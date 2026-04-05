@@ -1,0 +1,1159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Supabase JWT Migration Fix — Wadjet-Eye AI v5.4</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --surface2: #21262d;
+      --border: #30363d;
+      --accent: #58a6ff;
+      --accent2: #3fb950;
+      --warn: #d29922;
+      --danger: #f85149;
+      --text: #e6edf3;
+      --text-muted: #8b949e;
+      --purple: #bc8cff;
+      --cyan: #39d353;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+      line-height: 1.6;
+    }
+    /* Header */
+    .header {
+      background: linear-gradient(135deg, #0d1117 0%, #1a1f35 50%, #0d1117 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 32px 24px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .header::before {
+      content: '';
+      position: absolute; inset: 0;
+      background: radial-gradient(ellipse at 50% 0%, rgba(88,166,255,0.08) 0%, transparent 70%);
+    }
+    .header-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(248,81,73,0.15);
+      border: 1px solid rgba(248,81,73,0.4);
+      border-radius: 20px;
+      padding: 6px 16px;
+      font-size: 13px;
+      color: #f85149;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+    .header h1 {
+      font-size: clamp(22px, 4vw, 36px);
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+    .header p {
+      color: var(--text-muted);
+      font-size: 15px;
+      max-width: 700px;
+      margin: 0 auto;
+    }
+    /* Layout */
+    .container { max-width: 1000px; margin: 0 auto; padding: 32px 20px; }
+    /* Alert boxes */
+    .alert {
+      border-radius: 10px;
+      padding: 16px 20px;
+      margin-bottom: 24px;
+      border-left: 4px solid;
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+    }
+    .alert-icon { font-size: 22px; flex-shrink: 0; margin-top: 2px; }
+    .alert-content h3 { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+    .alert-content p, .alert-content ul { font-size: 14px; color: var(--text-muted); }
+    .alert-content ul { padding-left: 18px; margin-top: 6px; }
+    .alert-content li { margin-bottom: 4px; }
+    .alert.danger { background: rgba(248,81,73,0.08); border-color: var(--danger); }
+    .alert.danger .alert-icon { color: var(--danger); }
+    .alert.danger h3 { color: var(--danger); }
+    .alert.warn { background: rgba(210,153,34,0.08); border-color: var(--warn); }
+    .alert.warn .alert-icon { color: var(--warn); }
+    .alert.warn h3 { color: var(--warn); }
+    .alert.success { background: rgba(63,185,80,0.08); border-color: var(--accent2); }
+    .alert.success .alert-icon { color: var(--accent2); }
+    .alert.success h3 { color: var(--accent2); }
+    .alert.info { background: rgba(88,166,255,0.08); border-color: var(--accent); }
+    .alert.info .alert-icon { color: var(--accent); }
+    .alert.info h3 { color: var(--accent); }
+    /* Step cards */
+    .step-section { margin-bottom: 40px; }
+    .step-section-title {
+      font-size: 20px;
+      font-weight: 700;
+      color: #fff;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 12px;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .step-section-title span.badge {
+      background: var(--accent);
+      color: #000;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 2px 10px;
+      border-radius: 12px;
+    }
+    .step {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+    .step-header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 16px 20px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.2s;
+    }
+    .step-header:hover { background: var(--surface2); }
+    .step-num {
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 14px;
+      flex-shrink: 0;
+    }
+    .step-num.blue { background: rgba(88,166,255,0.2); color: var(--accent); border: 1px solid rgba(88,166,255,0.4); }
+    .step-num.green { background: rgba(63,185,80,0.2); color: var(--accent2); border: 1px solid rgba(63,185,80,0.4); }
+    .step-num.orange { background: rgba(210,153,34,0.2); color: var(--warn); border: 1px solid rgba(210,153,34,0.4); }
+    .step-num.red { background: rgba(248,81,73,0.2); color: var(--danger); border: 1px solid rgba(248,81,73,0.4); }
+    .step-title { font-weight: 600; font-size: 15px; flex: 1; }
+    .step-subtitle { font-size: 13px; color: var(--text-muted); }
+    .step-arrow { color: var(--text-muted); transition: transform 0.2s; font-size: 14px; }
+    .step.open .step-arrow { transform: rotate(90deg); }
+    .step-body { padding: 0 20px 20px; border-top: 1px solid var(--border); }
+    .step-body p { font-size: 14px; color: var(--text-muted); margin: 14px 0 10px; }
+    .step-body ul { font-size: 14px; color: var(--text-muted); padding-left: 20px; margin: 8px 0; }
+    .step-body li { margin-bottom: 6px; }
+    /* Code blocks */
+    .code-block {
+      background: #010409;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 18px;
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+      line-height: 1.7;
+      overflow-x: auto;
+      position: relative;
+      margin: 12px 0;
+    }
+    .code-block .comment { color: #6e7681; }
+    .code-block .key { color: #79c0ff; }
+    .code-block .val { color: #a5d6ff; }
+    .code-block .old { color: var(--danger); text-decoration: line-through; opacity: 0.7; }
+    .code-block .new { color: var(--accent2); }
+    .code-block .highlight { background: rgba(63,185,80,0.1); border-radius: 3px; padding: 1px 4px; }
+    .copy-btn {
+      position: absolute; top: 10px; right: 10px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-muted);
+      font-size: 12px;
+      padding: 4px 10px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .copy-btn:hover { background: var(--accent); color: #000; border-color: var(--accent); }
+    .copy-btn.copied { background: var(--accent2); color: #000; border-color: var(--accent2); }
+    /* Diff block */
+    .diff-block {
+      background: #010409;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      margin: 12px 0;
+    }
+    .diff-header {
+      background: var(--surface2);
+      padding: 8px 16px;
+      font-size: 12px;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      font-family: monospace;
+    }
+    .diff-line {
+      padding: 3px 16px;
+      font-family: monospace;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .diff-line.rm { background: rgba(248,81,73,0.1); color: #ffa198; }
+    .diff-line.rm::before { content: '- '; color: var(--danger); }
+    .diff-line.add { background: rgba(63,185,80,0.1); color: #7ee787; }
+    .diff-line.add::before { content: '+ '; color: var(--accent2); }
+    .diff-line.ctx { color: var(--text-muted); }
+    .diff-line.ctx::before { content: '  '; }
+    /* Key comparison table */
+    table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+    th { background: var(--surface2); color: var(--text-muted); text-align: left; padding: 10px 14px; font-weight: 600; border: 1px solid var(--border); }
+    td { padding: 10px 14px; border: 1px solid var(--border); }
+    tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+    .tag { display: inline-block; border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 700; }
+    .tag.old { background: rgba(248,81,73,0.2); color: var(--danger); }
+    .tag.new { background: rgba(63,185,80,0.2); color: var(--accent2); }
+    .tag.both { background: rgba(88,166,255,0.2); color: var(--accent); }
+    /* Timeline */
+    .timeline { position: relative; padding-left: 30px; margin: 16px 0; }
+    .timeline::before { content: ''; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+    .tl-item { position: relative; margin-bottom: 16px; }
+    .tl-dot {
+      position: absolute; left: -26px; top: 4px;
+      width: 12px; height: 12px; border-radius: 50%;
+      background: var(--accent); border: 2px solid var(--bg);
+    }
+    .tl-dot.done { background: var(--accent2); }
+    .tl-dot.warn { background: var(--warn); }
+    .tl-dot.danger { background: var(--danger); }
+    .tl-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+    .tl-desc { font-size: 13px; color: var(--text-muted); }
+    /* Quick answer banner */
+    .quick-answer {
+      background: linear-gradient(135deg, rgba(63,185,80,0.1), rgba(88,166,255,0.1));
+      border: 1px solid rgba(63,185,80,0.4);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 32px;
+    }
+    .quick-answer h2 { font-size: 18px; color: #fff; margin-bottom: 12px; }
+    .qa-items { display: grid; gap: 10px; }
+    .qa-item {
+      display: flex; gap: 12px; align-items: flex-start;
+      background: rgba(255,255,255,0.03);
+      border-radius: 8px;
+      padding: 12px 14px;
+    }
+    .qa-icon { font-size: 18px; flex-shrink: 0; }
+    .qa-text { font-size: 14px; color: var(--text-muted); }
+    .qa-text strong { color: var(--text); }
+    /* Checklist */
+    .checklist { list-style: none; padding: 0; }
+    .checklist li {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.04);
+      font-size: 14px; color: var(--text-muted);
+    }
+    .checklist input[type=checkbox] {
+      width: 16px; height: 16px;
+      accent-color: var(--accent2);
+      cursor: pointer; flex-shrink: 0;
+    }
+    .checklist label { cursor: pointer; }
+    /* Footer */
+    .footer {
+      text-align: center; color: var(--text-muted); font-size: 13px;
+      padding: 32px 20px; border-top: 1px solid var(--border);
+      margin-top: 48px;
+    }
+    /* Responsive */
+    @media (max-width: 640px) {
+      .container { padding: 20px 12px; }
+      .step-body { padding: 0 14px 14px; }
+    }
+    /* Print step numbers */
+    .inline-step {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--accent); color: #000; font-size: 12px; font-weight: 700;
+      margin-right: 4px; vertical-align: middle;
+    }
+    kbd {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 4px; padding: 2px 8px; font-size: 12px; font-family: monospace;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .toc {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px 24px;
+      margin-bottom: 32px;
+    }
+    .toc h3 { font-size: 14px; color: var(--text-muted); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+    .toc ol { padding-left: 20px; }
+    .toc li { margin-bottom: 6px; font-size: 14px; }
+    .toc a { color: var(--text-muted); }
+    .toc a:hover { color: var(--accent); }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-badge">🔐 SECURITY ADVISORY — Action Required</div>
+  <h1>Supabase JWT Migration Fix</h1>
+  <p>Step-by-step guide to resolve the Legacy JWT Secret warning and fix the <code>HTTP 401 — Missing or invalid Authorization header</code> error on Wadjet-Eye AI v5.4</p>
+</div>
+
+<div class="container">
+
+  <!-- TOC -->
+  <div class="toc">
+    <h3>📋 Table of Contents</h3>
+    <ol>
+      <li><a href="#understand">Understanding the Problem (Read This First)</a></li>
+      <li><a href="#answer">Direct Answer: Should You Change the JWT Secret?</a></li>
+      <li><a href="#root-cause">Root Cause of Your HTTP 401 Error</a></li>
+      <li><a href="#step1">Step 1 — Get New API Keys from Supabase Dashboard</a></li>
+      <li><a href="#step2">Step 2 — Update backend/.env on Render</a></li>
+      <li><a href="#step3">Step 3 — Update Frontend JS (anon key reference)</a></li>
+      <li><a href="#step4">Step 4 — Redeploy Backend on Render</a></li>
+      <li><a href="#step5">Step 5 — Verify the Fix</a></li>
+      <li><a href="#rotate">Optional: Rotate JWT Signing Keys (Advanced)</a></li>
+      <li><a href="#checklist">Final Checklist</a></li>
+    </ol>
+  </div>
+
+  <!-- QUICK ANSWER -->
+  <div class="quick-answer" id="answer">
+    <h2>⚡ Direct Answer to Your Question</h2>
+    <div class="qa-items">
+      <div class="qa-item">
+        <span class="qa-icon">🚫</span>
+        <div class="qa-text">
+          <strong>DO NOT manually change the Legacy JWT Secret.</strong> Supabase has made it read-only — you can only rotate it via their dashboard key rotation flow, not by editing the value directly.
+        </div>
+      </div>
+      <div class="qa-item">
+        <span class="qa-icon">✅</span>
+        <div class="qa-text">
+          <strong>YES — switch to the new Publishable + Secret API keys.</strong> Replace <code>SUPABASE_ANON_KEY</code> with <kbd>sb_publishable_LwTPXF-cDzMcmc_V16N9lA_KvN-ElTZ</kbd> and <code>SUPABASE_SERVICE_KEY</code> with <kbd>sb_secret_xDSevd4Gq3--9EPiWAcl0w_1M5S7M1_</kbd>.
+        </div>
+      </div>
+      <div class="qa-item">
+        <span class="qa-icon">🔑</span>
+        <div class="qa-text">
+          <strong>Your HTTP 401 error is NOT caused by the key migration warning.</strong> It is caused by the frontend not sending the correct JWT in the <code>Authorization: Bearer</code> header. The steps below fix both issues.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- UNDERSTAND -->
+  <div id="understand" class="step-section">
+    <div class="step-section-title">🔬 Understanding the Problem <span class="badge">READ FIRST</span></div>
+
+    <div class="alert warn">
+      <span class="alert-icon">⚠️</span>
+      <div class="alert-content">
+        <h3>What the Supabase Warning Actually Means</h3>
+        <p>Supabase recently changed from a single <em>Legacy JWT Secret</em> (one shared HS256 symmetric key) to a new <em>JWT Signing Keys</em> system that supports multiple keys and asymmetric signing. The warning is informational — your old keys still work <strong>until you explicitly revoke them</strong>.</p>
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Concept</th>
+          <th>Old System</th>
+          <th>New System</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>JWT Signing Method</td>
+          <td>HS256 (symmetric, 1 shared secret)</td>
+          <td>RS256 or HS256 (per-key control)</td>
+          <td><span class="tag both">Migrating</span></td>
+        </tr>
+        <tr>
+          <td>anon key</td>
+          <td><code>eyJhbGciOiJIUzI1NiIs...</code> (JWT)</td>
+          <td><code>sb_publishable_...</code></td>
+          <td><span class="tag both">Both valid</span></td>
+        </tr>
+        <tr>
+          <td>service_role key</td>
+          <td><code>eyJhbGciOiJIUzI1NiIs...</code> (JWT)</td>
+          <td><code>sb_secret_...</code></td>
+          <td><span class="tag both">Both valid</span></td>
+        </tr>
+        <tr>
+          <td>JWT Secret</td>
+          <td><code>KO3aLoS4LJqK4Nz6O+Lx...</code></td>
+          <td>New key from Key Settings page</td>
+          <td><span class="tag old">Legacy (keep for now)</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ROOT CAUSE -->
+  <div id="root-cause" class="step-section">
+    <div class="step-section-title">🔍 Root Cause of Your HTTP 401</div>
+
+    <div class="alert danger">
+      <span class="alert-icon">❌</span>
+      <div class="alert-content">
+        <h3>Error: <code>{"error":"Missing or invalid Authorization header","code":"MISSING_TOKEN","hint":"Include: Authorization: Bearer"}</code></h3>
+        <p>This error comes from your own backend middleware (<code>backend/middleware/auth.js</code> line 76-81). It means the request reached your Express server but the <code>Authorization: Bearer &lt;token&gt;</code> header was missing or empty.</p>
+      </div>
+    </div>
+
+    <p style="color:var(--text-muted); font-size:14px; margin-bottom: 12px;">The 401 chain — what's actually happening:</p>
+
+    <div class="timeline">
+      <div class="tl-item">
+        <div class="tl-dot danger"></div>
+        <div class="tl-title">Frontend calls <code>POST /api/ingest/run</code> (or any protected route)</div>
+        <div class="tl-desc">The JavaScript fetch does NOT include the <code>Authorization</code> header because it reads the token from the wrong localStorage key, or the token was never stored under the expected key.</div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-dot danger"></div>
+        <div class="tl-title">Express middleware runs <code>extractToken(req)</code></div>
+        <div class="tl-desc">Checks for Authorization header → not found. Checks X-Access-Token header → not found. Checks query param → not found. Returns <code>{ token: null }</code>.</div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-dot danger"></div>
+        <div class="tl-title">401 MISSING_TOKEN is returned</div>
+        <div class="tl-desc">The error you see: <code>HTTP 401 — Missing or invalid Authorization header</code></div>
+      </div>
+    </div>
+
+    <div class="alert info">
+      <span class="alert-icon">💡</span>
+      <div class="alert-content">
+        <h3>This is separate from the JWT migration warning</h3>
+        <p>The JWT migration warning is about the <em>type</em> of API keys. Your 401 is about the frontend <em>not sending a token at all</em>. Both must be fixed — and this guide covers both.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 1 -->
+  <div id="step1" class="step-section">
+    <div class="step-section-title">🔑 Step 1 — Get Your New Keys from Supabase</div>
+
+    <div class="step open">
+      <div class="step-header" onclick="toggleStep(this)">
+        <div class="step-num blue">1</div>
+        <div>
+          <div class="step-title">Open Supabase Dashboard → API Keys page</div>
+          <div class="step-subtitle">Navigate to the correct settings page</div>
+        </div>
+        <span class="step-arrow">▶</span>
+      </div>
+      <div class="step-body">
+        <p>Open your browser and go directly to:</p>
+        <div class="code-block">
+          <span class="comment"># Direct link to your project's API keys</span><br>
+          <span class="val">https://supabase.com/dashboard/project/miywxnplaltduuscjfmq/settings/api</span>
+        </div>
+        <p>Or navigate manually:</p>
+        <ul>
+          <li>Go to <a href="https://supabase.com/dashboard" target="_blank">supabase.com/dashboard</a></li>
+          <li>Select your project <strong>miywxnplaltduuscjfmq</strong></li>
+          <li>Click <strong>Settings</strong> (gear icon, left sidebar)</li>
+          <li>Click <strong>API</strong> under Configuration</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="step open">
+      <div class="step-header" onclick="toggleStep(this)">
+        <div class="step-num blue">2</div>
+        <div>
+          <div class="step-title">Copy the new Publishable Key (anon)</div>
+          <div class="step-subtitle">This replaces SUPABASE_ANON_KEY</div>
+        </div>
+        <span class="step-arrow">▶</span>
+      </div>
+      <div class="step-body">
+        <p>On the API Settings page, find the <strong>API Keys</strong> section. You'll see two new keys:</p>
+        <div class="code-block">
+          <button class="copy-btn" onclick="copyToClipboard(this, 'sb_publishable_LwTPXF-cDzMcmc_V16N9lA_KvN-ElTZ')">Copy</button>
+          <span class="comment"># Publishable Key (safe for frontend — replaces anon key)</span><br>
+          <span class="new">sb_publishable_LwTPXF-cDzMcmc_V16N9lA_KvN-ElTZ</span>
+        </div>
+        <div class="alert warn">
+          <span class="alert-icon">⚠️</span>
+          <div class="alert-content">
+            <h3>Confirm this key on your Supabase dashboard</h3>
+            <p>The key above was provided by you and should match exactly what Supabase shows. Always copy from Supabase dashboard directly to avoid typos.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step open">
+      <div class="step-header" onclick="toggleStep(this)">
+        <div class="step-num blue">3</div>
+        <div>
+          <div class="step-title">Copy the new Secret Key (service_role)</div>
+          <div class="step-subtitle">This replaces SUPABASE_SERVICE_KEY — NEVER expose this in frontend code</div>
+        </div>
+        <span class="step-arrow">▶</span>
+      </div>
+      <div class="step-body">
+        <div class="code-block">
+          <button class="copy-btn" onclick="copyToClipboard(this, 'sb_secret_xDSevd4Gq3--9EPiWAcl0w_1M5S7M1_')">Copy</button>
+          <span class="comment"># Secret Key (backend only — replaces service_role key)</span><br>
+          <span class="new">sb_secret_xDSevd4Gq3--9EPiWAcl0w_1M5S7M1_</span>
+        </div>
+        <div class="alert danger">
+          <span class="alert-icon">🚨</span>
+          <div class="alert-content">
+            <h3>NEVER put this in frontend JavaScript files</h3>
+            <p>The secret key bypasses all Row Level Security (RLS). It should only be in your <code>backend/.env</code> file and in your Render environment variables. It must never appear in any file that gets deployed to Vercel or served to browsers.</p>
+          </div>
+        </div>
+
+        <p>Also get the new JWT Secret (if Supabase has generated one):</p>
+        <ul>
+          <li>On the same API Settings page, scroll to <strong>JWT Settings</strong></li>
+          <li>Click <strong>Show</strong> next to the JWT Secret</li>
+          <li>Copy that value — you'll need it for <code>JWT_SECRET</code> in your .env</li>
+        </ul>
+        <div class="alert info">
+          <span class="alert-icon">ℹ️</span>
+          <div class="alert-content">
+            <h3>Your current JWT_SECRET may still be valid</h3>
+            <p>Your current <code>JWT_SECRET=KO3aLoS4LJqK4Nz6O+LxOqq4X/MxGlKBbhbiIR6aNg/eyTujTSIuCqMlUT930rBIhIGrorftB0pZjsRux7pR/g==</code> is the <em>legacy</em> secret. As long as you haven't rotated/revoked it in Supabase, it's still valid for verifying tokens. You only need to change it if Supabase shows a <em>different</em> value in the JWT Settings page.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 2 -->
+  <div id="step2" class="step-section">
+    <div class="step-section-title">⚙️ Step 2 — Update Environment Variables on Render</div>
+
+    <div class="alert info">
+      <span class="alert-icon">ℹ️</span>
+      <div class="alert-content">
+        <h3>Two places to update</h3>
+        <ul>
+          <li><strong>backend/.env</strong> — for local development and git reference</li>
+          <li><strong>Render Dashboard → Environment</strong> — for production deployment (this is what matters for production)</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="step open">
+      <div class="step-header" onclick="toggleStep(this)">
+        <div class="step-num green">A</div>
+        <div>
+          <div class="step-title">Update backend/.env (local file)</div>
+          <div class="step-subtitle">Make these exact changes</div>
+        </div>
+        <span class="step-arrow">▶</span>
+      </div>
+      <div class="step-body">
+        <p>Open <code>backend/.env</code> and update the Supabase section:</p>
+        <div class="diff-block">
+          <div class="diff-header">backend/.env — Supabase section diff</div>
+          <div class="diff-line ctx"># ── Supabase ────────────────────────────────────────────────</div>
+          <div class="diff-line ctx">SUPABASE_URL=https://miywxnplaltduuscjfmq.supabase.co</div>
+          <div class="diff-line rm">SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh...</div>
+          <div class="diff-line add">SUPABASE_ANON_KEY=sb_publishable_LwTPXF-cDzMcmc_V16N9lA_KvN-ElTZ</div>
+          <div class="diff-line rm">SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh...</div>
+          <div class="diff-line add">SUPABASE_SERVICE_KEY=sb_secret_xDSevd4Gq3--9EPiWAcl0w_1M5S7M1_</div>
+          <div class="diff-line ctx">&nbsp;</div>
+          <div class="diff-line ctx"># ── JWT Secret ──────────────────────────────────────────────</div>
+          <div class="diff-line ctx"># Get from: Supabase Dashboard → Settings → API → JWT Settings</div>
+          <div class="diff-line ctx">JWT_SECRET=KO3aLoS4LJqK4Nz6O+LxOqq4X/MxGlKBbhbiIR6aNg/eyTujTSIuCqMlUT930rBIhIGrorftB0pZjsRux7pR/g==</div>
+          <div class="diff-line ctx"># ^^ Only change this if Supabase shows a DIFFERENT value in JWT Settings</div>
+        </div>
+
+        <p>The complete updated <code>backend/.env</code> Supabase block should look like:</p>
+        <div class="code-block">
+          <button class="copy-btn" onclick="copyBlock(this)">Copy</button>
+<pre># ── Supabase ─────────────────────────────────────────────────
+SUPABASE_URL=https://miywxnplaltduuscjfmq.supabase.co
+SUPABASE_ANON_KEY=sb_publishable_LwTPXF-cDzMcmc_V16N9lA_KvN-ElTZ
+SUPABASE_SERVICE_KEY=sb_secret_xDSevd4Gq3--9EPiWAcl0w_1M5S7M1_
+
+# ── JWT Secret (must match Supabase Project JWT Secret) ───────
+# Get from: Supabase Dashboard → Settings → API → JWT Settings
+JWT_SECRET=KO3aLoS4LJqK4Nz6O+LxOqq4X/MxGlKBbhbiIR6aNg/eyTujTSIuCqMlUT930rBIhIGrorftB0pZjsRux7pR/g==
+# Note: Only update JWT_SECRET if Supabase shows a new value in their JWT Settings page</pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="step open">
+      <div class="step-header" onclick="toggleStep(this)">
+        <div class="step-num green">B</div>
+        <div>
+          <div class="step-title">Update Render Dashboard Environment Variables (CRITICAL)</div>
+          <div class="step-subtitle">This is what production uses — must be done here</div>
+        </div>
+        <span class="step-arrow">▶</span>
+      </div>
+      <div class="step-body">
+        <p>Your local <code>.env</code> file is NOT used in production. Render uses its own environment variables. Follow these steps:</p>
+        <div class="timeline">
+          <div class="tl-item">
+            <div class="tl-dot"></div>
+            <div class="tl-title">Go to <a href="https://dashboard.render.com" target="_blank">dashboard.render.com</a></div>
+            <div class="tl-desc">Log in and find your Wadjet-Eye AI backend web service</div>
+          </div>
+          <div class="tl-item">
+            <div class="tl-dot"></div>
+            <div class="tl-title">Click on your service → <strong>Environment</strong> tab</div>
+            <div class="tl-desc">This shows all your environment variables for the production deployment</div>
+          </div>
+          <div class="tl-item">
+            <div class="tl-dot"></div>
+            <div class="tl-title">Find and update <code>SUPABASE_ANON_KEY</code></div>
+            <div class="tl-desc">Click Edit → clear the old <code>eyJhbGci...</code> value → paste <code>sb_publishable_LwTPXF-cDzMcmc_V16N9lA_KvN-ElTZ</code></div>
+          </div>
+          <div class="tl-item">
+            <div class="tl-dot"></div>
+            <div class="tl-title">Find and update <code>SUPABASE_SERVICE_KEY</code></div>
+            <div class="tl-desc">Click Edit → clear the old <code>eyJhbGci...</code> value → paste <code>sb_secret_xDSevd4Gq3--9EPiWAcl0w_1M5S7M1_</code></div>
+          </div>
+          <div class="tl-item">
+            <div class="tl-dot done"></div>
+            <div class="tl-title">Click <strong>Save Changes</strong></div>
+            <div class="tl-desc">Render will show a banner saying changes will take effect on next deploy</div>
+          </div>
+        </div>
+
+        <div class="code-block">
+          <span class="comment">## Render Environment Variables to set:</span><br><br>
+          <span class="key">SUPABASE_ANON_KEY</span>    = <span class="new">sb_publishable_LwTPXF-cDzMcmc_V16N9lA_KvN-ElTZ</span><br>
+          <span class="key">SUPABASE_SERVICE_KEY</span> = <span class="new">sb_secret_xDSevd4Gq3--9EPiWAcl0w_1M5S7M1_</span><br>
+          <span class="key">JWT_SECRET</span>           = <span class="val">KO3aLoS4LJqK4Nz6O+LxOqq4X/MxGlKBbhbiIR6aNg/eyTujTSIuCqMlUT930rBIhIGrorftB0pZjsRux7pR/g==</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 3 -->
+  <div id="step3" class="step-section">
+    <div class="step-section-title">🌐 Step 3 — Fix the Frontend Auth (Root Cause of 401)</div>
+
+    <div class="alert danger">
+      <span class="alert-icon">🚨</span>
+      <div class="alert-content">
+        <h3>This is the actual fix for your HTTP 401 error</h3>
+        <p>The Supabase key update above stops the warning. This step fixes the actual <code>MISSING_TOKEN</code> 401 by ensuring the frontend properly stores and sends the JWT in the Authorization header.</p>
+      </div>
+    </div>
+
+    <div class="step open">
+      <div class="step-header" onclick="toggleStep(this)">
+        <div class="step-num orange">A</div>
+        <div>
+          <div class="step-title">Verify token storage key in <code>js/auth-interceptor.js</code></div>
+          <div class="step-subtitle">The token must be stored under the correct localStorage key</div>
+        </div>
+        <span class="step-arrow">▶</span>
+      </div>
+      <div class="step-body">
+        <p>Your <code>auth-interceptor.js</code> (v5.2) defines UNIFIED_KEYS. The <strong>primary key</strong> must be what all API calls read from. Confirm this structure exists:</p>
+        <div class="code-block">
+<pre>// In js/auth-interceptor.js — UNIFIED_KEYS must include these:
+const UNIFIED_KEYS = {
+  primary: {
+    access:   'wadjet_access_token',    // ← PRIMARY key
+    refresh:  'wadjet_refresh_token',
+    expires:  'wadjet_token_expires',
+    user:     'wadjet_user_data',
+    session:  'wadjet_session_id',
+  },
+  legacy: [
+    'we_access_token',       // old key
+    'access_token',          // generic
+    'supabase_token',        // supabase sdk
+    'sb-miywxnplaltduuscjfmq-auth-token',  // supabase storage key
+  ]
+};</pre>
+        </div>
+        <p>When calling any API, the request must include:</p>
+        <div class="code-block">
+<pre>// Every authenticated API call needs this header:
+const token = localStorage.getItem('wadjet_access_token')
+           || localStorage.getItem('we_access_token')
+           || localStorage.getItem('access_token');
+
+fetch('/api/ingest/run', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${token}`   // ← This must be present
+  }
+});</pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="step open">
+      <div class="step-header" onclick="toggleStep(this)">
+        <div class="step-num orange">B</div>
+        <div>
+          <div class="step-title">Verify login stores token under the correct key</div>
+          <div class="step-subtitle">Check what <code>js/main.js</code> does on successful login</div>
+        </div>
+        <span class="step-arrow">▶</span>
+      </div>
+      <div class="step-body">
+        <p>After a successful <code>POST /api/auth/login</code>, the response contains <code>{ token, access_token, ... }</code>. Ensure the login handler stores it correctly:</p>
+        <div class="diff-block">
+          <div class="diff-header">js/main.js — login handler (check this code exists)</div>
+          <div class="diff-line ctx">const data = await response.json();</div>
+          <div class="diff-line ctx">const accessToken = data.token || data.access_token;</div>
+          <div class="diff-line ctx">&nbsp;</div>
+          <div class="diff-line add">// Store under ALL known keys for compatibility:</div>
+          <div class="diff-line add">localStorage.setItem('wadjet_access_token', accessToken);</div>
+          <div class="diff-line add">localStorage.setItem('we_access_token', accessToken);     // legacy</div>
+          <div class="diff-line add">localStorage.setItem('access_token', accessToken);         // generic</div>
+          <div class="diff-line add">localStorage.setItem('wadjet_refresh_token', data.refresh_token);</div>
+          <div class="diff-line add">localStorage.setItem('wadjet_token_expires', Date.now() + (data.expires_in * 1000));</div>
+        </div>
+
+        <div class="alert success">
+          <span class="alert-icon">✅</span>
+          <div class="alert-content">
+            <h3>Your auth-interceptor.js already handles this</h3>
+            <p>The <code>UnifiedTokenStore.save()</code> function already writes to all keys. Make sure <code>loginUser()</code> calls <code>UnifiedTokenStore.save()</code> rather than <code>localStorage.setItem</code> directly.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step open">
+      <div class="step-header" onclick="toggleStep(this)">
+        <div class="step-num orange">C</div>
+        <div>
+          <div class="step-title">Debug: Check token in browser DevTools right now</div>
+          <div class="step-subtitle">Find out why the token isn't being sent</div>
+        </div>
+        <span class="step-arrow">▶</span>
+      </div>
+      <div class="step-body">
+        <p>Open your app in the browser, log in, then open DevTools (<kbd>F12</kbd>) and run this in the Console:</p>
+        <div class="code-block">
+          <button class="copy-btn" onclick="copyBlock(this)">Copy</button>
+<pre>// Paste this in DevTools console after logging in:
+const keys = [
+  'wadjet_access_token',
+  'we_access_token',
+  'access_token',
+  'supabase_token',
+  `sb-miywxnplaltduuscjfmq-auth-token`
+];
+
+console.log('=== TOKEN STORAGE DEBUG ===');
+keys.forEach(k => {
+  const val = localStorage.getItem(k);
+  console.log(`localStorage[${k}]:`, val ? val.substring(0, 30) + '...' : 'NOT SET');
+});
+
+// Also check sessionStorage
+keys.forEach(k => {
+  const val = sessionStorage.getItem(k);
+  if (val) console.log(`sessionStorage[${k}]:`, val.substring(0, 30) + '...');
+});</pre>
+        </div>
+        <p>Expected output: At least one key should show a token starting with <code>eyJ...</code> (a JWT). If ALL say <code>NOT SET</code>, the login is not saving the token.</p>
+
+        <p>Then test the API call manually:</p>
+        <div class="code-block">
+          <button class="copy-btn" onclick="copyBlock(this)">Copy</button>
+<pre>// Test an authenticated API call from DevTools console:
+const token = localStorage.getItem('wadjet_access_token')
+           || localStorage.getItem('we_access_token')
+           || localStorage.getItem('access_token');
+
+if (!token) { console.error('❌ No token found — need to log in first'); }
+else {
+  fetch('https://wadjet-eye-ai.onrender.com/api/auth/me', {
+    headers: { 'Authorization': `Bearer ${token}` }
+  })
+  .then(r => r.json())
+  .then(d => console.log('✅ Auth working:', d))
+  .catch(e => console.error('❌ Auth failed:', e));
+}</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 4 -->
+  <div id="step4" class="step-section">
+    <div class="step-section-title">🚀 Step 4 — Redeploy Backend on Render</div>
+
+    <div class="step open">
+      <div class="step-header" onclick="toggleStep(this)">
+        <div class="step-num blue">1</div>
+        <div>
+          <div class="step-title">Push changes to GitHub (triggers auto-deploy)</div>
+          <div class="step-subtitle">Or use the Manual Deploy button in Render</div>
+        </div>
+        <span class="step-arrow">▶</span>
+      </div>
+      <div class="step-body">
+        <p>If your Render service is connected to GitHub with auto-deploy:</p>
+        <div class="code-block">
+          <button class="copy-btn" onclick="copyBlock(this)">Copy</button>
+<pre>cd /path/to/wadjet-eye-ai
+
+# Stage and commit the .env.example update (never commit .env itself!)
+git add backend/.env.example
+git add backend/config/supabase.js
+git commit -m "fix: migrate to new Supabase API key format (sb_publishable/sb_secret)"
+
+git push origin main</pre>
+        </div>
+        <p>Or go to <strong>Render Dashboard → your service → Manual Deploy → Deploy Latest Commit</strong>.</p>
+
+        <div class="alert warn">
+          <span class="alert-icon">⚠️</span>
+          <div class="alert-content">
+            <h3>NEVER commit backend/.env to git!</h3>
+            <p>Your <code>.gitignore</code> already has <code>backend/.env</code> excluded. Only update the Render environment variables directly in the Render dashboard — never push <code>.env</code> to GitHub.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step open">
+      <div class="step-header" onclick="toggleStep(this)">
+        <div class="step-num blue">2</div>
+        <div>
+          <div class="step-title">Watch the deployment logs</div>
+          <div class="step-subtitle">Confirm the new keys are being picked up</div>
+        </div>
+        <span class="step-arrow">▶</span>
+      </div>
+      <div class="step-body">
+        <p>After deploy, you should see in Render logs:</p>
+        <div class="code-block">
+<pre>[Supabase] <span class="new">✅ Using new API key format (sb_secret_*)</span>
+[Supabase] <span class="new">✅ Connection OK</span>
+[Auth] Server listening on port 4000</pre>
+        </div>
+        <p>If you still see:</p>
+        <div class="code-block">
+<pre>[Supabase] <span class="old">❌ API KEY ERROR — your SUPABASE_SERVICE_KEY may be invalid or revoked</span></pre>
+        </div>
+        <p>→ The Render environment variable was not saved correctly. Go back to Step 2B and try again.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 5 -->
+  <div id="step5" class="step-section">
+    <div class="step-section-title">✅ Step 5 — Verify the Fix End-to-End</div>
+
+    <div class="step open">
+      <div class="step-header" onclick="toggleStep(this)">
+        <div class="step-num green">1</div>
+        <div>
+          <div class="step-title">Test backend health endpoint</div>
+          <div class="step-subtitle">Confirm the server is up with new keys</div>
+        </div>
+        <span class="step-arrow">▶</span>
+      </div>
+      <div class="step-body">
+        <div class="code-block">
+          <button class="copy-btn" onclick="copyBlock(this)">Copy</button>
+<pre>curl https://wadjet-eye-ai.onrender.com/health</pre>
+        </div>
+        <p>Expected response:</p>
+        <div class="code-block">
+<pre>{
+  "status": "healthy",
+  "version": "5.4.0",
+  "timestamp": "2026-03-31T...",
+  "supabase": "connected"
+}</pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="step open">
+      <div class="step-header" onclick="toggleStep(this)">
+        <div class="step-num green">2</div>
+        <div>
+          <div class="step-title">Test login and authenticated API call</div>
+          <div class="step-subtitle">Confirm token flow works end-to-end</div>
+        </div>
+        <span class="step-arrow">▶</span>
+      </div>
+      <div class="step-body">
+        <div class="code-block">
+          <button class="copy-btn" onclick="copyBlock(this)">Copy</button>
+<pre># 1. Login and get token
+TOKEN=$(curl -s -X POST https://wadjet-eye-ai.onrender.com/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"YOUR_EMAIL@example.com","password":"YOUR_PASSWORD"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin).get('token','NOT FOUND'))")
+
+echo "Token: ${TOKEN:0:40}..."
+
+# 2. Test authenticated endpoint
+curl -H "Authorization: Bearer $TOKEN" \
+  https://wadjet-eye-ai.onrender.com/api/auth/me</pre>
+        </div>
+        <p>Expected: Your user profile JSON. If you see <code>401 MISSING_TOKEN</code>, the login is returning a token but it's not being captured by the shell variable. Inspect the raw login response first.</p>
+      </div>
+    </div>
+
+    <div class="step open">
+      <div class="step-header" onclick="toggleStep(this)">
+        <div class="step-num green">3</div>
+        <div>
+          <div class="step-title">Test the IOC ingest endpoint (the one that was 401-ing)</div>
+          <div class="step-subtitle">Confirm the feed sync now works</div>
+        </div>
+        <span class="step-arrow">▶</span>
+      </div>
+      <div class="step-body">
+        <div class="code-block">
+          <button class="copy-btn" onclick="copyBlock(this)">Copy</button>
+<pre># Using the token from login above:
+curl -X GET \
+  -H "Authorization: Bearer $TOKEN" \
+  https://wadjet-eye-ai.onrender.com/api/ingest/feeds
+
+# Expected: JSON list of configured feeds with status</pre>
+        </div>
+        <p>If this returns 200 with feed data instead of 401, the fix is complete. ✅</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- OPTIONAL ROTATION -->
+  <div id="rotate" class="step-section">
+    <div class="step-section-title">🔄 Optional: JWT Key Rotation (Advanced — Do Later)</div>
+
+    <div class="alert warn">
+      <span class="alert-icon">⚠️</span>
+      <div class="alert-content">
+        <h3>Do NOT do this until the above steps are confirmed working</h3>
+        <p>Key rotation will invalidate ALL existing user sessions. Every logged-in user will be signed out and will need to log in again. Plan this during a maintenance window.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-header" onclick="toggleStep(this)">
+        <div class="step-num orange">?</div>
+        <div>
+          <div class="step-title">How to properly rotate JWT signing keys (when ready)</div>
+          <div class="step-subtitle">The full migration path if you choose to fully migrate</div>
+        </div>
+        <span class="step-arrow">▶</span>
+      </div>
+      <div class="step-body">
+        <p>Supabase's <strong>recommended rotation process</strong>:</p>
+        <div class="timeline">
+          <div class="tl-item">
+            <div class="tl-dot"></div>
+            <div class="tl-title">Step R1: Go to Settings → API → JWT Settings in Supabase</div>
+            <div class="tl-desc">Click "Add standby key" — this generates a new key without invalidating the old one</div>
+          </div>
+          <div class="tl-item">
+            <div class="tl-dot"></div>
+            <div class="tl-title">Step R2: Update your backend JWT_SECRET to the new key</div>
+            <div class="tl-desc">Update <code>JWT_SECRET</code> in Render environment variables to the new key value</div>
+          </div>
+          <div class="tl-item">
+            <div class="tl-dot"></div>
+            <div class="tl-title">Step R3: Redeploy backend</div>
+            <div class="tl-desc">Confirm new key is working — both old and new tokens will be accepted during transition</div>
+          </div>
+          <div class="tl-item">
+            <div class="tl-dot warn"></div>
+            <div class="tl-title">Step R4: Promote standby key to primary</div>
+            <div class="tl-desc">In Supabase dashboard, click "Promote to primary" on the standby key</div>
+          </div>
+          <div class="tl-item">
+            <div class="tl-dot danger"></div>
+            <div class="tl-title">Step R5: Revoke the old legacy key</div>
+            <div class="tl-desc">⚠️ This signs out ALL users. Do during maintenance window. All old JWTs (including your anon/service_role keys) stop working immediately.</div>
+          </div>
+          <div class="tl-item">
+            <div class="tl-dot done"></div>
+            <div class="tl-title">Step R6: Re-issue your anon and service_role API keys</div>
+            <div class="tl-desc">After revoking, regenerate these keys and update all env vars again</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CHECKLIST -->
+  <div id="checklist" class="step-section">
+    <div class="step-section-title">☑️ Final Deployment Checklist</div>
+
+    <div class="step open">
+      <div class="step-header" onclick="toggleStep(this)">
+        <div class="step-num green">✓</div>
+        <div>
+          <div class="step-title">Complete this checklist before marking the issue resolved</div>
+          <div class="step-subtitle">Check each item as you complete it</div>
+        </div>
+        <span class="step-arrow">▶</span>
+      </div>
+      <div class="step-body">
+        <ul class="checklist">
+          <li><input type="checkbox" id="c1"><label for="c1">Copied new <code>sb_publishable_...</code> key from Supabase Dashboard</label></li>
+          <li><input type="checkbox" id="c2"><label for="c2">Copied new <code>sb_secret_...</code> key from Supabase Dashboard</label></li>
+          <li><input type="checkbox" id="c3"><label for="c3">Updated <code>SUPABASE_ANON_KEY</code> in Render environment variables</label></li>
+          <li><input type="checkbox" id="c4"><label for="c4">Updated <code>SUPABASE_SERVICE_KEY</code> in Render environment variables</label></li>
+          <li><input type="checkbox" id="c5"><label for="c5">Verified <code>JWT_SECRET</code> matches what Supabase shows in JWT Settings page</label></li>
+          <li><input type="checkbox" id="c6"><label for="c6">Saved changes in Render dashboard</label></li>
+          <li><input type="checkbox" id="c7"><label for="c7">Redeployed backend on Render (manual deploy or git push)</label></li>
+          <li><input type="checkbox" id="c8"><label for="c8">Verified Render deploy logs show <code>✅ Using new API key format</code></label></li>
+          <li><input type="checkbox" id="c9"><label for="c9">Tested <code>GET /health</code> returns 200</label></li>
+          <li><input type="checkbox" id="c10"><label for="c10">Logged in to the app and confirmed token is stored in localStorage</label></li>
+          <li><input type="checkbox" id="c11"><label for="c11">Confirmed <code>GET /api/ingest/feeds</code> with Bearer token returns 200 (no 401)</label></li>
+          <li><input type="checkbox" id="c12"><label for="c12">Updated <code>backend/.env</code> local file with new keys (for local dev reference)</label></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- SUMMARY TABLE -->
+  <div class="step-section">
+    <div class="step-section-title">📋 Summary: What Changes Where</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Variable</th>
+          <th>Old Value</th>
+          <th>New Value</th>
+          <th>Change?</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>SUPABASE_URL</code></td>
+          <td><code>https://miywxnplaltduuscjfmq.supabase.co</code></td>
+          <td><em>Same</em></td>
+          <td><span class="tag both">No change</span></td>
+        </tr>
+        <tr>
+          <td><code>SUPABASE_ANON_KEY</code></td>
+          <td><code>eyJhbGciOiJIUzI1NiIs...</code></td>
+          <td><code>sb_publishable_LwTPXF-...</code></td>
+          <td><span class="tag new">✅ Update</span></td>
+        </tr>
+        <tr>
+          <td><code>SUPABASE_SERVICE_KEY</code></td>
+          <td><code>eyJhbGciOiJIUzI1NiIs...</code></td>
+          <td><code>sb_secret_xDSevd4Gq3-...</code></td>
+          <td><span class="tag new">✅ Update</span></td>
+        </tr>
+        <tr>
+          <td><code>JWT_SECRET</code></td>
+          <td><code>KO3aLoS4LJqK4Nz6O+Lx...</code></td>
+          <td><em>Same (verify with dashboard)</em></td>
+          <td><span class="tag both">Verify only</span></td>
+        </tr>
+        <tr>
+          <td>Frontend localStorage key</td>
+          <td>Variable (<code>we_access_token</code>?)</td>
+          <td>Must be <code>wadjet_access_token</code></td>
+          <td><span class="tag old">Check/Fix</span></td>
+        </tr>
+        <tr>
+          <td>API call Authorization header</td>
+          <td>Missing in some calls</td>
+          <td>Every call must include Bearer token</td>
+          <td><span class="tag old">Check/Fix</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert success">
+    <span class="alert-icon">🎉</span>
+    <div class="alert-content">
+      <h3>After completing all steps above, your system will:</h3>
+      <ul>
+        <li>Have no more "Legacy JWT Secret" warning on Supabase dashboard</li>
+        <li>Use the secure new API key format</li>
+        <li>Properly authenticate API calls (no more HTTP 401 MISSING_TOKEN)</li>
+        <li>Have a working IOC feed sync pipeline</li>
+      </ul>
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<div class="footer">
+  <strong>Wadjet-Eye AI</strong> — JWT Migration Guide v5.4 &nbsp;|&nbsp;
+  Generated 2026-03-31 &nbsp;|&nbsp;
+  Supabase Project: <code>miywxnplaltduuscjfmq</code>
+</div>
+
+<script>
+  // Toggle step expand/collapse
+  function toggleStep(header) {
+    const step = header.closest('.step');
+    step.classList.toggle('open');
+  }
+
+  // Copy button
+  function copyToClipboard(btn, text) {
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = '✓ Copied';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = 'Copy';
+        btn.classList.remove('copied');
+      }, 2000);
+    });
+  }
+
+  function copyBlock(btn) {
+    const block = btn.closest('.code-block');
+    const pre = block.querySelector('pre');
+    const text = pre ? pre.textContent : block.innerText;
+    navigator.clipboard.writeText(text.trim()).then(() => {
+      btn.textContent = '✓ Copied!';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = 'Copy';
+        btn.classList.remove('copied');
+      }, 2000);
+    });
+  }
+
+  // Persist checklist state in localStorage
+  document.querySelectorAll('.checklist input[type=checkbox]').forEach(cb => {
+    const key = 'jwt_checklist_' + cb.id;
+    if (localStorage.getItem(key) === 'true') {
+      cb.checked = true;
+      cb.closest('li').style.opacity = '0.5';
+    }
+    cb.addEventListener('change', () => {
+      localStorage.setItem(key, cb.checked);
+      cb.closest('li').style.opacity = cb.checked ? '0.5' : '1';
+    });
+  });
+</script>
+</body>
+</html>

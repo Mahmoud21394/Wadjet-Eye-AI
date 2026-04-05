@@ -1,0 +1,1465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Wadjet-Eye AI — Cyber Threat Intelligence Platform</title>
+  <link rel="icon" type="image/png" href="images/wadjet-logo.png" />
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/modals.css" />
+  <link rel="stylesheet" href="css/soc-operations.css" />
+  <link rel="stylesheet" href="css/micro-interactions.css" />
+  <!-- SOC Campaigns & Detections Theme v2.0 -->
+  <link rel="stylesheet" href="css/soc-campaigns.css" />
+  <!-- Platform Enhancements v1.0 — Dark Web, Exposure, IOC, AI, Pricing, RBAC, Settings -->
+  <link rel="stylesheet" href="css/enhancements.css" />
+  <!-- Platform v19.0 Master CSS — Full redesign with animations, responsive, micro-interactions -->
+  <link rel="stylesheet" href="css/platform-v19.css" />
+  <!-- Platform v20.0 — Micro-interactions, skeletons, pricing, global fixes -->
+  <link rel="stylesheet" href="css/platform-v20.css" />
+  <!-- Login v20.0 — Production-grade SOC-style login page -->
+  <link rel="stylesheet" href="css/login-v20.css" />
+  <!-- Cyber Defense Brain Design System v2.0 — All new AI modules unified design language -->
+  <link rel="stylesheet" href="css/cyber-brain-design-system.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<!-- ══════════ LOGIN SCREEN ══════════ -->
+<div id="loginScreen" class="login-screen">
+  <div class="login-bg-grid"></div>
+  <div class="login-particles" id="loginParticles"></div>
+  <div class="login-card">
+    <div class="login-logo">
+      <img src="images/wadjet-logo.png" alt="Wadjet-Eye AI Logo" class="login-logo-img" />
+      <div>
+        <div class="login-logo-name">Wadjet-Eye AI</div>
+        <div class="login-logo-tagline">AI-Agentic Cyber Threat Intelligence Platform v17.0</div>
+      </div>
+    </div>
+    <div id="loginError" class="login-error" style="display:none"></div>
+    <div class="login-field">
+      <label><i class="fas fa-building" style="margin-right:6px;color:var(--accent-gold)"></i>Tenant</label>
+      <select id="loginTenant" class="login-input">
+        <option value="mssp-global">MSSP Global Operations</option>
+        <option value="hackerone">HackerOne Security Team</option>
+        <option value="bugcrowd">Bugcrowd Platform</option>
+        <option value="enterprise">Enterprise</option>
+      </select>
+    </div>
+    <div class="login-field">
+      <label><i class="fas fa-envelope" style="margin-right:6px;color:var(--accent-gold)"></i>Email</label>
+      <input type="email" id="loginEmail" class="login-input" placeholder="analyst@company.com" autocomplete="email" />
+    </div>
+    <div class="login-field">
+      <label><i class="fas fa-lock" style="margin-right:6px;color:var(--accent-gold)"></i>Password</label>
+      <input type="password" id="loginPassword" class="login-input" placeholder="••••••••" autocomplete="current-password" />
+    </div>
+    <div class="login-field" style="margin-top:-4px;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div class="toggle-switch on" id="mfaToggle" onclick="this.classList.toggle('on')"></div>
+        <span style="font-size:12px;color:var(--text-secondary);">Enable MFA (TOTP)</span>
+      </div>
+    </div>
+    <button class="login-btn" id="loginBtn" onclick="doLogin()">
+      <i class="fas fa-eye"></i> Authenticate Securely
+    </button>
+    <div class="login-footer-note">
+      <i class="fas fa-shield-alt"></i> TLS 1.3 · Zero-Trust · SOC2 Compliant
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ MAIN APP ══════════ -->
+<div id="mainApp" style="display:none;">
+
+<!-- ────────── SIDEBAR ────────── -->
+<aside id="sidebar" class="sidebar">
+  <div class="sidebar-header">
+    <div class="logo-wrap">
+      <img src="images/wadjet-logo.png" alt="Wadjet-Eye AI" class="sidebar-logo-img" />
+      <div class="logo-text">
+        <span class="logo-name">Wadjet-Eye AI</span>
+        <span class="logo-tagline">v17.0 · <span id="sidebarTenant">MSSP Global</span></span>
+      </div>
+    </div>
+    <button class="sidebar-toggle" id="sidebarToggle"><i class="fas fa-bars"></i></button>
+  </div>
+
+  <div class="sidebar-nav-scroll">
+
+    <div class="sidebar-section-label">OPERATIONS</div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item active" data-page="command-center">
+        <i class="fas fa-tachometer-alt"></i><span>Command Center</span>
+        <span class="nav-badge badge-red" id="nb-critical">0</span>
+      </a>
+      <a href="#" class="nav-item" data-page="findings">
+        <i class="fas fa-crosshairs"></i><span>Findings</span>
+        <span class="nav-badge badge-orange" id="nb-findings">0</span>
+      </a>
+      <a href="#" class="nav-item" data-page="campaigns">
+        <i class="fas fa-chess-king"></i><span>Campaigns</span>
+        <span class="nav-badge badge-purple" id="nb-campaigns">0</span>
+      </a>
+      <a href="#" class="nav-item" data-page="detections">
+        <i class="fas fa-broadcast-tower"></i><span>Live Detections</span>
+        <span class="nav-badge badge-green blink">LIVE</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-section-label">INTELLIGENCE</div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item" data-page="threat-actors">
+        <i class="fas fa-user-secret"></i><span>Threat Actors</span>
+      </a>
+      <a href="#" class="nav-item" data-page="dark-web">
+        <i class="fas fa-spider"></i><span>Dark Web</span>
+      </a>
+      <a href="#" class="nav-item" data-page="exposure">
+        <i class="fas fa-radiation"></i><span>Exposure</span>
+      </a>
+      <a href="#" class="nav-item" data-page="ioc-registry">
+        <i class="fas fa-fingerprint"></i><span>IOC Registry</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-section-label">AI OPERATIONS</div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item" data-page="ai-orchestrator">
+        <i class="fas fa-robot"></i><span>AI Orchestrator</span>
+        <span class="nav-badge badge-cyan">AI</span>
+      </a>
+      <a href="#" class="nav-item" data-page="collectors">
+        <i class="fas fa-satellite"></i><span>Collectors</span>
+      </a>
+      <a href="#" class="nav-item" data-page="playbooks">
+        <i class="fas fa-book"></i><span>Playbooks</span>
+      </a>
+      <a href="#" class="nav-item" data-page="edr-siem">
+        <i class="fas fa-plug"></i><span>EDR / SIEM</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-section-label">SOC OPERATIONS</div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item" data-page="soc-operations">
+        <i class="fas fa-shield-virus"></i><span>SOC Operations</span>
+        <span class="nav-badge badge-gold">NEW</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-section-label">ADVANCED SOC</div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item" data-page="executive-dashboard">
+        <i class="fas fa-chart-line"></i><span>Executive Dashboard</span>
+      </a>
+      <a href="#" class="nav-item" data-page="kill-chain">
+        <i class="fas fa-sitemap"></i><span>Kill Chain View</span>
+      </a>
+      <a href="#" class="nav-item" data-page="case-management">
+        <i class="fas fa-folder-open"></i><span>Case Management</span>
+      </a>
+      <a href="#" class="nav-item" data-page="threat-hunting">
+        <i class="fas fa-search"></i><span>Threat Hunting</span>
+      </a>
+      <a href="#" class="nav-item" data-page="detection-engineering">
+        <i class="fas fa-code"></i><span>Detection Engineering</span>
+      </a>
+      <a href="#" class="nav-item" data-page="soar">
+        <i class="fas fa-bolt"></i><span>SOAR Automation</span>
+      </a>
+      <a href="#" class="nav-item" data-page="live-feeds">
+        <i class="fas fa-rss"></i><span>Live Threat Feeds</span>
+      </a>
+      <a href="#" class="nav-item" data-page="sysmon">
+        <i class="fas fa-file-code"></i><span>Sysmon Analyzer</span>
+        <span class="nav-badge badge-gold">NEW</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-section-label">INTEL HUB</div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item" data-page="cyber-news">
+        <i class="fas fa-newspaper"></i><span>Cyber News</span>
+      </a>
+      <a href="#" class="nav-item" data-page="mitre-attack">
+        <i class="fas fa-th"></i><span>MITRE ATT&CK</span>
+      </a>
+      <a href="#" class="nav-item" data-page="ioc-database">
+        <i class="fas fa-database"></i><span>IOC Database</span>
+      </a>
+      <a href="#" class="nav-item" data-page="geo-threats">
+        <i class="fas fa-globe"></i><span>Geo Threat Map</span>
+        <span class="nav-badge badge-gold">NEW</span>
+      </a>
+    </nav>
+
+    <!-- ════ CYBER DEFENSE BRAIN ════ -->
+    <div class="sidebar-section-label" style="color:#00d4ff;opacity:1;">🧠 CYBER DEFENSE BRAIN</div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item" data-page="malware-lab">
+        <i class="fas fa-flask"></i><span>Malware Analysis Lab</span>
+        <span class="nav-badge" style="background:linear-gradient(90deg,#ef4444,#f97316);color:white;font-size:8px;padding:1px 5px;border-radius:8px;">LAB</span>
+      </a>
+      <a href="#" class="nav-item" data-page="cognitive-layer">
+        <i class="fas fa-brain"></i><span>Cognitive AI Layer</span>
+        <span class="nav-badge" style="background:linear-gradient(90deg,#a855f7,#6366f1);color:white;font-size:8px;padding:1px 5px;border-radius:8px;">XAI</span>
+      </a>
+      <a href="#" class="nav-item" data-page="predictive-engine">
+        <i class="fas fa-chart-line"></i><span>Predictive Threat Engine</span>
+      </a>
+      <a href="#" class="nav-item" data-page="attack-graph">
+        <i class="fas fa-sitemap"></i><span>Attack Graph Intelligence</span>
+      </a>
+      <a href="#" class="nav-item" data-page="malware-dna">
+        <i class="fas fa-dna"></i><span>Malware DNA Engine</span>
+      </a>
+      <a href="#" class="nav-item" data-page="adversary-sim">
+        <i class="fas fa-user-ninja"></i><span>Adversary Simulation Lab</span>
+      </a>
+      <a href="#" class="nav-item" data-page="soc-memory">
+        <i class="fas fa-memory"></i><span>SOC Memory Engine</span>
+      </a>
+      <a href="#" class="nav-item" data-page="threat-graph">
+        <i class="fas fa-project-diagram"></i><span>Threat Intel Graph</span>
+      </a>
+      <a href="#" class="nav-item" data-page="digital-risk">
+        <i class="fas fa-shield-virus"></i><span>Digital Risk Protection</span>
+      </a>
+      <a href="#" class="nav-item" data-page="attack-storyline">
+        <i class="fas fa-film"></i><span>Attack Storyline</span>
+        <span class="nav-badge" style="background:linear-gradient(90deg,#f59e0b,#f97316);color:white;font-size:8px;padding:1px 5px;border-radius:8px;">NEW</span>
+      </a>
+    </nav>
+
+    <!-- ════ INNOVATIONS ════ -->
+    <div class="sidebar-section-label" style="color:#f97316;opacity:1;">🚀 INNOVATIONS</div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item" data-page="whatif-simulator">
+        <i class="fas fa-chess"></i><span>What-If Simulator</span>
+        <span class="nav-badge" style="background:linear-gradient(90deg,#f97316,#ef4444);color:white;font-size:8px;padding:1px 5px;border-radius:8px;">NEW</span>
+      </a>
+      <a href="#" class="nav-item" data-page="security-brain">
+        <i class="fas fa-brain"></i><span>Security Memory Brain</span>
+        <span class="nav-badge" style="background:linear-gradient(90deg,#00d4ff,#a855f7);color:white;font-size:8px;padding:1px 5px;border-radius:8px;">NEW</span>
+      </a>
+      <a href="#" class="nav-item" data-page="autonomous-agent">
+        <i class="fas fa-robot"></i><span>Autonomous SOC Agent</span>
+        <span class="nav-badge" style="background:linear-gradient(90deg,#22c55e,#16a34a);color:white;font-size:8px;padding:1px 5px;border-radius:8px;">NEW</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-section-label">PLATFORM</div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item" data-page="customers">
+        <i class="fas fa-building"></i><span>Tenants</span>
+      </a>
+      <a href="#" class="nav-item" data-page="reports">
+        <i class="fas fa-file-alt"></i><span>Reports</span>
+      </a>
+      <a href="#" class="nav-item" data-page="rbac-admin">
+        <i class="fas fa-users-cog"></i><span>RBAC Admin</span>
+      </a>
+      <a href="#" class="nav-item" data-page="branding">
+        <i class="fas fa-palette"></i><span>Branding</span>
+      </a>
+      <a href="#" class="nav-item" data-page="pricing">
+        <i class="fas fa-tags"></i><span>Pricing Plans</span>
+      </a>
+      <a href="#" class="nav-item" data-page="settings">
+        <i class="fas fa-cog"></i><span>Settings</span>
+      </a>
+    </nav>
+
+  </div><!-- end sidebar-nav-scroll -->
+
+  <div class="sidebar-footer">
+    <div class="sidebar-user" id="sidebarUserInfo">
+      <div class="user-avatar-sm" id="sidebarAvatar">SA</div>
+      <div class="user-info-text">
+        <div class="user-name-sm" id="sidebarUserName">Loading…</div>
+        <div class="user-role-sm" id="sidebarUserRole">Analyst</div>
+      </div>
+    </div>
+    <button class="sidebar-logout-btn" onclick="doLogout()" title="Sign Out">
+      <i class="fas fa-sign-out-alt"></i>
+    </button>
+  </div>
+</aside>
+
+<!-- ────────── MAIN WRAPPER ────────── -->
+<div class="main-wrapper" id="mainWrapper">
+
+  <!-- ────────── TOPBAR ────────── -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="page-info">
+        <div class="page-title" id="pageTitle">Command Center</div>
+        <div class="breadcrumb" id="breadcrumb">Dashboard / Overview</div>
+      </div>
+    </div>
+    <div class="topbar-center">
+      <div class="search-wrap" id="searchWrap">
+        <i class="fas fa-search search-icon"></i>
+        <input type="text" class="global-search" id="globalSearch" placeholder="Search IOCs, actors, campaigns… (Ctrl+K)" />
+        <div class="search-results" id="searchResults"></div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <!-- AI Provider switcher -->
+      <div class="ai-provider-wrap">
+        <button class="tb-btn ai-provider-btn" id="aiProviderBtn" title="Switch AI Provider">
+          <i class="fas fa-microchip"></i>
+          <span id="aiProviderName">Ollama</span>
+        </button>
+        <div class="ai-provider-menu" id="aiProviderMenu">
+          <div class="ap-item" onclick="switchAIProvider('ollama','Qwen3:8B via Ollama','#22c55e','GPU Accelerated')">
+            <i class="fas fa-microchip" style="color:#22c55e"></i> Ollama (Local)
+          </div>
+          <div class="ap-item" onclick="switchAIProvider('openai','GPT-4o','#22d3ee','OpenAI API')">
+            <i class="fas fa-brain" style="color:#22d3ee"></i> OpenAI GPT-4o
+          </div>
+          <div class="ap-item" onclick="switchAIProvider('anthropic','Claude 3.5','#a855f7','Anthropic API')">
+            <i class="fas fa-flask" style="color:#a855f7"></i> Anthropic Claude
+          </div>
+          <div class="ap-item" onclick="switchAIProvider('gemini','Gemini Pro','#f59e0b','Google AI')">
+            <i class="fas fa-gem" style="color:#f59e0b"></i> Google Gemini
+          </div>
+        </div>
+      </div>
+      <!-- Notifications -->
+      <div class="notif-wrap">
+        <button class="tb-btn" id="notifBtn" onclick="toggleNotifications()" title="Notifications">
+          <i class="fas fa-bell"></i>
+          <span class="notif-dot" id="notifDot"></span>
+        </button>
+        <div class="notif-dropdown" id="notifDropdown">
+          <div class="notif-header">
+            <span>Notifications</span>
+            <button onclick="markAllRead()" style="background:none;border:none;color:var(--accent-blue);font-size:11px;cursor:pointer;">Mark all read</button>
+          </div>
+          <div class="notif-list" id="notifList"></div>
+        </div>
+      </div>
+      <!-- Sync -->
+      <button class="tb-btn" title="Sync Feeds" id="syncBtn" onclick="triggerSync()">
+        <i class="fas fa-sync-alt" id="syncIcon"></i>
+      </button>
+      <!-- User -->
+      <div class="user-avatar" id="topbarAvatar" title="User Profile" onclick="navigateTo('settings')">WA</div>
+    </div>
+  </header>
+
+  <!-- PAGE CONTENT -->
+  <div class="content-area" id="contentArea">
+
+    <!-- ======= COMMAND CENTER ======= -->
+    <div class="page active" id="page-command-center">
+      <div class="content-grid">
+        <!-- KPI Cards -->
+        <div class="metrics-row">
+          <div class="metric-card critical" style="cursor:pointer" onclick="navigateTo('findings',{severity:'critical'})" title="View Critical Threats">
+            <div class="metric-icon"><i class="fas fa-skull-crossbones"></i></div>
+            <div class="metric-body">
+              <div class="metric-value" id="m-critical">—</div>
+              <div class="metric-label">Critical Threats</div>
+              <div class="metric-delta" id="m-critical-delta">Loading…</div>
+            </div>
+            <div class="metric-arrow"><i class="fas fa-chevron-right"></i></div>
+          </div>
+          <div class="metric-card high" style="cursor:pointer" onclick="navigateTo('findings',{severity:'high'})" title="View High Severity">
+            <div class="metric-icon"><i class="fas fa-exclamation-triangle"></i></div>
+            <div class="metric-body">
+              <div class="metric-value" id="m-high">—</div>
+              <div class="metric-label">High Severity</div>
+              <div class="metric-delta" id="m-high-delta">Loading…</div>
+            </div>
+            <div class="metric-arrow"><i class="fas fa-chevron-right"></i></div>
+          </div>
+          <div class="metric-card info" style="cursor:pointer" onclick="navigateTo('findings')" title="All Findings">
+            <div class="metric-icon"><i class="fas fa-crosshairs"></i></div>
+            <div class="metric-body">
+              <div class="metric-value" id="m-findings">—</div>
+              <div class="metric-label">Total Findings</div>
+              <div class="metric-delta" id="m-findings-delta">Loading…</div>
+            </div>
+            <div class="metric-arrow"><i class="fas fa-chevron-right"></i></div>
+          </div>
+          <div class="metric-card green" style="cursor:pointer" onclick="navigateTo('collectors')" title="Collector Status">
+            <div class="metric-icon"><i class="fas fa-satellite"></i></div>
+            <div class="metric-body">
+              <div class="metric-value" id="m-feeds">—</div>
+              <div class="metric-label">Active Feeds</div>
+              <div class="metric-delta" id="m-feeds-delta">Loading…</div>
+            </div>
+            <div class="metric-arrow"><i class="fas fa-chevron-right"></i></div>
+          </div>
+          <div class="metric-card purple" style="cursor:pointer" onclick="navigateTo('ioc-registry')" title="IOC Registry">
+            <div class="metric-icon"><i class="fas fa-fingerprint"></i></div>
+            <div class="metric-body">
+              <div class="metric-value" id="m-iocs">—</div>
+              <div class="metric-label">IOCs Collected</div>
+              <div class="metric-delta" id="m-iocs-delta">Loading…</div>
+            </div>
+            <div class="metric-arrow"><i class="fas fa-chevron-right"></i></div>
+          </div>
+          <div class="metric-card cyan" style="cursor:pointer" onclick="navigateTo('ai-orchestrator')" title="AI Investigations">
+            <div class="metric-icon"><i class="fas fa-robot"></i></div>
+            <div class="metric-body">
+              <div class="metric-value" id="m-ai">—</div>
+              <div class="metric-label">AI Investigations</div>
+              <div class="metric-delta" id="m-ai-delta">Loading…</div>
+            </div>
+            <div class="metric-arrow"><i class="fas fa-chevron-right"></i></div>
+          </div>
+        </div>
+
+        <!-- Charts Row -->
+        <div class="charts-row">
+          <div class="chart-card wide">
+            <div class="chart-header">
+              <div class="chart-title"><i class="fas fa-chart-area"></i> Detection Timeline</div>
+              <div class="chart-controls">
+                <button class="chart-btn active" onclick="setTimeRange(this,'7d')">7D</button>
+                <button class="chart-btn" onclick="setTimeRange(this,'30d')">30D</button>
+                <button class="chart-btn" onclick="setTimeRange(this,'90d')">90D</button>
+              </div>
+            </div>
+            <div style="height:220px;position:relative;"><canvas id="timelineChart"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-header"><div class="chart-title"><i class="fas fa-chart-pie"></i> IOC Categories</div></div>
+            <div style="height:220px;position:relative;"><canvas id="iocDistChart"></canvas></div>
+          </div>
+        </div>
+
+        <!-- Bottom Panels -->
+        <div class="bottom-grid">
+          <div class="panel findings-panel">
+            <div class="panel-header">
+              <span><i class="fas fa-crosshairs"></i> Latest Findings</span>
+              <button class="panel-action" onclick="navigateTo('findings')">View All →</button>
+            </div>
+            <div class="findings-list" id="latestFindings"></div>
+          </div>
+          <div class="panel tpi-panel">
+            <div class="panel-header"><span><i class="fas fa-fire"></i> Threat Pressure Index</span></div>
+            <div class="tpi-gauge-wrap">
+              <canvas id="tpiGauge" style="max-width:180px;max-height:180px;"></canvas>
+              <div class="tpi-center-text">
+                <div class="tpi-number" id="tpiNumber">—</div>
+                <div class="tpi-label-text" id="tpiLevelLabel">LOADING</div>
+              </div>
+            </div>
+            <div class="tpi-breakdown">
+              <div class="tpi-row"><span>Vuln Intel</span><div class="tpi-mini-bar"><div id="tpBarMini" style="width:0%;background:#ef4444"></div></div><span id="tpValueMini">—</span></div>
+            </div>
+          </div>
+          <div class="panel collectors-panel">
+            <div class="panel-header">
+              <span><i class="fas fa-satellite"></i> Collector Status</span>
+              <button class="panel-action" onclick="navigateTo('collectors')" id="collectorsPanelBtn">View All</button>
+            </div>
+            <div class="collectors-mini-list" id="collectorsMiniList"></div>
+          </div>
+        </div>
+
+        <!-- MITRE + Campaigns Row -->
+        <div class="charts-row">
+          <div class="chart-card wide">
+            <div class="chart-header">
+              <div class="chart-title"><i class="fas fa-th"></i> MITRE ATT&CK Coverage</div>
+              <div class="chart-controls">
+                <span class="badge-pill" style="background:#ef444422;color:#ef4444">Critical</span>
+                <span class="badge-pill" style="background:#f9731622;color:#f97316">High</span>
+                <span class="badge-pill" style="background:#22c55e22;color:#22c55e">Covered</span>
+              </div>
+            </div>
+            <div id="mitreHeatmap" style="height:160px;overflow:auto;"></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-header">
+              <div class="chart-title"><i class="fas fa-chess-king"></i> Active Campaigns</div>
+            </div>
+            <div class="campaigns-mini-list" id="campaignsMiniList"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======= FINDINGS ======= -->
+    <div class="page" id="page-findings">
+      <div id="findingsLiveContainer" style="padding:8px 0"></div>
+      <div id="findingsLegacyWrap" style="display:none"></div>
+    </div>
+
+    <!-- ======= CAMPAIGNS (SOC v2.0) ======= -->
+    <div class="page" id="page-campaigns">
+      <!-- SOC module renders into this wrapper -->
+      <div id="soc-campaigns-wrap" style="height:100%;overflow:auto">
+        <!-- Legacy container kept for backward compatibility -->
+        <div id="campaignsLiveContainer" style="display:none"></div>
+      </div>
+      <div id="campaignsLegacyWrap" style="display:none"></div>
+    </div>
+
+    <!-- ======= LIVE DETECTIONS (SOC v2.0) ======= -->
+    <div class="page" id="page-detections">
+      <!-- SOC module renders into this wrapper -->
+      <div id="soc-detections-wrap" style="height:100%;overflow:auto">
+        <!-- Legacy elements kept for backward compatibility -->
+        <div id="detectionsLiveContainer" style="display:none"></div>
+        <div class="detections-header" style="display:none">
+          <div class="live-indicator"><span class="live-dot"></span> LIVE FEED</div>
+          <div class="detection-stats">
+            <span id="detRate">— events/sec</span>
+            <span id="detTotal">— total</span>
+          </div>
+          <button class="btn-primary" onclick="_ffExport()" style="margin-left:auto;"><i class="fas fa-download"></i> Export Stream</button>
+        </div>
+        <div class="detections-stream" id="detectionsStream" style="display:none"></div>
+      </div>
+    </div>
+
+    <!-- ======= THREAT ACTORS ======= -->
+    <div class="page" id="page-threat-actors">
+      <div id="threatActorsLiveContainer" style="padding:8px 0"></div>
+    </div>
+
+    <!-- ======= DARK WEB ======= -->
+    <div class="page" id="page-dark-web" style="padding:0"></div>
+
+    <!-- ======= EXPOSURE ======= -->
+    <div class="page" id="page-exposure">
+      <div id="exposureLiveContainer" style="padding:8px 0"></div>
+    </div>
+
+    <!-- ======= IOC REGISTRY ======= -->
+    <div class="page" id="page-ioc-registry">
+      <div id="iocRegistryLiveContainer" style="padding:8px 0"></div>
+      <div id="iocRegistryLegacyWrap" style="display:none"></div>
+    </div>
+
+    <!-- ======= AI ORCHESTRATOR ======= -->
+    <div class="page" id="page-ai-orchestrator">
+      <div class="ai-orch-layout">
+        <div class="ai-chat-main">
+          <div class="ai-chat-header">
+            <div class="ai-header-left">
+              <img src="images/wadjet-logo.png" alt="Wadjet" style="width:28px;height:28px;object-fit:contain;border-radius:4px;" />
+              <div style="margin-left:8px;">
+                <div class="ai-status-indicator">
+                  <span class="ai-pulse-dot"></span>
+                  <span id="aiProviderLabel">Qwen3:8B via Ollama</span>
+                </div>
+                <div class="ai-sub-status">GPU Accelerated · Autonomous · <span id="aiIterDisplay">0</span>/12 iterations</div>
+              </div>
+            </div>
+            <div class="ai-header-right">
+              <div class="ai-tools-active">
+                <span class="tools-label">Tools:</span>
+                <span class="tool-chip">whois</span>
+                <span class="tool-chip">virustotal</span>
+                <span class="tool-chip">shodan</span>
+                <span class="tool-chip">cve_lookup</span>
+                <span class="tool-chip">mitre_map</span>
+                <span class="tool-chip">urlscan</span>
+                <span class="tool-chip">abuseipdb</span>
+                <span class="tool-chip">otx_pulse</span>
+                <span class="tool-chip">passive_dns</span>
+              </div>
+            </div>
+          </div>
+          <div class="ai-messages" id="aiMessages">
+            <div class="ai-welcome">
+              <div class="ai-welcome-icon">
+                <img src="images/wadjet-logo.png" alt="Wadjet-Eye AI" style="width:56px;height:56px;object-fit:contain;" />
+              </div>
+              <div class="ai-welcome-text">
+                <h3>Wadjet-Eye Agentic AI</h3>
+                <p>Autonomous threat investigation engine. I select tools, observe results, reason iteratively, and build a provable evidence trail — up to 12 autonomous iterations per query.</p>
+                <div class="ai-suggestion-chips">
+                  <button class="suggestion-chip" onclick="sendSuggestion(this)">Investigate 185.220.101.45 for C2 activity</button>
+                  <button class="suggestion-chip" onclick="sendSuggestion(this)">Analyze CVE-2024-3400 exploit in the wild</button>
+                  <button class="suggestion-chip" onclick="sendSuggestion(this)">Check domain maliciousupdate[.]ru attribution</button>
+                  <button class="suggestion-chip" onclick="sendSuggestion(this)">Summarize all CRITICAL findings today</button>
+                  <button class="suggestion-chip" onclick="sendSuggestion(this)">Which MITRE techniques have highest coverage?</button>
+                  <button class="suggestion-chip" onclick="sendSuggestion(this)">Run full threat brief for today</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="ai-input-bar">
+            <div class="ai-input-wrap">
+              <textarea id="aiInput" placeholder="Investigate a threat, analyze an IOC, or ask about your security posture…" rows="1" onkeydown="handleAIKey(event)"></textarea>
+              <div class="ai-input-actions">
+                <span class="ai-iter-label" id="aiIterLabel">0/12 iterations</span>
+                <button class="ai-send-btn" id="aiSendBtn" onclick="sendAIMessage()">
+                  <i class="fas fa-paper-plane"></i>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="ai-sidebar">
+          <div class="ai-sidebar-section">
+            <div class="ai-sidebar-title">Recent Investigations</div>
+            <div class="inv-list" id="invList"></div>
+          </div>
+          <div class="ai-sidebar-section">
+            <div class="ai-sidebar-title">Tool Execution Log</div>
+            <div class="tool-log" id="toolLog"></div>
+          </div>
+          <div class="ai-sidebar-section">
+            <div class="ai-sidebar-title">Evidence Trail</div>
+            <div class="evidence-trail" id="evidenceTrail">
+              <div class="evidence-empty">No active investigation</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======= COLLECTORS ======= -->
+    <div class="page" id="page-collectors">
+      <div id="collectorsLiveContainer" style="padding:8px 0"></div>
+      <div class="collectors-page-wrap" id="collectorsPageWrap" style="display:none"></div>
+    </div>
+
+    <!-- ======= PLAYBOOKS ======= -->
+    <div class="page" id="page-playbooks">
+      <div id="playbooksWrap" style="min-height:400px"></div>
+    </div>
+
+    <!-- ======= EDR/SIEM ======= -->
+    <div class="page" id="page-edr-siem">
+      <div id="edrSiemWrap"></div>
+    </div>
+
+    <!-- ======= SOC OPERATIONS MODULE ======= -->
+    <div class="page" id="page-soc-operations" style="padding:0;overflow:hidden;height:100%;display:none;flex-direction:column;">
+      <div id="socOperationsWrap" style="display:flex;flex-direction:column;height:100%;overflow:hidden;"></div>
+    </div>
+
+    <!-- ======= SYSMON ANALYZER ======= -->
+    <div class="page" id="page-sysmon">
+      <div id="sysmonWrap"></div>
+    </div>
+
+    <!-- ======= TENANTS ======= -->
+    <div class="page" id="page-customers">
+      <div class="customers-grid" id="customersGrid"></div>
+    </div>
+
+    <!-- ======= REPORTS ======= -->
+    <div class="page" id="page-reports">
+      <div class="reports-wrap" id="reportsWrap"></div>
+    </div>
+
+    <!-- ======= SETTINGS ======= -->
+    <div class="page" id="page-settings">
+      <div id="settingsWrap" style="height:100%;overflow:auto"></div>
+    </div>
+
+    <!-- ======= EXECUTIVE DASHBOARD ======= -->
+    <div class="page" id="page-executive-dashboard">
+      <div id="executiveDashWrap"></div>
+    </div>
+
+    <!-- ======= KILL CHAIN VIEW ======= -->
+    <div class="page" id="page-kill-chain">
+      <div id="killChainWrap"></div>
+    </div>
+
+    <!-- ======= CASE MANAGEMENT ======= -->
+    <div class="page" id="page-case-management">
+      <div id="casesLiveContainer" style="padding:8px 0"></div>
+      <div id="caseManagementWrap" style="display:none"></div>
+    </div>
+
+    <!-- ======= THREAT HUNTING ======= -->
+    <div class="page" id="page-threat-hunting">
+      <div id="threatHuntingWrap" style="min-height:400px"></div>
+    </div>
+
+    <!-- ======= DETECTION ENGINEERING ======= -->
+    <div class="page" id="page-detection-engineering">
+      <div id="detectionEngineeringWrap" style="min-height:400px"></div>
+    </div>
+
+    <!-- ======= SOAR AUTOMATION ======= -->
+    <div class="page" id="page-soar">
+      <div id="soarWrap" style="height:100%;overflow:auto"></div>
+    </div>
+
+    <!-- ======= LIVE THREAT FEEDS ======= -->
+    <div class="page" id="page-live-feeds">
+      <div id="liveFeedsWrap"></div>
+    </div>
+
+    <!-- ======= CYBER NEWS ======= -->
+    <div class="page" id="page-cyber-news">
+      <div id="cyberNewsWrap" style="padding:4px;"></div>
+    </div>
+
+    <!-- ======= MITRE ATT&CK NAVIGATOR ======= -->
+    <div class="page" id="page-mitre-attack">
+      <div id="mitreCoverageLiveContainer" style="padding:8px 0"></div>
+      <div id="mitreAttackWrap"></div>
+    </div>
+
+    <!-- ======= IOC DATABASE ======= -->
+    <div class="page" id="page-ioc-database">
+      <div id="iocDatabaseWrap" style="height:100%;overflow:auto"></div>
+    </div>
+
+    <!-- ======= GEO THREATS ======= -->
+    <div class="page" id="page-geo-threats">
+      <div id="geoThreatsWrap" style="width:100%;height:calc(100vh - 80px);position:relative;background:#080c14;"></div>
+    </div>
+
+    <!-- ======= RBAC ADMIN ======= -->
+    <div class="page" id="page-rbac-admin">
+      <div id="rbacAdminWrap"></div>
+    </div>
+
+    <!-- ======= BRANDING ======= -->
+    <div class="page" id="page-branding">
+      <div id="brandingWrap"></div>
+    </div>
+
+    <!-- ======= PRICING ======= -->
+    <div class="page" id="page-pricing">
+      <div id="pricingWrap" style="padding:4px;"></div>
+    </div>
+
+    <!-- ════════════════════════════════════════
+         CYBER DEFENSE BRAIN — NEW MODULE PAGES
+    ════════════════════════════════════════ -->
+
+    <!-- ======= MALWARE ANALYSIS LAB ======= -->
+    <div class="page" id="page-malware-lab" style="padding:0;overflow:auto;"></div>
+
+    <!-- ======= COGNITIVE SECURITY LAYER ======= -->
+    <div class="page" id="page-cognitive-layer" style="padding:0;overflow:auto;"></div>
+
+    <!-- ======= PREDICTIVE THREAT ENGINE ======= -->
+    <div class="page" id="page-predictive-engine" style="padding:0;overflow:auto;"></div>
+
+    <!-- ======= ATTACK GRAPH INTELLIGENCE ======= -->
+    <div class="page" id="page-attack-graph" style="padding:0;overflow:auto;"></div>
+
+    <!-- ======= MALWARE DNA ENGINE ======= -->
+    <div class="page" id="page-malware-dna" style="padding:0;overflow:auto;"></div>
+
+    <!-- ======= ADVERSARY SIMULATION LAB ======= -->
+    <div class="page" id="page-adversary-sim" style="padding:0;overflow:auto;"></div>
+
+    <!-- ======= SOC MEMORY ENGINE ======= -->
+    <div class="page" id="page-soc-memory" style="padding:0;overflow:auto;"></div>
+
+    <!-- ======= THREAT INTELLIGENCE GRAPH BRAIN ======= -->
+    <div class="page" id="page-threat-graph" style="padding:0;overflow:auto;"></div>
+
+    <!-- ======= DIGITAL RISK PROTECTION ======= -->
+    <div class="page" id="page-digital-risk" style="padding:0;overflow:auto;"></div>
+
+    <!-- ======= ATTACK STORYLINE GENERATOR ======= -->
+    <div class="page" id="page-attack-storyline" style="padding:0;overflow:auto;"></div>
+
+    <!-- ======= WHAT-IF SIMULATOR ======= -->
+    <div class="page" id="page-whatif-simulator" style="padding:0;overflow:auto;"></div>
+
+    <!-- ======= SECURITY MEMORY BRAIN ======= -->
+    <div class="page" id="page-security-brain" style="padding:0;overflow:auto;"></div>
+
+    <!-- ======= AUTONOMOUS SOC AGENT ======= -->
+    <div class="page" id="page-autonomous-agent" style="padding:0;overflow:auto;"></div>
+
+  </div><!-- end content-area -->
+</div><!-- end main-wrapper -->
+</div><!-- end mainApp -->
+
+<!-- ══════════ MODALS ══════════ -->
+<div class="modal-overlay" id="detailModal" onclick="closeDetailModal(event)">
+  <div class="modal-card large" id="detailModalContent">
+    <button class="modal-close" onclick="closeDetailModalBtn()"><i class="fas fa-times"></i></button>
+    <div id="detailModalBody"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="findingModal" onclick="closeFindingModal(event)">
+  <div class="modal-card" id="findingModalContent">
+    <button class="modal-close" onclick="closeFindingModalBtn()"><i class="fas fa-times"></i></button>
+    <div id="findingModalBody"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="collectorModal" onclick="closeCollectorModal(event)">
+  <div class="modal-card" id="collectorModalContent">
+    <button class="modal-close" onclick="closeCollectorModalBtn()"><i class="fas fa-times"></i></button>
+    <div id="collectorModalBody"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="playbookModal" onclick="closePlaybookModal(event)">
+  <div class="modal-card large" id="playbookModalContent">
+    <button class="modal-close" onclick="closePlaybookModalBtn()"><i class="fas fa-times"></i></button>
+    <div id="playbookModalBody"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="tenantModal" onclick="closeTenantModal(event)">
+  <div class="modal-card" id="tenantModalContent">
+    <button class="modal-close" onclick="closeTenantModalBtn()"><i class="fas fa-times"></i></button>
+    <div id="tenantModalBody"></div>
+  </div>
+</div>
+
+<!-- Actor Detail Modal -->
+<div class="modal-overlay" id="actorModal" onclick="if(event.target===this){this.classList.remove('active');document.body.style.overflow='';}">  
+  <div class="modal-card large" id="actorModalContent">
+    <button class="modal-close" onclick="document.getElementById('actorModal').classList.remove('active');document.body.style.overflow=''" style="position:absolute;top:14px;right:14px;z-index:10;width:32px;height:32px;border-radius:8px;background:#21262d;border:1px solid #30363d;color:#8b949e;font-size:1em;cursor:pointer;display:flex;align-items:center;justify-content:center"><i class="fas fa-times"></i></button>
+    <div id="actorModalBody"></div>
+  </div>
+</div>
+
+<!-- Exposure Detail Modal -->
+<div class="modal-overlay" id="exposureModal" onclick="if(event.target===this)this.classList.remove('active')">
+  <div class="modal-card large" id="exposureModalContent">
+    <button class="modal-close" onclick="document.getElementById('exposureModal').classList.remove('active')"><i class="fas fa-times"></i></button>
+    <div id="exposureModalBody"></div>
+  </div>
+</div>
+
+<!-- ══════════ TOAST ══════════ -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- ══ BACKEND CONFIG ══ -->
+<script>
+  window.THREATPILOT_API_URL = 'https://wadjet-eye-ai.onrender.com';
+  window.THREATPILOT_WS_URL  = 'https://wadjet-eye-ai.onrender.com';
+  // Legacy alias
+  window.WADJET_API_URL = window.THREATPILOT_API_URL;
+</script>
+
+<!-- Socket.IO -->
+<script src="https://cdn.jsdelivr.net/npm/socket.io-client@4/dist/socket.io.min.js"></script>
+
+<script src="js/data.js"></script>
+<script src="js/api-client.js"></script>
+<script src="js/auth-persistent.js"></script>
+<!-- v5.2 Centralized Auth Interceptor — must load AFTER api-client + auth-persistent -->
+<script src="js/auth-interceptor.js"></script>
+<!-- v5.3 Auth Validator — centralized authFetch(), API health check, 401 banner -->
+<script src="js/auth-validator.js"></script>
+<!-- v6.1 Secure Auth — Bearer+cookie bridge, fixes getAuthToken()=null, preserves tokens -->
+<script src="js/auth-secure.js"></script>
+<script src="js/cti-api.js"></script>
+<script src="js/realtime-data.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/pages.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/modals.js"></script>
+<script src="js/advanced.js"></script>
+<script src="js/rbac.js"></script>
+<script src="js/branding.js"></script>
+<script src="js/features.js"></script>
+<script src="js/ai-orchestrator.js"></script>
+<script src="js/geo-map.js"></script>
+<script src="js/sysmon.js"></script>
+<script src="js/playbooks-data.js"></script>
+<script src="js/playbooks-ui.js"></script>
+<script src="js/threat-hunting.js"></script>
+<script src="js/detection-engineering.js"></script>
+<script src="js/mitre-navigator.js"></script>
+<!-- darkweb.js uses const _DW_DATA at global scope — expose as window._ to prevent re-declare -->
+<script>window.__DW_PRELOAD_GUARD__ = true;</script>
+<script src="js/darkweb.js"></script>
+<!-- Guard: move _DW_DATA to window so next darkweb file can override without const collision -->
+<script>try { if(typeof _DW_DATA !== 'undefined') window._DW_DATA_v4 = _DW_DATA; } catch(e){}</script>
+<script src="js/live-pages.js"></script>
+<script src="js/eye-ai-branding.js"></script>
+<script src="js/leaflet-geo-map.js"></script>
+<!-- Enterprise v4.0 — New Modules -->
+<script src="js/kill-chain-viz.js"></script>
+<script src="js/detail-pages.js"></script>
+<!-- SOC Operations Module v1.0 -->
+<script src="js/soc-ai-engine.js"></script>
+<script src="js/soc-operations.js"></script>
+<script src="js/main.js"></script>
+<!-- v6.1 Secure Login Patch — MUST load AFTER main.js; overrides doLogin() on DOMContentLoaded;
+     v6.1 fixes: _finalizeLogin() now saves JWT to localStorage so getToken() works -->
+<script src="js/login-secure-patch.js"></script>
+<!-- v5.2 Production Modules — Auth Fixed, No Demo Mode -->
+<script src="js/branding-slogan.js"></script>
+<script src="js/ioc-intelligence.js"></script>
+<script src="js/platform-settings.js"></script>
+<script src="js/soar-ui.js"></script>
+<!-- v5.2 Live CTI Patch — removes all mock/demo data, real API only -->
+<script src="js/live-pages-patch.js"></script>
+<!-- v5.3 Module Router — non-blocking navigation with skeleton loading -->
+<script src="js/module-router.js"></script>
+<!-- v5.3 Threat Actors v2 — real API, full detail panel, OTX+MITRE ingest -->
+<!-- MUST load AFTER main.js and live-pages-patch.js to override renderThreatActors -->
+<script src="js/threat-actors-v2.js"></script>
+
+<!-- ══════════════════════════════════════════════════════════
+     SOC v3.0 — Active Campaigns & Live Detections (2026-04-02)
+     MUST load AFTER main.js, live-pages.js, live-pages-patch.js
+
+     Load order within this block matters:
+       1. campaign-correlation.js  — sets window.CorrelationEngine
+       2. campaigns-soc.js         — overrides window.renderCampaigns +
+                                     PAGE_CONFIG['campaigns'] with robust retry
+       3. live-detections-soc.js   — overrides window.renderDetections +
+                                     PAGE_CONFIG['detections'] with robust retry
+
+     v3.0 Fixes applied:
+       - PAGE_CONFIG race condition fixed (polling retry loop, 40 attempts @ 150ms)
+       - window.renderCampaigns / renderDetections overridden IMMEDIATELY at parse time
+       - _apiGet/apiPost paths corrected (no double /api with authFetch)
+       - Auto-correlation triggers when 0 campaigns returned
+       - Auth event listeners re-render if user navigated before auth resolved
+═══════════════════════════════════════════════════════════ -->
+<!-- Campaign Correlation Engine v3.0 — auto-creates campaigns from IOC clusters -->
+<script src="js/campaign-correlation.js"></script>
+<!-- Active Campaigns SOC Dashboard v3.0 -->
+<script src="js/campaigns-soc.js"></script>
+<!-- Live Detections SOC Feed v3.0 -->
+<script src="js/live-detections-soc.js"></script>
+
+<!-- ═══════════════════════════════════════════════════════════
+     PLATFORM ENHANCEMENTS v1.0 (2026-04-02)
+     Dark Web v5.0 · Exposure v3.0 · IOC Search v2.0
+     AI Orchestrator v4.0 · Pricing v2.0 · Settings Fix v2.0
+     Tenant Management v2.0
+     MUST load AFTER: main.js, ioc-intelligence.js, platform-settings.js
+═══════════════════════════════════════════════════════════ -->
+<!-- Dark Web Intelligence v5.0 — Threat Actor style, animations -->
+<script src="js/darkweb-enhanced.js"></script>
+<!-- Exposure Assessment v3.0 — CVE tracking, CVSS, EPSS -->
+<script src="js/exposure-enhanced.js"></script>
+<!-- IOC Registry Search Enhancement v2.0 — real-time type detection -->
+<script src="js/ioc-search-enhanced.js"></script>
+<!-- AI Orchestrator v4.0 — real multi-source investigation -->
+<script src="js/ai-orchestrator-enhanced.js"></script>
+<!-- Pricing Module v2.0 — fully functional, admin-editable -->
+<script src="js/pricing-enhanced.js"></script>
+<!-- Platform Settings Fix v2.0 — HTTP 400 fix, validation -->
+<script src="js/settings-enhanced.js"></script>
+<!-- Tenant Management v2.0 — functional CRUD + RBAC import/export -->
+<script src="js/tenant-management-enhanced.js"></script>
+<!-- Live IOC Lookup v2.0 — multi-source real-time intelligence -->
+<script src="js/live-ioc-lookup.js"></script>
+
+<!-- ═══════════════════════════════════════════════════════════
+     PLATFORM v19.0 — Complete Module Overhaul
+     Dark Web v6.0 · AI Orchestrator v5.0 · IOC Lookup v3.0
+     Tenant RBAC v3.0 · Reports v2.0 · Pricing v3.0 · Settings v3.0
+     MUST load AFTER all other modules
+═══════════════════════════════════════════════════════════ -->
+<!-- Dark Web Intelligence v6.0 — Full redesign, 5 tabs, animated cards -->
+<script src="js/darkweb-v6.js"></script>
+<!-- AI Orchestrator v5.0 — Real OpenAI/Claude integration, streaming -->
+<script src="js/ai-orchestrator-v5.js"></script>
+<!-- Live IOC Lookup v3.0 — VT, AbuseIPDB, Shodan, OTX, URLhaus -->
+<script src="js/live-ioc-lookup-v3.js"></script>
+<!-- Tenant Management & RBAC v3.0 — Full CRUD, role management -->
+<script src="js/tenant-rbac-v3.js"></script>
+<!-- Reports + Pricing + Settings v3.0 — Combined module, HTTP 400 fix -->
+<script src="js/reports-pricing-settings-v3.js"></script>
+
+<!-- Enhancement Integration — Wire all modules to PAGE_CONFIG & navigation -->
+<script>
+(function() {
+  'use strict';
+
+  /* ══════════════════════════════════════════════════════
+     v19.0 PAGE_CONFIG WIRING
+     Priority: v19 modules override all previous renderers
+  ══════════════════════════════════════════════════════ */
+  function _patchV19Modules() {
+    if (!window.PAGE_CONFIG) return false;
+
+    const _wire = (pageId, renderFn, fallbackFn) => {
+      if (!window.PAGE_CONFIG[pageId]) {
+        window.PAGE_CONFIG[pageId] = { onEnter: renderFn };
+      } else {
+        window.PAGE_CONFIG[pageId].onEnter = function() {
+          if (typeof renderFn === 'function') renderFn();
+          else if (typeof fallbackFn === 'function') fallbackFn();
+        };
+      }
+    };
+
+    // Dark Web v6.0
+    _wire('dark-web', () => {
+      if (typeof window.renderDarkWeb === 'function') window.renderDarkWeb();
+    });
+
+    // AI Orchestrator v5.0
+    _wire('ai-orchestrator', () => {
+      if (typeof window.renderAIOrchestrator === 'function') window.renderAIOrchestrator();
+    });
+
+    // Live Feeds / IOC Lookup v3.0
+    _wire('live-feeds', () => {
+      if (typeof window.renderLiveIOCLookup === 'function') window.renderLiveIOCLookup();
+    });
+    _wire('ioc-lookup', () => {
+      if (typeof window.renderLiveIOCLookup === 'function') window.renderLiveIOCLookup();
+    });
+
+    // Tenant Management & RBAC v3.0
+    _wire('customers', () => {
+      if (typeof window.renderTenantManagement === 'function') window.renderTenantManagement();
+    });
+    _wire('rbac-admin', () => {
+      if (typeof window.renderTenantManagement === 'function') window.renderTenantManagement();
+    });
+
+    // Reports v2.0
+    _wire('reports', () => {
+      if (typeof window.renderReports === 'function') window.renderReports();
+    });
+
+    // Pricing v3.0
+    _wire('pricing', () => {
+      if (typeof window.renderPricing === 'function') window.renderPricing();
+    });
+
+    // Settings v3.0
+    _wire('settings', () => {
+      if (typeof window.renderSettingsEnhanced === 'function') window.renderSettingsEnhanced();
+      else if (typeof window.renderSettings === 'function') window.renderSettings();
+    });
+
+    // Exposure Assessment (use existing enhanced or original)
+    if (window.PAGE_CONFIG['exposure']) {
+      const _origExp = window.PAGE_CONFIG['exposure'].onEnter;
+      window.PAGE_CONFIG['exposure'].onEnter = function() {
+        if (typeof window.renderExposureAssessment === 'function') window.renderExposureAssessment();
+        else if (typeof _origExp === 'function') _origExp();
+      };
+    }
+
+    return true;
+  }
+
+  /* ── Also run legacy patch for backward compatibility ── */
+  function _patchEnhancedModules() {
+    if (!window.PAGE_CONFIG) return false;
+
+    // Dark Web — use enhanced renderer
+    if (window.PAGE_CONFIG['dark-web']) {
+      window.PAGE_CONFIG['dark-web'].onEnter = function() {
+        if (typeof window.renderDarkWeb === 'function') {
+          window.renderDarkWeb();
+        } else {
+          setTimeout(() => window.PAGE_CONFIG['dark-web']?.onEnter?.(), 300);
+        }
+      };
+    }
+
+    // Exposure Assessment — use enhanced renderer
+    if (window.PAGE_CONFIG['exposure']) {
+      const _origExp = window.PAGE_CONFIG['exposure'].onEnter;
+      window.PAGE_CONFIG['exposure'].onEnter = function() {
+        if (typeof window.renderExposureAssessment === 'function') {
+          window.renderExposureAssessment();
+        } else if (typeof _origExp === 'function') {
+          _origExp();
+        }
+      };
+    }
+
+    // Pricing — use enhanced renderer
+    if (window.PAGE_CONFIG['pricing']) {
+      window.PAGE_CONFIG['pricing'].onEnter = function() {
+        if (typeof window.renderPricing === 'function') {
+          window.renderPricing();
+        }
+      };
+    }
+
+    // Settings — use enhanced renderer (with HTTP 400 fix)
+    if (window.PAGE_CONFIG['settings']) {
+      const _origSettings = window.PAGE_CONFIG['settings'].onEnter;
+      window.PAGE_CONFIG['settings'].onEnter = function() {
+        if (typeof window.renderSettingsEnhanced === 'function') {
+          window.renderSettingsEnhanced();
+        } else if (typeof _origSettings === 'function') {
+          _origSettings();
+        }
+      };
+    }
+
+    // AI Orchestrator — use enhanced renderer
+    if (window.PAGE_CONFIG['ai-orchestrator']) {
+      const _origAI = window.PAGE_CONFIG['ai-orchestrator'].onEnter;
+      window.PAGE_CONFIG['ai-orchestrator'].onEnter = function() {
+        if (typeof window.renderAIOrchestrator === 'function') {
+          window.renderAIOrchestrator();
+        } else if (typeof _origAI === 'function') {
+          _origAI();
+        }
+      };
+    }
+
+    // Customers/Tenants — use enhanced tenant management
+    if (window.PAGE_CONFIG['customers']) {
+      const _origCust = window.PAGE_CONFIG['customers'].onEnter;
+      window.PAGE_CONFIG['customers'].onEnter = function() {
+        if (typeof window.renderTenantManagement === 'function') {
+          window.renderTenantManagement();
+        } else if (typeof _origCust === 'function') {
+          _origCust();
+        }
+      };
+    }
+
+    // Live Feeds / IOC Lookup — use enhanced lookup
+    if (window.PAGE_CONFIG['live-feeds']) {
+      const _origFeeds = window.PAGE_CONFIG['live-feeds'].onEnter;
+      window.PAGE_CONFIG['live-feeds'].onEnter = function() {
+        if (typeof window.renderLiveIOCLookup === 'function') {
+          window.renderLiveIOCLookup();
+        } else if (typeof _origFeeds === 'function') {
+          _origFeeds();
+        }
+      };
+    }
+
+    // Also globally expose openIOCSearch
+    if (!window.openIOCSearch && typeof window.openIOCSearch !== 'function') {
+      window.openIOCSearch = function() {
+        if (typeof window.openIOCSearch === 'function') window.openIOCSearch();
+      };
+    }
+
+    return true;
+  }
+
+  /* ── Retry patching until PAGE_CONFIG is ready ── */
+  let _attempts = 0;
+  const _patchInterval = setInterval(function() {
+    const v19Done = _patchV19Modules();
+    const legDone = _patchEnhancedModules();
+    if ((v19Done && legDone) || _attempts++ > 80) {
+      clearInterval(_patchInterval);
+    }
+  }, 150);
+
+  /* ── Initialize toast container and alias settings ── */
+  document.addEventListener('DOMContentLoaded', function() {
+    setTimeout(function() {
+      // Ensure p19 toast container exists
+      if (!document.getElementById('p19-toast-wrap')) {
+        const tc = document.createElement('div');
+        tc.id = 'p19-toast-wrap';
+        document.body.appendChild(tc);
+      }
+      // Alias settingsSave to v3.0 enhanced version
+      if (typeof window._settingsSaveAll === 'function') {
+        window.settingsSave = window._settingsSaveAll;
+      } else if (typeof window.settingsSaveEnhanced === 'function') {
+        window.settingsSave = window.settingsSaveEnhanced;
+      }
+      // Alias settingsReload
+      if (typeof window._settingsLoadConfig === 'function') {
+        window.settingsReload = window._settingsLoadConfig;
+      } else if (typeof window.settingsReloadEnhanced === 'function') {
+        window.settingsReload = window.settingsReloadEnhanced;
+      }
+      // Unified showToast — uses p19 toast system
+      const _origToast = window.showToast;
+      window.showToast = function(message, type = 'info') {
+        // Try original first
+        if (typeof _origToast === 'function') {
+          try { _origToast(message, type); return; } catch {}
+        }
+        // p19 toast fallback
+        let tc = document.getElementById('p19-toast-wrap');
+        if (!tc) { tc = document.createElement('div'); tc.id='p19-toast-wrap'; document.body.appendChild(tc); }
+        const icons = { success:'fa-check-circle', error:'fa-exclamation-circle', warning:'fa-exclamation-triangle', info:'fa-info-circle' };
+        const toast = document.createElement('div');
+        toast.className = `p19-toast p19-toast--${type}`;
+        toast.innerHTML = `<i class="fas ${icons[type]||'fa-bell'}"></i><span>${String(message).replace(/</g,'&lt;')}</span>`;
+        tc.appendChild(toast);
+        setTimeout(() => { toast.classList.add('p19-toast--exit'); setTimeout(()=>toast.remove(), 300); }, 3500);
+      };
+    }, 500);
+  });
+
+})();
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════
+     PLATFORM v20.0 — Critical Fixes + Advanced Login
+     Load LAST — overrides all previous module renderers
+═══════════════════════════════════════════════════════════ -->
+<!-- Platform Critical Fixes v20.0 — Settings UPSERT, data pipelines, nav freeze, pricing -->
+<script src="js/platform-fixes-v20.js"></script>
+<!-- Platform Utilities v20.0 — Toast system, mobile sidebar, keyboard shortcuts -->
+<script src="js/platform-utils-v20.js"></script>
+<!-- Advanced Login Page v20.0 — SOC-style glassmorphism, panels, animations -->
+<script src="js/login-v20.js"></script>
+
+<!-- ═══════════════════════════════════════════════════════════
+     PLATFORM v22.0 — Critical Bug Fixes (2026-04-05)
+     Fix #1 : Branding Tab — page container + nav item + PAGE_CONFIG
+     Fix #2 : Settings Save — form-field collection + UPSERT fallback
+     Fix #3 : Pricing Tab  — 4-tier plans + billing toggle + feature table
+     Fix #4 : Predictive Threat Engine — full async pipeline + charts
+     Fix #5 : Malware DNA Engine — 8 families, MITRE, IOC, detection rules
+     Fix #6 : "Never-Seen-Before:" — global DOM scrub + MutationObserver
+     Fix #7 : What-If Simulator — 6 scenarios, dynamic selection, state refresh
+     Fix #8 : Tenant CRUD — Add/Edit/Delete/View with modal forms
+     Fix #9 : Navigation freeze/stacking — lock timeout + unified page switcher
+     MUST load AFTER innovation-modules.js and cyber-brain wiring
+═══════════════════════════════════════════════════════════ -->
+<script src="js/platform-fixes-v22.js"></script>
+
+<!-- ═══════════════════════════════════════════════════════════
+     AUTONOMOUS CYBER DEFENSE BRAIN v1.0
+     Malware Analysis Lab · Cognitive Layer · Predictive Engine
+     Attack Graph · Malware DNA · Adversary Sim · Autonomous Agent
+     SOC Memory · Threat Graph · Digital Risk · Attack Storyline
+     What-If Simulator · Security Memory Brain · 3 Innovations
+     MUST load LAST — after all platform modules
+═══════════════════════════════════════════════════════════ -->
+<!-- Malware Analysis Lab v1.0 — Full sandbox orchestration -->
+<script src="js/malware-lab.js"></script>
+<!-- Next-Gen Brain Modules v1.0 — Cognitive, Predictive, Attack Graph, DNA, Adversary, SOC Agent -->
+<script src="js/cyber-brain-modules.js"></script>
+<!-- Differentiator Modules v1.0 — SOC Memory, Threat Graph, Digital Risk, Attack Storyline -->
+<script src="js/differentiator-modules.js"></script>
+<!-- Innovation Modules v1.0 — What-If Simulator, Security Memory Brain, Autonomous Agent -->
+<script src="js/innovation-modules.js"></script>
+
+<!-- Cyber Defense Brain — PAGE_CONFIG Wiring & Feature Flags -->
+<script>
+(function() {
+  'use strict';
+
+  /* ═══════════════════════════════════════════════════════════
+     FEATURE FLAGS — Enable/disable modules without code changes
+  ═══════════════════════════════════════════════════════════ */
+  window.FEATURE_FLAGS = window.FEATURE_FLAGS || {};
+  Object.assign(window.FEATURE_FLAGS, {
+    'malware-lab':         true,
+    'cognitive-layer':     true,
+    'predictive-engine':   true,
+    'attack-graph':        true,
+    'malware-dna':         true,
+    'adversary-sim':       true,
+    'soc-memory':          true,
+    'threat-graph':        true,
+    'digital-risk':        true,
+    'attack-storyline':    true,
+    'whatif-simulator':    true,
+    'security-brain':      true,
+    'autonomous-agent':    true,
+  });
+
+  /* ═══════════════════════════════════════════════════════════
+     MODULE REGISTRY — maps page IDs to render functions
+  ═══════════════════════════════════════════════════════════ */
+  const BRAIN_MODULES = {
+    'malware-lab':       () => typeof window.renderMalwareLab         === 'function' && window.renderMalwareLab(),
+    'cognitive-layer':   () => typeof window.renderCognitiveLayer     === 'function' && window.renderCognitiveLayer(),
+    'predictive-engine': () => typeof window.renderPredictiveEngine   === 'function' && window.renderPredictiveEngine(),
+    'attack-graph':      () => typeof window.renderAttackGraph        === 'function' && window.renderAttackGraph(),
+    'malware-dna':       () => typeof window.renderMalwareDNA         === 'function' && window.renderMalwareDNA(),
+    'adversary-sim':     () => typeof window.renderAdversarySim       === 'function' && window.renderAdversarySim(),
+    'soc-memory':        () => typeof window.renderSOCMemoryEngine     === 'function' && window.renderSOCMemoryEngine(),
+    'threat-graph':      () => typeof window.renderThreatGraphBrain    === 'function' && window.renderThreatGraphBrain(),
+    'digital-risk':      () => typeof window.renderDigitalRiskProtection==='function' && window.renderDigitalRiskProtection(),
+    'attack-storyline':  () => typeof window.renderAttackStorylineGenerator==='function' && window.renderAttackStorylineGenerator(),
+    'whatif-simulator':  () => typeof window.renderWhatIfSimulator     === 'function' && window.renderWhatIfSimulator(),
+    'security-brain':    () => typeof window.renderSecurityMemoryBrain === 'function' && window.renderSecurityMemoryBrain(),
+    'autonomous-agent':  () => typeof window.renderAutonomousAgent     === 'function' && window.renderAutonomousAgent(),
+  };
+
+  /* ─── Page metadata for topbar ─── */
+  const PAGE_META = {
+    'malware-lab':       { title: 'Malware Analysis Lab',           breadcrumb: 'Cyber Defense Brain / Malware Lab' },
+    'cognitive-layer':   { title: 'Cognitive Security Layer',       breadcrumb: 'Cyber Defense Brain / Cognitive AI' },
+    'predictive-engine': { title: 'Predictive Threat Engine',       breadcrumb: 'Cyber Defense Brain / Predictive Intel' },
+    'attack-graph':      { title: 'Attack Graph Intelligence',      breadcrumb: 'Cyber Defense Brain / Attack Graph' },
+    'malware-dna':       { title: 'Malware DNA Engine',             breadcrumb: 'Cyber Defense Brain / Malware DNA' },
+    'adversary-sim':     { title: 'Adversary Simulation Lab',       breadcrumb: 'Cyber Defense Brain / Adversary Sim' },
+    'soc-memory':        { title: 'SOC Memory Engine',              breadcrumb: 'Cyber Defense Brain / SOC Memory' },
+    'threat-graph':      { title: 'Threat Intelligence Graph',      breadcrumb: 'Cyber Defense Brain / Threat Graph' },
+    'digital-risk':      { title: 'Digital Risk Protection',        breadcrumb: 'Cyber Defense Brain / Digital Risk' },
+    'attack-storyline':  { title: 'Attack Storyline Generator',     breadcrumb: 'Innovations / Attack Storyline' },
+    'whatif-simulator':  { title: 'What-If Attack Simulator',       breadcrumb: 'Innovations / What-If Simulator' },
+    'security-brain':    { title: 'Security Memory Brain',          breadcrumb: 'Innovations / Security Memory Brain' },
+    'autonomous-agent':  { title: 'Autonomous SOC Agent',           breadcrumb: 'Innovations / Autonomous Agent' },
+  };
+
+  /* ─── Wire into PAGE_CONFIG ─── */
+  function _wireBrainModules() {
+    const PC = window.PAGE_CONFIG;
+    if (!PC) return false;
+
+    Object.entries(BRAIN_MODULES).forEach(([page, renderFn]) => {
+      if (!window.FEATURE_FLAGS[page]) return;
+      const meta = PAGE_META[page] || { title: page, breadcrumb: page };
+
+      if (!PC[page]) {
+        PC[page] = {
+          title:      meta.title,
+          breadcrumb: meta.breadcrumb,
+          onEnter:    renderFn,
+        };
+      } else {
+        // Override with our render (higher priority)
+        const origEnter = PC[page].onEnter;
+        PC[page].onEnter = function() {
+          renderFn();
+          if (typeof origEnter === 'function') {
+            try { origEnter(); } catch(e) {}
+          }
+        };
+      }
+    });
+    console.log('[CyberBrain v1.0] ✅ 13 modules wired into PAGE_CONFIG with feature flags');
+    return true;
+  }
+
+  /* ─── Retry with backoff if PAGE_CONFIG isn't ready ─── */
+  let _tries = 0;
+  const _MAX = 100;
+  function _tryWire() {
+    if (_wireBrainModules()) return;
+    if (++_tries < _MAX) setTimeout(_tryWire, 100);
+    else {
+      console.warn('[CyberBrain] PAGE_CONFIG not found after 10s — installing direct nav interceptor');
+      _installDirectInterceptor();
+    }
+  }
+  _tryWire();
+
+  /* ─── Direct interceptor (fallback if PAGE_CONFIG never exists) ─── */
+  function _installDirectInterceptor() {
+    document.addEventListener('click', function(e) {
+      const navItem = e.target.closest('[data-page]');
+      if (!navItem) return;
+      const page = navItem.getAttribute('data-page');
+      if (!BRAIN_MODULES[page]) return;
+
+      // Show the page
+      document.querySelectorAll('.page').forEach(p => p.style.display = 'none');
+      const pageEl = document.getElementById('page-' + page);
+      if (pageEl) {
+        pageEl.style.display = 'block';
+        // Update topbar if elements exist
+        const titleEl = document.querySelector('.topbar-title, #pageTitle, .page-title');
+        const breadEl = document.querySelector('.topbar-breadcrumb, #pageBreadcrumb, .breadcrumb');
+        const meta = PAGE_META[page];
+        if (titleEl && meta) titleEl.textContent = meta.title;
+        if (breadEl && meta) breadEl.textContent = meta.breadcrumb;
+        // Render
+        setTimeout(() => BRAIN_MODULES[page](), 50);
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, true);
+  }
+
+  /* ─── Active nav highlighting for new items ─── */
+  document.addEventListener('page:changed', function(e) {
+    const page = e && e.detail && e.detail.page;
+    if (!page || !BRAIN_MODULES[page]) return;
+    document.querySelectorAll('[data-page]').forEach(el => {
+      el.classList.toggle('active', el.getAttribute('data-page') === page);
+    });
+  });
+
+  /* ─── Lazy render: if user is already on a brain module page on load ─── */
+  document.addEventListener('DOMContentLoaded', function() {
+    const active = document.querySelector('.nav-item.active[data-page]');
+    if (active) {
+      const page = active.getAttribute('data-page');
+      if (BRAIN_MODULES[page]) {
+        setTimeout(() => BRAIN_MODULES[page](), 200);
+      }
+    }
+  });
+
+})();
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SESSION RESTORE — v5.0 (Persistent Auth Engine)
+     auth-persistent.js handles all the heavy lifting.
+     This block just wires the auth:restored event to the UI.
+═══════════════════════════════════════════════════════════ -->
+<script>
+(function() {
+  // auth:restored is fired by auth-persistent.js after successful
+  // session restore from localStorage (access token or offline token).
+  // It can fire BEFORE or AFTER DOMContentLoaded, so we listen immediately.
+
+  function _handleAuthRestored(e) {
+    const user = e.detail;
+    if (!user) return;
+
+    // CURRENT_USER was already set by auth-persistent.js,
+    // but we rebuild it here too for safety
+    window.CURRENT_USER = window.CURRENT_USER || {
+      id:          user.id,
+      email:       user.email,
+      name:        user.name || user.email,
+      role:        user.role || 'ANALYST',
+      tenant:      user.tenant_slug || user.tenant || 'mssp-global',
+      tenant_name: user.tenant_name || '',
+      tenant_id:   user.tenant_id   || user.tenant_slug || 'mssp-global',
+      avatar:      user.avatar || (user.name||'U').split(' ').map(n=>n[0]).join('').toUpperCase().slice(0,2),
+      permissions: user.permissions || ['read'],
+      mfa_enabled: user.mfa_enabled || false,
+      _offline:    user._offline || false,
+    };
+
+    function _transitionToApp() {
+      const loginScreen = document.getElementById('loginScreen');
+      const mainApp     = document.getElementById('mainApp');
+      if (!loginScreen || loginScreen.style.display === 'none') return; // already on dashboard
+
+      loginScreen.style.opacity    = '0';
+      loginScreen.style.transition = 'opacity 0.35s ease';
+      setTimeout(() => {
+        loginScreen.style.display = 'none';
+        if (mainApp) { mainApp.style.display = 'flex'; }
+        if (typeof initApp === 'function') initApp();
+
+        const isOffline = user._offline || (typeof PersistentTokenStore !== 'undefined' && PersistentTokenStore.isOffline());
+        if (typeof showToast === 'function') {
+          if (isOffline) {
+            showToast(`⭐ Session restored (offline mode) — ${user.name || user.email}`, 'warning', 5000);
+          } else {
+            showToast(`✅ Welcome back, ${user.name || user.email}`, 'success', 3000);
+          }
+        }
+      }, 350);
+    }
+
+    // If DOM is ready, transition now; otherwise wait
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', _transitionToApp, { once: true });
+    } else {
+      _transitionToApp();
+    }
+  }
+
+  // Listen immediately (before DOMContentLoaded)
+  window.addEventListener('auth:restored', _handleAuthRestored, { once: true });
+})();
+</script>
+</body>
+</html>

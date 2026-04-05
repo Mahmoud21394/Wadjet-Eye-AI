@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>RLS Fix + Deploy Guide — Wadjet-Eye AI v5.1</title>
+<style>
+  :root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--border:#30363d;--accent:#58a6ff;--green:#3fb950;--orange:#d29922;--red:#f85149;--purple:#bc8cff;--text:#e6edf3;--muted:#8b949e;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;line-height:1.7;}
+  a{color:var(--accent);}
+  .page{max-width:1000px;margin:0 auto;padding:28px 20px;}
+  h1{font-size:24px;font-weight:700;}
+  h2{font-size:17px;font-weight:600;color:var(--accent);margin:28px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--border);}
+  h3{font-size:14px;font-weight:600;color:var(--text);margin:14px 0 6px;}
+  p{margin-bottom:10px;}
+  code{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-family:'Cascadia Code','Fira Code',monospace;font-size:12px;color:#79c0ff;}
+  pre{background:#0a0e1a;border:1px solid var(--border);border-radius:8px;padding:16px;overflow-x:auto;margin:8px 0;position:relative;}
+  pre code{background:none;border:none;padding:0;font-size:12.5px;color:#e6edf3;line-height:1.65;}
+  .copy-btn{position:absolute;top:8px;right:8px;background:var(--bg3);border:1px solid var(--border);color:var(--muted);padding:3px 10px;border-radius:4px;cursor:pointer;font-size:11px;transition:all .2s;}
+  .copy-btn:hover{color:var(--text);border-color:var(--accent);}
+  .copy-btn.copied{color:var(--green);border-color:var(--green);}
+  .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;margin:2px;}
+  .badge-red{background:#f8514922;color:var(--red);}
+  .badge-green{background:#3fb95022;color:var(--green);}
+  .badge-orange{background:#d2992222;color:var(--orange);}
+  .badge-blue{background:#58a6ff22;color:var(--accent);}
+  .badge-purple{background:#bc8cff22;color:var(--purple);}
+  .callout{border-left:3px solid;border-radius:0 8px 8px 0;padding:12px 16px;margin:12px 0;}
+  .callout-danger{border-color:var(--red);background:#f8514910;}
+  .callout-success{border-color:var(--green);background:#3fb95010;}
+  .callout-info{border-color:var(--accent);background:#58a6ff10;}
+  .callout-warn{border-color:var(--orange);background:#d2992210;}
+  table{width:100%;border-collapse:collapse;margin:10px 0;}
+  th{background:var(--bg3);color:var(--muted);text-align:left;padding:8px 12px;font-size:11px;text-transform:uppercase;border:1px solid var(--border);}
+  td{padding:8px 12px;border:1px solid var(--border);font-size:13px;vertical-align:top;}
+  tr:nth-child(even) td{background:#161b2260;}
+  .step-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:20px;margin:16px 0;position:relative;}
+  .step-card.priority{border-color:var(--red);}
+  .step-num{display:inline-block;background:var(--accent);color:#000;font-weight:700;font-size:11px;padding:3px 10px;border-radius:10px;margin-bottom:10px;}
+  .step-num.red{background:var(--red);}
+  .step-num.green{background:var(--green);}
+  .step-num.orange{background:var(--orange);}
+  .header-bar{background:linear-gradient(135deg,#1a0a0a 0%,#2a0d0d 50%,#0d1117 100%);border:1px solid #f8514940;border-radius:12px;padding:24px;margin-bottom:24px;}
+  .error-box{background:#f8514912;border:1px solid var(--red);border-radius:8px;padding:14px 16px;margin:12px 0;font-family:monospace;font-size:13px;color:var(--red);}
+  .fix-box{background:#3fb95012;border:1px solid var(--green);border-radius:8px;padding:14px 16px;margin:6px 0 16px;}
+  .platform-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0;}
+  .platform-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:16px;}
+  .platform-card h3{margin-top:0;color:var(--accent);}
+  @media(max-width:640px){.platform-grid{grid-template-columns:1fr;}}
+  .env-key{color:#79c0ff;font-family:monospace;}
+  .env-val{color:#3fb950;font-family:monospace;}
+  .env-comment{color:#6e7681;font-family:monospace;}
+  .progress{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0;}
+  .prog-step{background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer;}
+  .prog-step.done{background:#3fb95020;border-color:var(--green);color:var(--green);}
+  .prog-step.active{background:#58a6ff20;border-color:var(--accent);color:var(--accent);}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- HEADER -->
+  <div class="header-bar">
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;">
+      <span style="font-size:36px;">🔒</span>
+      <div>
+        <h1>RLS Fix + Deploy Guide</h1>
+        <div style="color:var(--muted);font-size:13px;">Wadjet-Eye AI v5.1 — Row Level Security + JWT + Render + Vercel</div>
+      </div>
+    </div>
+    <div class="error-box">
+      ❌ Failed to store refresh token: new row violates row-level security policy for table "refresh_tokens"
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
+      <span class="badge badge-red">RLS Policy Missing</span>
+      <span class="badge badge-orange">JWT_SECRET Added</span>
+      <span class="badge badge-green">auth.js Made Resilient</span>
+      <span class="badge badge-blue">Deploy Steps Included</span>
+    </div>
+  </div>
+
+  <!-- ROOT CAUSE -->
+  <h2>🔍 Exact Root Cause — Why This Error Appears</h2>
+
+  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:16px;">
+    <h3 style="color:var(--red);margin-top:0;">The Problem in 3 Lines</h3>
+    <p>1. The migration script ran <code>ALTER TABLE refresh_tokens ENABLE ROW LEVEL SECURITY;</code></p>
+    <p>2. But it <strong>never created an INSERT policy</strong> — not even for <code>service_role</code></p>
+    <p>3. In Supabase, when RLS is enabled with <strong>no policies → ALL rows are blocked</strong></p>
+  </div>
+
+  <div class="callout callout-warn">
+    <strong>Common misconception:</strong> Many developers think <code>service_role</code> key always bypasses RLS.
+    In standard PostgreSQL this is true, but <strong>Supabase's PostgREST layer enforces RLS even for service_role
+    UNLESS you have an explicit policy OR the table has RLS disabled.</strong>
+    Adding <code>USING (true) WITH CHECK (true)</code> for <code>service_role</code> is the correct fix.
+  </div>
+
+  <table>
+    <tr><th>What</th><th>Broken State</th><th>Fixed State</th></tr>
+    <tr>
+      <td><code>refresh_tokens</code> RLS</td>
+      <td><span class="badge badge-red">ENABLED</span> + no INSERT policy → all writes blocked</td>
+      <td><span class="badge badge-green">DISABLED</span> (backend-only table, no need for RLS)</td>
+    </tr>
+    <tr>
+      <td><code>login_activity</code> RLS</td>
+      <td><span class="badge badge-red">ENABLED</span> + no INSERT policy → audit writes blocked</td>
+      <td><span class="badge badge-green">DISABLED</span> (backend-only table)</td>
+    </tr>
+    <tr>
+      <td>All other tables</td>
+      <td>RLS enabled with missing <code>service_role</code> policies</td>
+      <td>Explicit <code>service_role ALL USING (true)</code> policy added</td>
+    </tr>
+    <tr>
+      <td><code>JWT_SECRET</code> in .env</td>
+      <td>Missing — token verification could fail silently</td>
+      <td>Added — must match Supabase project JWT secret</td>
+    </tr>
+    <tr>
+      <td><code>auth.js</code> error handling</td>
+      <td>RLS error propagated to login UI as fatal error</td>
+      <td>Non-fatal: warns + continues login even if refresh token store fails</td>
+    </tr>
+  </table>
+
+  <!-- STEP 1: RLS FIX -->
+  <h2>🚨 Step 1 — Run the RLS Fix SQL (DO THIS FIRST)</h2>
+
+  <div class="step-card priority">
+    <div class="step-num red">⚡ CRITICAL — Do This Now</div>
+    <h3>Run <code>rls-fix-v5.1.sql</code> in Supabase SQL Editor</h3>
+    <p>This is the <strong>single command that fixes the login error</strong>.</p>
+
+    <ol style="margin:10px 0 14px 18px;">
+      <li>Open → <a href="https://supabase.com/dashboard/project/miywxnplaltduuscjfmq/sql/new" target="_blank">
+        <strong>Supabase SQL Editor — New Query</strong>
+      </a></li>
+      <li>Paste the SQL below <em>entirely</em></li>
+      <li>Click <strong>RUN</strong></li>
+      <li>You should see: <code>Success. X rows returned.</code> (table list)</li>
+      <li>Try logging in again — error will be gone ✅</li>
+    </ol>
+
+    <div class="callout callout-info">
+      File location: <code>backend/database/rls-fix-v5.1.sql</code>
+      (already created in your project)
+    </div>
+
+    <pre><code><span class="env-comment">-- ═══ PART 1: DISABLE RLS on backend-only tables ═══</span>
+<span class="env-comment">-- These are only accessed via service_role (server-side)</span>
+ALTER TABLE public.refresh_tokens    DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.login_activity    DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.audit_logs        DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.collectors        DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cti_feed_logs     DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ioc_enrichment_cache DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.threat_feeds      DISABLE ROW LEVEL SECURITY;
+
+<span class="env-comment">-- ═══ PART 2: Drop old incomplete policies ═══</span>
+DO $$ BEGIN
+  DROP POLICY IF EXISTS "tenant_read_sysmon_sessions"   ON public.sysmon_sessions;
+  DROP POLICY IF EXISTS "tenant_read_vulnerabilities"   ON public.vulnerabilities;
+  DROP POLICY IF EXISTS "tenant_read_cti_actors"        ON public.cti_actors;
+  DROP POLICY IF EXISTS "tenant_read_cti_campaigns"     ON public.cti_campaigns;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+<span class="env-comment">-- ═══ PART 3: Add service_role bypass for all other tables ═══</span>
+ALTER TABLE public.tenants   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.users     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.alerts    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.iocs      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cases     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.playbooks ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY IF NOT EXISTS "service_role_all_tenants"   ON public.tenants   AS PERMISSIVE FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY IF NOT EXISTS "service_role_all_users"     ON public.users     AS PERMISSIVE FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY IF NOT EXISTS "service_role_all_alerts"    ON public.alerts    AS PERMISSIVE FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY IF NOT EXISTS "service_role_all_iocs"      ON public.iocs      AS PERMISSIVE FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY IF NOT EXISTS "service_role_all_cases"     ON public.cases     AS PERMISSIVE FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY IF NOT EXISTS "service_role_all_playbooks" ON public.playbooks AS PERMISSIVE FOR ALL TO service_role USING (true) WITH CHECK (true);
+
+<span class="env-comment">-- Verify: show RLS status for all tables</span>
+SELECT relname AS table_name, relrowsecurity AS rls_enabled
+FROM pg_class
+WHERE relnamespace = 'public'::regnamespace AND relkind = 'r'
+ORDER BY relname;</code></pre>
+  </div>
+
+  <!-- STEP 2: JWT SECRET -->
+  <h2>🔑 Step 2 — Set JWT_SECRET Correctly</h2>
+
+  <div class="step-card">
+    <div class="step-num orange">WHERE TO GET IT</div>
+    <h3>Get your exact JWT Secret from Supabase</h3>
+
+    <p>Go to: <a href="https://supabase.com/dashboard/project/miywxnplaltduuscjfmq/settings/api" target="_blank">
+      Supabase Dashboard → Settings → API → JWT Settings → JWT Secret (Reveal)
+    </a></p>
+
+    <p>The JWT_SECRET you provided (<code>KO3aLoS4LJqK4Nz6O+LxOqq4X/...</code>) has been added
+    to <code>backend/.env</code>. <strong>Verify it matches exactly</strong> what Supabase shows
+    (including any trailing <code>==</code>).</p>
+
+    <div class="callout callout-warn">
+      <strong>Important:</strong> In your <code>backend/.env</code>, make sure there are NO
+      quotes around the value and NO extra spaces. The <code>+</code> and <code>/</code>
+      characters are valid base64 and must be preserved exactly.
+    </div>
+
+    <pre><code><span class="env-comment"># backend/.env — correct format:</span>
+<span class="env-key">JWT_SECRET</span>=<span class="env-val">KO3aLoS4LJqK4Nz6O+LxOqq4X/MxGlKBbhbiIR6aNg/eyTujTSIuCqMlUT930rBIhIGrorftB0pZjsRux7pR/g==</span>
+
+<span class="env-comment"># ✅ Correct — no quotes</span>
+<span class="env-comment"># ❌ Wrong: JWT_SECRET="KO3aLoS4..."  (quotes break dotenv parsing)</span>
+<span class="env-comment"># ❌ Wrong: JWT_SECRET = KO3aLoS4...  (spaces break dotenv parsing)</span></code></pre>
+
+    <p>This key is used by <code>backend/config/supabase.js</code> to verify that JWT tokens
+    were genuinely issued by your Supabase project. Without it, token verification can silently
+    fail.</p>
+  </div>
+
+  <!-- STEP 3: DEPLOY TO RENDER -->
+  <h2>🚀 Step 3 — Deploy Backend to Render</h2>
+
+  <div class="step-card">
+    <div class="step-num">RENDER (Backend)</div>
+    <h3>Update Environment Variables on Render</h3>
+
+    <p>Your backend runs at <code>https://wadjet-eye-ai.onrender.com</code>. After the local
+    <code>.env</code> fix, you must push these values to Render too — Render doesn't read your
+    local <code>.env</code>.</p>
+
+    <h3>How to Update Render Env Vars</h3>
+    <ol style="margin:8px 0 12px 18px;line-height:2;">
+      <li>Open <a href="https://dashboard.render.com" target="_blank">dashboard.render.com</a></li>
+      <li>Click your backend service → <strong>Environment</strong> tab</li>
+      <li>Add/update each variable below</li>
+      <li>Click <strong>Save Changes</strong> → service auto-redeploys</li>
+    </ol>
+
+    <table>
+      <tr><th>Variable</th><th>Value</th><th>Notes</th></tr>
+      <tr>
+        <td><code>NODE_ENV</code></td>
+        <td><code>production</code></td>
+        <td>Required</td>
+      </tr>
+      <tr>
+        <td><code>PORT</code></td>
+        <td><code>4000</code></td>
+        <td>Or leave blank — Render sets PORT automatically</td>
+      </tr>
+      <tr>
+        <td><code>SUPABASE_URL</code></td>
+        <td><code>https://miywxnplaltduuscjfmq.supabase.co</code></td>
+        <td>Already set</td>
+      </tr>
+      <tr>
+        <td><code>SUPABASE_ANON_KEY</code></td>
+        <td><code>eyJhbGci... (anon key)</code></td>
+        <td>Already set</td>
+      </tr>
+      <tr>
+        <td><code>SUPABASE_SERVICE_KEY</code></td>
+        <td><code>eyJhbGci... (service_role key)</code></td>
+        <td>Already set — keep this secret!</td>
+      </tr>
+      <tr>
+        <td style="color:var(--orange);"><code>JWT_SECRET</code></td>
+        <td><code>KO3aLoS4LJqK4Nz6O+LxOqq4X/...</code></td>
+        <td><span class="badge badge-orange">ADD THIS</span> — must match Supabase</td>
+      </tr>
+      <tr>
+        <td><code>FRONTEND_URL</code></td>
+        <td><code>https://wadjet-eye-ai.vercel.app</code></td>
+        <td>For CORS whitelist</td>
+      </tr>
+      <tr>
+        <td><code>ALLOWED_ORIGINS</code></td>
+        <td><code>https://wadjet-eye-ai.vercel.app,https://www.genspark.ai,http://localhost:3000</code></td>
+        <td>Comma-separated</td>
+      </tr>
+      <tr>
+        <td><code>REFRESH_TOKEN_EXPIRY_DAYS</code></td>
+        <td><code>30</code></td>
+        <td><span class="badge badge-orange">ADD THIS</span></td>
+      </tr>
+      <tr>
+        <td><code>ACCESS_TOKEN_TTL</code></td>
+        <td><code>900</code></td>
+        <td><span class="badge badge-orange">ADD THIS</span> (15 min in seconds)</td>
+      </tr>
+      <tr>
+        <td><code>OTX_API_KEY</code></td>
+        <td>your key</td>
+        <td>Already set</td>
+      </tr>
+    </table>
+
+    <div class="callout callout-info">
+      <strong>Tip:</strong> On Render, go to <strong>Environment → Add Secret File</strong>
+      and upload your <code>backend/.env</code> directly. This adds all variables at once
+      instead of one-by-one.
+    </div>
+
+    <h3>Render Health Check (Prevents Cold Starts)</h3>
+    <p>In Render → your service → <strong>Settings</strong> → <strong>Health Check Path</strong>
+    → set to <code>/health</code></p>
+    <p>This keeps the backend warm and prevents the 15-second cold start that was causing
+    refresh token timeouts.</p>
+  </div>
+
+  <!-- STEP 4: DEPLOY TO VERCEL -->
+  <h2>🌐 Step 4 — Deploy Frontend to Vercel</h2>
+
+  <div class="step-card">
+    <div class="step-num">VERCEL (Frontend)</div>
+
+    <p>The frontend has <strong>3 changed files</strong> that need to be deployed:</p>
+
+    <table>
+      <tr><th>File</th><th>What Changed</th><th>Why Important</th></tr>
+      <tr>
+        <td><code>js/auth-persistent.js</code></td>
+        <td>New file — Persistent Auth Engine</td>
+        <td>Fixes session expiry on F5</td>
+      </tr>
+      <tr>
+        <td><code>js/main.js</code></td>
+        <td>3 edits — persist login/logout/emergency sessions</td>
+        <td>Saves session to localStorage</td>
+      </tr>
+      <tr>
+        <td><code>index.html</code></td>
+        <td>Load auth-persistent.js, new auth:restored handler</td>
+        <td>Wires session restore to UI</td>
+      </tr>
+    </table>
+
+    <h3>Deploy to Vercel — 2 Methods</h3>
+
+    <div class="platform-grid">
+      <div class="platform-card">
+        <h3>Method A: Git Push (Recommended)</h3>
+        <pre><code><span class="env-comment"># From your project root:</span>
+git add js/auth-persistent.js
+git add js/main.js
+git add index.html
+git commit -m "fix: persistent auth engine v5.1"
+git push origin main
+<span class="env-comment"># Vercel auto-deploys on push</span></code></pre>
+      </div>
+      <div class="platform-card">
+        <h3>Method B: Vercel CLI</h3>
+        <pre><code><span class="env-comment"># Install CLI if needed:</span>
+npm i -g vercel
+
+<span class="env-comment"># Deploy from project root:</span>
+vercel --prod
+
+<span class="env-comment"># Or deploy specific files:</span>
+vercel deploy --prod</code></pre>
+      </div>
+    </div>
+
+    <div class="callout callout-warn">
+      <strong>Vercel has no env vars</strong> — the frontend is static HTML/JS.
+      The backend URL (<code>https://wadjet-eye-ai.onrender.com</code>) is hardcoded in
+      <code>js/api-client.js</code> via <code>window.THREATPILOT_API_URL</code>.
+      No Vercel env vars are needed.
+    </div>
+  </div>
+
+  <!-- STEP 5: SEED -->
+  <h2>🌱 Step 5 — Re-run the Seed Script</h2>
+
+  <div class="step-card">
+    <div class="step-num green">SEED DATABASE</div>
+    <p>After fixing RLS, re-run the seed to ensure all rows are properly inserted:</p>
+    <pre><code><span class="env-comment"># From your project root (Windows PowerShell):</span>
+node backend/scripts/seed-mahmoud.js</code></pre>
+
+    <p>Expected: all 5 steps succeed with ✅ messages. Then login with:</p>
+    <table>
+      <tr><th>Email</th><th>Password</th><th>Role</th></tr>
+      <tr><td><code>mahmoud@mssp.com</code></td><td><code>Admin@2024Wadjet!</code></td><td>SUPER_ADMIN</td></tr>
+      <tr><td><code>mahmoud.osman@wadjet.ai</code></td><td><code>Admin@2024Wadjet!</code></td><td>SUPER_ADMIN</td></tr>
+      <tr><td><code>analyst@mssp.com</code></td><td><code>Analyst@Secure2024!</code></td><td>ANALYST</td></tr>
+    </table>
+  </div>
+
+  <!-- VERIFICATION CHECKLIST -->
+  <h2>✅ Verification Checklist</h2>
+
+  <div class="step-card">
+    <table>
+      <tr><th>Test</th><th>Expected Result</th><th>How to Check</th></tr>
+      <tr>
+        <td>Login with <code>mahmoud@mssp.com</code></td>
+        <td>Redirected to dashboard — no RLS error</td>
+        <td>Open app → login page → enter credentials</td>
+      </tr>
+      <tr>
+        <td>Press F5 after login</td>
+        <td>Stays on dashboard (session persisted)</td>
+        <td>Login → press F5 → should stay logged in</td>
+      </tr>
+      <tr>
+        <td>Backend health check</td>
+        <td>Returns <code>{"status":"ok"}</code></td>
+        <td>Open <a href="https://wadjet-eye-ai.onrender.com/health" target="_blank">https://wadjet-eye-ai.onrender.com/health</a></td>
+      </tr>
+      <tr>
+        <td>Refresh tokens in Supabase</td>
+        <td>Rows appearing in <code>refresh_tokens</code> table</td>
+        <td>Supabase → Table Editor → refresh_tokens</td>
+      </tr>
+      <tr>
+        <td>RLS status check</td>
+        <td><code>refresh_tokens: rls_enabled = false</code></td>
+        <td>Run SQL: <code>SELECT relname, relrowsecurity FROM pg_class WHERE relnamespace='public'::regnamespace</code></td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- FILES CHANGED -->
+  <h2>📁 All Files Changed in This Fix Session</h2>
+  <table>
+    <tr><th>File</th><th>Action</th><th>Fix</th></tr>
+    <tr>
+      <td><code>backend/database/rls-fix-v5.1.sql</code></td>
+      <td><span class="badge badge-green">CREATED</span></td>
+      <td>Disables RLS on backend-only tables; adds service_role bypass on all others</td>
+    </tr>
+    <tr>
+      <td><code>backend/routes/auth.js</code></td>
+      <td><span class="badge badge-orange">MODIFIED</span></td>
+      <td><code>storeRefreshToken()</code> now handles RLS errors gracefully (non-fatal); <code>logActivity()</code> silently ignores RLS errors</td>
+    </tr>
+    <tr>
+      <td><code>backend/.env</code></td>
+      <td><span class="badge badge-orange">MODIFIED</span></td>
+      <td>Added <code>JWT_SECRET</code>, <code>ACCESS_TOKEN_TTL</code>, <code>REFRESH_TOKEN_EXPIRY_DAYS</code></td>
+    </tr>
+    <tr>
+      <td><code>js/auth-persistent.js</code></td>
+      <td><span class="badge badge-green">CREATED</span></td>
+      <td>Persistent session engine — fixes session expired on page refresh</td>
+    </tr>
+    <tr>
+      <td><code>js/main.js</code></td>
+      <td><span class="badge badge-orange">MODIFIED</span></td>
+      <td>Save tokens persistently on login/emergency login/logout</td>
+    </tr>
+    <tr>
+      <td><code>index.html</code></td>
+      <td><span class="badge badge-orange">MODIFIED</span></td>
+      <td>Load auth-persistent.js; new auth:restored event handler</td>
+    </tr>
+    <tr>
+      <td><code>backend/scripts/seed-mahmoud.js</code></td>
+      <td><span class="badge badge-orange">REWRITTEN</span></td>
+      <td>Uses Supabase SDK (not pg), correct column names, resilient upserts</td>
+    </tr>
+    <tr>
+      <td><code>backend/database/migration-v5.0-auth-tables.sql</code></td>
+      <td><span class="badge badge-green">CREATED</span></td>
+      <td>Creates all missing tables (refresh_tokens, login_activity, etc.)</td>
+    </tr>
+  </table>
+
+  <!-- QUICK SUMMARY -->
+  <h2>⚡ Quick Action Summary (Copy-Paste Order)</h2>
+  <div class="step-card" style="border-color:var(--green);">
+    <div class="step-num green">DO THESE IN ORDER</div>
+    <pre><code><span class="env-comment">═══ 1. Supabase SQL Editor ═══════════════════════════════════</span>
+Run: backend/database/rls-fix-v5.1.sql    (fixes the RLS error)
+
+<span class="env-comment">═══ 2. PowerShell (local) ════════════════════════════════════</span>
+node backend/scripts/seed-mahmoud.js      (seeds users + data)
+
+<span class="env-comment">═══ 3. Render Dashboard ══════════════════════════════════════</span>
+Add env var: JWT_SECRET=KO3aLoS4LJqK4Nz6O+LxOqq4X/MxGlKBbhbiIR6aNg/...
+Add env var: REFRESH_TOKEN_EXPIRY_DAYS=30
+Add env var: ACCESS_TOKEN_TTL=900
+→ Service auto-redeploys
+
+<span class="env-comment">═══ 4. Vercel / Git ══════════════════════════════════════════</span>
+git add js/auth-persistent.js js/main.js index.html
+git commit -m "fix: persistent auth + RLS fix v5.1"
+git push origin main
+→ Vercel auto-deploys
+
+<span class="env-comment">═══ 5. Test Login ════════════════════════════════════════════</span>
+Email:    mahmoud@mssp.com
+Password: Admin@2024Wadjet!
+→ Should login + session persists on F5</code></pre>
+  </div>
+
+  <hr style="border:none;border-top:1px solid var(--border);margin:28px 0 16px;"/>
+  <p style="color:var(--muted);font-size:12px;text-align:center;">
+    Wadjet-Eye AI v5.1 RLS Fix &nbsp;|&nbsp;
+    Supabase: <code>miywxnplaltduuscjfmq.supabase.co</code> &nbsp;|&nbsp;
+    Backend: <code>wadjet-eye-ai.onrender.com</code> &nbsp;|&nbsp;
+    Frontend: <code>wadjet-eye-ai.vercel.app</code>
+  </p>
+</div>
+
+<script>
+document.querySelectorAll('pre').forEach(pre => {
+  const btn = document.createElement('button');
+  btn.className = 'copy-btn';
+  btn.textContent = 'Copy';
+  btn.onclick = () => {
+    const text = pre.querySelector('code')?.innerText || pre.innerText;
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = 'Copied!';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+    });
+  };
+  pre.style.paddingTop = '36px';
+  pre.appendChild(btn);
+});
+</script>
+</body>
+</html>
