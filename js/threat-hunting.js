@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  EYEbot AI — Threat Hunting Workspace v3.0
+ *  Wadjet-Eye AI — Threat Hunting Workspace v3.0
  *  Comprehensive hunting queries for KQL, SPL, SIGMA, EQL,
  *  YARA, Suricata, Elastic, QRadar, Chronicle
  * ══════════════════════════════════════════════════════════
@@ -161,7 +161,7 @@ SecurityEvent
     query:`# SIGMA Rule
 title: Mimikatz Execution
 status: stable
-author: EYEbot AI
+author: Wadjet-Eye AI
 description: Detects Mimikatz credential dumping tool execution
 logsource:
     category: process_creation
@@ -358,7 +358,7 @@ DnsEvents
     query:`# SIGMA Rule
 title: Cobalt Strike Beacon Network Activity
 status: experimental
-author: EYEbot AI
+author: Wadjet-Eye AI
 description: Detects Cobalt Strike beacon activity
 logsource:
     category: proxy
@@ -562,7 +562,7 @@ and not user.name in ("root","www-data")`,
     query:`# SIGMA Rule
 title: Container Escape via nsenter or chroot
 status: experimental
-author: EYEbot AI
+author: Wadjet-Eye AI
 description: Detects container escape techniques
 logsource:
     category: process_creation
@@ -594,7 +594,7 @@ tags:
     query:`rule Wadjet_Ransomware_Generic {
     meta:
         description = "Detects common ransomware indicators"
-        author = "EYEbot AI"
+        author = "Wadjet-Eye AI"
         severity = "CRITICAL"
     strings:
         $ext1 = ".encrypted" nocase

@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  EYEbot AI — Tenant Management & RBAC v3.0
+ *  Wadjet-Eye AI — Tenant Management & RBAC v3.0
  *  Full CRUD: create/edit/delete tenants, user management,
  *  role assignment, permission import/export, audit log
  * ══════════════════════════════════════════════════════════════════════

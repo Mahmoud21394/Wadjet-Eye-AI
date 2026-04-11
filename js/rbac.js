@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════════════════════
-   EYEbot AI — RBAC Module v17.0.0
+   Wadjet-Eye AI — RBAC Module v17.0.0
    Role-Based Access Control: Users, Roles, Permissions,
    Tenant Isolation, Audit Log
    ══════════════════════════════════════════════════════════ */

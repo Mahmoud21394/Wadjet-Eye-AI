@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  EYEbot AI — Adversary Simulation Lab v2.0
+ *  Wadjet-Eye AI — Adversary Simulation Lab v2.0
  *  FILE: js/adversary-sim-lab.js
  *
  *  MITRE ATT&CK-based attack simulations with real-world scenarios.

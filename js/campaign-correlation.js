@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════
- *  EYEbot AI — Campaign Correlation Engine v3.0
+ *  Wadjet-Eye AI — Campaign Correlation Engine v3.0
  *  FILE: js/campaign-correlation.js
  *
  *  v3.0 Fixes (2026-04-02):

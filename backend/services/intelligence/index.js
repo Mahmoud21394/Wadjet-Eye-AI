@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  EYEbot AI — Normalisation, Scoring & MITRE Engine
+ *  Wadjet-Eye AI — Normalisation, Scoring & MITRE Engine
  *  services/intelligence/index.js  (v3.1 — fixes applied)
  *
  *  BUG FIXES IN THIS VERSION:

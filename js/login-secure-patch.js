@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════
- *  EYEbot AI — Secure Login Patch v6.1
+ *  Wadjet-Eye AI — Secure Login Patch v6.1
  *  js/login-secure-patch.js
  *
  *  v6.1 FIX — Auth Token NOT FOUND after login (root cause):

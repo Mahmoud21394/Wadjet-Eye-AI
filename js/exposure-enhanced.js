@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  EYEbot AI — Exposure Assessment Module v3.0 (ENHANCED)
+ *  Wadjet-Eye AI — Exposure Assessment Module v3.0 (ENHANCED)
  *  Redesigned to match Threat Actor Intelligence style
  *  Real API: GET /api/cti/vulnerabilities
  * ══════════════════════════════════════════════════════════════════════

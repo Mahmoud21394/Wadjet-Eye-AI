@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════
- *  EYEbot AI — Unified Frontend API Client v5.2
+ *  Wadjet-Eye AI — Unified Frontend API Client v5.2
  *  js/api-client-v2.js
  *
  *  ROOT CAUSE FIX for "IOC Intelligence Database HTTP 401":

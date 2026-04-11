@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   EYEbot AI — Never-Seen-Before Innovation Modules v1.0
+   Wadjet-Eye AI — Never-Seen-Before Innovation Modules v1.0
    ─────────────────────────────────────────────────────────────────────
    INNOVATION 1: What-If Attack Simulator
      → "If the attacker takes THIS path, here's what happens next"

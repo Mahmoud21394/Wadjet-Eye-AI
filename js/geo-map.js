@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  EYEbot AI — Geo Threat Map v2.0
+ *  Wadjet-Eye AI — Geo Threat Map v2.0
  *  js/geo-map.js
  *
  *  Canvas-based real-time threat map featuring:
@@ -513,4 +513,4 @@ window.renderGeoThreatMap = renderGeoThreatMap;
 window.renderGeoThreats   = renderGeoThreatMap;
 window.stopGeoMap         = stopGeoMap;
 
-console.info('[GeoMap] Module loaded — EYEbot AI Geo Threat Map v2.0');
+console.info('[GeoMap] Module loaded — Wadjet-Eye AI Geo Threat Map v2.0');

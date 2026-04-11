@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════════
- *  EYEbot AI — SOAR Automation UI v5.1 (PRODUCTION)
+ *  Wadjet-Eye AI — SOAR Automation UI v5.1 (PRODUCTION)
  *  FILE: js/soar-ui.js
  *
  *  Real SOAR engine frontend — connects to /api/soar/* endpoints.

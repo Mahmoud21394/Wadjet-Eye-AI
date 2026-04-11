@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════
-   EYEbot AI — Next-Generation Cyber Defense Brain Modules v1.0
+   Wadjet-Eye AI — Next-Generation Cyber Defense Brain Modules v1.0
    ─────────────────────────────────────────────────────────────────
    Module 1: Cognitive Security Layer   (AI reasoning + XAI)
    Module 2: Predictive Threat Engine   (forecast campaigns)
@@ -855,8 +855,7 @@
     window._mdnaSearch = window._mdnaSearch || '';
 
     function _mdnaRender() {
-      const selected = window._mdnaSelected;
-      const search = window._mdnaSearch.toLowerCase();
+      const search = (window._mdnaSearch || '').toLowerCase();
       const filtered = MALWARE_DB.filter(m =>
         !search ||
         m.family.toLowerCase().includes(search) ||
@@ -866,217 +865,229 @@
       );
 
       el.innerHTML = `
-      <div class="cds-module cds-accent-dna" style="min-height:100%;">
+      <div class="cds-module cds-accent-dna">
         <div class="cds-module-header">
           <div class="cds-module-title-group">
-            <div class="cds-module-icon" style="background:rgba(34,197,94,0.1);color:#22c55e;border:1px solid rgba(34,197,94,0.3);">
+            <div class="cds-module-icon accent" style="background:rgba(34,197,94,0.1);color:#22c55e;border:1px solid rgba(34,197,94,0.3);">
               <i class="fas fa-dna"></i>
             </div>
             <div>
               <div class="cds-module-name">Malware DNA Engine</div>
               <div class="cds-module-meta">
                 <div class="cds-status cds-status-online"><div class="cds-status-dot"></div>Intelligence Active</div>
-                <span>·</span><span>Real-world Malware Intel</span><span>·</span>
-                <span style="color:#22c55e;font-weight:700;font-size:10px;">CONTINUOUS UPDATES</span>
+                <span>·</span><span>Real-world Malware Families</span>
               </div>
             </div>
           </div>
           <div class="cds-module-actions">
-            <input type="text" id="mdna-search" placeholder="Search malware family, type, hash…"
-              value="${_esc(window._mdnaSearch)}"
-              oninput="window._mdnaSearch=this.value;window.renderMalwareDNA()"
-              style="background:rgba(255,255,255,.05);border:1px solid var(--cds-border);border-radius:6px;padding:6px 10px;color:var(--cds-text);font-size:12px;width:220px;">
-            <button class="cds-btn cds-btn-sm" onclick="window.renderMalwareDNA()"
-              style="background:rgba(34,197,94,0.15);color:#22c55e;border:1px solid rgba(34,197,94,0.3);">
-              <i class="fas fa-sync-alt"></i> Refresh
-            </button>
+            <span class="cds-badge cds-badge-low"><i class="fas fa-database"></i> LIVE INTEL</span>
           </div>
         </div>
         <div class="cds-module-body">
-
-          <!-- KPIs -->
-          <div class="cds-metrics" style="margin-bottom:20px;">
+          <!-- KPI Stats (same layout as Adversary Sim Lab) -->
+          <div class="cds-metrics">
             ${[
               ['Families Tracked', MALWARE_STATS.families.toLocaleString(), '#22c55e', 'fa-dna'],
-              ['Avg Code Reuse', MALWARE_STATS.code_reuse_avg+'%', '#00d4ff', 'fa-code'],
+              ['Code Reuse Detected', MALWARE_STATS.code_reuse_avg+'%', '#00d4ff', 'fa-code'],
               ['Mutations Tracked', MALWARE_STATS.mutations_tracked.toLocaleString(), '#f97316', 'fa-random'],
               ['New (24h)', MALWARE_STATS.new_last_24h, '#ef4444', 'fa-plus-circle'],
-              ['Clustering Accuracy', MALWARE_STATS.clustering_accuracy+'%', '#a855f7', 'fa-bullseye'],
             ].map(([l,v,c,i])=>`
               <div class="cds-card cds-stat-card" style="border-color:${c}22;">
-                <div class="cds-stat-icon" style="background:${c}15;color:${c};border:1px solid ${c}33;"><i class="fas ${i}"></i></div>
+                <div class="cds-stat-icon" style="background:${c}15;color:${c};"><i class="fas ${i}"></i></div>
                 <div><div class="cds-stat-num" style="color:${c};">${v}</div><div class="cds-stat-label">${l}</div></div>
               </div>`).join('')}
           </div>
 
-          <!-- Two-panel: list + detail -->
-          <div style="display:grid;grid-template-columns:320px 1fr;gap:16px;min-height:600px;">
+          <!-- Search bar -->
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+            <input type="text" placeholder="Search malware family, type, hash, origin…"
+              value="${_esc(window._mdnaSearch||'')}"
+              oninput="window._mdnaSearch=this.value;window.renderMalwareDNA()"
+              style="flex:1;background:rgba(255,255,255,.05);border:1px solid var(--cds-border);border-radius:6px;padding:8px 12px;color:var(--cds-text);font-size:12px;">
+            <button class="cds-btn cds-btn-sm" onclick="window._mdnaSearch='';window.renderMalwareDNA()"
+              style="background:rgba(34,197,94,0.15);color:#22c55e;border:1px solid rgba(34,197,94,0.3);">
+              <i class="fas fa-sync-alt"></i> Reset
+            </button>
+          </div>
 
-            <!-- Left: Malware List -->
-            <div style="display:flex;flex-direction:column;gap:8px;overflow-y:auto;">
-              ${filtered.map(m => `
-              <div onclick="window._mdnaSelected='${m.id}';window.renderMalwareDNA()"
-                style="background:var(--cds-card);border:1px solid ${selected===m.id?'#22c55e':'var(--cds-border)'};border-radius:10px;padding:12px 14px;cursor:pointer;transition:all .2s;${selected===m.id?'box-shadow:0 0 12px rgba(34,197,94,.2);':''}"
-                onmouseover="this.style.borderColor='#22c55e44'"
-                onmouseout="this.style.borderColor='${selected===m.id?'#22c55e':'var(--cds-border)'}'">
-                <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-                  <div style="width:36px;height:36px;border-radius:8px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.2);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-                    <i class="fas fa-dna" style="color:#22c55e;"></i>
-                  </div>
-                  <div style="min-width:0;">
-                    <div style="font-weight:700;font-size:.9rem;color:var(--cds-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_esc(m.family)}</div>
-                    <div style="font-size:.75rem;color:var(--cds-text-muted);">${_esc(m.type)} · ${_esc(m.origin)}</div>
-                  </div>
-                  <div style="margin-left:auto;flex-shrink:0;">
-                    <div style="font-size:1.1rem;font-weight:800;color:${m.risk_score>=90?'#ef4444':m.risk_score>=75?'#f97316':'#f59e0b'};font-family:'JetBrains Mono',monospace;">${m.risk_score}</div>
-                    <div style="font-size:.65rem;color:var(--cds-text-muted);text-align:center;">Risk</div>
-                  </div>
-                </div>
-                <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                  <span style="font-size:.7rem;padding:1px 6px;border-radius:4px;background:rgba(34,197,94,.1);color:#22c55e;border:1px solid rgba(34,197,94,.2);">${m.samples.toLocaleString()} samples</span>
-                  <span style="font-size:.7rem;padding:1px 6px;border-radius:4px;background:rgba(0,0,0,.2);color:var(--cds-text-muted);">Last: ${m.last_seen}</span>
-                </div>
-              </div>`).join('')}
-            </div>
-
-            <!-- Right: Detail Panel -->
-            ${selected ? (() => {
-              const m = MALWARE_DB.find(x=>x.id===selected);
-              if (!m) return '<div style="padding:40px;text-align:center;color:var(--cds-text-muted);">Not found</div>';
-              const riskColor = m.risk_score>=90?'#ef4444':m.risk_score>=75?'#f97316':'#f59e0b';
-              return `
-              <div style="overflow-y:auto;display:flex;flex-direction:column;gap:14px;">
-
-                <!-- Header -->
-                <div style="background:var(--cds-card);border:1px solid var(--cds-border);border-radius:10px;padding:16px;">
-                  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
-                    <div>
-                      <div style="font-size:1.25rem;font-weight:800;color:#22c55e;">${_esc(m.family)}</div>
-                      <div style="font-size:.8rem;color:var(--cds-text-muted);margin-top:2px;">${_esc(m.type)} · ${_esc(m.attribution)}</div>
-                    </div>
-                    <div style="text-align:center;background:${riskColor}15;border:1px solid ${riskColor}33;border-radius:8px;padding:8px 14px;">
-                      <div style="font-size:1.8rem;font-weight:800;color:${riskColor};font-family:'JetBrains Mono',monospace;">${m.risk_score}</div>
-                      <div style="font-size:.7rem;color:var(--cds-text-muted);">RISK SCORE</div>
-                    </div>
-                  </div>
-                  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
-                    <div style="font-size:.78rem;"><div style="color:var(--cds-text-muted);margin-bottom:2px;">First Seen</div><div style="color:var(--cds-text);">${m.first_seen}</div></div>
-                    <div style="font-size:.78rem;"><div style="color:var(--cds-text-muted);margin-bottom:2px;">Last Active</div><div style="color:var(--cds-text);">${m.last_seen}</div></div>
-                    <div style="font-size:.78rem;"><div style="color:var(--cds-text-muted);margin-bottom:2px;">Samples</div><div style="color:#22c55e;font-weight:700;">${m.samples.toLocaleString()}</div></div>
-                    <div style="font-size:.78rem;"><div style="color:var(--cds-text-muted);margin-bottom:2px;">Origin</div><div style="color:var(--cds-text);">${m.origin}</div></div>
-                    <div style="font-size:.78rem;"><div style="color:var(--cds-text-muted);margin-bottom:2px;">Code Reuse</div><div style="color:#00d4ff;">${m.code_reuse}%</div></div>
-                    <div style="font-size:.78rem;"><div style="color:var(--cds-text-muted);margin-bottom:2px;">Obfuscation</div><div style="color:#f97316;">${_esc(m.obfuscation)}</div></div>
-                  </div>
-                </div>
-
-                <!-- Hashes -->
-                <div style="background:var(--cds-card);border:1px solid var(--cds-border);border-radius:10px;padding:14px;">
-                  <div class="cds-section-title" style="margin-bottom:10px;"><i class="fas fa-fingerprint"></i> File Hashes</div>
-                  ${[['SHA-256',m.hash_sha256],['MD5',m.hash_md5],['SHA-1',m.hash_sha1]].map(([t,v])=>`
-                    <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--cds-border);">
-                      <span style="font-size:.7rem;color:var(--cds-text-muted);min-width:50px;">${t}</span>
-                      <code style="font-size:.7rem;color:#00d4ff;font-family:'JetBrains Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${_esc(v)}</code>
-                      <button onclick="navigator.clipboard?.writeText('${_esc(v)}');_toast('Hash copied','success')"
-                        style="background:none;border:none;color:var(--cds-text-muted);cursor:pointer;font-size:.75rem;padding:2px 6px;border-radius:4px;">
-                        <i class="fas fa-copy"></i>
-                      </button>
-                    </div>`).join('')}
-                </div>
-
-                <!-- Behavior -->
-                <div style="background:var(--cds-card);border:1px solid var(--cds-border);border-radius:10px;padding:14px;">
-                  <div class="cds-section-title" style="margin-bottom:10px;"><i class="fas fa-eye" style="color:#ef4444;"></i> Behavior Analysis</div>
-                  ${m.behavior.map(b=>`
-                    <div style="display:flex;align-items:flex-start;gap:8px;padding:4px 0;font-size:.8rem;color:var(--cds-text-secondary);">
-                      <i class="fas fa-caret-right" style="color:#ef4444;margin-top:3px;flex-shrink:0;"></i>${_esc(b)}
-                    </div>`).join('')}
-                </div>
-
-                <!-- Mutations -->
-                <div style="background:var(--cds-card);border:1px solid var(--cds-border);border-radius:10px;padding:14px;">
-                  <div class="cds-section-title" style="margin-bottom:10px;"><i class="fas fa-random" style="color:#f97316;"></i> New Mutations (vs Parent)</div>
-                  ${m.mutations.map((mut,i)=>`
-                    <div style="display:flex;align-items:flex-start;gap:8px;padding:4px 0;font-size:.8rem;color:var(--cds-text-secondary);border-bottom:1px solid var(--cds-border);">
-                      <span style="background:rgba(249,115,22,.15);color:#f97316;font-size:.65rem;padding:1px 5px;border-radius:3px;min-width:16px;text-align:center;flex-shrink:0;">${i+1}</span>
-                      ${_esc(mut)}
-                    </div>`).join('')}
-                </div>
-
-                <!-- MITRE TTPs -->
-                <div style="background:var(--cds-card);border:1px solid var(--cds-border);border-radius:10px;padding:14px;">
-                  <div class="cds-section-title" style="margin-bottom:10px;"><i class="fas fa-th" style="color:#3b82f6;"></i> MITRE ATT&CK Techniques</div>
-                  <div style="display:flex;flex-wrap:wrap;gap:6px;">
-                    ${m.mitre_ttps.map(ttp=>`
-                      <a href="https://attack.mitre.org/techniques/${ttp.replace('.','/')}/" target="_blank"
-                        style="background:rgba(59,130,246,.15);color:#3b82f6;border:1px solid rgba(59,130,246,.3);padding:3px 8px;border-radius:5px;font-size:.75rem;font-family:'JetBrains Mono',monospace;text-decoration:none;">
-                        ${_esc(ttp)}
-                      </a>`).join('')}
-                  </div>
-                </div>
-
-                <!-- Indicators -->
-                <div style="background:var(--cds-card);border:1px solid var(--cds-border);border-radius:10px;padding:14px;">
-                  <div class="cds-section-title" style="margin-bottom:10px;"><i class="fas fa-bullseye" style="color:#a855f7;"></i> Indicators of Compromise (IOCs)</div>
-                  ${m.indicators.map(ioc=>`
-                    <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--cds-border);">
-                      <span style="font-size:.65rem;text-transform:uppercase;color:#a855f7;background:rgba(168,85,247,.1);padding:1px 6px;border-radius:3px;min-width:55px;text-align:center;flex-shrink:0;">${_esc(ioc.type)}</span>
-                      <code style="font-size:.78rem;color:var(--cds-text);font-family:'JetBrains Mono',monospace;flex:1;word-break:break-all;">${_esc(ioc.value)}</code>
-                    </div>`).join('')}
-                </div>
-
-                <!-- Evolution Timeline -->
-                <div style="background:var(--cds-card);border:1px solid var(--cds-border);border-radius:10px;padding:14px;">
-                  <div class="cds-section-title" style="margin-bottom:14px;"><i class="fas fa-history" style="color:#22c55e;"></i> Evolution Timeline</div>
-                  <div style="display:flex;align-items:flex-end;gap:8px;padding:12px 0;overflow-x:auto;min-height:120px;">
-                    ${m.evolution.map((e,i,arr) => `
-                      <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex-shrink:0;min-width:72px;">
-                        <div style="font-size:.7rem;color:#22c55e;font-weight:700;">${e.sim}%</div>
-                        <div title="${_esc(e.version)}: ${e.samples} samples"
-                          style="width:56px;height:${Math.round(e.sim/100*80)+10}px;background:linear-gradient(180deg,rgba(34,197,94,.7),rgba(34,197,94,.2));border:1px solid rgba(34,197,94,.4);border-radius:4px 4px 0 0;cursor:pointer;"
-                          onclick="_toast('${_esc(e.version)}: ${e.samples} samples · ${e.year}','info')">
+          <!-- Table (same structure as Adversary Simulation Lab) -->
+          <div class="cds-table-wrap">
+            <table class="cds-table">
+              <thead><tr>
+                ${['Family / Hash','Type','Risk Score','Code Reuse','Samples','Last Seen','MITRE TTPs','Actions'].map(h=>`<th>${h}</th>`).join('')}
+              </tr></thead>
+              <tbody>
+                ${filtered.map(m => {
+                  const riskColor = m.risk_score>=90?'#ef4444':m.risk_score>=75?'#f97316':'#f59e0b';
+                  const riskClass = m.risk_score>=90?'cds-badge-critical':m.risk_score>=75?'cds-badge-high':'cds-badge-medium';
+                  return `
+                  <tr>
+                    <td>
+                      <div style="font-size:12px;font-weight:700;color:var(--cds-text-primary);">${_esc(m.family)}</div>
+                      <div style="font-size:10px;color:var(--cds-text-muted);font-family:'JetBrains Mono',monospace;margin-top:2px;">${m.hash_sha256.slice(0,20)}…</div>
+                      <div style="font-size:10px;color:#64748b;margin-top:1px;">${_esc(m.attribution)}</div>
+                    </td>
+                    <td>
+                      <span class="cds-inline-code" style="font-size:11px;">${_esc(m.type)}</span>
+                      <div style="font-size:10px;color:var(--cds-text-muted);margin-top:3px;">Origin: ${_esc(m.origin)}</div>
+                    </td>
+                    <td>
+                      <span class="cds-badge ${riskClass}" style="font-size:13px;font-weight:800;letter-spacing:.5px;">${m.risk_score}</span>
+                    </td>
+                    <td>
+                      <div style="display:flex;align-items:center;gap:8px;">
+                        <div class="cds-progress" style="width:70px;flex-shrink:0;">
+                          <div class="cds-progress-fill" style="width:${m.code_reuse}%;background:${m.code_reuse>=80?'#22c55e':m.code_reuse>=50?'#f59e0b':'#ef4444'};"></div>
                         </div>
-                        <div style="font-size:.7rem;color:var(--cds-text-muted);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:72px;">${_esc(e.version)}</div>
-                        <div style="font-size:.65rem;color:#475569;">${e.year}</div>
+                        <span style="font-size:11px;font-weight:700;color:${m.code_reuse>=80?'#22c55e':m.code_reuse>=50?'#f59e0b':'#ef4444'};">${m.code_reuse}%</span>
                       </div>
-                      ${i < arr.length-1 ? '<i class="fas fa-arrow-right" style="color:#334155;font-size:10px;margin-bottom:34px;flex-shrink:0;"></i>' : ''}
-                    `).join('')}
-                  </div>
-                </div>
-
-                <!-- Detection Rules -->
-                <div style="background:var(--cds-card);border:1px solid var(--cds-border);border-radius:10px;padding:14px;">
-                  <div class="cds-section-title" style="margin-bottom:10px;"><i class="fas fa-shield-alt" style="color:#22c55e;"></i> Detection & Mitigation</div>
-                  <div style="font-size:.8rem;color:var(--cds-text-secondary);">
-                    <div style="margin-bottom:6px;"><strong style="color:var(--cds-text);">Detection Rules:</strong> ${_esc(m.detection_rules)}</div>
-                    <div><strong style="color:var(--cds-text);">Relevant Patches:</strong> ${_esc(m.patches)}</div>
-                  </div>
-                  <div style="display:flex;gap:8px;margin-top:12px;">
-                    <button class="cds-btn cds-btn-sm" style="background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.3);"
-                      onclick="_toast('Searching VirusTotal for ${_esc(m.hash_sha256.slice(0,16))}…','info')">
-                      <i class="fas fa-virus"></i> VirusTotal
-                    </button>
-                    <button class="cds-btn cds-btn-sm" style="background:rgba(59,130,246,.15);color:#3b82f6;border:1px solid rgba(59,130,246,.3);"
-                      onclick="_toast('Creating IOC watchlist entry for ${_esc(m.family)}','success')">
-                      <i class="fas fa-plus"></i> Add to Watchlist
-                    </button>
-                    <button class="cds-btn cds-btn-sm" style="background:rgba(168,85,247,.15);color:#a855f7;border:1px solid rgba(168,85,247,.3);"
-                      onclick="_toast('Exporting ${_esc(m.family)} intelligence report','info')">
-                      <i class="fas fa-download"></i> Export Intel
-                    </button>
-                  </div>
-                </div>
-
-              </div>`;
-            })() : `
-            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:60px;text-align:center;">
-              <i class="fas fa-dna" style="font-size:3rem;color:#22c55e;opacity:.3;margin-bottom:16px;"></i>
-              <div style="font-size:1rem;font-weight:600;color:var(--cds-text);margin-bottom:8px;">Select a Malware Sample</div>
-              <div style="font-size:.85rem;color:var(--cds-text-muted);">Click any malware family on the left to view full intelligence report including hashes, behavior, MITRE TTPs, IOCs, and evolution timeline.</div>
-            </div>`}
-
+                    </td>
+                    <td style="font-size:12px;color:var(--cds-text-secondary);">
+                      <span style="font-weight:700;color:#22c55e;">${m.samples.toLocaleString()}</span>
+                    </td>
+                    <td style="font-size:11px;color:var(--cds-text-muted);">${m.last_seen}</td>
+                    <td>
+                      <div style="display:flex;gap:4px;flex-wrap:wrap;max-width:200px;">
+                        ${m.mitre_ttps.slice(0,3).map(t=>`
+                          <span class="cds-inline-code" style="font-size:9px;padding:1px 5px;">${_esc(t)}</span>
+                        `).join('')}
+                        ${m.mitre_ttps.length>3?`<span style="font-size:9px;color:var(--cds-text-muted);">+${m.mitre_ttps.length-3}</span>`:''}
+                      </div>
+                    </td>
+                    <td>
+                      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                        <button class="cds-btn cds-btn-primary cds-btn-sm"
+                          onclick="window._mdnaShowDetail('${m.id}')">
+                          <i class="fas fa-search"></i> Analyze
+                        </button>
+                        <button class="cds-btn cds-btn-ghost cds-btn-sm"
+                          onclick="_toast('🧬 ${_esc(m.family)} added to IOC watchlist','success')">
+                          <i class="fas fa-bookmark"></i>
+                        </button>
+                        <button class="cds-btn cds-btn-ghost cds-btn-sm"
+                          onclick="navigator.clipboard?.writeText('${_esc(m.hash_sha256)}');_toast('Hash copied to clipboard','info')">
+                          <i class="fas fa-copy"></i>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
           </div>
         </div>
       </div>`;
+
+      // Attach modal show function
+      window._mdnaShowDetail = function(id) {
+        const m = MALWARE_DB.find(x=>x.id===id);
+        if (!m) return;
+        const riskColor = m.risk_score>=90?'#ef4444':m.risk_score>=75?'#f97316':'#f59e0b';
+        // Create overlay modal
+        let overlay = document.getElementById('mdna-detail-overlay');
+        if (!overlay) {
+          overlay = document.createElement('div');
+          overlay.id = 'mdna-detail-overlay';
+          overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:24px;overflow-y:auto;';
+          overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+          document.body.appendChild(overlay);
+        }
+        overlay.innerHTML = `
+          <div style="background:#0f172a;border:1px solid #1e293b;border-radius:16px;max-width:860px;width:100%;margin:auto;overflow:hidden;">
+            <!-- Modal Header -->
+            <div style="background:linear-gradient(135deg,rgba(34,197,94,.1),rgba(0,0,0,0));border-bottom:1px solid #1e293b;padding:20px 24px;display:flex;align-items:center;justify-content:space-between;">
+              <div>
+                <div style="font-size:1.25rem;font-weight:800;color:#22c55e;">${_esc(m.family)}</div>
+                <div style="font-size:.8rem;color:#64748b;margin-top:3px;">${_esc(m.type)} · ${_esc(m.attribution)} · Origin: ${_esc(m.origin)}</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:14px;">
+                <div style="text-align:center;background:${riskColor}15;border:1px solid ${riskColor}33;border-radius:8px;padding:8px 14px;">
+                  <div style="font-size:1.6rem;font-weight:800;color:${riskColor};font-family:'JetBrains Mono',monospace;">${m.risk_score}</div>
+                  <div style="font-size:.65rem;color:#64748b;">RISK SCORE</div>
+                </div>
+                <button onclick="document.getElementById('mdna-detail-overlay').remove()"
+                  style="background:#1e293b;border:1px solid #334155;color:#94a3b8;width:34px;height:34px;border-radius:8px;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;">
+                  <i class="fas fa-times"></i>
+                </button>
+              </div>
+            </div>
+            <!-- Modal Body -->
+            <div style="padding:20px 24px;display:grid;grid-template-columns:1fr 1fr;gap:14px;max-height:75vh;overflow-y:auto;">
+              <!-- Hashes -->
+              <div style="background:#0a0e17;border:1px solid #1e293b;border-radius:10px;padding:14px;grid-column:1/-1;">
+                <div style="font-size:.8rem;font-weight:700;color:#22c55e;margin-bottom:10px;"><i class="fas fa-fingerprint"></i> File Hashes</div>
+                ${[['SHA-256',m.hash_sha256],['MD5',m.hash_md5],['SHA-1',m.hash_sha1]].map(([t,v])=>`
+                  <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #1e293b;">
+                    <span style="font-size:.7rem;color:#64748b;min-width:50px;">${t}</span>
+                    <code style="font-size:.72rem;color:#22d3ee;font-family:'JetBrains Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${_esc(v)}</code>
+                    <button onclick="navigator.clipboard?.writeText('${_esc(v)}');_toast('Hash copied','success')" style="background:none;border:none;color:#64748b;cursor:pointer;padding:2px 6px;"><i class="fas fa-copy"></i></button>
+                  </div>`).join('')}
+              </div>
+              <!-- Behavior -->
+              <div style="background:#0a0e17;border:1px solid #1e293b;border-radius:10px;padding:14px;">
+                <div style="font-size:.8rem;font-weight:700;color:#ef4444;margin-bottom:10px;"><i class="fas fa-eye"></i> Behavior</div>
+                ${m.behavior.map(b=>`<div style="font-size:.78rem;color:#94a3b8;padding:3px 0;display:flex;gap:6px;"><i class="fas fa-caret-right" style="color:#ef4444;margin-top:3px;flex-shrink:0;"></i>${_esc(b)}</div>`).join('')}
+              </div>
+              <!-- Mutations -->
+              <div style="background:#0a0e17;border:1px solid #1e293b;border-radius:10px;padding:14px;">
+                <div style="font-size:.8rem;font-weight:700;color:#f97316;margin-bottom:10px;"><i class="fas fa-random"></i> Mutations vs Parent</div>
+                ${m.mutations.map((mut,i)=>`<div style="font-size:.78rem;color:#94a3b8;padding:3px 0;display:flex;gap:6px;border-bottom:1px solid #0f172a;"><span style="background:rgba(249,115,22,.15);color:#f97316;font-size:.65rem;padding:1px 5px;border-radius:3px;min-width:18px;text-align:center;flex-shrink:0;">${i+1}</span>${_esc(mut)}</div>`).join('')}
+              </div>
+              <!-- MITRE TTPs -->
+              <div style="background:#0a0e17;border:1px solid #1e293b;border-radius:10px;padding:14px;">
+                <div style="font-size:.8rem;font-weight:700;color:#3b82f6;margin-bottom:10px;"><i class="fas fa-th"></i> MITRE ATT&CK</div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px;">
+                  ${m.mitre_ttps.map(t=>`<a href="https://attack.mitre.org/techniques/${t.replace('.','/').replace('.','-')}/" target="_blank" style="background:rgba(59,130,246,.15);color:#3b82f6;border:1px solid rgba(59,130,246,.3);padding:3px 8px;border-radius:5px;font-size:.75rem;font-family:'JetBrains Mono',monospace;text-decoration:none;">${_esc(t)}</a>`).join('')}
+                </div>
+              </div>
+              <!-- IOCs -->
+              <div style="background:#0a0e17;border:1px solid #1e293b;border-radius:10px;padding:14px;">
+                <div style="font-size:.8rem;font-weight:700;color:#a855f7;margin-bottom:10px;"><i class="fas fa-bullseye"></i> IOCs</div>
+                ${m.indicators.map(ioc=>`<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid #0f172a;"><span style="font-size:.65rem;text-transform:uppercase;color:#a855f7;background:rgba(168,85,247,.1);padding:1px 6px;border-radius:3px;min-width:50px;text-align:center;flex-shrink:0;">${_esc(ioc.type)}</span><code style="font-size:.75rem;color:#e2e8f0;font-family:'JetBrains Mono',monospace;word-break:break-all;">${_esc(ioc.value)}</code></div>`).join('')}
+              </div>
+              <!-- Evolution -->
+              <div style="background:#0a0e17;border:1px solid #1e293b;border-radius:10px;padding:14px;">
+                <div style="font-size:.8rem;font-weight:700;color:#22c55e;margin-bottom:14px;"><i class="fas fa-history"></i> Evolution Timeline</div>
+                <div style="display:flex;align-items:flex-end;gap:8px;overflow-x:auto;min-height:80px;">
+                  ${m.evolution.map((e,i,a)=>`
+                    <div style="display:flex;flex-direction:column;align-items:center;gap:3px;flex-shrink:0;min-width:60px;">
+                      <div style="font-size:.65rem;color:#22c55e;font-weight:700;">${e.sim}%</div>
+                      <div style="width:44px;height:${Math.round(e.sim/100*60)+8}px;background:linear-gradient(180deg,rgba(34,197,94,.7),rgba(34,197,94,.15));border:1px solid rgba(34,197,94,.4);border-radius:3px 3px 0 0;cursor:pointer;"
+                        onclick="_toast('${_esc(e.version)}: ${e.samples} samples','info')"></div>
+                      <div style="font-size:.65rem;color:#64748b;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60px;">${_esc(e.version)}</div>
+                      <div style="font-size:.6rem;color:#475569;">${e.year}</div>
+                    </div>
+                    ${i<a.length-1?'<i class="fas fa-arrow-right" style="color:#334155;font-size:9px;margin-bottom:24px;"></i>':''}
+                  `).join('')}
+                </div>
+              </div>
+              <!-- Detection & Actions -->
+              <div style="background:#0a0e17;border:1px solid #1e293b;border-radius:10px;padding:14px;grid-column:1/-1;">
+                <div style="font-size:.8rem;font-weight:700;color:#22c55e;margin-bottom:10px;"><i class="fas fa-shield-alt"></i> Detection & Response</div>
+                <div style="font-size:.8rem;color:#94a3b8;margin-bottom:6px;"><strong style="color:#e2e8f0;">Rules:</strong> ${_esc(m.detection_rules)}</div>
+                <div style="font-size:.8rem;color:#94a3b8;margin-bottom:14px;"><strong style="color:#e2e8f0;">Patches:</strong> ${_esc(m.patches)}</div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                  <a href="https://www.virustotal.com/gui/search/${m.hash_sha256}" target="_blank"
+                    style="background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.3);padding:6px 14px;border-radius:7px;font-size:12px;font-weight:600;text-decoration:none;display:flex;align-items:center;gap:6px;">
+                    <i class="fas fa-virus"></i> VirusTotal
+                  </a>
+                  <button class="cds-btn cds-btn-sm" style="background:rgba(59,130,246,.15);color:#3b82f6;border:1px solid rgba(59,130,246,.3);"
+                    onclick="_toast('Added ${_esc(m.family)} to IOC watchlist','success')">
+                    <i class="fas fa-plus"></i> Add to Watchlist
+                  </button>
+                  <button class="cds-btn cds-btn-sm" style="background:rgba(168,85,247,.15);color:#a855f7;border:1px solid rgba(168,85,247,.3);"
+                    onclick="_toast('Exporting ${_esc(m.family)} intel report','info')">
+                    <i class="fas fa-download"></i> Export Intel
+                  </button>
+                  <button class="cds-btn cds-btn-sm" onclick="document.getElementById('mdna-detail-overlay').remove()"
+                    style="background:#1e293b;color:#94a3b8;border:1px solid #334155;">
+                    <i class="fas fa-times"></i> Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>`;
+      };
     }
 
     _mdnaRender();

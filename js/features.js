@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  EYEbot AI — Features Module v2.0.0
+ *  Wadjet-Eye AI — Features Module v2.0.0
  *  Cyber News · MITRE ATT&CK Navigator · IOC Database · Geo Threats
  *  All modules are enterprise-grade with real-time simulation
  * ══════════════════════════════════════════════════════════
@@ -338,7 +338,7 @@ function exportNewsPDF(id) {
   <h3>AI Summary</h3><p>${n.summary}</p>
   <h3>IOCs</h3><p>${n.iocs.map(i=>`<span class="ioc">${i}</span>`).join(' ')}</p>
   <h3>Affected Industries</h3><p>${n.industries.map(i=>`<span class="tag">${i}</span>`).join('')}</p>
-  <footer style="margin-top:40px;border-top:1px solid #e2e8f0;padding-top:16px;font-size:11px;color:#718096;">EYEbot AI v2.0.0 · Generated ${new Date().toISOString()}</footer>
+  <footer style="margin-top:40px;border-top:1px solid #e2e8f0;padding-top:16px;font-size:11px;color:#718096;">Wadjet-Eye AI v2.0.0 · Generated ${new Date().toISOString()}</footer>
   </body></html>`);
   w.document.close(); w.print();
 }
@@ -556,7 +556,7 @@ function generateAllDetectionRules() {
 }
 
 function exportMITRELayer() {
-  const layer = { version:'4.5', name:'EYEbot Coverage', domain:'enterprise-attack', techniques: Object.keys(MITRE_TECHNIQUE_DETAILS).map(tid => ({ techniqueID: tid, score: MITRE_TECHNIQUE_DETAILS[tid].coverage })) };
+  const layer = { version:'4.5', name:'Wadjet-Eye Coverage', domain:'enterprise-attack', techniques: Object.keys(MITRE_TECHNIQUE_DETAILS).map(tid => ({ techniqueID: tid, score: MITRE_TECHNIQUE_DETAILS[tid].coverage })) };
   const blob = new Blob([JSON.stringify(layer, null, 2)], { type:'application/json' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'mitre-layer.json'; a.click();
   showToast('📊 MITRE ATT&CK layer exported', 'success');

@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════════
- *  EYEbot AI — Centralized Auth Interceptor & Session Manager v5.2
+ *  Wadjet-Eye AI — Centralized Auth Interceptor & Session Manager v5.2
  *  FILE: js/auth-interceptor.js
  *
  *  ROOT CAUSE ANALYSIS OF AUTH ISSUES:

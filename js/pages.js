@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════════════════════
-   EYEbot AI — Pages Module (Enhanced v2)
+   Wadjet-Eye AI — Pages Module (Enhanced v2)
    All page renderers with full interactivity
    ══════════════════════════════════════════════════════════ */
 
@@ -655,7 +655,7 @@ function renderSettings() {
   container.innerHTML = `
     <div style="margin-bottom:16px;">
       <h3 style="font-size:15px;font-weight:700;">Platform Settings</h3>
-      <p style="font-size:11px;color:var(--text-muted);margin-top:2px;">EYEbot AI v16.4.7 · Logged in as ${userName} (${userRole})</p>
+      <p style="font-size:11px;color:var(--text-muted);margin-top:2px;">Wadjet-Eye AI v16.4.7 · Logged in as ${userName} (${userRole})</p>
     </div>`;
   // Only super_admin and admin can see full settings
   const isAdmin = userRole === 'SUPER_ADMIN' || userRole === 'ADMIN';

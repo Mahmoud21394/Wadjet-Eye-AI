@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  EYEbot AI — Kill Chain Visualization v3.0
+ *  Wadjet-Eye AI — Kill Chain Visualization v3.0
  *  js/kill-chain-viz.js
  *
  *  Interactive MITRE ATT&CK Kill Chain visualization using

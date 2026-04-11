@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  EYEbot AI — Dynamic Detail Pages v2.0
+ *  Wadjet-Eye AI — Dynamic Detail Pages v2.0
  *  js/detail-pages.js
  *
  *  Provides full-screen detail views for:

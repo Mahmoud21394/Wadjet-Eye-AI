@@ -1,8 +1,8 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  EYEbot AI — Platform Settings Fix v2.0
+ *  Wadjet-Eye AI — Platform Settings Fix v2.1
  *  Fixes HTTP 400 save errors, adds proper validation,
- *  enhanced UI with animations, clear error messages
+ *  enhanced UI with localStorage fallback for offline use
  * ══════════════════════════════════════════════════════════════════════
  */
 'use strict';
@@ -120,16 +120,14 @@ function _collectSettingsFormData() {
   return data;
 }
 
-/* ── Save handler (fixes HTTP 400) ── */
+/* ── Save handler (fixes HTTP 400, with localStorage fallback) ── */
 window.settingsSaveEnhanced = async function() {
   if (_settingsEnhSaving) return;
   _settingsEnhSaving = true;
 
   const btn = document.getElementById('settings-save-btn-enh');
-  if (btn) {
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Saving…';
-  }
+  const btn2 = document.getElementById('settings-save-btn-enh-bottom');
+  [btn, btn2].forEach(b => { if (b) { b.disabled = true; b.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Saving…'; } });
 
   const rawData = _collectSettingsFormData();
   const { errors, cleaned } = _validateSettings(rawData);
@@ -137,43 +135,50 @@ window.settingsSaveEnhanced = async function() {
   if (errors.length > 0) {
     _settingsShowStatus('error', `Validation failed: ${errors.join('; ')}`);
     _settingsEnhSaving = false;
-    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-save"></i> Save Changes'; }
+    [btn, btn2].forEach(b => { if (b) { b.disabled = false; b.innerHTML = '<i class="fas fa-save"></i> Save Changes'; } });
     return;
   }
 
+  let savedOffline = false;
   try {
-    // Use PATCH instead of PUT to avoid overwriting fields we didn't include
-    await _settingsEnhFetch('/settings', {
-      method: 'PATCH',
-      body: cleaned,
-    });
-
+    // Try PATCH first, then PUT as fallback
+    let result;
+    try {
+      result = await _settingsEnhFetch('/settings', { method: 'PATCH', body: cleaned });
+    } catch (patchErr) {
+      // Try PUT with wrapper if PATCH fails
+      try {
+        result = await _settingsEnhFetch('/settings', { method: 'PUT', body: cleaned });
+      } catch {
+        throw patchErr; // throw original error
+      }
+    }
     _settingsEnhData   = { ..._settingsEnhData, ...cleaned };
     _settingsEnhDirty  = false;
+    // Save to local cache as backup
+    localStorage.setItem('wadjet_settings_cache', JSON.stringify({ ..._settingsEnhData, _savedAt: new Date().toISOString() }));
     _settingsShowStatus('success', '✅ Settings saved successfully');
-    if (btn) btn.style.opacity = '.5';
+    [btn, btn2].forEach(b => { if (b) { b.style.opacity = '.6'; b.innerHTML = '<i class="fas fa-check"></i> Saved'; } });
   } catch(err) {
-    // Try PUT as fallback
+    // Offline fallback — save to localStorage
     try {
-      await _settingsEnhFetch('/settings', {
-        method: 'PUT',
-        body: { settings: cleaned },
-      });
+      const cache = JSON.parse(localStorage.getItem('wadjet_settings_cache') || '{}');
+      const merged = { ...cache, ...cleaned, _savedAt: new Date().toISOString(), _offline: true };
+      localStorage.setItem('wadjet_settings_cache', JSON.stringify(merged));
       _settingsEnhData  = { ..._settingsEnhData, ...cleaned };
       _settingsEnhDirty = false;
-      _settingsShowStatus('success', '✅ Settings saved successfully');
-      if (btn) btn.style.opacity = '.5';
-    } catch(err2) {
-      // Show clear error message
-      const msg = err2.message || err.message || 'Unknown error';
-      _settingsShowStatus('error', `Save failed: ${msg}. Please check your permissions and try again.`);
+      savedOffline = true;
+      _settingsShowStatus('info', `⚠️ Saved locally (offline mode). Will sync when backend is available. [${err.message}]`);
+      [btn, btn2].forEach(b => { if (b) { b.style.opacity = '.7'; b.innerHTML = '<i class="fas fa-cloud-upload-alt"></i> Saved Locally'; } });
+    } catch(localErr) {
+      const msg = err.message || 'Unknown error';
+      _settingsShowStatus('error', `Save failed: ${msg}`);
+      [btn, btn2].forEach(b => { if (b) { b.innerHTML = '<i class="fas fa-save"></i> Save Changes'; b.disabled = false; } });
     }
   } finally {
     _settingsEnhSaving = false;
-    if (btn) {
-      btn.disabled = false;
-      if (!_settingsEnhDirty) btn.innerHTML = '<i class="fas fa-check"></i> Saved';
-      else btn.innerHTML = '<i class="fas fa-save"></i> Save Changes';
+    if (!savedOffline) {
+      [btn, btn2].forEach(b => { if (b) b.disabled = false; });
     }
   }
 };
@@ -269,8 +274,25 @@ window.settingsReloadEnhanced = async function() {
     const res = await _settingsEnhFetch('/settings');
     _settingsEnhData  = res?.settings || res || {};
     _settingsEnhDirty = false;
+    // Merge with local cache if exists
+    const cached = localStorage.getItem('wadjet_settings_cache');
+    if (cached) {
+      try { const p = JSON.parse(cached); if (p._offline) { _settingsEnhData = { ..._settingsEnhData, ...p }; delete _settingsEnhData._offline; delete _settingsEnhData._savedAt; } } catch {}
+    }
     body.innerHTML = _buildEnhancedForm(_settingsEnhData);
   } catch(err) {
+    // Try loading from local cache
+    const cached = localStorage.getItem('wadjet_settings_cache');
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        _settingsEnhData  = parsed;
+        _settingsEnhDirty = false;
+        body.innerHTML = _buildEnhancedForm(_settingsEnhData);
+        _settingsShowStatus('info', `⚠️ Loaded from local cache (backend offline). Last saved: ${parsed._savedAt || 'Unknown'}`);
+        return;
+      } catch {}
+    }
     body.innerHTML = `
       <div class="settings-status settings-status--error" style="display:flex;margin-bottom:14px">
         <i class="fas fa-exclamation-triangle"></i>
@@ -284,7 +306,7 @@ window.settingsReloadEnhanced = async function() {
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:8px">
         <button onclick="settingsReloadEnhanced()" class="enh-btn enh-btn--ghost enh-btn--sm">
-          <i class="fas fa-retry"></i> Retry
+          <i class="fas fa-sync-alt"></i> Retry
         </button>
         <button onclick="_settingsLoadOfflineForm()" class="enh-btn enh-btn--cyan enh-btn--sm">
           <i class="fas fa-edit"></i> Edit Offline
@@ -305,7 +327,7 @@ function _buildEnhancedForm(s) {
   return `
     <!-- General Settings -->
     ${_settingsSection('fa-id-card','General Settings', 1, `
-      ${_settingsField('Platform Name','platform_name','text', s.platform_name||'EYEbot AI','Your platform display name',{maxlength:100})}
+      ${_settingsField('Platform Name','platform_name','text', s.platform_name||'Wadjet-Eye AI','Your platform display name',{maxlength:100})}
       ${_settingsField('Default Theme','theme','select', s.theme||'dark','Platform color theme',{options:['dark','light']})}
       ${_settingsField('Timezone','timezone','select', s.timezone||'UTC','Default timezone for all users',{options:['UTC','US/Eastern','US/Pacific','Europe/London','Europe/Berlin','Asia/Tokyo','Australia/Sydney']})}
       ${_settingsField('Session Timeout (minutes)','session_timeout_minutes','number', s.session_timeout_minutes||480,'Auto-logout after inactivity',{min:5,max:10080})}

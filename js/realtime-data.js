@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  EYEbot AI — Real-Time Live Data Module v1.0
+ *  Wadjet-Eye AI — Real-Time Live Data Module v1.0
  *
  *  Replaces ALL static ARGUS_DATA / demo data with live
  *  Supabase reads via the backend API.

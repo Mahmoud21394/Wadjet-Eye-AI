@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  EYEbot AI — Direct Enrichment Service v3.1
+ *  Wadjet-Eye AI — Direct Enrichment Service v3.1
  *  backend/services/enrichment-direct.js
  *
  *  Calls threat intel APIs DIRECTLY (no HTTP loopback).

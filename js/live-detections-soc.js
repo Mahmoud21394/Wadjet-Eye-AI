@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════
- *  EYEbot AI — SOC-Grade Live Detections Module v3.0
+ *  Wadjet-Eye AI — SOC-Grade Live Detections Module v3.0
  *  FILE: js/live-detections-soc.js
  *
  *  v3.0 Fixes (2026-04-02):
