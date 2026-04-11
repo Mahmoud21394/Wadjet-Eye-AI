@@ -294,8 +294,7 @@ const PAGE_CONFIG = {
   },
   'threat-actors':   { title:'Threat Actors',           breadcrumb:'Intelligence / Threat Actors',          onEnter:()=>renderThreatActors(),   onLeave:()=>{} },
   'dark-web':        { title:'Dark Web Intelligence',   breadcrumb:'Intelligence / Dark Web',               onEnter:()=>{ if(typeof window.renderDarkWeb==='function') window.renderDarkWeb(); else { const p=document.getElementById('page-dark-web'); if(p) p.innerHTML='<div style="padding:40px;text-align:center;color:#8b949e">Dark web module loading...</div>'; } }, onLeave:()=>{} },
-  'exposure':        { title:'Exposure Assessment',     breadcrumb:'Intelligence / CVEs & Vulnerabilities', onEnter:()=>{ if(typeof renderExposureLive==='function') renderExposureLive().catch(e=>console.warn('[Exposure]',e)); else if(typeof renderExposure==='function') renderExposure(); }, onLeave:()=>{} },
-  'ioc-registry':    { title:'IOC Registry',            breadcrumb:'Intelligence / IOC Registry',           onEnter:(opts)=>renderIOCRegistry(opts),    onLeave:()=>{} },
+  'exposure':        { title:'CVE Intelligence Engine', breadcrumb:'Intelligence / CVE Intelligence',       onEnter:()=>{ if(typeof renderCVEIntelligence==='function') renderCVEIntelligence(); else if(typeof renderExposureLive==='function') renderExposureLive().catch(e=>console.warn('[CVE]',e)); }, onLeave:()=>{} },
   'ai-orchestrator': { title:'AI Orchestrator',         breadcrumb:'AI Operations / Agentic Investigation', onEnter:()=>renderAIOrchestrator(), onLeave:()=>{} },
   'collectors':      { title:'Threat Collectors',       breadcrumb:'AI Operations / Collectors',            onEnter:()=>renderCollectors(),     onLeave:()=>{} },
   'playbooks':       { title:'Response Playbooks',      breadcrumb:'AI Operations / Playbooks',             onEnter:()=>{ 
@@ -331,7 +330,7 @@ const PAGE_CONFIG = {
   },
   'edr-siem':        { title:'EDR / SIEM Webhooks',     breadcrumb:'Phase 2 / Webhook Ingestion',           onEnter:()=>renderEDRSIEM(),        onLeave:()=>{} },
   'sysmon':          { title:'Sysmon Log Analyzer',   breadcrumb:'Advanced SOC / Sysmon Investigation',   onEnter:()=>{ if(typeof renderSysmonAnalyzer==='function') renderSysmonAnalyzer(); else if(typeof renderSysmon==='function') renderSysmon(); }, onLeave:()=>{} },
-  'customers':       { title:'Tenant Management',       breadcrumb:'Management / Tenants',                  onEnter:()=>renderCustomers(),      onLeave:()=>{} },
+  'customers':       { title:'Tenant Management',       breadcrumb:'Platform / Tenants',                    onEnter:()=>{ if(typeof renderTenantsPage==='function') renderTenantsPage(); else if(typeof renderCustomers==='function') renderCustomers(); }, onLeave:()=>{} },
   'reports':         { title:'Reports & Exports',       breadcrumb:'Management / Reports',                  onEnter:()=>renderReports(),        onLeave:()=>{} },
   'settings':        { title:'Platform Settings',       breadcrumb:'Management / Settings',                 onEnter:()=>renderSettings(),       onLeave:()=>{} },
   'executive-dashboard':{ title:'Executive Dashboard',  breadcrumb:'Advanced SOC / Executive View',        onEnter:()=>renderExecutiveDashboard(), onLeave:()=>{} },

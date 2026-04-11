@@ -758,4 +758,51 @@ window.loadDashboardData = () => API.dashboard.stats().catch(() => null);
 window.loadAlerts        = (p) => API.alerts.list(p).then(r => r?.data || []).catch(() => []);
 window.loadIOCs          = (p) => API.iocs.list(p).then(r => r?.data || []).catch(() => []);
 
+/* ════════════════════════════════════════════════════════════
+   GLOBAL API CONVENIENCE HELPERS — used by new v25.0 modules
+═══════════════════════════════════════════════════════════ */
+(function _installGlobalHelpers() {
+  const BACKEND = (() => {
+    const u = (typeof window !== 'undefined' && window.THREATPILOT_API_URL)
+      ? window.THREATPILOT_API_URL.replace(/\/$/, '')
+      : (window.location.hostname === 'localhost' ? 'http://localhost:3000' : '');
+    return u;
+  })();
+
+  function _authHeaders() {
+    const token = typeof TokenStore !== 'undefined' ? TokenStore.get() : null;
+    const h = { 'Content-Type': 'application/json' };
+    if (token) h['Authorization'] = `Bearer ${token}`;
+    return h;
+  }
+
+  async function _apiFetch(method, path, body) {
+    const url = BACKEND + (path.startsWith('http') ? path.replace(BACKEND, '') : path);
+    const opts = { method, headers: _authHeaders() };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    const res = await fetch(url, opts);
+    if (!res.ok) {
+      let errMsg = `HTTP ${res.status}`;
+      try { const j = await res.json(); errMsg = j.error || j.message || errMsg; } catch {}
+      throw new Error(errMsg);
+    }
+    if (res.status === 204) return null;
+    return res.json();
+  }
+
+  // Install globally — safe to call from any new module
+  window.apiGet    = (path)         => _apiFetch('GET',    path);
+  window.apiPost   = (path, body)   => _apiFetch('POST',   path, body);
+  window.apiPatch  = (path, body)   => _apiFetch('PATCH',  path, body);
+  window.apiPut    = (path, body)   => _apiFetch('PUT',    path, body);
+  window.apiDelete = (path)         => _apiFetch('DELETE', path);
+
+  // Toast helper — uses existing showToast if available
+  window._showToast = function(msg, type = 'info', duration = 3500) {
+    if (typeof showToast === 'function') { showToast(msg, type, duration); return; }
+    if (type === 'error') console.error('[Toast]', msg);
+    else console.log('[Toast]', msg);
+  };
+})();
+
 })(); // end IIFE — scopes _refreshPromise to prevent collision with auth-interceptor.js
