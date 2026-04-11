@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Dark Web Intelligence Module v5.0 (ENHANCED)
+ *  EYEbot AI — Dark Web Intelligence Module v5.0 (ENHANCED)
  *  Redesigned to match Threat Actor Intelligence style
  *  + Modern animations, hover effects, responsive design
  *  + Real API integration with synthetic fallback

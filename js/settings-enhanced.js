@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Platform Settings Fix v2.0
+ *  EYEbot AI — Platform Settings Fix v2.0
  *  Fixes HTTP 400 save errors, adds proper validation,
  *  enhanced UI with animations, clear error messages
  * ══════════════════════════════════════════════════════════════════════
@@ -305,7 +305,7 @@ function _buildEnhancedForm(s) {
   return `
     <!-- General Settings -->
     ${_settingsSection('fa-id-card','General Settings', 1, `
-      ${_settingsField('Platform Name','platform_name','text', s.platform_name||'Wadjet-Eye AI','Your platform display name',{maxlength:100})}
+      ${_settingsField('Platform Name','platform_name','text', s.platform_name||'EYEbot AI','Your platform display name',{maxlength:100})}
       ${_settingsField('Default Theme','theme','select', s.theme||'dark','Platform color theme',{options:['dark','light']})}
       ${_settingsField('Timezone','timezone','select', s.timezone||'UTC','Default timezone for all users',{options:['UTC','US/Eastern','US/Pacific','Europe/London','Europe/Berlin','Asia/Tokyo','Australia/Sydney']})}
       ${_settingsField('Session Timeout (minutes)','session_timeout_minutes','number', s.session_timeout_minutes||480,'Auto-logout after inactivity',{min:5,max:10080})}

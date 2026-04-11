@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Wadjet-Eye AI — Platform Critical Fixes v20.0
+   EYEbot AI — Platform Critical Fixes v20.0
    ─────────────────────────────────────────────────────────────────
    FIX 1: API Settings Save Failure — correct UPSERT, strip nulls
    FIX 2: Modules not showing data — ensure data pipelines + demo

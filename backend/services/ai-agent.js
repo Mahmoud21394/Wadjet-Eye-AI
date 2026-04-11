@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  ThreatPilot AI — AI Orchestration Agent v3.0
+ *  EYEbot AI — AI Orchestration Agent v3.0
  *  backend/services/ai-agent.js
  *
  *  Design:

@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Production Module Router v5.1
+ *  EYEbot AI — Production Module Router v5.1
  *  FILE: js/module-router.js
  *
  *  FIXES:

@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — SOC AI Analysis Engine v1.0
+ *  EYEbot AI — SOC AI Analysis Engine v1.0
  *  js/soc-ai-engine.js
  *
  *  Provides local rule-based threat analysis + optional OpenAI GPT-4o
@@ -632,7 +632,7 @@ Provide a structured JSON response with these exact fields:
       return generateLocalChatResponse(question, context);
     }
 
-    const systemPrompt = `You are an expert SOC analyst assistant for Wadjet-Eye AI. 
+    const systemPrompt = `You are an expert SOC analyst assistant for EYEbot AI. 
 Answer questions about the current investigation context concisely and accurately.
 Context: ${JSON.stringify(context).substring(0, 3000)}`;
 

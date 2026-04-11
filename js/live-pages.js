@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  ThreatPilot AI — Live Pages Module v5.0
+ *  EYEbot AI — Live Pages Module v5.0
  *  FILE: js/live-pages.js
  *
  *  ALL dashboard cards & pages wired to real backend data.
@@ -3033,7 +3033,7 @@ function _initAutoRefresh() {
    INIT  — called from main.js initApp()
 ───────────────────────────────────────────── */
 async function initLivePages() {
-  console.info('[LivePages] v5.0 (Wadjet-Eye AI) initialising…');
+  console.info('[LivePages] v5.0 (EYEbot AI) initialising…');
 
   // Kick off initial KPI load + dynamic collector count
   await renderCommandCenterLive();
@@ -3049,7 +3049,7 @@ async function initLivePages() {
     if (typeof orig === 'function') orig();
   };
 
-  console.info('[LivePages] Ready — Wadjet-Eye AI CTI Platform');
+  console.info('[LivePages] Ready — EYEbot AI CTI Platform');
 }
 
 /* ─────────────────────────────────────────────

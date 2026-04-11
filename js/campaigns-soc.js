@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — SOC-Grade Active Campaigns Module v3.0
+ *  EYEbot AI — SOC-Grade Active Campaigns Module v3.0
  *  FILE: js/campaigns-soc.js
  *
  *  v3.0 Fixes (2026-04-02):

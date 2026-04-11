@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Secure Auth Module v6.0
+ *  EYEbot AI — Secure Auth Module v6.0
  *  js/auth-secure.js
  *
  *  SECURITY DESIGN:

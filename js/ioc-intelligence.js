@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — IOC Intelligence Database v5.1 (PRODUCTION)
+ *  EYEbot AI — IOC Intelligence Database v5.1 (PRODUCTION)
  *  FILE: js/ioc-intelligence.js
  *
  *  Features:

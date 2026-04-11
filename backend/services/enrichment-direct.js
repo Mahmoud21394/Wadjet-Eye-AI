@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  ThreatPilot AI — Direct Enrichment Service v3.1
+ *  EYEbot AI — Direct Enrichment Service v3.1
  *  backend/services/enrichment-direct.js
  *
  *  Calls threat intel APIs DIRECTLY (no HTTP loopback).

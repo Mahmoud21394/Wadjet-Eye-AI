@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Threat Actor Intelligence Module v5.3
+ *  EYEbot AI — Threat Actor Intelligence Module v5.3
  *  js/threat-actors-v2.js
  *
  *  PRODUCTION — 100% Real API Data. No mock data whatsoever.

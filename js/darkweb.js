@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Dark Web Intelligence Module v4.0
+ *  EYEbot AI — Dark Web Intelligence Module v4.0
  *  High-fidelity hacker-style GUI with active tabs
  *  Tabs: Marketplace | Ransomware | Credentials | Forums | Onion Monitor
  * ══════════════════════════════════════════════════════════

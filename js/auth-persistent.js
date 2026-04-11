@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Persistent Auth Engine v5.1
+ *  EYEbot AI — Persistent Auth Engine v5.1
  *  FILE: js/auth-persistent.js
  *
  *  WHAT THIS MODULE PROVIDES:

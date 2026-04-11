@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — AI Orchestrator Page Module v4.0 (ENHANCED)
+ *  EYEbot AI — AI Orchestrator Page Module v4.0 (ENHANCED)
  *  Real-time investigation results, multi-source intel integration,
  *  exportable reports, action logging
  *  
@@ -142,7 +142,7 @@ window.renderAIOrchestrator = function() {
               <i class="fas fa-robot"></i>
             </div>
             <div class="ai-msg__bubble">
-              <p style="margin:0 0 8px">👋 Hello! I'm the Wadjet-Eye AI Orchestrator. I can:</p>
+              <p style="margin:0 0 8px">👋 Hello! I'm the EYEbot AI Orchestrator. I can:</p>
               <ul style="margin:0;padding-left:16px;font-size:.9em;color:#8b949e;line-height:1.8">
                 <li>Investigate IOCs across VirusTotal, AbuseIPDB, Shodan, and OTX</li>
                 <li>Map threats to MITRE ATT&CK techniques</li>
@@ -733,7 +733,7 @@ window._orchExportReport = function() {
     messages: _AIORCH.messages,
     logs: _AIORCH.logs,
     exported: _orchNow(),
-    platform: 'Wadjet-Eye AI',
+    platform: 'EYEbot AI',
   };
   const blob = new Blob([JSON.stringify(report, null, 2)], {type:'application/json'});
   const a = document.createElement('a');

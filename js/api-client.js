@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Frontend API Client v3.0
+ *  EYEbot AI — Frontend API Client v3.0
  *  Enterprise Edition — Real Auth, No Mock Data
  *
  *  Features:

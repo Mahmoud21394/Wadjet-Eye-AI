@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════════════════════
-   ThreatPilot AI — Advanced SOC Module
+   EYEbot AI — Advanced SOC Module
    Executive Dashboard, Kill Chain, Case Mgmt, Threat Hunting,
    Detection Engineering, SOAR, Live Threat Feeds
    ══════════════════════════════════════════════════════════ */
@@ -182,7 +182,7 @@ function generateExecutivePDF() {
   if (!win) { showToast('Allow pop-ups to generate PDF', 'warning'); return; }
   const critical = ARGUS_DATA.findings.filter(f=>f.severity==='CRITICAL').length;
   const high = ARGUS_DATA.findings.filter(f=>f.severity==='HIGH').length;
-  win.document.write(`<!DOCTYPE html><html><head><title>ThreatPilot AI — Executive Security Report</title>
+  win.document.write(`<!DOCTYPE html><html><head><title>EYEbot AI — Executive Security Report</title>
   <style>
     body { font-family: Arial, sans-serif; color: #1e293b; padding: 40px; }
     .cover { background: linear-gradient(135deg,#0f172a,#1e3a5f); color: white; padding: 40px; border-radius: 12px; margin-bottom: 30px; }
@@ -199,7 +199,7 @@ function generateExecutivePDF() {
     .footer { margin-top: 40px; font-size: 10px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 12px; text-align: center; }
   </style></head><body>
   <div class="cover">
-    <h1 style="color:white;border:none;">🛡️ ThreatPilot AI</h1>
+    <h1 style="color:white;border:none;">🛡️ EYEbot AI</h1>
     <h2 style="color:#93c5fd;border:none;margin-top:4px;">Executive Security Report — Q1 2025</h2>
     <p style="color:#94a3b8;">Prepared for: Board of Directors | Confidential | ${new Date().toLocaleString()}</p>
     <p style="color:#94a3b8;font-size:12px;">Analyst: Mahmoud Osman, SUPER_ADMIN | Platform v16.4.7</p>
@@ -222,7 +222,7 @@ function generateExecutivePDF() {
   <table><tr><th>Client</th><th>Plan</th><th>Risk Level</th><th>Findings</th><th>Status</th></tr>
   ${ARGUS_DATA.tenants.map(t=>{const f=ARGUS_DATA.findings.filter(x=>x.customer===t.short||x.customer===t.name).length;return `<tr><td>${t.name}</td><td>${t.plan}</td><td class="${t.risk==='HIGH'?'critical':t.risk==='MEDIUM'?'high':'ok'}">${t.risk}</td><td>${f}</td><td>Active Monitoring</td></tr>`;}).join('')}
   </table>
-  <div class="footer">ThreatPilot AI v16.4.7 · ${new Date().toISOString()} · CONFIDENTIAL — FOR BOARD USE ONLY</div>
+  <div class="footer">EYEbot AI v16.4.7 · ${new Date().toISOString()} · CONFIDENTIAL — FOR BOARD USE ONLY</div>
   <script>setTimeout(()=>window.print(),400);<\/script>
   </body></html>`);
   win.document.close();

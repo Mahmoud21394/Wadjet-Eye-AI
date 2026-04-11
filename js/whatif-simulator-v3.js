@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — What-If Attack Simulator v3.0 (FULLY REBUILT)
+ *  EYEbot AI — What-If Attack Simulator v3.0 (FULLY REBUILT)
  *  FILE: js/whatif-simulator-v3.js
  *
  *  Completely rewritten from scratch — no static data, no UI freezes.

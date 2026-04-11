@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — MITRE ATT&CK Navigator v3.0
+ *  EYEbot AI — MITRE ATT&CK Navigator v3.0
  *  Full interactive ATT&CK matrix v14 with tactic/technique
  *  descriptions, manual customization, and coverage overlay
  * ══════════════════════════════════════════════════════════
@@ -657,10 +657,10 @@ window._mitreMarkTech = function(techId) {
 
 window._mitreExport = function() {
   const data = {
-    name: 'Wadjet-Eye AI Coverage Layer',
+    name: 'EYEbot AI Coverage Layer',
     version: '4.4',
     domain: 'mitre-attack',
-    description: 'Wadjet-Eye AI MITRE ATT&CK Coverage',
+    description: 'EYEbot AI MITRE ATT&CK Coverage',
     techniques: (window.MITRE_TACTICS || []).flatMap(t => t.techniques.filter(tech => tech.covered || window.MITRE_USER_COVERAGE[tech.id]).map(tech => ({
       techniqueID: tech.id, tactic: t.name.toLowerCase().replace(/ /g,'-'),
       color: (window.MITRE_USER_COVERAGE[tech.id]?.color) || (tech.alerts >= 5 ? '#22c55e' : tech.alerts >= 1 ? '#f59e0b' : '#3b82f6'),

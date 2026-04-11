@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Tenant Management v2.0 (Full CRUD)
+ *  EYEbot AI — Tenant Management v2.0 (Full CRUD)
  *  FILE: js/tenant-management-v2.js
  *
  *  Full Create/Read/Update/Delete with DB persistence.

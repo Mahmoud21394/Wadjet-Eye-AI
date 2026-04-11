@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Animated Branding Slogan Component v5.1
+ *  EYEbot AI — Animated Branding Slogan Component v5.1
  *  FILE: js/branding-slogan.js
  *
  *  Adds a cyber-style animated slogan to:

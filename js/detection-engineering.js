@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Detection Engineering Studio v3.0
+ *  EYEbot AI — Detection Engineering Studio v3.0
  *  Production rules, test coverage, MITRE mapping
  * ══════════════════════════════════════════════════════════
  */
@@ -16,7 +16,7 @@ window.DETECTION_RULES = [
     rule:`title: Google API Key Exposure
 id: de4e3b5c-1234-5678-abcd-ef0123456789
 status: production
-author: Wadjet-Eye AI
+author: EYEbot AI
 date: 2025/01/15
 description: Detects exposure of Google API keys
 logsource:
@@ -91,7 +91,7 @@ index=web_access
     rule:`# SIGMA — C2 Communication
 title: Malicious IP C2 Communication
 status: production
-author: Wadjet-Eye AI
+author: EYEbot AI
 logsource:
     category: firewall
 detection:
@@ -256,7 +256,7 @@ index=windows EventCode=4624 Logon_Type IN (2, 10)
     rule:`# SIGMA — Cryptominer Detection
 title: Cryptocurrency Miner Execution
 status: production
-author: Wadjet-Eye AI
+author: EYEbot AI
 logsource:
     category: process_creation
     product: windows
@@ -557,7 +557,7 @@ window._deNewRule = function() {
   editor.value = `title: New Detection Rule
 id: 
 status: testing
-author: Wadjet-Eye AI
+author: EYEbot AI
 date: ${new Date().toISOString().split('T')[0].replace(/-/g,'/')}
 description: Describe what this rule detects
 logsource:

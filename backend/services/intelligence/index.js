@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  ThreatPilot AI — Normalisation, Scoring & MITRE Engine
+ *  EYEbot AI — Normalisation, Scoring & MITRE Engine
  *  services/intelligence/index.js  (v3.1 — fixes applied)
  *
  *  BUG FIXES IN THIS VERSION:

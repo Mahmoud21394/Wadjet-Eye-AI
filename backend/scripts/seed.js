@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * ══════════════════════════════════════════════════════════════════
- *  ThreatPilot AI — Production Database Seeder
+ *  EYEbot AI — Production Database Seeder
  *  Version: 2.0.0
  *
  *  Creates:
@@ -66,7 +66,7 @@ const TENANT_IDS = {
 const SEED_USERS = [
   {
     email:     'mahmoud@mssp.com',
-    password:  'ThreatPilot@2024!',        // SUPER_ADMIN — change after first login
+    password:  'EYEbot@2024!',        // SUPER_ADMIN — change after first login
     name:      'Mahmoud Osman',
     role:      'SUPER_ADMIN',
     tenant_id: TENANT_IDS.mssp,
@@ -630,7 +630,7 @@ async function verifyConnection() {
 async function main() {
   console.log('\n');
   console.log('╔══════════════════════════════════════════════════════╗');
-  console.log('║   ThreatPilot AI — Database Seeder v2.0.0            ║');
+  console.log('║   EYEbot AI — Database Seeder v2.0.0            ║');
   console.log('║   Supabase: ' + process.env.SUPABASE_URL.slice(0, 40) + '  ║');
   console.log('╚══════════════════════════════════════════════════════╝');
 
