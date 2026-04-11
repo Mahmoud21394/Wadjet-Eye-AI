@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  EYEbot AI — CTI Frontend API Client v3.0
+ *  Wadjet-Eye AI — CTI Frontend API Client v3.0
  *  js/cti-api.js
  *
  *  Wraps all /api/cti/* endpoints with clean async methods.

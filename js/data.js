@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════════════════════
-   EYEbot AI — Mock Data Layer
+   Wadjet-Eye AI — Mock Data Layer
    All realistic threat intelligence data for demo
    ══════════════════════════════════════════════════════════ */
 

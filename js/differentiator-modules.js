@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   EYEbot AI — Differentiator Modules v1.0
+   Wadjet-Eye AI — Differentiator Modules v1.0
    ─────────────────────────────────────────────────────────────────────
    Module A: SOC Memory Engine         (institutional learning brain)
    Module B: Threat Intelligence Graph (entity relationship brain)
@@ -514,7 +514,7 @@
     const DRP_ALERTS = [
       { id: 'DRP-001', type: 'domain_squatting', severity: 'critical', title: 'Typosquat domain registered', detail: 'wadjet-eye-ai.com registered 6h ago — near-perfect clone of wadjet-eye.ai, used for phishing kit delivery', source: 'Domain Monitor', action_required: true, first_seen: new Date(Date.now()-21600000).toISOString(), risk_score: 97 },
       { id: 'DRP-002', type: 'credential_leak', severity: 'critical', title: 'Executive credentials on dark web', detail: 'CEO mahmoud.osman@wadjet.ai password hash found in COMBOLISTS-2025 dataset on BreachForums. Hash type: bcrypt.', source: 'Dark Web Monitor', action_required: true, first_seen: new Date(Date.now()-86400000).toISOString(), risk_score: 95 },
-      { id: 'DRP-003', type: 'brand_impersonation', severity: 'high', title: 'LinkedIn fake company page', detail: '"EYEbot AI Security" fake LinkedIn page with 147 followers attempting spearphishing campaigns against clients.', source: 'Social Monitor', action_required: true, first_seen: new Date(Date.now()-172800000).toISOString(), risk_score: 82 },
+      { id: 'DRP-003', type: 'brand_impersonation', severity: 'high', title: 'LinkedIn fake company page', detail: '"Wadjet-Eye AI Security" fake LinkedIn page with 147 followers attempting spearphishing campaigns against clients.', source: 'Social Monitor', action_required: true, first_seen: new Date(Date.now()-172800000).toISOString(), risk_score: 82 },
       { id: 'DRP-004', type: 'data_exposure', severity: 'high', title: 'GitHub repository secret leak', detail: 'API key WEY_SK_LIVE_xxxx found in public GitHub repo "wadjet-integration-examples" — key potentially valid.', source: 'Code Monitor', action_required: true, first_seen: new Date(Date.now()-43200000).toISOString(), risk_score: 91 },
       { id: 'DRP-005', type: 'mobile_app_clone', severity: 'medium', title: 'Cloned mobile app on 3rd party store', detail: 'WadjetEye_v2.1.apk uploaded to APKPure — repackaged with banking trojan (AsyncRAT payload detected).', source: 'App Store Monitor', action_required: false, first_seen: new Date(Date.now()-259200000).toISOString(), risk_score: 74 },
       { id: 'DRP-006', type: 'employee_pii', severity: 'medium', title: 'Employee PII in data broker databases', detail: '23 employees found in data broker databases (Spokeo, BeenVerified) with home addresses and phone numbers.', source: 'PII Monitor', action_required: false, first_seen: new Date(Date.now()-345600000).toISOString(), risk_score: 62 },
@@ -704,7 +704,7 @@
             color: '#00d4ff',
             mitre: null,
             title: 'The Eye Opens',
-            narrative: 'At 07:41 UTC, EYEbot AI\'s Cognitive Layer flagged WKSTN-045 for anomalous SMB traffic — specifically the 4.3-minute beacon cadence identified from SOC Memory Engine\'s learned pattern database. The alert was classified as CRITICAL with 94% AI confidence. Analyst Ahmed Hassan was paged at 07:43. He reviewed the AI reasoning chain, confirmed the Cobalt Strike signature in under 4 minutes, and immediately escalated to incident response.',
+            narrative: 'At 07:41 UTC, Wadjet-Eye AI\'s Cognitive Layer flagged WKSTN-045 for anomalous SMB traffic — specifically the 4.3-minute beacon cadence identified from SOC Memory Engine\'s learned pattern database. The alert was classified as CRITICAL with 94% AI confidence. Analyst Ahmed Hassan was paged at 07:43. He reviewed the AI reasoning chain, confirmed the Cobalt Strike signature in under 4 minutes, and immediately escalated to incident response.',
             iocs: [],
           },
           {

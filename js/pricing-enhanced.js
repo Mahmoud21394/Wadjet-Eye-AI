@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  EYEbot AI — Pricing Module v2.0 (ENHANCED)
+ *  Wadjet-Eye AI — Pricing Module v2.0 (ENHANCED)
  *  Fully functional, admin-editable pricing with:
  *  - Annual/monthly toggle with savings calculation
  *  - Dynamic plan editing for super admins

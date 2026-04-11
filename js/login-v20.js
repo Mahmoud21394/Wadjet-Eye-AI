@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════
-   EYEbot AI — Advanced Login Page v20.0
+   Wadjet-Eye AI — Advanced Login Page v20.0
    Production-grade SOC-style login with:
    - Animated cyber grid + scan-line background
    - Glassmorphism login card
@@ -192,9 +192,9 @@
           <div class="lv20-logo">
             <div class="lv20-logo-img-wrap">
               <div class="lv20-logo-ring"></div>
-              <img src="images/wadjet-logo.png" alt="EYEbot AI" class="lv20-logo-img" onerror="this.style.display='none'"/>
+              <img src="images/wadjet-logo.png" alt="Wadjet-Eye AI" class="lv20-logo-img" onerror="this.style.display='none'"/>
             </div>
-            <div class="lv20-logo-name">EYEbot AI</div>
+            <div class="lv20-logo-name">Wadjet-Eye AI</div>
             <div class="lv20-logo-tagline">Cyber Threat Intelligence Platform v20.0</div>
           </div>
 

@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  EYEbot AI — Live IOC Lookup v3.0
+ *  Wadjet-Eye AI — Live IOC Lookup v3.0
  *  Real API integration: VirusTotal, AbuseIPDB, Shodan, AlienVault OTX
  *  Unified results with clickable links, proper error handling,
  *  search history, real-time validation, multiple IOC types

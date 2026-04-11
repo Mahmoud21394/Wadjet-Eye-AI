@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  EYEbot AI — Live Pages Patch v5.2
+ *  Wadjet-Eye AI — Live Pages Patch v5.2
  *  js/live-pages-patch.js
  *
  *  LOADS AFTER live-pages.js to:
@@ -776,7 +776,7 @@ onReady(function patchDashboardKPIs() {
 //  Console banner
 // ══════════════════════════════════════════════════════════════
 console.log(
-  '%c[EYEbot AI v5.2] Live Pages Patch loaded — All mock data removed. Real API only.',
+  '%c[Wadjet-Eye AI v5.2] Live Pages Patch loaded — All mock data removed. Real API only.',
   'color:#3b82f6;font-weight:bold;font-size:12px'
 );
 

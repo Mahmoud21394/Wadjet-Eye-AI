@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════
- *  EYEbot AI — Threat Actor Intelligence Module v5.2
+ *  Wadjet-Eye AI — Threat Actor Intelligence Module v5.2
  *  js/threat-actors-module.js
  *
  *  PRODUCTION — NO MOCK DATA

@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════════
- *  EYEbot AI — Platform Settings UI v5.1 (PRODUCTION)
+ *  Wadjet-Eye AI — Platform Settings UI v5.2 (PRODUCTION)
  *  FILE: js/platform-settings.js
  *
  *  Loads and saves real platform configuration via /api/settings.
@@ -155,19 +155,49 @@ async function settingsReload() {
 
   try {
     const res   = await _settingsGet('/settings');
-    _settingsData  = res.settings || {};
+    _settingsData  = res?.settings || res || {};
     _settingsDirty = false;
     _updateSaveBtn();
     body.innerHTML = _buildSettingsForm(_settingsData);
   } catch (err) {
+    // Load from local cache if available
+    const cached = localStorage.getItem('wadjet_settings_cache');
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        _settingsData  = parsed;
+        _settingsDirty = false;
+        _updateSaveBtn();
+        body.innerHTML = _buildSettingsForm(_settingsData);
+        const status = document.getElementById('settings-status');
+        if (status) {
+          status.style.display = 'block';
+          status.style.background = '#f59e0b20';
+          status.style.borderColor = '#f59e0b';
+          status.style.color = '#f59e0b';
+          status.textContent = `⚠️ Loaded from local cache (backend offline). Last saved: ${parsed._savedAt || 'Unknown'}`;
+        }
+        return;
+      } catch {}
+    }
     body.innerHTML = `<div style="padding:32px;text-align:center;color:#ef4444">
       <i class="fas fa-exclamation-triangle fa-2x" style="display:block;margin-bottom:10px"></i>
       Failed to load settings: ${err.message}
       <br><br>
       <button onclick="settingsReload()" style="padding:8px 16px;background:#21262d;border:1px solid #30363d;color:#e6edf3;border-radius:6px;cursor:pointer">Retry</button>
+      <button onclick="_settingsLoadFromDefaults()" style="margin-left:8px;padding:8px 16px;background:#1d6ae5;border:none;color:#fff;border-radius:6px;cursor:pointer">Use Defaults</button>
     </div>`;
   }
 }
+
+window._settingsLoadFromDefaults = function() {
+  _settingsData = {};
+  _settingsDirty = false;
+  const body = document.getElementById('settings-body');
+  if (body) body.innerHTML = _buildSettingsForm(_settingsData);
+  const status = document.getElementById('settings-status');
+  if (status) { status.style.display = 'block'; status.style.background = '#22d3ee20'; status.style.borderColor = '#22d3ee'; status.style.color = '#22d3ee'; status.textContent = 'ℹ️ Showing default settings. Save to persist changes.'; }
+};
 
 /* ─────────────────────────────────────────────
    BUILD FORM HTML
@@ -365,34 +395,54 @@ async function settingsSave() {
   const feedCheckboxes = document.querySelectorAll('input[name="feeds_enabled"]:checked');
   _settingsData.feeds_enabled = Array.from(feedCheckboxes).map(cb => cb.value);
 
-  try {
-    const res = await _settingsPut('/settings', _settingsData);
-    _settingsData  = res.settings;
-    _settingsDirty = false;
-    _updateSaveBtn();
-
-    if (status) {
-      status.style.display = 'block';
-      status.style.background = '#00cc4420';
-      status.style.borderColor = '#00cc44';
-      status.style.color = '#00cc44';
-      status.textContent = `✅ Settings saved successfully (${res.updated_keys?.length || 0} keys updated)`;
-      setTimeout(() => { if (status) status.style.display = 'none'; }, 4000);
-    }
-
-    if (typeof showToast === 'function') showToast('✅ Platform settings saved', 'success');
-  } catch (err) {
-    if (status) {
-      status.style.display = 'block';
-      status.style.background = '#ff444420';
-      status.style.borderColor = '#ff4444';
-      status.style.color = '#ff4444';
-      status.textContent = `❌ Failed to save: ${err.message}`;
-    }
-    if (typeof showToast === 'function') showToast(`❌ Save failed: ${err.message}`, 'error');
+  // Remove empty/null values to prevent HTTP 400
+  const payload = {};
+  for (const [k, v] of Object.entries(_settingsData)) {
+    if (v !== null && v !== undefined && v !== '') payload[k] = v;
   }
 
-  if (btn) { btn.innerHTML = '<i class="fas fa-save"></i> Save Changes'; }
+  let savedLocally = false;
+  try {
+    // Try PUT first, then PATCH as fallback
+    let res;
+    try {
+      res = await _settingsPut('/settings', payload);
+    } catch (putErr) {
+      if (/400|method/i.test(putErr.message)) {
+        res = await _settingsPatch('/settings', payload);
+      } else throw putErr;
+    }
+    _settingsData  = res?.settings || { ..._settingsData };
+    _settingsDirty = false;
+    _updateSaveBtn();
+    _showSettingsMsg(status, 'success', `✅ Settings saved successfully`);
+    (window._toast || window.showToast)?.('✅ Platform settings saved', 'success');
+  } catch (err) {
+    // Backend unavailable — save to localStorage as offline cache
+    try {
+      localStorage.setItem('wadjet_settings_cache', JSON.stringify({ ...payload, _savedAt: new Date().toISOString(), _offline: true }));
+      savedLocally = true;
+      _settingsDirty = false;
+      _updateSaveBtn();
+      _showSettingsMsg(status, 'warn', `⚠️ Saved locally (backend offline). Changes will sync when connected. Error: ${err.message}`);
+      (window._toast || window.showToast)?.('⚠️ Settings saved locally (offline mode)', 'info');
+    } catch (localErr) {
+      _showSettingsMsg(status, 'error', `❌ Failed to save: ${err.message}`);
+      (window._toast || window.showToast)?.(`❌ Save failed: ${err.message}`, 'error');
+    }
+  }
+
+  if (btn) { btn.innerHTML = savedLocally ? '<i class="fas fa-cloud-upload-alt"></i> Saved Locally' : '<i class="fas fa-save"></i> Save Changes'; }
+}
+
+function _showSettingsMsg(el, type, msg) {
+  if (!el) return;
+  const colors = { success: { bg:'#00cc4420', border:'#00cc44', text:'#00cc44' }, error: { bg:'#ff444420', border:'#ff4444', text:'#ff4444' }, warn: { bg:'#f59e0b20', border:'#f59e0b', text:'#f59e0b' } };
+  const c = colors[type] || colors.error;
+  el.style.display = 'block';
+  el.style.background = c.bg; el.style.borderColor = c.border; el.style.color = c.text;
+  el.textContent = msg;
+  if (type === 'success') setTimeout(() => { if (el) el.style.display = 'none'; }, 5000);
 }
 
 /* ─────────────────────────────────────────────

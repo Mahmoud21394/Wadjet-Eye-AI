@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════
-   EYEbot AI — Toast Notification System v20.0
+   Wadjet-Eye AI — Toast Notification System v20.0
    + Global Platform Utilities
    ═══════════════════════════════════════════════════════════════════ */
 (function () {

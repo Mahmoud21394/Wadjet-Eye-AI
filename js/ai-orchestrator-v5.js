@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  EYEbot AI — AI Orchestrator v5.0
+ *  Wadjet-Eye AI — AI Orchestrator v5.0
  *  Real AI Integration: OpenAI GPT-4 / Claude / Platform AI
  *  Features: streaming responses, IOC enrichment pipeline,
  *            multi-source intel, exportable reports, session management
@@ -121,7 +121,7 @@ async function _callOpenAI(messages, model='gpt-4o') {
 
   const systemPrompt = {
     role: 'system',
-    content: `You are EYEbot AI, an expert cybersecurity analyst and threat intelligence specialist. 
+    content: `You are Wadjet-Eye AI, an expert cybersecurity analyst and threat intelligence specialist. 
 You analyze IOCs (IPs, domains, URLs, file hashes), correlate threat data, identify APT groups, 
 map MITRE ATT&CK techniques, and provide actionable intelligence reports.
 When analyzing IOCs, always structure your response with:
@@ -161,7 +161,7 @@ async function _callClaude(messages, model='claude-3-5-sonnet-20241022') {
   const key = AIORCH.apiKeys.claude;
   if (!key) throw new Error('Claude API key not configured. Go to Settings → AI Configuration to add your key.');
 
-  const systemPrompt = `You are EYEbot AI, a cybersecurity threat intelligence expert. 
+  const systemPrompt = `You are Wadjet-Eye AI, a cybersecurity threat intelligence expert. 
 Analyze IOCs, map MITRE ATT&CK techniques, identify threat actors, and provide actionable intel reports.
 Structure responses with: Verdict, Threat Summary, Recommended Actions, and MITRE ATT&CK mappings.`;
 
@@ -280,9 +280,9 @@ To enable real-time AI analysis, add your API keys in:
 ### Recommendation
 Configure threat actor feeds via Settings → Threat Feeds for real-time APT tracking.`;
   } else {
-    response = `## 🤖 EYEbot AI Orchestrator
+    response = `## 🤖 Wadjet-Eye AI Orchestrator
 
-I'm your agentic cyber threat intelligence analyst, powered by the EYEbot AI platform.
+I'm your agentic cyber threat intelligence analyst, powered by the Wadjet-Eye AI platform.
 
 ### What I Can Do
 - **IOC Investigation**: Analyze IPs, domains, URLs, and file hashes across VirusTotal, AbuseIPDB, Shodan, OTX — simultaneously
@@ -793,7 +793,7 @@ window.renderAIOrchestrator = function() {
             <i class="fas fa-robot"></i>
           </div>
           <div class="p19-msg__bubble">
-            <p style="margin:0 0 8px"><strong>👋 EYEbot AI Orchestrator</strong> — Agentic Cyber Threat Intelligence</p>
+            <p style="margin:0 0 8px"><strong>👋 Wadjet-Eye AI Orchestrator</strong> — Agentic Cyber Threat Intelligence</p>
             <p style="margin:0 0 8px;font-size:.9em;color:var(--p19-t2)">I can investigate IOCs across VirusTotal, AbuseIPDB, Shodan, and AlienVault OTX in parallel, map MITRE ATT&CK techniques, and generate exportable intelligence reports.</p>
             <div style="background:rgba(168,85,247,.06);border:1px solid rgba(168,85,247,.15);border-radius:8px;padding:10px;font-size:.82em">
               <div style="color:var(--p19-t3);margin-bottom:6px;font-weight:600;font-size:.86em">ACTIVE INTEGRATION</div>
@@ -972,7 +972,7 @@ window._orchShowLogs = function() {
 
 window._orchExportReport = function() {
   const report = {
-    title: 'EYEbot AI Investigation Report',
+    title: 'Wadjet-Eye AI Investigation Report',
     session: AIORCH.sessionId,
     session_title: AIORCH.sessionTitle,
     ai_provider: AIORCH.aiProvider,

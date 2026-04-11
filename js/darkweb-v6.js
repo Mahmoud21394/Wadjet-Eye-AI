@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  EYEbot AI — Dark Web Intelligence Module v6.0
+ *  Wadjet-Eye AI — Dark Web Intelligence Module v6.0
  *  Complete redesign matching Threat Actor Intelligence style
  *  Features: 5 tabs, animated cards, slide-in detail panel,
  *            loading skeletons, real-time filters, hover effects

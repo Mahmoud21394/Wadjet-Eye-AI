@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  EYEbot AI — Tenant & RBAC Management Enhanced v2.0
+ *  Wadjet-Eye AI — Tenant & RBAC Management Enhanced v2.0
  *  Functional add/delete/modify tenants via real API
  *  RBAC with permission import/export, role matrix
  * ══════════════════════════════════════════════════════════════════════
@@ -479,7 +479,7 @@ window.exportRBACPermissions = function() {
   const exportData = {
     version: '2.0',
     exported: new Date().toISOString(),
-    platform: 'EYEbot AI',
+    platform: 'Wadjet-Eye AI',
     roles: roles.map(r => ({
       id: r.id, name: r.name, slug: r.slug,
       permissions: r.permissions, modules: r.modules,

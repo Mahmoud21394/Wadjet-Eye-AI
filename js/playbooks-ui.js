@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  EYEbot AI — Playbooks UI Module v3.0
+ *  Wadjet-Eye AI — Playbooks UI Module v3.0
  *  Interactive playbook browser with full detail view
  * ══════════════════════════════════════════════════════════
  */

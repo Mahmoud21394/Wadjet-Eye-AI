@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  EYEbot AI — Lightweight SOAR Engine v3.0
+ *  Wadjet-Eye AI — Lightweight SOAR Engine v3.0
  *  backend/services/soar.js
  *
  *  Capabilities:
