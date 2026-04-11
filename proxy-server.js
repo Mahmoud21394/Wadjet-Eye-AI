@@ -1,7 +1,14 @@
 /**
- * Wadjet-Eye AI — Local Proxy Server
+ * Wadjet-Eye AI — Local Proxy Server  v31.0
  * Serves static files + proxies NVD API, OpenAI, Claude, VT, AbuseIPDB, Shodan, OTX
  * to bypass browser CORS restrictions.
+ *
+ * NVD routing changes (v31):
+ *   • Dedicated NVD handler matches BOTH `/proxy/nvd` (no trailing slash) AND `/proxy/nvd/...`
+ *   • Forwards ALL query parameters unchanged (after auto-correction) using URLSearchParams
+ *   • Debug logs: incoming query, constructed NVD URL, and response HTTP status
+ *   • Dynamic error messages: `NVD HTTP <status>: <actual response>` (no hard-coded "Check date format")
+ *   • Upstream 404 with empty body → safe fallback JSON (prevents UI parse crashes)
  */
 'use strict';
 
@@ -115,22 +122,22 @@ function proxyRequest(targetUrl, req, res, extraHeaders = {}) {
   }
 }
 
-// ── Route table ───────────────────────────────────────────────
+// ── Route table (non-NVD routes) ──────────────────────────────
+// NVD has its own dedicated handler below that matches both
+// `/proxy/nvd` (no trailing slash) and `/proxy/nvd/` (with slash).
 const PROXY_ROUTES = [
-  // NVD CVE API
-  { prefix: '/proxy/nvd/', target: (p) => `https://services.nvd.nist.gov/rest/json/cves/2.0${p}` },
   // VirusTotal
-  { prefix: '/proxy/vt/', target: (p) => `https://www.virustotal.com/api/v3${p}` },
+  { prefix: '/proxy/vt/',         target: (p) => `https://www.virustotal.com/api/v3${p}` },
   // AbuseIPDB
-  { prefix: '/proxy/abuseipdb/', target: (p) => `https://api.abuseipdb.com/api/v2${p}` },
+  { prefix: '/proxy/abuseipdb/',  target: (p) => `https://api.abuseipdb.com/api/v2${p}` },
   // Shodan
-  { prefix: '/proxy/shodan/', target: (p) => `https://api.shodan.io${p}` },
+  { prefix: '/proxy/shodan/',     target: (p) => `https://api.shodan.io${p}` },
   // OTX AlienVault
-  { prefix: '/proxy/otx/', target: (p) => `https://otx.alienvault.com/api/v1${p}` },
+  { prefix: '/proxy/otx/',        target: (p) => `https://otx.alienvault.com/api/v1${p}` },
   // OpenAI
-  { prefix: '/proxy/openai/', target: (p) => `https://api.openai.com${p}` },
+  { prefix: '/proxy/openai/',     target: (p) => `https://api.openai.com${p}` },
   // Anthropic Claude
-  { prefix: '/proxy/claude/', target: (p) => `https://api.anthropic.com${p}` },
+  { prefix: '/proxy/claude/',     target: (p) => `https://api.anthropic.com${p}` },
 ];
 
 // ── Static file server ────────────────────────────────────────
@@ -174,6 +181,7 @@ function serveStatic(reqPath, res) {
 
 // ── NVD parameter auto-correction ────────────────────────────
 const NVD_MAX_RANGE_DAYS = 120; // NVD rejects date ranges > 120 days with 404
+const NVD_BASE_URL       = 'https://services.nvd.nist.gov/rest/json/cves/2.0';
 
 /**
  * nvdToISOZ — normalises a date string to ISO-8601 with trailing Z (UTC).
@@ -192,15 +200,21 @@ function nvdToISOZ(dateStr) {
   return new Date(s).toISOString().replace(/\.\d{3}Z$/, '.000Z');
 }
 
+/**
+ * nvdAutoCorrectQS — auto-fixes common NVD 404 causes in a raw query string.
+ * Returns a corrected URLSearchParams string.
+ *
+ * Fixes applied:
+ *   1. cveId not uppercase → uppercase
+ *   2. pubStartDate without pubEndDate → add pubEndDate = now
+ *   3. pubEndDate without pubStartDate → add pubStartDate = 30 days ago
+ *   4. Missing Z timezone on dates → append Z
+ *   5. Date range > 120 days → clamp to 120 days
+ */
 function nvdAutoCorrectQS(rawQS) {
-  // Parse query params and auto-fix known NVD 404 causes:
-  // 1. pubStartDate without pubEndDate → add pubEndDate = now
-  // 2. cveId not uppercase → uppercase it
-  // 3. Missing timezone (no Z) on dates → append Z for unambiguous UTC
-  // 4. Missing .000 milliseconds on dates → add them
-  // 5. Date range > 120 days → clamp to 120 days (NVD hard limit)
   const params = new URLSearchParams(rawQS);
 
+  // Fix 1: cveId uppercase
   if (params.get('cveId')) {
     params.set('cveId', params.get('cveId').toUpperCase());
   }
@@ -208,11 +222,14 @@ function nvdAutoCorrectQS(rawQS) {
   let pubStart = params.get('pubStartDate');
   let pubEnd   = params.get('pubEndDate');
 
+  // Fix 2: pubStartDate without pubEndDate
   if (pubStart && !pubEnd) {
     pubEnd = nvdToISOZ(new Date().toISOString());
     params.set('pubEndDate', pubEnd);
     console.log('[NVD Auto-fix] Added missing pubEndDate:', pubEnd);
   }
+
+  // Fix 3: pubEndDate without pubStartDate
   if (pubEnd && !pubStart) {
     const s = new Date(pubEnd);
     s.setDate(s.getDate() - 30);
@@ -221,19 +238,19 @@ function nvdAutoCorrectQS(rawQS) {
     console.log('[NVD Auto-fix] Added missing pubStartDate:', pubStart);
   }
 
-  // Normalise dates to ISO-8601 UTC (Z suffix)
-  ['pubStartDate','pubEndDate'].forEach(k => {
+  // Fix 4: Normalise dates to ISO-8601 UTC (Z suffix)
+  ['pubStartDate', 'pubEndDate'].forEach(k => {
     const v = params.get(k);
     if (v) {
       const fixed = nvdToISOZ(v);
       if (fixed !== v) {
         params.set(k, fixed);
-        console.log(`[NVD Auto-fix] Normalised date timezone for ${k}: "${v}" → "${fixed}"`);
+        console.log(`[NVD Auto-fix] Normalised date for ${k}: "${v}" → "${fixed}"`);
       }
     }
   });
 
-  // Enforce ≤120 day range (NVD returns 404 for wider ranges)
+  // Fix 5: Enforce ≤120 day range
   pubStart = params.get('pubStartDate');
   pubEnd   = params.get('pubEndDate');
   if (pubStart && pubEnd) {
@@ -243,11 +260,178 @@ function nvdAutoCorrectQS(rawQS) {
     if (diffDays > NVD_MAX_RANGE_DAYS) {
       const clampedStart = nvdToISOZ(new Date(endMs - NVD_MAX_RANGE_DAYS * 86400000).toISOString());
       params.set('pubStartDate', clampedStart);
-      console.log(`[NVD Auto-fix] Clamped date range from ${Math.round(diffDays)} to ${NVD_MAX_RANGE_DAYS} days → pubStartDate=${clampedStart}`);
+      console.log(`[NVD Auto-fix] Clamped ${Math.round(diffDays)} day range to ${NVD_MAX_RANGE_DAYS} days → pubStartDate=${clampedStart}`);
     }
   }
 
   return params.toString();
+}
+
+// ── Dedicated NVD proxy handler ───────────────────────────────
+/**
+ * handleNVDProxy — handles all /proxy/nvd and /proxy/nvd/* requests.
+ *
+ * 1. Logs the incoming query string verbatim.
+ * 2. Runs nvdAutoCorrectQS() on it.
+ * 3. Constructs the final NVD URL using URLSearchParams.
+ * 4. Logs the final NVD URL.
+ * 5. Forwards the request transparently.
+ * 6. Logs the HTTP response status.
+ * 7. On upstream 404 with empty body → returns safe fallback JSON.
+ * 8. Dynamic error message: `NVD HTTP <status>: <actual response text>`.
+ */
+function handleNVDProxy(parsedUrl, req, res) {
+  // ── Diagnostics sub-endpoint ──────────────────────────────
+  if (parsedUrl.pathname === '/proxy/nvd/diagnose') {
+    addCORS(res);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      endpoint:      NVD_BASE_URL,
+      proxy_paths:   ['/proxy/nvd', '/proxy/nvd/'],
+      valid_params:  ['resultsPerPage','startIndex','pubStartDate','pubEndDate','cvssV3Severity','keywordSearch','cveId'],
+      date_format:   'YYYY-MM-DDThh:mm:ss.000Z (both pubStartDate AND pubEndDate required)',
+      cve_format:    'CVE-YYYY-NNNNN (uppercase)',
+      severity_values: ['CRITICAL','HIGH','MEDIUM','LOW'],
+      rate_limit:    '5 req/30s (unauthenticated) | 50 req/30s (with apiKey)',
+      example_urls:  [
+        '/proxy/nvd?resultsPerPage=20',
+        '/proxy/nvd?cvssV3Severity=CRITICAL&resultsPerPage=10',
+        '/proxy/nvd?cveId=CVE-2024-21762',
+        '/proxy/nvd?pubStartDate=2026-01-01T00:00:00.000Z&pubEndDate=2026-04-11T23:59:59.000Z&resultsPerPage=20',
+      ],
+    }));
+    return;
+  }
+
+  // ── Build query string ────────────────────────────────────
+  const rawQS = parsedUrl.query
+    ? new URLSearchParams(parsedUrl.query).toString()
+    : '';
+
+  // MANDATORY DEBUG LOG 1: incoming query
+  console.log(`[NVD Proxy] Incoming query: "${rawQS || '(none)'}"`);
+
+  const fixedQS      = nvdAutoCorrectQS(rawQS);
+  const qs           = fixedQS ? '?' + fixedQS : '';
+
+  // MANDATORY DEBUG LOG 2: constructed NVD URL
+  const nvdTargetUrl = `${NVD_BASE_URL}${qs}`;
+  console.log(`[NVD Proxy] Constructed NVD URL: ${nvdTargetUrl}`);
+
+  // ── Forward request ───────────────────────────────────────
+  const parsed2 = new URL(nvdTargetUrl);
+  const STRIP   = new Set([
+    'host','origin','referer','connection','transfer-encoding',
+    'content-length','keep-alive','upgrade','te','trailers',
+  ]);
+
+  const nvdOptions = {
+    hostname: parsed2.hostname,
+    port:     443,
+    path:     parsed2.pathname + parsed2.search,
+    method:   'GET',
+    headers:  {
+      ...Object.fromEntries(
+        Object.entries(req.headers).filter(([k]) => !STRIP.has(k.toLowerCase()))
+      ),
+      host: parsed2.hostname,
+    },
+  };
+
+  const nvdReq = https.request(nvdOptions, (nvdRes) => {
+    // MANDATORY DEBUG LOG 3: response status
+    console.log(`[NVD Proxy] Response status: ${nvdRes.statusCode} for ${nvdTargetUrl}`);
+
+    const chunks = [];
+    nvdRes.on('data', c => chunks.push(c));
+    nvdRes.on('end', () => {
+      const body    = Buffer.concat(chunks);
+      const bodyStr = body.toString('utf8').trim();
+
+      // ── Upstream 404 with empty body → safe fallback (prevents UI crash) ──
+      if (nvdRes.statusCode === 404 && !bodyStr) {
+        console.warn(`[NVD Proxy] Upstream 404 with empty body — returning safe fallback. URL: ${nvdTargetUrl}`);
+        addCORS(res);
+        if (!res.headersSent) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+        }
+        res.end(JSON.stringify({
+          vulnerabilities: [],
+          totalResults:    0,
+          resultsPerPage:  0,
+          startIndex:      0,
+          message:         `No data or invalid query (NVD HTTP 404). URL: ${nvdTargetUrl}`,
+        }));
+        return;
+      }
+
+      // ── Non-2xx with content → dynamic error message (no hard-coded text) ─
+      if (nvdRes.statusCode >= 400) {
+        // Dynamic: "NVD HTTP <status>: <actual response>"
+        const dynamicMsg = `NVD HTTP ${nvdRes.statusCode}: ${bodyStr.slice(0, 300) || 'empty response'}`;
+        console.warn(`[NVD Proxy] ${dynamicMsg}`);
+
+        // Always return parseable JSON so the frontend never crashes
+        addCORS(res);
+        if (!res.headersSent) {
+          res.writeHead(nvdRes.statusCode, { 'Content-Type': 'application/json' });
+        }
+        // If upstream body is already JSON, try to pass it through; otherwise wrap it
+        let outBody;
+        try {
+          const parsed3 = JSON.parse(bodyStr);
+          // Merge error metadata into existing JSON
+          outBody = JSON.stringify({ ...parsed3, _proxy_error: dynamicMsg, vulnerabilities: parsed3.vulnerabilities || [], totalResults: parsed3.totalResults || 0 });
+        } catch (_) {
+          outBody = JSON.stringify({ error: dynamicMsg, vulnerabilities: [], totalResults: 0 });
+        }
+        res.end(outBody);
+        return;
+      }
+
+      // ── Success — forward transparently ──────────────────────────────────
+      addCORS(res);
+      if (!res.headersSent) {
+        res.writeHead(nvdRes.statusCode, {
+          'Content-Type':   nvdRes.headers['content-type'] || 'application/json',
+          'Content-Length': body.length,
+        });
+      }
+      res.end(body);
+    });
+
+    nvdRes.on('error', (err) => {
+      console.error('[NVD Proxy] Response stream error:', err.message);
+      if (!res.headersSent) {
+        addCORS(res);
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+      }
+      res.end(JSON.stringify({
+        error:           'NVD proxy response error',
+        message:         err.message,
+        vulnerabilities: [],
+        totalResults:    0,
+      }));
+    });
+  });
+
+  nvdReq.setTimeout(30000, () => nvdReq.destroy(new Error('NVD upstream timeout after 30s')));
+
+  nvdReq.on('error', (err) => {
+    console.error('[NVD Proxy] Request error:', err.message);
+    if (!res.headersSent) {
+      addCORS(res);
+      res.writeHead(err.message.includes('timeout') ? 504 : 502, { 'Content-Type': 'application/json' });
+    }
+    res.end(JSON.stringify({
+      error:           'NVD proxy error',
+      message:         err.message,
+      vulnerabilities: [],
+      totalResults:    0,
+    }));
+  });
+
+  nvdReq.end();
 }
 
 // ── Main request handler ──────────────────────────────────────
@@ -268,50 +452,28 @@ const server = http.createServer((req, res) => {
     addCORS(res);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
-      status: 'ok',
-      server: 'Wadjet-Eye AI Proxy',
-      timestamp: new Date().toISOString(),
-      proxies: PROXY_ROUTES.map(r => r.prefix),
-      nvd_endpoint: 'https://services.nvd.nist.gov/rest/json/cves/2.0',
+      status:       'ok',
+      server:       'Wadjet-Eye AI Proxy',
+      timestamp:    new Date().toISOString(),
+      nvd_proxy:    ['/proxy/nvd', '/proxy/nvd/'],
+      nvd_endpoint: NVD_BASE_URL,
+      proxies:      PROXY_ROUTES.map(r => r.prefix),
     }));
     return;
   }
 
-  // NVD diagnostics endpoint
-  if (reqPath === '/proxy/nvd/diagnose') {
-    addCORS(res);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      endpoint: 'https://services.nvd.nist.gov/rest/json/cves/2.0',
-      proxy: '/proxy/nvd/',
-      valid_params: ['resultsPerPage','startIndex','pubStartDate','pubEndDate','cvssV3Severity','keywordSearch','cveId'],
-      date_format: 'YYYY-MM-DDThh:mm:ss.000 (both pubStartDate AND pubEndDate required)',
-      cve_format: 'CVE-YYYY-NNNNN (uppercase)',
-      severity_values: ['CRITICAL','HIGH','MEDIUM','LOW'],
-      rate_limit: '5 req/30s (unauthenticated) | 50 req/30s (with apiKey)',
-      example_urls: [
-        '/proxy/nvd/?resultsPerPage=20',
-        '/proxy/nvd/?cvssV3Severity=CRITICAL&resultsPerPage=10',
-        '/proxy/nvd/?cveId=CVE-2024-21762',
-        '/proxy/nvd/?pubStartDate=2026-01-01T00:00:00.000&pubEndDate=2026-04-11T23:59:59.000&resultsPerPage=20',
-      ],
-    }));
+  // ── NVD — dedicated handler (matches `/proxy/nvd` AND `/proxy/nvd/...`) ──
+  // Must be checked BEFORE the generic PROXY_ROUTES loop.
+  if (reqPath === '/proxy/nvd' || reqPath.startsWith('/proxy/nvd/')) {
+    handleNVDProxy(parsedUrl, req, res);
     return;
   }
 
-  // Check proxy routes
+  // ── Generic proxy routes ──────────────────────────────────
   for (const route of PROXY_ROUTES) {
     if (reqPath.startsWith(route.prefix)) {
-      const subPath = reqPath.slice(route.prefix.length - 1); // keep leading /
-
-      // Auto-correct NVD query parameters to prevent 404 errors
-      let qs = parsedUrl.search || '';
-      if (route.prefix === '/proxy/nvd/') {
-        const rawQS = parsedUrl.query ? new URLSearchParams(parsedUrl.query).toString() : '';
-        const fixedQS = nvdAutoCorrectQS(rawQS);
-        qs = fixedQS ? '?' + fixedQS : '';
-      }
-
+      const subPath   = reqPath.slice(route.prefix.length - 1); // keep leading /
+      const qs        = parsedUrl.search || '';
       const targetUrl = route.target(subPath + qs);
       console.log(`[Proxy] ${req.method} ${reqPath}${qs} → ${targetUrl}`);
       proxyRequest(targetUrl, req, res);
@@ -324,7 +486,8 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n🚀 Wadjet-Eye AI Proxy Server running on port ${PORT}`);
+  console.log(`\n🚀 Wadjet-Eye AI Proxy Server v31.0 running on port ${PORT}`);
   console.log(`   Static: ${STATIC}`);
-  console.log(`   Proxy routes: /proxy/nvd/ /proxy/vt/ /proxy/abuseipdb/ /proxy/shodan/ /proxy/otx/ /proxy/openai/ /proxy/claude/\n`);
+  console.log(`   NVD proxy: /proxy/nvd (no slash) + /proxy/nvd/ (with slash) → ${NVD_BASE_URL}`);
+  console.log(`   Other proxies: /proxy/vt/ /proxy/abuseipdb/ /proxy/shodan/ /proxy/otx/ /proxy/openai/ /proxy/claude/\n`);
 });
