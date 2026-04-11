@@ -650,7 +650,7 @@ window.renderSettingsEnhanced = function() {
         <button class="p19-btn p19-btn--ghost p19-btn--sm" id="settings-reload-btn" onclick="window._settingsLoadConfig()">
           <i class="fas fa-sync-alt"></i> <span>Reload</span>
         </button>
-        <button class="p19-btn p19-btn--primary p19-btn--sm" id="settings-save-btn" onclick="window._settingsSaveAll()">
+        <button class="p19-btn p19-btn--primary p19-btn--sm" id="settings-save-btn" onclick="window._settingsSaveAll()" style="opacity:1">
           <i class="fas fa-save"></i> <span>Save Changes</span>
         </button>
       </div>
@@ -922,45 +922,35 @@ function _settingsStatus(msg, type='info') {
   if (type !== 'error') setTimeout(()=>{ bar.style.display='none'; }, 5000);
 }
 
-// Collect settings from DOM — strips null/undefined/empty to avoid HTTP 400
+// Collect settings from DOM
+// Returns full settings payload — always has data (no "No data to save" error)
 function _collectSettings() {
   const sections = ['general','ai','threat_feeds','notifications','integrations','soar','retention'];
   const payload = {};
 
   sections.forEach(section => {
-    const s = _sData[section] || {};
-    const sPayload = {};
+    // Start with current _sData as base (keeps defaults/previously loaded values)
+    const s = { ...(_sData[section] || {}) };
+    const sPayload = { ...s }; // always include all current values
 
+    // Override with current DOM values
     Object.keys(s).forEach(key => {
       const el = document.getElementById(`s-${section}-${key}`);
-      if (!el) {
-        // Keep original non-empty values
-        if (s[key] !== null && s[key] !== undefined && s[key] !== '') {
-          sPayload[key] = s[key];
-        }
-        return;
-      }
+      if (!el) return; // keep _sData value
 
-      let val;
-      if (el.type === 'checkbox') val = el.checked;
-      else if (el.type === 'number') val = el.value !== '' ? parseFloat(el.value) : null;
-      else val = el.value?.trim();
-
-      // KEY FIX: Only include non-null, non-empty, valid values to prevent HTTP 400
-      if (val === null || val === undefined || val === '') {
-        // Only include booleans and numbers even if 0/false
-        if (typeof val === 'boolean' || typeof val === 'number') {
-          sPayload[key] = val;
-        }
-        // Skip empty strings to avoid validation errors
+      if (el.type === 'checkbox') {
+        sPayload[key] = el.checked;
+      } else if (el.type === 'number') {
+        const n = parseFloat(el.value);
+        if (!isNaN(n)) sPayload[key] = n;
       } else {
-        sPayload[key] = val;
+        const v = el.value?.trim() ?? '';
+        sPayload[key] = v; // allow empty strings (user intentionally cleared)
       }
     });
 
-    if (Object.keys(sPayload).length > 0) {
-      payload[section] = sPayload;
-    }
+    // Always include section in payload (never empty)
+    payload[section] = sPayload;
   });
 
   return payload;
@@ -973,20 +963,39 @@ window._settingsSaveAll = async function() {
   const saveBtn = document.getElementById('settings-save-btn');
   if (saveBtn) { saveBtn.disabled=true; saveBtn.innerHTML='<i class="fas fa-circle-notch fa-spin"></i> Saving…'; }
 
-  // Force _sDirty so we always collect current values
+  // Always collect current settings (never skip due to _sDirty flag)
   _sDirty = true;
   const payload = _collectSettings();
+
+  // Sanity check — payload should always have data now
+  if (!payload || Object.keys(payload).length === 0) {
+    _settingsStatus('⚠️ No settings data found — please reload the page.', 'warning');
+    _sSaving = false;
+    if (saveBtn) { saveBtn.disabled=false; saveBtn.innerHTML='<i class="fas fa-save"></i> <span>Save Changes</span>'; }
+    return;
+  }
 
   // Always save API keys to localStorage immediately (critical for AI Orchestrator)
   const ai = payload.ai || {};
   const feeds = payload.threat_feeds || {};
-  if (ai.openai_key) { localStorage.setItem('wadjet_openai_key', ai.openai_key); if(window.AIORCH) AIORCH.apiKeys.openai = ai.openai_key; }
-  if (ai.claude_key) { localStorage.setItem('wadjet_claude_key', ai.claude_key); if(window.AIORCH) AIORCH.apiKeys.claude = ai.claude_key; }
-  if (ai.provider)   { localStorage.setItem('wadjet_ai_provider', ai.provider); if(window.AIORCH) AIORCH.aiProvider = ai.provider; }
-  if (feeds.vt_key)        { localStorage.setItem('wadjet_vt_key', feeds.vt_key); if(window.AIORCH) AIORCH.apiKeys.virustotal = feeds.vt_key; }
-  if (feeds.abuseipdb_key) { localStorage.setItem('wadjet_abuseipdb_key', feeds.abuseipdb_key); if(window.AIORCH) AIORCH.apiKeys.abuseipdb = feeds.abuseipdb_key; }
-  if (feeds.shodan_key)    { localStorage.setItem('wadjet_shodan_key', feeds.shodan_key); if(window.AIORCH) AIORCH.apiKeys.shodan = feeds.shodan_key; }
-  if (feeds.otx_key)       { localStorage.setItem('wadjet_otx_key', feeds.otx_key); if(window.AIORCH) AIORCH.apiKeys.otx = feeds.otx_key; }
+  // Save AI API keys to localStorage — always (even if empty, to allow clearing)
+  if (ai.openai_key !== undefined) {
+    localStorage.setItem('wadjet_openai_key', ai.openai_key);
+    if (window.AIORCH) window.AIORCH.apiKeys.openai = ai.openai_key;
+  }
+  if (ai.claude_key !== undefined) {
+    localStorage.setItem('wadjet_claude_key', ai.claude_key);
+    if (window.AIORCH) window.AIORCH.apiKeys.claude = ai.claude_key;
+  }
+  if (ai.provider) {
+    localStorage.setItem('wadjet_ai_provider', ai.provider);
+    if (window.AIORCH) window.AIORCH.aiProvider = ai.provider;
+  }
+  // Save threat feed keys
+  if (feeds.vt_key !== undefined)        { localStorage.setItem('wadjet_vt_key', feeds.vt_key);               if (window.AIORCH) window.AIORCH.apiKeys.virustotal = feeds.vt_key; }
+  if (feeds.abuseipdb_key !== undefined) { localStorage.setItem('wadjet_abuseipdb_key', feeds.abuseipdb_key); if (window.AIORCH) window.AIORCH.apiKeys.abuseipdb  = feeds.abuseipdb_key; }
+  if (feeds.shodan_key !== undefined)    { localStorage.setItem('wadjet_shodan_key', feeds.shodan_key);        if (window.AIORCH) window.AIORCH.apiKeys.shodan      = feeds.shodan_key; }
+  if (feeds.otx_key !== undefined)       { localStorage.setItem('wadjet_otx_key', feeds.otx_key);              if (window.AIORCH) window.AIORCH.apiKeys.otx         = feeds.otx_key; }
 
   // Save full settings to localStorage cache
   localStorage.setItem('wadjet_settings_cache', JSON.stringify(payload));

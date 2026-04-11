@@ -471,26 +471,47 @@ async function _orchEnrichIOC(value, type) {
   const results = {};
   const tasks = [];
 
-  // VirusTotal
+  // VirusTotal — always run (show "not configured" if no key)
   if (AIORCH.apiKeys.virustotal) {
-    tasks.push(_vtLookup(value, type).then(r=>{ results.virustotal=r; }).catch(e=>{ results.virustotal={error:e.message}; }));
+    tasks.push(_vtLookup(value, type)
+      .then(r  => { results.virustotal = r; })
+      .catch(e => { results.virustotal = { error: e.message }; }));
+  } else {
+    results.virustotal = { notConfigured: true };
   }
 
-  // AbuseIPDB (IP only)
-  if (type === 'ip' && AIORCH.apiKeys.abuseipdb) {
-    tasks.push(_abuseIPDBLookup(value).then(r=>{ results.abuseipdb=r; }).catch(e=>{ results.abuseipdb={error:e.message}; }));
+  // AbuseIPDB — IP and domain
+  if (type === 'ip' || type === 'domain') {
+    if (AIORCH.apiKeys.abuseipdb) {
+      tasks.push(_abuseIPDBLookup(value)
+        .then(r  => { results.abuseipdb = r; })
+        .catch(e => { results.abuseipdb = { error: e.message }; }));
+    } else {
+      results.abuseipdb = { notConfigured: true };
+    }
   }
 
-  // Shodan (IP only)
-  if (type === 'ip' && AIORCH.apiKeys.shodan) {
-    tasks.push(_shodanLookup(value).then(r=>{ results.shodan=r; }).catch(e=>{ results.shodan={error:e.message}; }));
+  // Shodan — IP only
+  if (type === 'ip') {
+    if (AIORCH.apiKeys.shodan) {
+      tasks.push(_shodanLookup(value)
+        .then(r  => { results.shodan = r; })
+        .catch(e => { results.shodan = { error: e.message }; }));
+    } else {
+      results.shodan = { notConfigured: true };
+    }
   }
 
-  // OTX
+  // OTX — always run
   if (AIORCH.apiKeys.otx) {
-    tasks.push(_otxLookup(value, type).then(r=>{ results.otx=r; }).catch(e=>{ results.otx={error:e.message}; }));
+    tasks.push(_otxLookup(value, type)
+      .then(r  => { results.otx = r; })
+      .catch(e => { results.otx = { error: e.message }; }));
+  } else {
+    results.otx = { notConfigured: true };
   }
 
+  // Run all in parallel — allSettled never throws
   await Promise.allSettled(tasks);
   return results;
 }
@@ -593,38 +614,90 @@ async function _otxLookup(value, type) {
 
 function _buildEnrichContext(data, value, type) {
   let ctx = `IOC: ${value} (${type.toUpperCase()})\n\n`;
-  if (data.virustotal && !data.virustotal.error) {
+  let sourcesUsed = 0;
+
+  if (data.virustotal && !data.virustotal.error && !data.virustotal.notConfigured) {
     const vt = data.virustotal;
     const verdict = vt.malicious > 5 ? 'MALICIOUS' : vt.malicious > 0 ? 'SUSPICIOUS' : 'CLEAN';
     ctx += `VirusTotal: ${verdict} — ${vt.malicious}/${vt.total} engines flagged as malicious, ${vt.suspicious} suspicious. Reputation score: ${vt.reputation}. Country: ${vt.country||'Unknown'}. ASN: ${vt.as_owner||'Unknown'}.`;
     if (vt.maliciousEngines?.length) ctx += ` Detected by: ${vt.maliciousEngines.map(e=>e.name).join(', ')}.`;
     ctx += '\n';
+    sourcesUsed++;
+  } else if (data.virustotal?.notConfigured) {
+    ctx += `VirusTotal: API key not configured — manual review recommended at https://www.virustotal.com/gui/${type==='ip'?'ip-address':type==='domain'?'domain':'file'}/${value}\n`;
   }
-  if (data.abuseipdb && !data.abuseipdb.error) {
+
+  if (data.abuseipdb && !data.abuseipdb.error && !data.abuseipdb.notConfigured) {
     const ab = data.abuseipdb;
-    ctx += `AbuseIPDB: Abuse confidence score ${ab.abuseScore}/100, ${ab.totalReports} total abuse reports. ISP: ${ab.isp}. Country: ${ab.countryCode}. Usage type: ${ab.usageType||'unknown'}. Whitelisted: ${ab.isWhitelisted?'yes':'no'}.\n`;
+    ctx += `AbuseIPDB: Abuse confidence score ${ab.abuseScore}/100, ${ab.totalReports} total reports. ISP: ${ab.isp||'Unknown'}. Country: ${ab.countryCode||'Unknown'}. Usage: ${ab.usageType||'unknown'}. Whitelisted: ${ab.isWhitelisted?'yes':'no'}.\n`;
+    sourcesUsed++;
+  } else if (data.abuseipdb?.notConfigured) {
+    ctx += `AbuseIPDB: API key not configured.\n`;
   }
-  if (data.shodan && !data.shodan.error) {
+
+  if (data.shodan && !data.shodan.error && !data.shodan.notConfigured) {
     const sh = data.shodan;
-    ctx += `Shodan: Organization: ${sh.org}, Country: ${sh.country}, OS: ${sh.os||'unknown'}. Open ports: ${sh.ports.join(', ')||'none'}. Known CVEs on host: ${sh.vulns.join(', ')||'none'}. Hostnames: ${sh.hostnames.join(', ')||'none'}.\n`;
+    ctx += `Shodan: Org: ${sh.org||'Unknown'}, Country: ${sh.country||'Unknown'}, OS: ${sh.os||'unknown'}. Open ports: ${sh.ports.join(', ')||'none'}. CVEs on host: ${sh.vulns.join(', ')||'none'}. Hostnames: ${sh.hostnames.join(', ')||'none'}.\n`;
+    sourcesUsed++;
+  } else if (data.shodan?.notConfigured) {
+    ctx += `Shodan: API key not configured.\n`;
   }
-  if (data.otx && !data.otx.error) {
+
+  if (data.otx && !data.otx.error && !data.otx.notConfigured) {
     const otx = data.otx;
-    ctx += `AlienVault OTX: ${otx.pulse_count} threat intelligence pulses. Malware families: ${otx.malware_families.join(', ')||'none identified'}. Tags: ${otx.tags.slice(0,5).join(', ')||'none'}.`;
+    ctx += `AlienVault OTX: ${otx.pulse_count} threat pulses. Malware families: ${otx.malware_families.join(', ')||'none identified'}. Tags: ${otx.tags.slice(0,5).join(', ')||'none'}.`;
     if (otx.pulses?.length) ctx += ` Recent pulses: ${otx.pulses.map(p=>p.name).join('; ')}.`;
     ctx += '\n';
+    sourcesUsed++;
+  } else if (data.otx?.notConfigured) {
+    ctx += `AlienVault OTX: API key not configured.\n`;
   }
-  return ctx || 'No external intelligence data available (API keys not configured).';
+
+  if (sourcesUsed === 0) {
+    ctx += `\nNote: No threat intelligence API keys are configured. Analysis will be based on IOC pattern recognition only. Add VirusTotal, AbuseIPDB, Shodan, and OTX API keys in Settings → Threat Feeds for live enrichment.`;
+  }
+  return ctx;
 }
 
 // Render enrichment data as a visual card in the chat
+// Shows all 4 source cards: live data, error, or "not configured"
 function _renderEnrichCard(data, value, type) {
   const _score = (n, total) => total > 0 ? Math.round(n/total*100) : 0;
+
+  // Helper: "Not Configured" placeholder card
+  const _notCfgCard = (name, icon) => `
+    <div style="background:rgba(71,85,105,0.06);border:1px dashed rgba(71,85,105,0.35);border-radius:10px;padding:12px 14px;flex:1;min-width:180px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <div style="width:28px;height:28px;background:rgba(71,85,105,0.12);border-radius:6px;display:flex;align-items:center;justify-content:center">
+          <i class="fas ${icon}" style="color:#475569;font-size:12px"></i>
+        </div>
+        <div style="font-weight:700;font-size:.82em;color:#64748b">${name}</div>
+        <div style="margin-left:auto;font-size:.66em;font-weight:700;color:#475569;background:rgba(71,85,105,.15);padding:2px 6px;border-radius:4px">NO KEY</div>
+      </div>
+      <div style="font-size:.74em;color:#475569;line-height:1.4">Add API key in <strong style="color:#94a3b8">Settings → Threat Feeds</strong> for live ${name} data.</div>
+    </div>`;
+
+  // Helper: error card
+  const _errCard = (name, icon, errMsg) => `
+    <div style="background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);border-radius:10px;padding:12px 14px;flex:1;min-width:180px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <div style="width:28px;height:28px;background:rgba(239,68,68,0.12);border-radius:6px;display:flex;align-items:center;justify-content:center">
+          <i class="fas ${icon}" style="color:#ef4444;font-size:12px"></i>
+        </div>
+        <div style="font-weight:700;font-size:.82em;color:#94a3b8">${name}</div>
+        <div style="margin-left:auto;font-size:.66em;font-weight:700;color:#ef4444;background:rgba(239,68,68,.12);padding:2px 6px;border-radius:4px">ERROR</div>
+      </div>
+      <div style="font-size:.74em;color:#ef4444;word-break:break-word">${_e(errMsg)}</div>
+    </div>`;
 
   let cards = '';
 
   // VirusTotal card
-  if (data.virustotal && !data.virustotal.error) {
+  if (data.virustotal?.notConfigured) {
+    cards += _notCfgCard('VirusTotal', 'fa-virus');
+  } else if (data.virustotal?.error) {
+    cards += _errCard('VirusTotal', 'fa-virus', data.virustotal.error);
+  } else if (data.virustotal) {
     const vt = data.virustotal;
     const pct = _score(vt.malicious, vt.total);
     const verdict = vt.malicious > 10 ? 'MALICIOUS' : vt.malicious > 2 ? 'SUSPICIOUS' : vt.malicious > 0 ? 'LOW RISK' : 'CLEAN';
@@ -650,7 +723,11 @@ function _renderEnrichCard(data, value, type) {
   }
 
   // AbuseIPDB card
-  if (data.abuseipdb && !data.abuseipdb.error) {
+  if (data.abuseipdb?.notConfigured) {
+    cards += _notCfgCard('AbuseIPDB', 'fa-shield-alt');
+  } else if (data.abuseipdb?.error) {
+    cards += _errCard('AbuseIPDB', 'fa-shield-alt', data.abuseipdb.error);
+  } else if (data.abuseipdb) {
     const ab = data.abuseipdb;
     const riskColor = ab.abuseScore > 75 ? '#ef4444' : ab.abuseScore > 25 ? '#f97316' : '#22c55e';
     cards += `
@@ -673,7 +750,11 @@ function _renderEnrichCard(data, value, type) {
   }
 
   // Shodan card
-  if (data.shodan && !data.shodan.error) {
+  if (data.shodan?.notConfigured) {
+    cards += _notCfgCard('Shodan', 'fa-server');
+  } else if (data.shodan?.error) {
+    cards += _errCard('Shodan', 'fa-server', data.shodan.error);
+  } else if (data.shodan) {
     const sh = data.shodan;
     cards += `
     <div style="background:rgba(249,115,22,0.08);border:1px solid rgba(249,115,22,0.25);border-radius:10px;padding:12px 14px;flex:1;min-width:200px">
@@ -696,7 +777,11 @@ function _renderEnrichCard(data, value, type) {
   }
 
   // OTX card
-  if (data.otx && !data.otx.error) {
+  if (data.otx?.notConfigured) {
+    cards += _notCfgCard('AlienVault OTX', 'fa-satellite');
+  } else if (data.otx?.error) {
+    cards += _errCard('AlienVault OTX', 'fa-satellite', data.otx.error);
+  } else if (data.otx) {
     const otx = data.otx;
     const otxType = type==='ip'?'ip':type==='domain'?'domain':type==='url'?'url':'file';
     cards += `
@@ -719,15 +804,19 @@ function _renderEnrichCard(data, value, type) {
     </div>`;
   }
 
-  if (!cards) return '';
-
   return `
-  <div style="margin:10px 0;padding:12px;background:rgba(0,0,0,.2);border:1px solid var(--p19-border);border-radius:10px">
-    <div style="font-size:.72em;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--p19-t4);margin-bottom:10px">
-      <i class="fas fa-search" style="margin-right:5px;color:var(--p19-cyan)"></i>
-      Multi-Source Intelligence Enrichment — ${_e(value)}
+  <div style="margin:10px 0 14px;padding:14px;background:rgba(0,0,0,.2);border:1px solid var(--p19-border);border-radius:12px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+      <i class="fas fa-satellite-dish" style="color:var(--p19-cyan);font-size:.85em"></i>
+      <span style="font-size:.72em;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--p19-t4)">
+        Multi-Source Intelligence Report
+      </span>
+      <span style="margin-left:4px;font-size:.72em;font-weight:700;color:var(--p19-cyan);font-family:monospace">${_e(value)}</span>
+      <span style="margin-left:auto;font-size:.68em;color:var(--p19-t4)">${new Date().toLocaleTimeString()}</span>
     </div>
-    <div style="display:flex;flex-wrap:wrap;gap:10px">${cards}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:10px">
+      ${cards || '<div style="color:var(--p19-t4);font-size:.8em;padding:8px">No enrichment data available — add API keys in Settings → Threat Feeds.</div>'}
+    </div>
   </div>`;
 }
 

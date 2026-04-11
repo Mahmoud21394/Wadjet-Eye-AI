@@ -138,6 +138,42 @@ function serveStatic(reqPath, res) {
   });
 }
 
+// ── NVD parameter auto-correction ────────────────────────────
+function nvdAutoCorrectQS(rawQS) {
+  // Parse query params and auto-fix known NVD 404 causes:
+  // 1. pubStartDate without pubEndDate → add pubEndDate = now
+  // 2. cveId not uppercase → uppercase it
+  // 3. Missing .000 milliseconds on dates → add them
+  const params = new URLSearchParams(rawQS);
+
+  if (params.get('cveId')) {
+    params.set('cveId', params.get('cveId').toUpperCase());
+  }
+
+  const pubStart = params.get('pubStartDate');
+  const pubEnd   = params.get('pubEndDate');
+  if (pubStart && !pubEnd) {
+    params.set('pubEndDate', new Date().toISOString().slice(0,19) + '.000');
+    console.log('[NVD Auto-fix] Added missing pubEndDate:', params.get('pubEndDate'));
+  }
+  if (pubEnd && !pubStart) {
+    const s = new Date(pubEnd);
+    s.setDate(s.getDate() - 30);
+    params.set('pubStartDate', s.toISOString().slice(0,19) + '.000');
+    console.log('[NVD Auto-fix] Added missing pubStartDate:', params.get('pubStartDate'));
+  }
+
+  ['pubStartDate','pubEndDate'].forEach(k => {
+    const v = params.get(k);
+    if (v && !/\.\d{3}$/.test(v)) {
+      params.set(k, v.slice(0,19) + '.000');
+      console.log(`[NVD Auto-fix] Fixed date format for ${k}:`, params.get(k));
+    }
+  });
+
+  return params.toString();
+}
+
 // ── Main request handler ──────────────────────────────────────
 const server = http.createServer((req, res) => {
   const parsedUrl = url.parse(req.url, true);
@@ -151,13 +187,57 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Health check endpoint
+  if (reqPath === '/health' || reqPath === '/api/health') {
+    addCORS(res);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      status: 'ok',
+      server: 'Wadjet-Eye AI Proxy',
+      timestamp: new Date().toISOString(),
+      proxies: PROXY_ROUTES.map(r => r.prefix),
+      nvd_endpoint: 'https://services.nvd.nist.gov/rest/json/cves/2.0',
+    }));
+    return;
+  }
+
+  // NVD diagnostics endpoint
+  if (reqPath === '/proxy/nvd/diagnose') {
+    addCORS(res);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      endpoint: 'https://services.nvd.nist.gov/rest/json/cves/2.0',
+      proxy: '/proxy/nvd/',
+      valid_params: ['resultsPerPage','startIndex','pubStartDate','pubEndDate','cvssV3Severity','keywordSearch','cveId'],
+      date_format: 'YYYY-MM-DDThh:mm:ss.000 (both pubStartDate AND pubEndDate required)',
+      cve_format: 'CVE-YYYY-NNNNN (uppercase)',
+      severity_values: ['CRITICAL','HIGH','MEDIUM','LOW'],
+      rate_limit: '5 req/30s (unauthenticated) | 50 req/30s (with apiKey)',
+      example_urls: [
+        '/proxy/nvd/?resultsPerPage=20',
+        '/proxy/nvd/?cvssV3Severity=CRITICAL&resultsPerPage=10',
+        '/proxy/nvd/?cveId=CVE-2024-21762',
+        '/proxy/nvd/?pubStartDate=2026-01-01T00:00:00.000&pubEndDate=2026-04-11T23:59:59.000&resultsPerPage=20',
+      ],
+    }));
+    return;
+  }
+
   // Check proxy routes
   for (const route of PROXY_ROUTES) {
     if (reqPath.startsWith(route.prefix)) {
       const subPath = reqPath.slice(route.prefix.length - 1); // keep leading /
-      const qs = parsedUrl.search || '';
+
+      // Auto-correct NVD query parameters to prevent 404 errors
+      let qs = parsedUrl.search || '';
+      if (route.prefix === '/proxy/nvd/') {
+        const rawQS = parsedUrl.query ? new URLSearchParams(parsedUrl.query).toString() : '';
+        const fixedQS = nvdAutoCorrectQS(rawQS);
+        qs = fixedQS ? '?' + fixedQS : '';
+      }
+
       const targetUrl = route.target(subPath + qs);
-      console.log(`[Proxy] ${req.method} ${reqPath} → ${targetUrl}`);
+      console.log(`[Proxy] ${req.method} ${reqPath}${qs} → ${targetUrl}`);
       proxyRequest(targetUrl, req, res);
       return;
     }
