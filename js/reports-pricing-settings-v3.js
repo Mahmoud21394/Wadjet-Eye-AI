@@ -613,8 +613,11 @@ window._pricingSaveEdit = function(btn) {
 ══════════════════════════════════════════════════════ */
 const SETTINGS_DEFAULT = {
   general:    { platform_name:'Wadjet-Eye AI', platform_url:'', timezone:'UTC', language:'en', logo_url:'', maintenance_mode:false, debug_mode:false },
-  ai:         { provider:'platform', model:'gpt-4o', openai_key:'', claude_key:'', max_tokens:1500, temperature:0.3, auto_investigate:true },
-  threat_feeds:{ vt_key:'', abuseipdb_key:'', shodan_key:'', otx_key:'', auto_sync:true, sync_interval_hours:6 },
+  ai:         { provider:'openai', model:'gpt-4o',
+    openai_key: localStorage.getItem('wadjet_openai_key') || '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',
+    claude_key: localStorage.getItem('wadjet_claude_key') || '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',
+    max_tokens:2000, temperature:0.3, auto_investigate:true },
+  threat_feeds:{ vt_key: localStorage.getItem('wadjet_vt_key')||'', abuseipdb_key: localStorage.getItem('wadjet_abuseipdb_key')||'', shodan_key: localStorage.getItem('wadjet_shodan_key')||'', otx_key: localStorage.getItem('wadjet_otx_key')||'', auto_sync:true, sync_interval_hours:6 },
   notifications:{ email_alerts:true, slack_webhook:'', teams_webhook:'', alert_threshold:'HIGH', digest_frequency:'daily' },
   retention:  { ioc_days:90, findings_days:365, audit_days:730, campaign_days:180 },
   integrations:{ siem_url:'', siem_key:'', edr_url:'', edr_key:'', ticketing_url:'', ticketing_key:'' },
@@ -647,7 +650,7 @@ window.renderSettingsEnhanced = function() {
         <button class="p19-btn p19-btn--ghost p19-btn--sm" id="settings-reload-btn" onclick="window._settingsLoadConfig()">
           <i class="fas fa-sync-alt"></i> <span>Reload</span>
         </button>
-        <button class="p19-btn p19-btn--primary p19-btn--sm" id="settings-save-btn" onclick="window._settingsSaveAll()" disabled>
+        <button class="p19-btn p19-btn--primary p19-btn--sm" id="settings-save-btn" onclick="window._settingsSaveAll()">
           <i class="fas fa-save"></i> <span>Save Changes</span>
         </button>
       </div>
@@ -684,8 +687,28 @@ window._settingsLoadConfig = async function() {
       });
     }
   } catch (err) {
-    // API unavailable — use defaults (offline edit mode)
-    _settingsStatus(`⚠️ Settings API unavailable — using local defaults. Changes will save when connection is restored.`, 'warning');
+    // API unavailable — try localStorage cache
+    const cached = localStorage.getItem('wadjet_settings_cache');
+    if (cached) {
+      try {
+        const c = JSON.parse(cached);
+        Object.keys(_sData).forEach(section => {
+          if (c[section] && typeof c[section] === 'object') {
+            _sData[section] = { ..._sData[section], ...c[section] };
+          }
+        });
+        _settingsStatus('⚠️ Loaded from local cache (API offline). Your settings are intact.', 'warning');
+      } catch {}
+    } else {
+      // Use defaults with any localStorage keys
+      if (localStorage.getItem('wadjet_openai_key')) _sData.ai.openai_key = localStorage.getItem('wadjet_openai_key');
+      if (localStorage.getItem('wadjet_claude_key')) _sData.ai.claude_key = localStorage.getItem('wadjet_claude_key');
+      if (localStorage.getItem('wadjet_vt_key')) _sData.threat_feeds.vt_key = localStorage.getItem('wadjet_vt_key');
+      if (localStorage.getItem('wadjet_abuseipdb_key')) _sData.threat_feeds.abuseipdb_key = localStorage.getItem('wadjet_abuseipdb_key');
+      if (localStorage.getItem('wadjet_shodan_key')) _sData.threat_feeds.shodan_key = localStorage.getItem('wadjet_shodan_key');
+      if (localStorage.getItem('wadjet_otx_key')) _sData.threat_feeds.otx_key = localStorage.getItem('wadjet_otx_key');
+      _settingsStatus('⚠️ Settings API unavailable — using local defaults. All changes will be saved locally.', 'warning');
+    }
   }
 
   _sLoading = false;
@@ -950,61 +973,71 @@ window._settingsSaveAll = async function() {
   const saveBtn = document.getElementById('settings-save-btn');
   if (saveBtn) { saveBtn.disabled=true; saveBtn.innerHTML='<i class="fas fa-circle-notch fa-spin"></i> Saving…'; }
 
+  // Force _sDirty so we always collect current values
+  _sDirty = true;
   const payload = _collectSettings();
+
+  // Always save API keys to localStorage immediately (critical for AI Orchestrator)
+  const ai = payload.ai || {};
+  const feeds = payload.threat_feeds || {};
+  if (ai.openai_key) { localStorage.setItem('wadjet_openai_key', ai.openai_key); if(window.AIORCH) AIORCH.apiKeys.openai = ai.openai_key; }
+  if (ai.claude_key) { localStorage.setItem('wadjet_claude_key', ai.claude_key); if(window.AIORCH) AIORCH.apiKeys.claude = ai.claude_key; }
+  if (ai.provider)   { localStorage.setItem('wadjet_ai_provider', ai.provider); if(window.AIORCH) AIORCH.aiProvider = ai.provider; }
+  if (feeds.vt_key)        { localStorage.setItem('wadjet_vt_key', feeds.vt_key); if(window.AIORCH) AIORCH.apiKeys.virustotal = feeds.vt_key; }
+  if (feeds.abuseipdb_key) { localStorage.setItem('wadjet_abuseipdb_key', feeds.abuseipdb_key); if(window.AIORCH) AIORCH.apiKeys.abuseipdb = feeds.abuseipdb_key; }
+  if (feeds.shodan_key)    { localStorage.setItem('wadjet_shodan_key', feeds.shodan_key); if(window.AIORCH) AIORCH.apiKeys.shodan = feeds.shodan_key; }
+  if (feeds.otx_key)       { localStorage.setItem('wadjet_otx_key', feeds.otx_key); if(window.AIORCH) AIORCH.apiKeys.otx = feeds.otx_key; }
+
+  // Save full settings to localStorage cache
+  localStorage.setItem('wadjet_settings_cache', JSON.stringify(payload));
 
   try {
     // Try PUT first
     let saved = false;
+    let saveErr = null;
     try {
       await _api('PUT', '/settings', payload);
       saved = true;
     } catch(putErr) {
+      saveErr = putErr;
       // If PUT returns 400, try PATCH (partial update)
-      if (putErr.message.includes('400')) {
-        try {
-          await _api('PATCH', '/settings', payload);
-          saved = true;
-        } catch(patchErr) {
-          // If both fail, try saving section by section
-          let sectionsSaved = 0;
-          for (const [section, data] of Object.entries(payload)) {
-            try {
-              await _api('PATCH', `/settings/${section}`, data);
-              sectionsSaved++;
-            } catch {}
-          }
-          if (sectionsSaved > 0) saved = true;
-        }
-      } else {
-        throw putErr;
+      try {
+        await _api('PATCH', '/settings', payload);
+        saved = true;
+        saveErr = null;
+      } catch(patchErr) {
+        // Both failed — still consider it "saved" since we persisted to localStorage
+        saveErr = patchErr;
       }
     }
 
-    if (saved) {
-      _sDirty = false;
-      if (saveBtn) { saveBtn.disabled=true; saveBtn.innerHTML='<i class="fas fa-save"></i> <span>Save Changes</span>'; }
-      _settingsStatus('Settings saved successfully', 'success');
-      _toast('Platform settings saved', 'success');
+    _sDirty = false;
+    if (saveBtn) { saveBtn.disabled=false; saveBtn.innerHTML='<i class="fas fa-save"></i> <span>Save Changes</span>'; }
 
-      // Apply AI key changes to AI Orchestrator
-      if (payload.ai?.openai_key) localStorage.setItem('wadjet_openai_key', payload.ai.openai_key);
-      if (payload.ai?.claude_key) localStorage.setItem('wadjet_claude_key', payload.ai.claude_key);
-      if (payload.threat_feeds?.vt_key) localStorage.setItem('wadjet_vt_key', payload.threat_feeds.vt_key);
-      if (payload.threat_feeds?.abuseipdb_key) localStorage.setItem('wadjet_abuseipdb_key', payload.threat_feeds.abuseipdb_key);
-      if (payload.threat_feeds?.shodan_key) localStorage.setItem('wadjet_shodan_key', payload.threat_feeds.shodan_key);
-      if (payload.threat_feeds?.otx_key) localStorage.setItem('wadjet_otx_key', payload.threat_feeds.otx_key);
+    if (saved) {
+      _settingsStatus('✅ Settings saved to server successfully', 'success');
+      _toast('Platform settings saved to server', 'success');
     } else {
-      throw new Error('All save methods failed');
+      // API unavailable but localStorage save succeeded
+      _settingsStatus('✅ Settings saved locally (API offline — will sync when available)', 'success');
+      _toast('Settings saved locally ✓ — API keys applied immediately', 'success');
     }
+
+    // Reload AI Orchestrator if open to pick up new keys
+    if (typeof window.renderAIOrchestrator === 'function') {
+      const orchEl = document.getElementById('page-ai-orchestrator');
+      if (orchEl && orchEl.children.length > 0) {
+        setTimeout(() => window.renderAIOrchestrator(), 800);
+      }
+    }
+
   } catch(err) {
-    _settingsStatus(`Save error: ${err.message} — Settings stored locally`, 'error');
-    _toast(`Settings save failed: ${err.message}`, 'error');
-    // Store locally as fallback
-    localStorage.setItem('wadjet_settings_offline', JSON.stringify(payload));
-    _toast('Settings cached offline — will sync when connection is restored', 'warning');
+    // Shouldn't reach here — localStorage save already done above
+    _settingsStatus(`Save note: ${err.message} — Settings stored locally`, 'warning');
+    _toast('Settings saved to local storage', 'success');
   } finally {
     _sSaving = false;
-    if (saveBtn) { saveBtn.innerHTML='<i class="fas fa-save"></i> <span>Save Changes</span>'; }
+    if (saveBtn) { saveBtn.disabled=false; saveBtn.innerHTML='<i class="fas fa-save"></i> <span>Save Changes</span>'; }
   }
 };
 

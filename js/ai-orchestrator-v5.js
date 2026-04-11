@@ -12,6 +12,18 @@
 /* ═══════════════════════════════════════════════════════
    STATE
 ═══════════════════════════════════════════════════════ */
+// Pre-load provided API keys into localStorage on first load
+(function _preloadApiKeys() {
+  const PRESET = {
+    wadjet_openai_key: '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',
+    wadjet_claude_key: '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',
+    wadjet_ai_provider: 'openai',
+  };
+  Object.entries(PRESET).forEach(([k, v]) => {
+    if (!localStorage.getItem(k)) localStorage.setItem(k, v);
+  });
+})();
+
 const AIORCH = {
   messages:   [],
   sessions:   [],
@@ -24,7 +36,7 @@ const AIORCH = {
     shodan:    localStorage.getItem('wadjet_shodan_key')    || '',
     otx:       localStorage.getItem('wadjet_otx_key')       || '',
   },
-  aiProvider:  localStorage.getItem('wadjet_ai_provider') || 'platform',
+  aiProvider:  localStorage.getItem('wadjet_ai_provider') || 'openai',
   isThinking:  false,
   sessionId:   _genId(),
   sessionTitle:'New Investigation',
@@ -114,10 +126,10 @@ async function _callPlatformAI(messages) {
   }
 }
 
-// OpenAI GPT-4 / GPT-4o (client-side, no API key proxy needed if CORS enabled)
+// OpenAI GPT-4 / GPT-4o — via local proxy to avoid CORS
 async function _callOpenAI(messages, model='gpt-4o') {
   const key = AIORCH.apiKeys.openai;
-  if (!key) throw new Error('OpenAI API key not configured. Go to Settings → AI Configuration to add your key.');
+  if (!key) throw new Error('OpenAI API key not configured. Go to API Keys to add your key.');
 
   const systemPrompt = {
     role: 'system',
@@ -127,12 +139,15 @@ map MITRE ATT&CK techniques, and provide actionable intelligence reports.
 When analyzing IOCs, always structure your response with:
 1. **Verdict**: MALICIOUS/SUSPICIOUS/CLEAN with confidence %
 2. **Threat Summary**: What this indicator represents
-3. **Recommended Actions**: Immediate steps for SOC analysts
-4. **MITRE ATT&CK**: Relevant techniques (T-codes)
+3. **Threat Actors**: Known groups associated with this IOC (if any)
+4. **Recommended Actions**: Immediate steps for SOC analysts
+5. **MITRE ATT&CK**: Relevant techniques (T-codes with names)
 Be concise, professional, and actionable.`
   };
 
-  const r = await fetch('https://api.openai.com/v1/chat/completions', {
+  // Use local proxy to avoid CORS
+  const endpoint = '/proxy/openai/v1/chat/completions';
+  const r = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -144,7 +159,7 @@ Be concise, professional, and actionable.`
         role: m.role==='assistant'?'assistant':'user',
         content: m.content
       }))],
-      max_tokens: 1500,
+      max_tokens: 2000,
       temperature: 0.3,
     }),
   });
@@ -156,26 +171,27 @@ Be concise, professional, and actionable.`
   return d.choices?.[0]?.message?.content || 'No response generated.';
 }
 
-// Anthropic Claude (client-side)
+// Anthropic Claude — via local proxy to avoid CORS
 async function _callClaude(messages, model='claude-3-5-sonnet-20241022') {
   const key = AIORCH.apiKeys.claude;
-  if (!key) throw new Error('Claude API key not configured. Go to Settings → AI Configuration to add your key.');
+  if (!key) throw new Error('Claude API key not configured. Go to API Keys to add your key.');
 
   const systemPrompt = `You are Wadjet-Eye AI, a cybersecurity threat intelligence expert. 
 Analyze IOCs, map MITRE ATT&CK techniques, identify threat actors, and provide actionable intel reports.
-Structure responses with: Verdict, Threat Summary, Recommended Actions, and MITRE ATT&CK mappings.`;
+Structure responses with: Verdict, Threat Summary, Threat Actors, Recommended Actions, and MITRE ATT&CK mappings.`;
 
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
+  // Use local proxy to avoid CORS
+  const endpoint = '/proxy/claude/v1/messages';
+  const r = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'x-api-key': key,
       'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
     },
     body: JSON.stringify({
       model,
-      max_tokens: 1500,
+      max_tokens: 2000,
       system: systemPrompt,
       messages: messages.map(m=>({
         role: m.role==='assistant'?'assistant':'user',
@@ -351,15 +367,29 @@ async function _orchSendMessage(prompt) {
 
   try {
     let responseText = '';
+    let enrichData = null;
 
     // If IOC detected, run enrichment pipeline first
     if (detectedIOC && iocType && ['ip','domain','url','md5','sha1','sha256','sha512'].includes(iocType)) {
       _orchLog('ioc_detected', `${iocType}: ${detectedIOC}`);
-      const enrichData = await _orchEnrichIOC(detectedIOC, iocType);
+
+      // Show "gathering intel" message
+      const gatherMsg = document.createElement('div');
+      gatherMsg.id = 'enrich-gathering-' + Date.now();
+      gatherMsg.className = 'p19-msg p19-msg--assistant';
+      gatherMsg.innerHTML = `<div class="p19-msg__avatar" style="background:rgba(168,85,247,.15);border:1px solid rgba(168,85,247,.2);color:var(--p19-purple)"><i class="fas fa-robot"></i></div>
+        <div class="p19-msg__bubble"><div style="font-size:.84em;color:var(--p19-t3)"><i class="fas fa-circle-notch fa-spin" style="margin-right:6px;color:var(--p19-cyan)"></i>Gathering intelligence from VirusTotal, AbuseIPDB, Shodan, OTX…</div></div>`;
+      const msgContainer = document.getElementById('orch-messages');
+      if (msgContainer) { msgContainer.appendChild(gatherMsg); msgContainer.scrollTop = msgContainer.scrollHeight; }
+
+      enrichData = await _orchEnrichIOC(detectedIOC, iocType);
       const enrichContext = _buildEnrichContext(enrichData, detectedIOC, iocType);
 
+      // Remove gathering msg
+      gatherMsg.remove();
+
       // Feed enriched context to AI
-      const enrichedPrompt = `User asked: "${prompt}"\n\nRelevant IOC intelligence gathered:\n${enrichContext}\n\nProvide a comprehensive threat analysis based on this data.`;
+      const enrichedPrompt = `User asked: "${prompt}"\n\nMulti-source intelligence gathered:\n${enrichContext}\n\nProvide a comprehensive threat analysis based on this intelligence data. Include a verdict (MALICIOUS/SUSPICIOUS/CLEAN), threat actor attribution if possible, and recommended SOC actions.`;
 
       responseText = await _callAI([
         ...AIORCH.messages.slice(-4).map(m=>({role:m.role, content:m.content})),
@@ -378,7 +408,7 @@ async function _orchSendMessage(prompt) {
 
     // Add assistant response
     AIORCH.messages.push({ role:'assistant', content: responseText, ts: Date.now() });
-    _orchAddMsg('assistant', responseText, detectedIOC, iocType);
+    _orchAddMsg('assistant', responseText, detectedIOC, iocType, enrichData);
 
     // Log completion
     _orchLog('ai_response', `${responseText.length} chars, IOC: ${detectedIOC||'none'}`);
@@ -399,22 +429,39 @@ async function _orchSendMessage(prompt) {
 
 async function _callAI(messages, ioc) {
   const provider = AIORCH.aiProvider;
-  try {
-    if (provider === 'openai' && AIORCH.apiKeys.openai) {
+
+  // Priority 1: OpenAI (if key available)
+  if (AIORCH.apiKeys.openai && (provider === 'openai' || provider === 'platform')) {
+    try {
+      _orchLog('ai_call', `OpenAI GPT-4o: ${messages.length} messages`);
       return await _callOpenAI(messages);
-    } else if (provider === 'claude' && AIORCH.apiKeys.claude) {
-      return await _callClaude(messages);
-    } else {
-      // Try platform AI first (always available when backend is running)
-      const platformResult = await _callPlatformAI(messages);
-      if (platformResult && !platformResult.includes('unavailable')) return platformResult;
-      // Fall back to intelligent local analysis (no API key message)
-      return _localAnalysis(messages[messages.length-1]?.content || '');
+    } catch(err) {
+      console.warn('[AI Orch] OpenAI failed:', err.message);
+      _orchLog('ai_fallback', `OpenAI failed: ${err.message}. Trying Claude…`, 'warning');
     }
-  } catch(err) {
-    console.warn('[AI Orch] AI call failed:', err.message);
-    return _localAnalysis(messages[messages.length-1]?.content || '');
   }
+
+  // Priority 2: Claude (if key available)
+  if (AIORCH.apiKeys.claude && (provider === 'claude' || provider === 'openai' || provider === 'platform')) {
+    try {
+      _orchLog('ai_call', `Claude 3.5 Sonnet: ${messages.length} messages`);
+      return await _callClaude(messages);
+    } catch(err) {
+      console.warn('[AI Orch] Claude failed:', err.message);
+      _orchLog('ai_fallback', `Claude failed: ${err.message}. Trying platform…`, 'warning');
+    }
+  }
+
+  // Priority 3: Platform backend AI
+  try {
+    const platformResult = await _callPlatformAI(messages);
+    if (platformResult && !platformResult.includes('unavailable')) return platformResult;
+  } catch(err) {
+    console.warn('[AI Orch] Platform AI failed:', err.message);
+  }
+
+  // Final fallback: local analysis
+  return _localAnalysis(messages[messages.length-1]?.content || '');
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -450,37 +497,46 @@ async function _orchEnrichIOC(value, type) {
 
 async function _vtLookup(value, type) {
   const key = AIORCH.apiKeys.virustotal;
-  let endpoint = '';
-  const base = 'https://www.virustotal.com/api/v3';
-  if (type==='ip')     endpoint = `/ip_addresses/${value}`;
-  else if (type==='domain') endpoint = `/domains/${value}`;
-  else if (['md5','sha1','sha256','sha512'].includes(type)) endpoint = `/files/${value}`;
+  let subPath = '';
+  if (type==='ip')     subPath = `/ip_addresses/${value}`;
+  else if (type==='domain') subPath = `/domains/${value}`;
+  else if (['md5','sha1','sha256','sha512'].includes(type)) subPath = `/files/${value}`;
   else if (type==='url') {
     const id = btoa(value).replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');
-    endpoint = `/urls/${id}`;
+    subPath = `/urls/${id}`;
   }
-  if (!endpoint) return { error: 'Unsupported IOC type for VirusTotal' };
+  if (!subPath) return { error: 'Unsupported IOC type for VirusTotal' };
 
-  const r = await fetch(`${base}${endpoint}`, { headers: { 'x-apikey': key } });
+  // Use proxy to bypass CORS
+  const r = await fetch(`/proxy/vt${subPath}`, { headers: { 'x-apikey': key } });
   if (!r.ok) throw new Error(`VT: HTTP ${r.status}`);
   const d = await r.json();
   const stats = d.data?.attributes?.last_analysis_stats || {};
+  const engines = d.data?.attributes?.last_analysis_results || {};
+  const maliciousEngines = Object.entries(engines)
+    .filter(([,v])=>v.category==='malicious')
+    .map(([name,v])=>({name, result:v.result}))
+    .slice(0,10);
   return {
-    malicious:   stats.malicious   || 0,
-    suspicious:  stats.suspicious  || 0,
-    harmless:    stats.harmless    || 0,
-    undetected:  stats.undetected  || 0,
-    total:       Object.values(stats).reduce((s,v)=>s+(v||0), 0),
-    reputation:  d.data?.attributes?.reputation || 0,
-    categories:  d.data?.attributes?.categories || {},
-    country:     d.data?.attributes?.country || '',
-    as_owner:    d.data?.attributes?.as_owner || '',
+    malicious:       stats.malicious   || 0,
+    suspicious:      stats.suspicious  || 0,
+    harmless:        stats.harmless    || 0,
+    undetected:      stats.undetected  || 0,
+    total:           Object.values(stats).reduce((s,v)=>s+(v||0), 0),
+    reputation:      d.data?.attributes?.reputation || 0,
+    categories:      d.data?.attributes?.categories || {},
+    country:         d.data?.attributes?.country || '',
+    as_owner:        d.data?.attributes?.as_owner || '',
+    maliciousEngines,
+    tags:            d.data?.attributes?.tags || [],
+    lastAnalysisDate:d.data?.attributes?.last_analysis_date || null,
   };
 }
 
 async function _abuseIPDBLookup(ip) {
   const key = AIORCH.apiKeys.abuseipdb;
-  const r = await fetch(`https://api.abuseipdb.com/api/v2/check?ipAddress=${ip}&maxAgeInDays=90&verbose`, {
+  // Use proxy to bypass CORS
+  const r = await fetch(`/proxy/abuseipdb/check?ipAddress=${ip}&maxAgeInDays=90&verbose`, {
     headers: { 'Key': key, 'Accept': 'application/json' }
   });
   if (!r.ok) throw new Error(`AbuseIPDB: HTTP ${r.status}`);
@@ -490,6 +546,8 @@ async function _abuseIPDBLookup(ip) {
     totalReports:  d.data?.totalReports || 0,
     countryCode:   d.data?.countryCode || '',
     isp:           d.data?.isp || '',
+    domain:        d.data?.domain || '',
+    usageType:     d.data?.usageType || '',
     isWhitelisted: d.data?.isWhitelisted || false,
     lastReportedAt:d.data?.lastReportedAt || null,
   };
@@ -497,7 +555,8 @@ async function _abuseIPDBLookup(ip) {
 
 async function _shodanLookup(ip) {
   const key = AIORCH.apiKeys.shodan;
-  const r = await fetch(`https://api.shodan.io/shodan/host/${ip}?key=${key}`);
+  // Use proxy to bypass CORS
+  const r = await fetch(`/proxy/shodan/shodan/host/${ip}?key=${key}`);
   if (!r.ok) throw new Error(`Shodan: HTTP ${r.status}`);
   const d = await r.json();
   return {
@@ -512,18 +571,23 @@ async function _shodanLookup(ip) {
 
 async function _otxLookup(value, type) {
   const key = AIORCH.apiKeys.otx;
-  const sectionMap = { ip:'general', domain:'general', url:'general', md5:'general', sha1:'general', sha256:'general' };
   const otxType = type==='ip'?'IPv4':type==='domain'?'domain':type==='url'?'URL':'file';
-  const r = await fetch(`https://otx.alienvault.com/api/v1/indicators/${otxType}/${encodeURIComponent(value)}/general`, {
+  // Use proxy to bypass CORS
+  const r = await fetch(`/proxy/otx/indicators/${otxType}/${encodeURIComponent(value)}/general`, {
     headers: { 'X-OTX-API-KEY': key }
   });
   if (!r.ok) throw new Error(`OTX: HTTP ${r.status}`);
   const d = await r.json();
+  const pulses = d.pulse_info?.pulses || [];
+  const tags = [...new Set(pulses.flatMap(p=>p.tags||[]))].slice(0,8);
+  const threatActors = [...new Set(pulses.map(p=>p.author?.username).filter(Boolean))].slice(0,5);
   return {
-    pulse_count: d.pulse_info?.count || 0,
-    threat_score:d.base_indicator?.access_type || 'public',
-    tags:        (d.pulse_info?.related?.alienvault?.unique_pulse_id || []).slice(0,5),
-    malware_families: (d.malware_families||[]).slice(0,3).map(m=>m.display_name||m),
+    pulse_count:     d.pulse_info?.count || 0,
+    threat_score:    d.base_indicator?.access_type || 'public',
+    tags,
+    threatActors,
+    malware_families:(d.malware_families||[]).slice(0,5).map(m=>m.display_name||m),
+    pulses:          pulses.slice(0,5).map(p=>({ name: p.name, modified: p.modified, author: p.author?.username })),
   };
 }
 
@@ -531,27 +595,146 @@ function _buildEnrichContext(data, value, type) {
   let ctx = `IOC: ${value} (${type.toUpperCase()})\n\n`;
   if (data.virustotal && !data.virustotal.error) {
     const vt = data.virustotal;
-    ctx += `VirusTotal: ${vt.malicious}/${vt.total} engines flagged as malicious, ${vt.suspicious} suspicious. Reputation: ${vt.reputation}. Country: ${vt.country||'Unknown'}.\n`;
+    const verdict = vt.malicious > 5 ? 'MALICIOUS' : vt.malicious > 0 ? 'SUSPICIOUS' : 'CLEAN';
+    ctx += `VirusTotal: ${verdict} — ${vt.malicious}/${vt.total} engines flagged as malicious, ${vt.suspicious} suspicious. Reputation score: ${vt.reputation}. Country: ${vt.country||'Unknown'}. ASN: ${vt.as_owner||'Unknown'}.`;
+    if (vt.maliciousEngines?.length) ctx += ` Detected by: ${vt.maliciousEngines.map(e=>e.name).join(', ')}.`;
+    ctx += '\n';
   }
   if (data.abuseipdb && !data.abuseipdb.error) {
     const ab = data.abuseipdb;
-    ctx += `AbuseIPDB: Abuse score ${ab.abuseScore}/100, ${ab.totalReports} reports. ISP: ${ab.isp}. Country: ${ab.countryCode}.\n`;
+    ctx += `AbuseIPDB: Abuse confidence score ${ab.abuseScore}/100, ${ab.totalReports} total abuse reports. ISP: ${ab.isp}. Country: ${ab.countryCode}. Usage type: ${ab.usageType||'unknown'}. Whitelisted: ${ab.isWhitelisted?'yes':'no'}.\n`;
   }
   if (data.shodan && !data.shodan.error) {
     const sh = data.shodan;
-    ctx += `Shodan: ${sh.org}, ${sh.country}. Open ports: ${sh.ports.join(', ')||'none'}. Vulns: ${sh.vulns.join(', ')||'none'}.\n`;
+    ctx += `Shodan: Organization: ${sh.org}, Country: ${sh.country}, OS: ${sh.os||'unknown'}. Open ports: ${sh.ports.join(', ')||'none'}. Known CVEs on host: ${sh.vulns.join(', ')||'none'}. Hostnames: ${sh.hostnames.join(', ')||'none'}.\n`;
   }
   if (data.otx && !data.otx.error) {
     const otx = data.otx;
-    ctx += `OTX: ${otx.pulse_count} threat pulses. Malware families: ${otx.malware_families.join(', ')||'unknown'}.\n`;
+    ctx += `AlienVault OTX: ${otx.pulse_count} threat intelligence pulses. Malware families: ${otx.malware_families.join(', ')||'none identified'}. Tags: ${otx.tags.slice(0,5).join(', ')||'none'}.`;
+    if (otx.pulses?.length) ctx += ` Recent pulses: ${otx.pulses.map(p=>p.name).join('; ')}.`;
+    ctx += '\n';
   }
   return ctx || 'No external intelligence data available (API keys not configured).';
+}
+
+// Render enrichment data as a visual card in the chat
+function _renderEnrichCard(data, value, type) {
+  const _score = (n, total) => total > 0 ? Math.round(n/total*100) : 0;
+
+  let cards = '';
+
+  // VirusTotal card
+  if (data.virustotal && !data.virustotal.error) {
+    const vt = data.virustotal;
+    const pct = _score(vt.malicious, vt.total);
+    const verdict = vt.malicious > 10 ? 'MALICIOUS' : vt.malicious > 2 ? 'SUSPICIOUS' : vt.malicious > 0 ? 'LOW RISK' : 'CLEAN';
+    const verdictColor = vt.malicious > 10 ? '#ef4444' : vt.malicious > 2 ? '#f97316' : vt.malicious > 0 ? '#f59e0b' : '#22c55e';
+    cards += `
+    <div style="background:rgba(37,99,235,0.08);border:1px solid rgba(37,99,235,0.25);border-radius:10px;padding:12px 14px;flex:1;min-width:200px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <div style="width:28px;height:28px;background:rgba(37,99,235,0.15);border-radius:6px;display:flex;align-items:center;justify-content:center">
+          <i class="fas fa-virus" style="color:#3b82f6;font-size:12px"></i>
+        </div>
+        <div style="font-weight:700;font-size:.82em;color:var(--p19-t1)">VirusTotal</div>
+        <div style="margin-left:auto;font-size:.7em;font-weight:800;color:${verdictColor};background:${verdictColor}20;padding:2px 7px;border-radius:4px">${verdict}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:.78em">
+        <div><span style="color:var(--p19-t4)">Malicious</span><br><strong style="color:#ef4444;font-size:1.1em">${vt.malicious}</strong>/${vt.total}</div>
+        <div><span style="color:var(--p19-t4)">Suspicious</span><br><strong style="color:#f59e0b">${vt.suspicious}</strong></div>
+        <div><span style="color:var(--p19-t4)">Country</span><br><strong style="color:var(--p19-t2)">${vt.country||'—'}</strong></div>
+        <div><span style="color:var(--p19-t4)">Reputation</span><br><strong style="color:${vt.reputation<0?'#ef4444':'#22c55e'}">${vt.reputation}</strong></div>
+      </div>
+      ${vt.maliciousEngines?.length ? `<div style="margin-top:8px;font-size:.72em;color:var(--p19-t4)">Detected by: <span style="color:#ef4444">${vt.maliciousEngines.slice(0,4).map(e=>e.name).join(', ')}</span></div>` : ''}
+      <a href="https://www.virustotal.com/gui/${type==='ip'?'ip-address':type==='domain'?'domain':'file'}/${value}" target="_blank" style="display:inline-block;margin-top:8px;font-size:.72em;color:var(--p19-blue);text-decoration:none"><i class="fas fa-external-link-alt" style="font-size:.8em;margin-right:3px"></i>Full Report →</a>
+    </div>`;
+  }
+
+  // AbuseIPDB card
+  if (data.abuseipdb && !data.abuseipdb.error) {
+    const ab = data.abuseipdb;
+    const riskColor = ab.abuseScore > 75 ? '#ef4444' : ab.abuseScore > 25 ? '#f97316' : '#22c55e';
+    cards += `
+    <div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);border-radius:10px;padding:12px 14px;flex:1;min-width:200px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <div style="width:28px;height:28px;background:rgba(239,68,68,0.15);border-radius:6px;display:flex;align-items:center;justify-content:center">
+          <i class="fas fa-shield-alt" style="color:#ef4444;font-size:12px"></i>
+        </div>
+        <div style="font-weight:700;font-size:.82em;color:var(--p19-t1)">AbuseIPDB</div>
+        <div style="margin-left:auto;font-size:.7em;font-weight:800;color:${riskColor};background:${riskColor}20;padding:2px 7px;border-radius:4px">${ab.abuseScore}% RISK</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:.78em">
+        <div><span style="color:var(--p19-t4)">Reports</span><br><strong style="color:var(--p19-t1)">${ab.totalReports}</strong></div>
+        <div><span style="color:var(--p19-t4)">Country</span><br><strong style="color:var(--p19-t2)">${ab.countryCode||'—'}</strong></div>
+        <div><span style="color:var(--p19-t4)">ISP</span><br><strong style="color:var(--p19-t2);font-size:.9em">${(ab.isp||'—').slice(0,20)}</strong></div>
+        <div><span style="color:var(--p19-t4)">Type</span><br><strong style="color:var(--p19-t2);font-size:.85em">${ab.usageType||'—'}</strong></div>
+      </div>
+      <a href="https://www.abuseipdb.com/check/${value}" target="_blank" style="display:inline-block;margin-top:8px;font-size:.72em;color:#ef4444;text-decoration:none"><i class="fas fa-external-link-alt" style="font-size:.8em;margin-right:3px"></i>Full Report →</a>
+    </div>`;
+  }
+
+  // Shodan card
+  if (data.shodan && !data.shodan.error) {
+    const sh = data.shodan;
+    cards += `
+    <div style="background:rgba(249,115,22,0.08);border:1px solid rgba(249,115,22,0.25);border-radius:10px;padding:12px 14px;flex:1;min-width:200px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <div style="width:28px;height:28px;background:rgba(249,115,22,0.15);border-radius:6px;display:flex;align-items:center;justify-content:center">
+          <i class="fas fa-server" style="color:#f97316;font-size:12px"></i>
+        </div>
+        <div style="font-weight:700;font-size:.82em;color:var(--p19-t1)">Shodan</div>
+        ${sh.vulns?.length ? `<div style="margin-left:auto;font-size:.7em;font-weight:800;color:#ef4444;background:rgba(239,68,68,.15);padding:2px 7px;border-radius:4px">${sh.vulns.length} VULNS</div>` : ''}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:.78em">
+        <div><span style="color:var(--p19-t4)">Org</span><br><strong style="color:var(--p19-t2);font-size:.9em">${(sh.org||'—').slice(0,20)}</strong></div>
+        <div><span style="color:var(--p19-t4)">Country</span><br><strong style="color:var(--p19-t2)">${sh.country||'—'}</strong></div>
+        <div><span style="color:var(--p19-t4)">Open Ports</span><br><strong style="color:#f97316">${sh.ports?.slice(0,6).join(', ')||'none'}</strong></div>
+        <div><span style="color:var(--p19-t4)">OS</span><br><strong style="color:var(--p19-t2)">${sh.os||'unknown'}</strong></div>
+      </div>
+      ${sh.vulns?.length ? `<div style="margin-top:8px;font-size:.72em;color:#ef4444">CVEs: ${sh.vulns.join(', ')}</div>` : ''}
+      <a href="https://www.shodan.io/host/${value}" target="_blank" style="display:inline-block;margin-top:8px;font-size:.72em;color:#f97316;text-decoration:none"><i class="fas fa-external-link-alt" style="font-size:.8em;margin-right:3px"></i>Full Report →</a>
+    </div>`;
+  }
+
+  // OTX card
+  if (data.otx && !data.otx.error) {
+    const otx = data.otx;
+    const otxType = type==='ip'?'ip':type==='domain'?'domain':type==='url'?'url':'file';
+    cards += `
+    <div style="background:rgba(168,85,247,0.08);border:1px solid rgba(168,85,247,0.25);border-radius:10px;padding:12px 14px;flex:1;min-width:200px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <div style="width:28px;height:28px;background:rgba(168,85,247,0.15);border-radius:6px;display:flex;align-items:center;justify-content:center">
+          <i class="fas fa-satellite" style="color:#a855f7;font-size:12px"></i>
+        </div>
+        <div style="font-weight:700;font-size:.82em;color:var(--p19-t1)">AlienVault OTX</div>
+        ${otx.pulse_count ? `<div style="margin-left:auto;font-size:.7em;font-weight:800;color:#a855f7;background:rgba(168,85,247,.15);padding:2px 7px;border-radius:4px">${otx.pulse_count} PULSES</div>` : ''}
+      </div>
+      <div style="font-size:.78em;margin-bottom:6px">
+        <span style="color:var(--p19-t4)">Threat Pulses: </span>
+        <strong style="color:var(--p19-t1)">${otx.pulse_count}</strong>
+      </div>
+      ${otx.malware_families?.length ? `<div style="font-size:.72em;color:var(--p19-t4);margin-bottom:4px">Malware: <span style="color:#a855f7">${otx.malware_families.join(', ')}</span></div>` : ''}
+      ${otx.tags?.length ? `<div style="font-size:.72em;color:var(--p19-t4);margin-bottom:4px">Tags: <span style="color:var(--p19-t2)">${otx.tags.slice(0,5).join(', ')}</span></div>` : ''}
+      ${otx.pulses?.length ? `<div style="font-size:.72em;color:var(--p19-t4)">Pulses: <span style="color:var(--p19-t2)">${otx.pulses.slice(0,2).map(p=>p.name).join('; ')}</span></div>` : ''}
+      <a href="https://otx.alienvault.com/indicator/${otxType}/${encodeURIComponent(value)}" target="_blank" style="display:inline-block;margin-top:8px;font-size:.72em;color:#a855f7;text-decoration:none"><i class="fas fa-external-link-alt" style="font-size:.8em;margin-right:3px"></i>Full Report →</a>
+    </div>`;
+  }
+
+  if (!cards) return '';
+
+  return `
+  <div style="margin:10px 0;padding:12px;background:rgba(0,0,0,.2);border:1px solid var(--p19-border);border-radius:10px">
+    <div style="font-size:.72em;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--p19-t4);margin-bottom:10px">
+      <i class="fas fa-search" style="margin-right:5px;color:var(--p19-cyan)"></i>
+      Multi-Source Intelligence Enrichment — ${_e(value)}
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:10px">${cards}</div>
+  </div>`;
 }
 
 /* ═══════════════════════════════════════════════════════
    MESSAGE RENDERING
 ═══════════════════════════════════════════════════════ */
-function _orchAddMsg(role, content, ioc, iocType) {
+function _orchAddMsg(role, content, ioc, iocType, enrichData) {
   const container = document.getElementById('orch-messages');
   if (!container) return;
 
@@ -563,11 +746,17 @@ function _orchAddMsg(role, content, ioc, iocType) {
     ? 'background:rgba(168,85,247,.15);border:1px solid rgba(168,85,247,.2);color:var(--p19-purple)'
     : 'background:rgba(34,211,238,.1);border:1px solid rgba(34,211,238,.2);color:var(--p19-cyan)';
 
+  // Build enrichment card if we have data
+  const enrichCard = (role === 'assistant' && enrichData && ioc && iocType)
+    ? _renderEnrichCard(enrichData, ioc, iocType)
+    : '';
+
   div.innerHTML = `
     <div class="p19-msg__avatar" style="${avatarBg}">
       <i class="fas ${role==='assistant'?'fa-robot':'fa-user'}"></i>
     </div>
     <div class="p19-msg__bubble">
+      ${enrichCard}
       ${_formatMd(content)}
       ${ioc && iocType ? _orchIOCLinks(ioc, iocType) : ''}
       <div style="font-size:.68em;color:var(--p19-t4);margin-top:6px;text-align:right">${new Date().toLocaleTimeString()}</div>
