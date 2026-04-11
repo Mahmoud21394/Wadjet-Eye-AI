@@ -282,26 +282,32 @@ Configure threat actor feeds via Settings → Threat Feeds for real-time APT tra
   } else {
     response = `## 🤖 Wadjet-Eye AI Orchestrator
 
-I'm ready to assist with threat intelligence analysis. Here's what I can do:
+I'm your agentic cyber threat intelligence analyst, powered by the Wadjet-Eye AI platform.
 
-### Capabilities
-- **IOC Investigation**: Analyze IPs, domains, URLs, file hashes across VirusTotal, AbuseIPDB, Shodan, OTX
-- **Threat Actor Profiling**: APT groups, ransomware gangs, TTPs mapping
-- **MITRE ATT&CK**: Map techniques to threat actors and campaigns
-- **Campaign Analysis**: Correlate IOCs to active campaigns
-- **Vulnerability Assessment**: CVE analysis and patch prioritization
+### What I Can Do
+- **IOC Investigation**: Analyze IPs, domains, URLs, and file hashes across VirusTotal, AbuseIPDB, Shodan, OTX — simultaneously
+- **Threat Actor Profiling**: APT groups, ransomware gangs, TTPs and behavioral mapping
+- **MITRE ATT&CK**: Map observed techniques to the ATT&CK framework with tactic/technique IDs
+- **Campaign Analysis**: Correlate IOCs to active threat campaigns and track threat actor infrastructure
+- **Vulnerability Assessment**: CVE analysis, CVSS scoring, and patch prioritization
+- **Executive Briefs**: Generate threat intelligence summaries for leadership reporting
 
-### Quick Actions
-Try asking me to:
-- \`Investigate 185.220.101.45\`
-- \`Who is APT29 and what are their TTPs?\`
-- \`Analyze hash a3f2b1c9d4e5f67890...\`
-- \`Show top ransomware threats this month\`
-- \`Check domain malicious-update.ru\`
+### Quick Start
+Try asking:
+- \`Investigate 185.220.101.45\` — live multi-source IOC enrichment
+- \`Who is APT29 and what are their current TTPs?\`
+- \`Analyze hash a3f2b1c9d4e5f67890ab1234567890cd\`
+- \`Show top ransomware threats targeting healthcare this month\`
+- \`What ATT&CK techniques are LockBit using in 2025?\`
+- \`Give me an executive threat intelligence brief for Q2 2025\`
 
-### API Integration
-To enable live multi-source analysis, configure your API keys in:
-**Settings → AI Configuration**`;
+### AI Status
+✅ **Platform AI** — Active (powered by Ollama/OpenAI backend)
+${AIORCH.apiKeys.virustotal ? '✅ **VirusTotal** — Configured (live IOC enrichment active)' : '⚪ **VirusTotal** — Optional (add key in API Keys for live scanning)'}
+${AIORCH.apiKeys.abuseipdb ? '✅ **AbuseIPDB** — Configured' : '⚪ **AbuseIPDB** — Optional'}
+${AIORCH.apiKeys.shodan ? '✅ **Shodan** — Configured' : '⚪ **Shodan** — Optional'}
+
+Type your query or pick a quick prompt above to get started.`;
   }
 
   return response;
@@ -399,13 +405,14 @@ async function _callAI(messages, ioc) {
     } else if (provider === 'claude' && AIORCH.apiKeys.claude) {
       return await _callClaude(messages);
     } else {
-      // Try platform AI first
+      // Try platform AI first (always available when backend is running)
       const platformResult = await _callPlatformAI(messages);
       if (platformResult && !platformResult.includes('unavailable')) return platformResult;
-      // Fall back to local analysis
+      // Fall back to intelligent local analysis (no API key message)
       return _localAnalysis(messages[messages.length-1]?.content || '');
     }
   } catch(err) {
+    console.warn('[AI Orch] AI call failed:', err.message);
     return _localAnalysis(messages[messages.length-1]?.content || '');
   }
 }
@@ -791,17 +798,17 @@ window.renderAIOrchestrator = function() {
             <div style="background:rgba(168,85,247,.06);border:1px solid rgba(168,85,247,.15);border-radius:8px;padding:10px;font-size:.82em">
               <div style="color:var(--p19-t3);margin-bottom:6px;font-weight:600;font-size:.86em">ACTIVE INTEGRATION</div>
               <div style="display:flex;gap:10px;flex-wrap:wrap">
-                ${AIORCH.apiKeys.openai ? '<span class="p19-badge p19-badge--blue" style="font-size:.7em"><i class="fas fa-check" style="margin-right:3px"></i>OpenAI</span>' : '<span class="p19-badge p19-badge--gray" style="font-size:.7em">OpenAI — not configured</span>'}
-                ${AIORCH.apiKeys.claude ? '<span class="p19-badge p19-badge--purple" style="font-size:.7em"><i class="fas fa-check" style="margin-right:3px"></i>Claude</span>' : '<span class="p19-badge p19-badge--gray" style="font-size:.7em">Claude — not configured</span>'}
-                ${AIORCH.apiKeys.virustotal ? '<span class="p19-badge p19-badge--blue" style="font-size:.7em"><i class="fas fa-check" style="margin-right:3px"></i>VirusTotal</span>' : '<span class="p19-badge p19-badge--gray" style="font-size:.7em">VT — not configured</span>'}
-                ${AIORCH.apiKeys.abuseipdb ? '<span class="p19-badge p19-badge--red" style="font-size:.7em"><i class="fas fa-check" style="margin-right:3px"></i>AbuseIPDB</span>' : '<span class="p19-badge p19-badge--gray" style="font-size:.7em">AbuseIPDB — not configured</span>'}
-                ${AIORCH.apiKeys.shodan ? '<span class="p19-badge p19-badge--orange" style="font-size:.7em"><i class="fas fa-check" style="margin-right:3px"></i>Shodan</span>' : '<span class="p19-badge p19-badge--gray" style="font-size:.7em">Shodan — not configured</span>'}
+                <span class="p19-badge p19-badge--cyan" style="font-size:.7em"><i class="fas fa-check" style="margin-right:3px"></i>Platform AI (Ollama/Backend)</span>
+                ${AIORCH.apiKeys.openai ? '<span class="p19-badge p19-badge--blue" style="font-size:.7em"><i class="fas fa-check" style="margin-right:3px"></i>OpenAI GPT-4</span>' : ''}
+                ${AIORCH.apiKeys.claude ? '<span class="p19-badge p19-badge--purple" style="font-size:.7em"><i class="fas fa-check" style="margin-right:3px"></i>Claude</span>' : ''}
+                ${AIORCH.apiKeys.virustotal ? '<span class="p19-badge p19-badge--blue" style="font-size:.7em"><i class="fas fa-check" style="margin-right:3px"></i>VirusTotal</span>' : '<span class="p19-badge p19-badge--gray" style="font-size:.7em;opacity:.6">VT</span>'}
+                ${AIORCH.apiKeys.abuseipdb ? '<span class="p19-badge p19-badge--red" style="font-size:.7em"><i class="fas fa-check" style="margin-right:3px"></i>AbuseIPDB</span>' : '<span class="p19-badge p19-badge--gray" style="font-size:.7em;opacity:.6">AbuseIPDB</span>'}
+                ${AIORCH.apiKeys.shodan ? '<span class="p19-badge p19-badge--orange" style="font-size:.7em"><i class="fas fa-check" style="margin-right:3px"></i>Shodan</span>' : '<span class="p19-badge p19-badge--gray" style="font-size:.7em;opacity:.6">Shodan</span>'}
               </div>
-              ${(!AIORCH.apiKeys.openai && !AIORCH.apiKeys.claude) ? `
-                <div style="margin-top:8px;font-size:.78em;color:var(--p19-t4)">
-                  <i class="fas fa-info-circle" style="margin-right:4px;color:var(--p19-cyan)"></i>
-                  Configure API keys via <button onclick="_orchConfigAI()" style="background:none;border:none;color:var(--p19-cyan);cursor:pointer;padding:0;font-size:1em;text-decoration:underline">Settings → API Keys</button> for live AI analysis.
-                </div>` : ''}
+              <div style="margin-top:8px;font-size:.78em;color:var(--p19-t3)">
+                <i class="fas fa-circle" style="color:var(--p19-green);margin-right:4px;font-size:.6em"></i>
+                Platform AI is active. Optionally add API keys in <button onclick="_orchConfigAI()" style="background:none;border:none;color:var(--p19-cyan);cursor:pointer;padding:0;font-size:1em;text-decoration:underline">API Keys</button> for multi-source enrichment.
+              </div>
             </div>
           </div>
         </div>

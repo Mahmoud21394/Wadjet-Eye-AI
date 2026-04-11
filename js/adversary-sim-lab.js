@@ -242,11 +242,449 @@ const ADVERSARY_SCENARIOS = [
     cvssEquivalent: 8.8,
     references: ['https://attack.mitre.org/groups/G0046/', 'https://securelist.com/the-carbanak-apt-the-great-bank-robbery/68732/'],
   },
+  // ══════════════════════════════════════════════════════════════
+  //  SCENARIO 6: Sandworm — Critical Infrastructure Attack
+  // ══════════════════════════════════════════════════════════════
+  {
+    id: 'sandworm-ics',
+    name: 'Sandworm (APT44) — Critical Infrastructure / ICS Attack',
+    actor: 'Sandworm / APT44 (Voodoo Bear)',
+    actorCountry: 'Russia (GRU)',
+    difficulty: 'CRITICAL',
+    industry: 'Energy / Utilities / ICS/SCADA',
+    duration: '6-18 months',
+    description: 'Reproduce Sandworm\'s destructive attacks on Ukrainian power grids (Industroyer/CRASHOVERRIDE) and industrial control systems. Full OT/ICS kill chain from spearphish to power blackout.',
+    icon: 'fa-bolt',
+    iconColor: '#ef4444',
+    phases: [
+      { id: 'initial-access', name: 'Initial Access', tactic: 'TA0001',
+        techniques: [{ id: 'T1566.001', name: 'Spearphishing Attachment', desc: 'BlackEnergy loader delivered via malicious Office documents to control system operators.' }],
+        timeline: '0h', status: 'phish', icon: 'fa-envelope',
+        indicators: ['BlackEnergy maldoc', 'OLE macro execution', 'Operator workstation compromise'] },
+      { id: 'execution', name: 'Execution', tactic: 'TA0002',
+        techniques: [{ id: 'T1059.003', name: 'Windows Command Shell', desc: 'BlackEnergy installs KillDisk wiper and Industroyer C2 backdoor.' }],
+        timeline: '1-7 days', status: 'exec', icon: 'fa-terminal',
+        indicators: ['BlackEnergy DLL injection', 'KillDisk process creation', 'Backdoor persistence'] },
+      { id: 'persistence', name: 'Persistence', tactic: 'TA0003',
+        techniques: [{ id: 'T1543.003', name: 'Windows Service', desc: 'Industroyer installs as Windows service for long-term persistence.' }],
+        timeline: '7-30 days', status: 'persist', icon: 'fa-anchor',
+        indicators: ['New service: "defragsvc"', 'Registry service keys modified', 'Signed binary hijacking'] },
+      { id: 'discovery', name: 'OT/ICS Discovery', tactic: 'TA0007',
+        techniques: [{ id: 'T0840', name: 'Network Connection Enumeration', desc: 'Map ICS network topology, enumerate PLCs, RTUs, and HMI systems.' }, { id: 'T0888', name: 'Remote System Information Discovery', desc: 'Identify SCADA master stations and substation automation systems.' }],
+        timeline: '30-90 days', status: 'recon', icon: 'fa-sitemap',
+        indicators: ['IEC 104/61850 protocol scanning', 'DNP3 traffic', 'SCADA host discovery'] },
+      { id: 'ics-attack', name: 'ICS/SCADA Attack', tactic: 'TA0104',
+        techniques: [{ id: 'T0855', name: 'Unauthorized Command Message', desc: 'Industroyer directly manipulates substation switchgear via IEC 101/104 protocols.' }, { id: 'T0816', name: 'Device Restart/Shutdown', desc: 'Force-restart of protective relays to cause sustained outage.' }],
+        timeline: '90-180 days', status: 'impact', icon: 'fa-power-off',
+        indicators: ['IEC 101/104 command floods', 'Unexpected breaker switching', 'RTU communication failure'] },
+      { id: 'impact', name: 'Destructive Impact', tactic: 'TA0040',
+        techniques: [{ id: 'T1485', name: 'Data Destruction', desc: 'KillDisk overwrites MBR/files on operator workstations to prevent recovery.' }, { id: 'T1499', name: 'Endpoint DoS', desc: 'Crash serial-to-Ethernet converters to maintain outage.' }],
+        timeline: '180+ days', status: 'impact', icon: 'fa-skull-crossbones',
+        indicators: ['MBR overwrite activity', 'Mass disk wipe', 'Serial device communication loss'] },
+    ],
+    mitigations: [
+      { id: 'M1030', name: 'Network Segmentation', desc: 'Air-gap OT/ICS network from corporate IT.' },
+      { id: 'M1042', name: 'Disable Protocols', desc: 'Disable Modbus/IEC 104 on unauthorized hosts.' },
+      { id: 'M1018', name: 'User Account Management', desc: 'Least privilege for SCADA operator accounts.' },
+    ],
+    detectionRules: ['Industroyer ICS protocol anomalies', 'KillDisk MBR overwrite patterns', 'BlackEnergy network signatures', 'Unexpected IEC 104 ASDU commands'],
+    cvssEquivalent: 10.0,
+    references: ['https://attack.mitre.org/groups/G0034/', 'https://www.welivesecurity.com/2022/04/12/industroyer2-industroyer-reloaded/'],
+  },
+  // ══════════════════════════════════════════════════════════════
+  //  SCENARIO 7: Scattered Spider — Social Engineering + Cloud
+  // ══════════════════════════════════════════════════════════════
+  {
+    id: 'scattered-spider-cloud',
+    name: 'Scattered Spider — Social Engineering & Cloud Ransomware',
+    actor: 'Scattered Spider (UNC3944 / 0ktapus)',
+    actorCountry: 'US/UK (Cybercriminal)',
+    difficulty: 'HIGH',
+    industry: 'Hospitality / Casino / Finance',
+    duration: '1-4 weeks',
+    description: 'Simulate the MGM Resorts breach: social engineering IT help desk to bypass MFA, Okta tenant hijack, Azure/AWS cloud pivot, ALPHV ransomware deployment.',
+    icon: 'fa-spider',
+    iconColor: '#a855f7',
+    phases: [
+      { id: 'recon', name: 'OSINT & Recon', tactic: 'TA0043',
+        techniques: [{ id: 'T1591.004', name: 'Identify Roles', desc: 'LinkedIn OSINT to identify IT admins and help desk staff at target.' }],
+        timeline: '0h', status: 'recon', icon: 'fa-binoculars',
+        indicators: ['Employee profile harvesting', 'Org chart reconstruction', 'OSINT tool activity'] },
+      { id: 'initial-access', name: 'Help Desk Vishing', tactic: 'TA0001',
+        techniques: [{ id: 'T1598.004', name: 'Social Engineering', desc: 'Call IT help desk impersonating an employee to reset MFA — 10-minute attack.' }],
+        timeline: '1-2 hours', status: 'phish', icon: 'fa-phone',
+        indicators: ['Help desk ticket: MFA reset', 'New device enrollment', 'Unusual auth geolocation'] },
+      { id: 'credential-access', name: 'Okta / Identity Provider Takeover', tactic: 'TA0006',
+        techniques: [{ id: 'T1556.006', name: 'Multifactor Authentication Manipulation', desc: 'Disable MFA policies in Okta, add attacker-controlled authenticator.' }, { id: 'T1078.004', name: 'Cloud Accounts', desc: 'Use Okta SSO to access all federated cloud applications.' }],
+        timeline: '2-6 hours', status: 'cred', icon: 'fa-id-card',
+        indicators: ['Okta policy change', 'New MFA enrollment from unknown device', 'Mass SSO application access'] },
+      { id: 'lateral-movement', name: 'Cloud & SaaS Lateral Movement', tactic: 'TA0008',
+        techniques: [{ id: 'T1538', name: 'Cloud Service Dashboard', desc: 'Access Azure portal, AWS console, Salesforce, ServiceNow via compromised SSO.' }, { id: 'T1530', name: 'Data from Cloud Storage', desc: 'Enumerate and exfiltrate SharePoint, OneDrive, S3 buckets.' }],
+        timeline: '6-24 hours', status: 'lateral', icon: 'fa-cloud',
+        indicators: ['Azure subscription enumeration', 'S3 ListBuckets from new IP', 'SharePoint mass download'] },
+      { id: 'impact', name: 'ALPHV Ransomware Deployment', tactic: 'TA0040',
+        techniques: [{ id: 'T1486', name: 'Data Encrypted for Impact', desc: 'ALPHV/BlackCat ransomware deployed to on-prem and cloud-connected systems.' }, { id: 'T1657', name: 'Financial Theft', desc: 'Data theft for double extortion — threaten to leak guest PII and financial data.' }],
+        timeline: '1-3 weeks', status: 'impact', icon: 'fa-lock',
+        indicators: ['ALPHV encryptor signatures', 'Mass file rename with .sph extension', 'Data exfil to MEGA/Gofile'] },
+    ],
+    mitigations: [
+      { id: 'M1017', name: 'User Training', desc: 'Train help desk on social engineering verification procedures.' },
+      { id: 'M1032', name: 'Multi-factor Authentication', desc: 'Require phishing-resistant MFA (FIDO2/passkeys).' },
+      { id: 'M1026', name: 'Privileged Account Management', desc: 'Enforce JIT access for cloud admin roles.' },
+    ],
+    detectionRules: ['Okta policy modifications', 'MFA enrollment from new device post-reset', 'Bulk cloud data access', 'ALPHV ransom note creation'],
+    cvssEquivalent: 9.6,
+    references: ['https://attack.mitre.org/groups/G1015/', 'https://www.cisa.gov/news-events/cybersecurity-advisories/aa23-320a'],
+  },
+  // ══════════════════════════════════════════════════════════════
+  //  SCENARIO 8: Volt Typhoon — Living off the Land (LoLBins)
+  // ══════════════════════════════════════════════════════════════
+  {
+    id: 'volt-typhoon-lotl',
+    name: 'Volt Typhoon — Living off the Land Pre-positioning',
+    actor: 'Volt Typhoon (Bronze Silhouette)',
+    actorCountry: 'China (PLA)',
+    difficulty: 'CRITICAL',
+    industry: 'Critical Infrastructure / Telecom / Defense',
+    duration: '12-60 months',
+    description: 'Chinese state-sponsored pre-positioning in US critical infrastructure using exclusively LoLBins (no custom malware). SOHO router compromise and proxied C2 for future disruption capability.',
+    icon: 'fa-shield-virus',
+    iconColor: '#22d3ee',
+    phases: [
+      { id: 'initial-access', name: 'SOHO Router Compromise', tactic: 'TA0001',
+        techniques: [{ id: 'T1190', name: 'Exploit Public-Facing Application', desc: 'Exploit CVE-2023-20198 (Cisco IOS XE) or Fortinet VPN vulnerabilities to gain SOHO router access.' }],
+        timeline: '0h', status: 'entry', icon: 'fa-router',
+        indicators: ['VPN exploit attempts', 'Cisco IOS XE /webui/ requests', 'Unusual outbound HTTPS from router'] },
+      { id: 'execution', name: 'LoLBin Execution Chain', tactic: 'TA0002',
+        techniques: [{ id: 'T1059.001', name: 'PowerShell', desc: 'Use built-in Windows tools exclusively: net.exe, wmic.exe, ntdsutil.exe.' }, { id: 'T1218', name: 'Signed Binary Proxy Execution', desc: 'LOLBins: mshta.exe, regsvr32.exe, certutil.exe for payload execution.' }],
+        timeline: '1-7 days', status: 'exec', icon: 'fa-terminal',
+        indicators: ['Unusual netsh usage', 'wmic remote process creation', 'certutil.exe downloading files'] },
+      { id: 'persistence', name: 'Stealthy Persistence', tactic: 'TA0003',
+        techniques: [{ id: 'T1098', name: 'Account Manipulation', desc: 'Add admin accounts to local groups, modify existing account permissions.' }, { id: 'T1137', name: 'Office Application Startup', desc: 'Office add-ins used for persistent code execution.' }],
+        timeline: '7-30 days', status: 'persist', icon: 'fa-anchor',
+        indicators: ['New local admin account', 'Group policy modification', 'Office template modification'] },
+      { id: 'defense-evasion', name: 'Proxy Network via KV Botnet', tactic: 'TA0005',
+        techniques: [{ id: 'T1090.003', name: 'Multi-hop Proxy', desc: 'Route all traffic through compromised SOHO devices (KV-Botnet) to blend into legitimate traffic.' }],
+        timeline: '30-90 days', status: 'evasion', icon: 'fa-route',
+        indicators: ['Traffic through residential IPs', 'Unusual SOHO router C2 patterns', 'Low-and-slow data flows'] },
+      { id: 'collection', name: 'Long-term Intelligence Collection', tactic: 'TA0009',
+        techniques: [{ id: 'T1074.002', name: 'Remote Data Staging', desc: 'Collect network diagrams, credentials, operational data over months.' }, { id: 'T1040', name: 'Network Sniffing', desc: 'Deploy passive packet capture on critical network segments.' }],
+        timeline: '90-730+ days', status: 'collect', icon: 'fa-database',
+        indicators: ['Unexpected packet capture tools', 'Internal network scanning from admin hosts', 'Low-volume data staging'] },
+    ],
+    mitigations: [
+      { id: 'M1051', name: 'Update Software', desc: 'Patch SOHO routers and edge devices immediately.' },
+      { id: 'M1037', name: 'Filter Network Traffic', desc: 'Block outbound from SOHO/OT devices to non-business destinations.' },
+      { id: 'M1031', name: 'Network Intrusion Prevention', desc: 'Monitor for LoLBin chains.' },
+    ],
+    detectionRules: ['SOHO device outbound C2', 'certutil.exe external downloads', 'wmic process creation chains', 'ntdsutil.exe usage outside backups'],
+    cvssEquivalent: 9.8,
+    references: ['https://attack.mitre.org/groups/G1017/', 'https://media.defense.gov/2023/May/24/2003229517/-1/-1/0/CSA_Living_off_the_Land.PDF'],
+  },
+  // ══════════════════════════════════════════════════════════════
+  //  SCENARIO 9: Clop — MOVEit Zero-Day Mass Exploitation
+  // ══════════════════════════════════════════════════════════════
+  {
+    id: 'clop-moveit-zeronday',
+    name: 'Clop — MOVEit Zero-Day Mass Exploitation',
+    actor: 'Clop Ransomware (TA505 / FIN11)',
+    actorCountry: 'Russia/Eastern Europe',
+    difficulty: 'HIGH',
+    industry: 'Enterprise SaaS / Government / Healthcare',
+    duration: '72 hours (mass exploitation)',
+    description: 'Reproduce Clop\'s 2023 campaign exploiting CVE-2023-34362 (MOVEit Transfer SQL injection) affecting 2,000+ organizations in 72 hours. Web-facing SQLi to data theft without ransomware.',
+    icon: 'fa-database',
+    iconColor: '#f97316',
+    phases: [
+      { id: 'initial-access', name: 'MOVEit SQLi Exploitation', tactic: 'TA0001',
+        techniques: [{ id: 'T1190', name: 'Exploit Public-Facing Application', desc: 'CVE-2023-34362: SQL injection in MOVEit Transfer human.aspx endpoint.' }],
+        timeline: '0h', status: 'entry', icon: 'fa-database',
+        indicators: ['POST /human.aspx with SQL payload', 'Unusual MOVEit system account activity', 'New DLL files in wwwroot'] },
+      { id: 'execution', name: 'LEMURLOOT Webshell Deployment', tactic: 'TA0002',
+        techniques: [{ id: 'T1505.003', name: 'Web Shell', desc: 'LEMURLOOT .NET webshell deployed to MOVEit IIS directory for persistent access.' }],
+        timeline: '0-2 hours', status: 'exec', icon: 'fa-code',
+        indicators: ['human2.aspx or similar webshell', '.NET assembly in wwwroot', 'IIS worker process spawning cmd.exe'] },
+      { id: 'collection', name: 'Mass Data Collection', tactic: 'TA0009',
+        techniques: [{ id: 'T1213', name: 'Data from Information Repositories', desc: 'Extract all files and metadata from MOVEit database and storage.' }, { id: 'T1005', name: 'Data from Local System', desc: 'Dump MOVEit configuration, stored credentials, and all transferred files.' }],
+        timeline: '2-24 hours', status: 'collect', icon: 'fa-folder-open',
+        indicators: ['LEMURLOOT file listing commands', 'Large database exports', 'Bulk file access from webshell'] },
+      { id: 'exfiltration', name: 'Bulk Data Exfiltration', tactic: 'TA0010',
+        techniques: [{ id: 'T1048.003', name: 'Exfiltration Over Unencrypted Protocol', desc: 'Files exfiltrated via HTTP POST to Clop infrastructure before cleanup.' }],
+        timeline: '24-72 hours', status: 'exfil', icon: 'fa-cloud-upload-alt',
+        indicators: ['Large POST requests to unknown IPs', 'Bandwidth spike from MOVEit server', 'Webshell deletion (cleanup)'] },
+      { id: 'impact', name: 'Double Extortion Announcement', tactic: 'TA0040',
+        techniques: [{ id: 'T1657', name: 'Financial Theft', desc: 'Clop dark-web site posts victim list; pay or data gets leaked.' }],
+        timeline: '72h+', status: 'impact', icon: 'fa-money-bill-wave',
+        indicators: ['Clop.onion victim list', 'Extortion demand email', 'Legal/compliance breach notification'] },
+    ],
+    mitigations: [
+      { id: 'M1051', name: 'Update Software', desc: 'Apply MOVEit Transfer patches immediately.' },
+      { id: 'M1042', name: 'Disable or Remove Feature', desc: 'Disable MOVEit if not needed; restrict to allow-listed IPs.' },
+      { id: 'M1030', name: 'Network Segmentation', desc: 'Isolate file transfer server from main network.' },
+    ],
+    detectionRules: ['MOVEit SQLi patterns in web logs', 'LEMURLOOT webshell IoCs', 'human2.aspx/human.aspx POST requests', 'Large outbound transfers from file server'],
+    cvssEquivalent: 9.8,
+    references: ['https://attack.mitre.org/software/S1110/', 'https://www.cisa.gov/news-events/cybersecurity-advisories/aa23-158a'],
+  },
+  // ══════════════════════════════════════════════════════════════
+  //  SCENARIO 10: Kimsuky — BEC / Executive Impersonation
+  // ══════════════════════════════════════════════════════════════
+  {
+    id: 'kimsuky-bec',
+    name: 'Kimsuky — Business Email Compromise & Nuclear Espionage',
+    actor: 'Kimsuky (Thallium / APT43)',
+    actorCountry: 'North Korea (RGB)',
+    difficulty: 'HIGH',
+    industry: 'Think Tanks / Government / Nuclear Research',
+    duration: '1-6 months',
+    description: 'Kimsuky BEC campaign targeting South Korean government officials, US nuclear researchers, and policy analysts through spearphishing, credential harvesting, and tailored implants (AppleSeed, BabyShark).',
+    icon: 'fa-atom',
+    iconColor: '#f59e0b',
+    phases: [
+      { id: 'recon', name: 'Targeted OSINT', tactic: 'TA0043',
+        techniques: [{ id: 'T1591.001', name: 'Determine Physical Locations', desc: 'Monitor target on social media, government websites, conference programs.' }],
+        timeline: '0h', status: 'recon', icon: 'fa-user-secret',
+        indicators: ['Target organization research', 'Policy paper tracking', 'Conference registration monitoring'] },
+      { id: 'initial-access', name: 'Spearphishing + Credential Harvest', tactic: 'TA0001',
+        techniques: [{ id: 'T1566.002', name: 'Spearphishing Link', desc: 'Google Forms-based credential phishing mimicking academic journals, security portal logins.' }, { id: 'T1598.003', name: 'Spearphishing Link (Credential Collection)', desc: 'Custom phishing pages spoofing Naver, Gmail, government portals.' }],
+        timeline: '1-7 days', status: 'phish', icon: 'fa-envelope-open',
+        indicators: ['Naver/Gmail phishing page', 'Google Forms credential collection', 'Custom domain impersonation'] },
+      { id: 'execution', name: 'AppleSeed Implant', tactic: 'TA0002',
+        techniques: [{ id: 'T1059.001', name: 'PowerShell', desc: 'AppleSeed backdoor delivered via malicious CHM or HWP documents.' }],
+        timeline: '3-14 days', status: 'exec', icon: 'fa-terminal',
+        indicators: ['CHM file execution', 'AppleSeed C2 beacon', 'HWP document macro activity'] },
+      { id: 'collection', name: 'Targeted Intelligence Collection', tactic: 'TA0009',
+        techniques: [{ id: 'T1114.001', name: 'Local Email Collection', desc: 'Exfiltrate emails with policy documents, nuclear research, diplomatic correspondence.' }, { id: 'T1213', name: 'Data from Information Repositories', desc: 'Access internal wikis, shared drives, and research databases.' }],
+        timeline: '14-90 days', status: 'collect', icon: 'fa-envelope',
+        indicators: ['Email client data access', 'Large Outlook PST export', 'Document staging in temp directory'] },
+      { id: 'exfiltration', name: 'Data Exfiltration via Cloud', tactic: 'TA0010',
+        techniques: [{ id: 'T1567.002', name: 'Exfiltration to Cloud Storage', desc: 'Staged data uploaded to OneDrive/Google Drive via compromised accounts.' }],
+        timeline: '90+ days', status: 'exfil', icon: 'fa-cloud-upload-alt',
+        indicators: ['OneDrive sync to unknown account', 'Google Drive bulk upload', 'Encrypted archive exfiltration'] },
+    ],
+    mitigations: [
+      { id: 'M1049', name: 'Antivirus/Antimalware', desc: 'Detect AppleSeed/BabyShark signatures.' },
+      { id: 'M1054', name: 'Software Configuration', desc: 'Disable CHM and HWP macros in enterprise.' },
+      { id: 'M1032', name: 'Multi-factor Authentication', desc: 'Enforce FIDO2 MFA on all email and cloud accounts.' },
+    ],
+    detectionRules: ['AppleSeed C2 domain patterns', 'CHM execution from temp dir', 'BabyShark PowerShell signatures', 'OneDrive sync from unusual locations'],
+    cvssEquivalent: 8.5,
+    references: ['https://attack.mitre.org/groups/G0094/', 'https://us-cert.cisa.gov/ncas/alerts/aa20-301a'],
+  },
+  // ══════════════════════════════════════════════════════════════
+  //  SCENARIO 11: REvil/Kaseya — MSP Supply Chain Ransomware
+  // ══════════════════════════════════════════════════════════════
+  {
+    id: 'revil-kaseya',
+    name: 'REvil — Kaseya VSA MSP Supply Chain Ransomware',
+    actor: 'REvil (Sodinokibi)',
+    actorCountry: 'Russia (RaaS)',
+    difficulty: 'CRITICAL',
+    industry: 'Managed Service Provider (MSP)',
+    duration: '4 hours to 1500+ victims',
+    description: 'Reproduce the 2021 Kaseya VSA zero-day supply chain attack: exploit authentication bypass in RMM software, push ransomware to all 1,500 managed customers simultaneously.',
+    icon: 'fa-building',
+    iconColor: '#ef4444',
+    phases: [
+      { id: 'initial-access', name: 'Kaseya VSA Zero-Day Exploit', tactic: 'TA0001',
+        techniques: [{ id: 'T1190', name: 'Exploit Public-Facing Application', desc: 'CVE-2021-30116: Auth bypass + credential leak in Kaseya VSA on-premise server.' }],
+        timeline: '0h', status: 'entry', icon: 'fa-server',
+        indicators: ['Kaseya VSA /userFilterTableRpt.asp exploit', 'Auth bypass via cookie tampering', 'VSA agent push unusual payload'] },
+      { id: 'execution', name: 'Mass RMM Agent Deployment', tactic: 'TA0002',
+        techniques: [{ id: 'T1072', name: 'Software Deployment Tools', desc: 'Kaseya VSA agent (legitimate) used to deploy REvil ransomware to all managed endpoints.' }],
+        timeline: '0-2 hours', status: 'exec', icon: 'fa-cogs',
+        indicators: ['Kaseya agent.exe deploying encoded PS', 'certutil.exe downloading agent.crt', 'Windows Defender disabled via policy'] },
+      { id: 'defense-evasion', name: 'Defender & EDR Bypass', tactic: 'TA0005',
+        techniques: [{ id: 'T1562.001', name: 'Impair Defenses', desc: 'Disable Windows Defender real-time protection via Kaseya scripting feature.' }, { id: 'T1218.011', name: 'Rundll32', desc: 'REvil payload executed via rundll32.exe to evade EDR.' }],
+        timeline: '0-30 minutes', status: 'evasion', icon: 'fa-shield-alt',
+        indicators: ['Defender disabled event 5001', 'rundll32.exe unusual DLL load', 'EDR service stopped'] },
+      { id: 'impact', name: 'Mass Ransomware Deployment', tactic: 'TA0040',
+        techniques: [{ id: 'T1486', name: 'Data Encrypted for Impact', desc: 'REvil encrypts files with .ikhwxb extension across 1,500+ organizations simultaneously.' }, { id: 'T1490', name: 'Inhibit System Recovery', desc: 'Shadow copies deleted, recovery mode disabled on all affected endpoints.' }],
+        timeline: '1-4 hours', status: 'impact', icon: 'fa-skull',
+        indicators: ['.ikhwxb encrypted extension', 'VSS deletion (vssadmin)', 'kaseya-ransomware note: README.ikhwxb'] },
+    ],
+    mitigations: [
+      { id: 'M1030', name: 'Network Segmentation', desc: 'Restrict Kaseya VSA to management VLAN only.' },
+      { id: 'M1051', name: 'Update Software', desc: 'Patch RMM/VSA software immediately and enforce SLA.' },
+      { id: 'M1018', name: 'User Account Management', desc: 'Require approval for mass agent scripting jobs.' },
+    ],
+    detectionRules: ['Kaseya VSA exploit POST patterns', 'Agent.crt download via certutil', 'Mass EDR disable event', 'REvil ransom note creation'],
+    cvssEquivalent: 10.0,
+    references: ['https://attack.mitre.org/software/S0496/', 'https://www.cisa.gov/news-events/cybersecurity-advisories/aa21-200b'],
+  },
+  // ══════════════════════════════════════════════════════════════
+  //  SCENARIO 12: APT28 — Credential Phishing & Data Theft
+  // ══════════════════════════════════════════════════════════════
+  {
+    id: 'apt28-phishing',
+    name: 'APT28 (Fancy Bear) — Credential Phishing & Political Espionage',
+    actor: 'APT28 / Fancy Bear (GRU Unit 26165)',
+    actorCountry: 'Russia (GRU)',
+    difficulty: 'HIGH',
+    industry: 'Political / Government / Media',
+    duration: '2-8 weeks',
+    description: 'APT28 targeting election campaigns, political parties, and media organizations using custom phishing tools (PHISHERY, CHOPSTICK) and password spray attacks on cloud services.',
+    icon: 'fa-vote-yea',
+    iconColor: '#ef4444',
+    phases: [
+      { id: 'recon', name: 'Target Reconnaissance', tactic: 'TA0043',
+        techniques: [{ id: 'T1589.002', name: 'Email Addresses', desc: 'Harvest target email addresses from public sources and data breaches.' }],
+        timeline: '0h', status: 'recon', icon: 'fa-binoculars',
+        indicators: ['Email harvesting tools', 'Have I Been Pwned API queries', 'HunterIO usage'] },
+      { id: 'initial-access', name: 'Credential Phishing', tactic: 'TA0001',
+        techniques: [{ id: 'T1566.002', name: 'Spearphishing Link', desc: 'PHISHERY toolkit: email linking to fake Google/Microsoft auth pages.' }, { id: 'T1110.003', name: 'Password Spraying', desc: 'Low-and-slow password spray against O365/Google Workspace.' }],
+        timeline: '1-7 days', status: 'phish', icon: 'fa-envelope-open',
+        indicators: ['PHISHERY OAuth phish page', 'Failed O365 auth from Tor IPs', 'OAuth token theft alerts'] },
+      { id: 'persistence', name: 'Persistence via Implants', tactic: 'TA0003',
+        techniques: [{ id: 'T1546.003', name: 'Windows Management Instrumentation Event Subscription', desc: 'CHOPSTICK uses WMI subscriptions for fileless persistence.' }],
+        timeline: '1-5 days', status: 'persist', icon: 'fa-anchor',
+        indicators: ['WMI event subscription creation', 'CHOPSTICK C2 signatures', 'Unusual scrcons.exe activity'] },
+      { id: 'collection', name: 'Email & Document Collection', tactic: 'TA0009',
+        techniques: [{ id: 'T1114.002', name: 'Remote Email Collection', desc: 'IMAP/API access to Gmail/O365 to bulk download emails and attachments.' }],
+        timeline: '5-21 days', status: 'collect', icon: 'fa-inbox',
+        indicators: ['IMAP login from Russian ASN', 'OAuth app suspicious grant', 'Gmail forwarding rule added'] },
+      { id: 'exfiltration', name: 'Strategic Exfiltration & Leak', tactic: 'TA0010',
+        techniques: [{ id: 'T1567', name: 'Exfiltration Over Web Service', desc: 'Political data staged for selective leak via WikiLeaks-style front organizations.' }],
+        timeline: '21+ days', status: 'exfil', icon: 'fa-cloud-upload-alt',
+        indicators: ['DCLeaks-style staging domains', 'Tor C2 exfiltration', 'Encrypted archive creation'] },
+    ],
+    mitigations: [
+      { id: 'M1032', name: 'Multi-factor Authentication', desc: 'Phishing-resistant MFA (FIDO2) for all accounts.' },
+      { id: 'M1049', name: 'Antivirus/Antimalware', desc: 'Detect CHOPSTICK WMI persistence patterns.' },
+      { id: 'M1054', name: 'Software Configuration', desc: 'Restrict OAuth app permissions and require admin consent.' },
+    ],
+    detectionRules: ['PHISHERY OAuth phishing indicators', 'Password spray: 1 attempt per 5min per user', 'WMI subscriptions to PowerShell', 'CHOPSTICK C2 domain patterns'],
+    cvssEquivalent: 8.8,
+    references: ['https://attack.mitre.org/groups/G0007/', 'https://www.cisa.gov/news-events/cybersecurity-advisories/aa20-336a'],
+  },
+  // ══════════════════════════════════════════════════════════════
+  //  SCENARIO 13: BlackMatter/DarkSide — Critical Infrastructure
+  // ══════════════════════════════════════════════════════════════
+  {
+    id: 'darkside-pipeline',
+    name: 'DarkSide — Colonial Pipeline Infrastructure Attack',
+    actor: 'DarkSide Ransomware Group',
+    actorCountry: 'Russia (Cybercriminal RaaS)',
+    difficulty: 'HIGH',
+    industry: 'Energy / Pipeline / Critical Infrastructure',
+    duration: '2-4 weeks',
+    description: 'Reproduce the Colonial Pipeline attack: VPN credential theft, network traversal to OT network, ransomware deployment causing national fuel shortage — and subsequent shutdown.',
+    icon: 'fa-oil-can',
+    iconColor: '#f97316',
+    phases: [
+      { id: 'initial-access', name: 'Compromised VPN Credentials', tactic: 'TA0001',
+        techniques: [{ id: 'T1078', name: 'Valid Accounts', desc: 'Stolen VPN password (no MFA) found on dark web from previous breach.' }],
+        timeline: '0h', status: 'entry', icon: 'fa-key',
+        indicators: ['VPN auth from Eastern European IP', 'Legacy VPN account with no MFA', 'Off-hours admin login'] },
+      { id: 'discovery', name: 'Network Reconnaissance', tactic: 'TA0007',
+        techniques: [{ id: 'T1046', name: 'Network Service Discovery', desc: 'Map IT and OT network segments, find billing and operational systems.' }],
+        timeline: '1-7 days', status: 'recon', icon: 'fa-search',
+        indicators: ['Internal port scanning', 'SMB enumeration', 'IT/OT network bridge detection'] },
+      { id: 'lateral-movement', name: 'IT to Billing System Pivot', tactic: 'TA0008',
+        techniques: [{ id: 'T1021.002', name: 'SMB/Windows Admin Shares', desc: 'Move from initial VPN foothold to billing and operational planning systems.' }],
+        timeline: '7-14 days', status: 'lateral', icon: 'fa-exchange-alt',
+        indicators: ['SMB lateral movement', 'Pass-the-hash activity', 'Billing database access'] },
+      { id: 'exfiltration', name: 'Data Exfiltration (Pre-Encryption)', tactic: 'TA0010',
+        techniques: [{ id: 'T1048', name: 'Exfiltration Over Alternative Protocol', desc: '100GB of data exfiltrated before encryption for double extortion.' }],
+        timeline: '14-18 days', status: 'exfil', icon: 'fa-cloud-upload-alt',
+        indicators: ['Large outbound transfers', 'Data staged to Eastern European IP', 'Rclone or similar tool usage'] },
+      { id: 'impact', name: 'DarkSide Ransomware + Operational Shutdown', tactic: 'TA0040',
+        techniques: [{ id: 'T1486', name: 'Data Encrypted for Impact', desc: 'DarkSide encrypts IT network; Colonial PROACTIVELY shuts down OT pipeline.' }],
+        timeline: '18-25 days', status: 'impact', icon: 'fa-exclamation-triangle',
+        indicators: ['DarkSide ransom note', '5,500 miles of pipeline halted', 'National fuel shortage declaration'] },
+    ],
+    mitigations: [
+      { id: 'M1032', name: 'Multi-factor Authentication', desc: 'MFA on ALL VPN accounts, no exceptions.' },
+      { id: 'M1030', name: 'Network Segmentation', desc: 'Strict IT/OT air-gap; operational networks must not be reachable from compromised IT.' },
+      { id: 'M1017', name: 'User Training', desc: 'Dark web credential monitoring and immediate password reset programs.' },
+    ],
+    detectionRules: ['VPN auth anomalies (new country, off-hours)', 'SMB lateral movement from VPN segment', 'Rclone data exfiltration', 'DarkSide ransomware signatures'],
+    cvssEquivalent: 9.8,
+    references: ['https://attack.mitre.org/software/S0603/', 'https://www.cisa.gov/news-events/cybersecurity-advisories/aa21-131a'],
+  },
+  // ══════════════════════════════════════════════════════════════
+  //  SCENARIO 14: ALPHV/BlackCat — Triple Extortion Healthcare
+  // ══════════════════════════════════════════════════════════════
+  {
+    id: 'blackcat-healthcare',
+    name: 'ALPHV/BlackCat — Triple Extortion Healthcare Attack',
+    actor: 'ALPHV / BlackCat (Ransomware-as-a-Service)',
+    actorCountry: 'Russia (RaaS affiliate)',
+    difficulty: 'HIGH',
+    industry: 'Healthcare / Hospitals / Patient Data',
+    duration: '1-3 weeks',
+    description: 'ALPHV Rust-based ransomware targeting a hospital network: AD compromise, data exfiltration of patient records, triple extortion (ransom + data leak + DDoS).',
+    icon: 'fa-hospital',
+    iconColor: '#22c55e',
+    phases: [
+      { id: 'initial-access', name: 'Exploit VPN/RDP', tactic: 'TA0001',
+        techniques: [{ id: 'T1190', name: 'Exploit Public-Facing Application', desc: 'Exploit Citrix ADC (CVE-2023-3519) or RDP brute-force hospital gateway.' }],
+        timeline: '0h', status: 'entry', icon: 'fa-door-open',
+        indicators: ['Citrix ADC exploit attempts', 'RDP brute-force on hospital VPN', 'Initial beacon from healthcare subnet'] },
+      { id: 'credential-access', name: 'Active Directory Compromise', tactic: 'TA0006',
+        techniques: [{ id: 'T1003.003', name: 'NTDS', desc: 'Dump Active Directory NTDS.dit for all domain credentials.' }, { id: 'T1558.003', name: 'Kerberoasting', desc: 'Request TGS tickets for service accounts to crack offline.' }],
+        timeline: '1-5 days', status: 'cred', icon: 'fa-key',
+        indicators: ['ntdsutil AD dump', 'Kerberoasting: abnormal TGS requests', 'Domain admin access from workstation'] },
+      { id: 'collection', name: 'Patient Record Exfiltration', tactic: 'TA0009',
+        techniques: [{ id: 'T1005', name: 'Data from Local System', desc: 'Collect EMR databases (Epic, Cerner), patient PII, billing records, research data.' }],
+        timeline: '5-12 days', status: 'collect', icon: 'fa-file-medical',
+        indicators: ['EMR database export activity', 'Mass patient record access outside business hours', 'HL7/FHIR bulk export'] },
+      { id: 'impact', name: 'ALPHV Triple Extortion', tactic: 'TA0040',
+        techniques: [{ id: 'T1486', name: 'Data Encrypted for Impact', desc: 'Rust-based ALPHV encrypts files across all hospital systems.' }, { id: 'T1498', name: 'Network Denial of Service', desc: 'DDoS threat adds third extortion vector on top of ransom and data leak.' }],
+        timeline: '12-20 days', status: 'impact', icon: 'fa-skull',
+        indicators: ['.alphv extension', 'Ransom note: RECOVER-XXXXXXXX-FILES.txt', 'Patient care disruption, systems offline'] },
+    ],
+    mitigations: [
+      { id: 'M1032', name: 'Multi-factor Authentication', desc: 'Enforce MFA on Citrix, RDP, and VPN.' },
+      { id: 'M1026', name: 'Privileged Account Management', desc: 'Separate NTDS backup accounts from regular operations.' },
+      { id: 'M1053', name: 'Data Backup', desc: 'Maintain air-gapped EMR backups; test quarterly.' },
+    ],
+    detectionRules: ['ALPHV Rust encryptor signatures', 'NTDS.dit dump via ntdsutil', 'Kerberoasting: unusual TGS volume', 'EMR bulk export outside hours'],
+    cvssEquivalent: 9.5,
+    references: ['https://attack.mitre.org/software/S1068/', 'https://www.cisa.gov/news-events/cybersecurity-advisories/aa23-353a'],
+  },
+  // ══════════════════════════════════════════════════════════════
+  //  SCENARIO 15: Storm-0558 — Microsoft Cloud Token Forgery
+  // ══════════════════════════════════════════════════════════════
+  {
+    id: 'storm-0558-cloud-token',
+    name: 'Storm-0558 — Cloud Token Forgery & Government Email Access',
+    actor: 'Storm-0558 (China-nexus)',
+    actorCountry: 'China',
+    difficulty: 'CRITICAL',
+    industry: 'Government / Diplomatic / Cloud Services',
+    duration: '1 month (undetected access)',
+    description: 'Reproduce the 2023 Storm-0558 breach: forge Azure AD authentication tokens using stolen MSA signing key to access US government Exchange Online mailboxes.',
+    icon: 'fa-envelope-square',
+    iconColor: '#3b82f6',
+    phases: [
+      { id: 'initial-access', name: 'MSA Signing Key Theft', tactic: 'TA0001',
+        techniques: [{ id: 'T1649', name: 'Steal or Forge Authentication Certificates', desc: 'Obtain Microsoft consumer MSA signing key from 2021 crash dump exposed in engineering environment.' }],
+        timeline: '0h (key already obtained)', status: 'cred', icon: 'fa-certificate',
+        indicators: ['Signing key in crash dump artifact', 'Engineer account compromise', 'Key material extracted from memory'] },
+      { id: 'execution', name: 'Token Forgery', tactic: 'TA0006',
+        techniques: [{ id: 'T1553.006', name: 'Code Signing', desc: 'Forge Azure AD access tokens for any cloud identity using stolen MSA signing key.' }],
+        timeline: '0-1 hour', status: 'exec', icon: 'fa-code',
+        indicators: ['Tokens signed with consumer MSA key (wrong key type)', 'aud claim mismatch', 'Cross-tenant token usage'] },
+      { id: 'collection', name: 'Exchange Online Email Access', tactic: 'TA0009',
+        techniques: [{ id: 'T1114.002', name: 'Remote Email Collection', desc: 'Access 25 US government agency Exchange Online mailboxes via Outlook Web Access API.' }],
+        timeline: '1-30 days', status: 'collect', icon: 'fa-envelope',
+        indicators: ['OWA/EWS API calls with forged tokens', 'Email search by keyword (policy, diplomacy)', 'Mass download State Dept / Commerce mailboxes'] },
+      { id: 'discovery', name: 'Lateral Cloud Discovery', tactic: 'TA0007',
+        techniques: [{ id: 'T1087.004', name: 'Cloud Account Discovery', desc: 'Enumerate other users, groups, and applications accessible via forged tokens.' }],
+        timeline: '1-30 days', status: 'recon', icon: 'fa-cloud',
+        indicators: ['MS Graph API enumeration', 'Directory user listing', 'SharePoint site enumeration'] },
+    ],
+    mitigations: [
+      { id: 'M1026', name: 'Privileged Account Management', desc: 'Strict separation of consumer and enterprise signing key environments.' },
+      { id: 'M1047', name: 'Audit', desc: 'Monitor token claims for key type mismatches.' },
+      { id: 'M1051', name: 'Update Software', desc: 'Rotate signing keys; implement key usage logging.' },
+    ],
+    detectionRules: ['Token signed by consumer MSA key used in enterprise context', 'Anomalous OWA API access patterns', 'Cross-tenant Graph API calls', 'Unusual Exchange audit logs from diplomatic accounts'],
+    cvssEquivalent: 9.1,
+    references: ['https://msrc.microsoft.com/blog/2023/07/msft-response-to-storm-0558/', 'https://attack.mitre.org/groups/G1013/'],
+  },
 ];
-
-/* ════════════════════════════════════════════════════════════════
-   STATE
-════════════════════════════════════════════════════════════════ */
 let _advSimState = {
   activeScenario: null,
   activePhase: null,
@@ -308,11 +746,11 @@ window.renderAdversarySimLab = function() {
       <!-- ── Stats ── -->
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-top:18px;">
         ${[
-          { label: 'Nation-State APTs', value: ADVERSARY_SCENARIOS.filter(s=>s.actorCountry!=='International (RaaS)'&&s.actorCountry!=='Eastern Europe').length, color: '#ef4444' },
-          { label: 'Ransomware Groups', value: 1, color: '#f97316' },
-          { label: 'Financial Crime', value: 2, color: '#f59e0b' },
+          { label: 'Total Scenarios', value: ADVERSARY_SCENARIOS.length, color: '#a855f7' },
+          { label: 'Nation-State APTs', value: ADVERSARY_SCENARIOS.filter(s=>!['International (RaaS)','Eastern Europe','US/UK (Cybercriminal)'].includes(s.actorCountry)).length, color: '#ef4444' },
+          { label: 'Ransomware/FIN Crime', value: ADVERSARY_SCENARIOS.filter(s=>s.id.includes('lockbit')||s.id.includes('clop')||s.id.includes('revil')||s.id.includes('darkside')||s.id.includes('blackcat')||s.id.includes('fin7')||s.id.includes('scattered')).length, color: '#f97316' },
           { label: 'MITRE Tactics', value: '14', color: '#22d3ee' },
-          { label: 'Techniques', value: '30+', color: '#a855f7' },
+          { label: 'Techniques Mapped', value: '50+', color: '#22c55e' },
         ].map(s => `
         <div style="background:rgba(15,23,42,.7);border:1px solid #1e293b;border-radius:8px;padding:12px 14px;">
           <div style="font-size:10px;color:#475569;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">${s.label}</div>
@@ -333,16 +771,52 @@ window.renderAdversarySimLab = function() {
 };
 
 /* ── Scenario Cards Grid ── */
-function renderScenarioCards() {
+function renderScenarioCards(filterText) {
+  const filtered = filterText
+    ? ADVERSARY_SCENARIOS.filter(s =>
+        s.name.toLowerCase().includes(filterText.toLowerCase()) ||
+        s.actor.toLowerCase().includes(filterText.toLowerCase()) ||
+        s.industry.toLowerCase().includes(filterText.toLowerCase()) ||
+        s.actorCountry.toLowerCase().includes(filterText.toLowerCase()) ||
+        s.difficulty.toLowerCase() === filterText.toLowerCase()
+      )
+    : ADVERSARY_SCENARIOS;
+
   return `
-  <div style="margin-bottom:20px;">
-    <h2 style="margin:0 0 6px;font-size:1.1rem;font-weight:700;color:#e2e8f0;">
-      <i class="fas fa-th-large" style="color:#a855f7;margin-right:8px;"></i>Select Attack Scenario
-    </h2>
-    <p style="margin:0;font-size:12px;color:#475569;">Click any scenario to view the full kill chain and launch simulation</p>
+  <div style="margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+    <div>
+      <h2 style="margin:0 0 4px;font-size:1.1rem;font-weight:700;color:#e2e8f0;">
+        <i class="fas fa-th-large" style="color:#a855f7;margin-right:8px;"></i>Select Attack Scenario
+      </h2>
+      <p style="margin:0;font-size:12px;color:#475569;">
+        ${filtered.length} of ${ADVERSARY_SCENARIOS.length} scenarios · Click any card to view full kill chain and launch simulation
+      </p>
+    </div>
+    <!-- Search & filter -->
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <div style="position:relative;">
+        <i class="fas fa-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#475569;font-size:12px;"></i>
+        <input id="advsim-search" type="text" placeholder="Search scenarios…" value="${filterText||''}"
+          style="background:#0a0e17;border:1px solid #1e293b;color:#e2e8f0;padding:8px 10px 8px 30px;border-radius:8px;font-size:12px;outline:none;width:200px;"
+          oninput="advSimFilterScenarios(this.value)" />
+      </div>
+      ${['CRITICAL','HIGH','MEDIUM'].map(d => `
+        <button onclick="advSimFilterScenarios('${d}')"
+          style="background:${advDiffColor(d)}20;color:${advDiffColor(d)};border:1px solid ${advDiffColor(d)}40;padding:6px 10px;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">
+          ${d}
+        </button>`).join('')}
+      <button onclick="advSimFilterScenarios('')"
+        style="background:#0a0e17;border:1px solid #1e293b;color:#64748b;padding:6px 10px;border-radius:8px;font-size:11px;cursor:pointer;">
+        All
+      </button>
+    </div>
   </div>
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:20px;">
-    ${ADVERSARY_SCENARIOS.map(s => `
+    ${filtered.length === 0 ? `
+    <div style="grid-column:1/-1;padding:40px;text-align:center;color:#475569;">
+      <i class="fas fa-search" style="font-size:2rem;margin-bottom:12px;display:block;opacity:.4;"></i>
+      No scenarios match "<em style="color:#64748b">${filterText}</em>"
+    </div>` : filtered.map(s => `
     <div onclick="advSimOpenScenario('${s.id}')"
       style="background:#0f172a;border:1px solid #1e293b;border-radius:14px;padding:22px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;"
       onmouseover="this.style.borderColor='${advDiffColor(s.difficulty)}60';this.style.transform='translateY(-2px)';this.style.boxShadow='0 8px 24px rgba(0,0,0,.4)'"
@@ -359,13 +833,15 @@ function renderScenarioCards() {
       <!-- Name & actor -->
       <div style="font-size:15px;font-weight:700;color:#e2e8f0;margin-bottom:4px;line-height:1.3;">${s.name}</div>
       <div style="font-size:12px;color:#64748b;margin-bottom:12px;display:flex;align-items:center;gap:6px;">
-        <i class="fas fa-user-secret" style="color:${advDiffColor(s.difficulty)};"></i>
-        ${s.actor}
+        <i class="fas fa-flag" style="color:#ef4444;font-size:9px;"></i>
+        <span>${s.actor}</span>
+        <span style="color:#334155;">·</span>
+        <span style="background:#1e293b;color:#94a3b8;padding:1px 6px;border-radius:4px;font-size:10px;">${s.actorCountry}</span>
       </div>
       <!-- Description -->
-      <p style="font-size:12px;color:#94a3b8;line-height:1.6;margin:0 0 14px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${s.description}</p>
-      <!-- Meta -->
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+      <div style="font-size:12px;color:#94a3b8;line-height:1.5;margin-bottom:14px;max-height:54px;overflow:hidden;">${s.description}</div>
+      <!-- Tags -->
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
         <span style="background:#1e293b;color:#64748b;padding:3px 8px;border-radius:6px;font-size:10px;">
           <i class="fas fa-industry" style="margin-right:3px;"></i>${s.industry}
         </span>
@@ -375,13 +851,16 @@ function renderScenarioCards() {
         <span style="background:#1e293b;color:#64748b;padding:3px 8px;border-radius:6px;font-size:10px;">
           <i class="fas fa-layer-group" style="margin-right:3px;"></i>${s.phases.length} phases
         </span>
+        <span style="background:${s.cvssEquivalent >= 9.5 ? 'rgba(239,68,68,.2)' : 'rgba(249,115,22,.2)'};color:${s.cvssEquivalent >= 9.5 ? '#ef4444' : '#f97316'};padding:3px 8px;border-radius:6px;font-size:10px;font-weight:700;">
+          CVSS ${s.cvssEquivalent}
+        </span>
       </div>
       <!-- Kill chain preview -->
       <div style="display:flex;align-items:center;gap:4px;overflow-x:auto;padding-bottom:2px;">
         ${s.phases.map((p, i) => `
         <div style="display:flex;align-items:center;gap:3px;">
           ${i > 0 ? `<i class="fas fa-chevron-right" style="color:#1e293b;font-size:8px;"></i>` : ''}
-          <span title="${p.name}" style="background:#1e293b;color:#64748b;padding:3px 6px;border-radius:4px;font-size:9px;white-space:nowrap;">${phaseStatusIcon(p.status)}</span>
+          <span title="${p.name}: ${p.tactic}" style="background:#1e293b;color:#64748b;padding:3px 6px;border-radius:4px;font-size:9px;white-space:nowrap;">${phaseStatusIcon(p.status)}</span>
         </div>`).join('')}
       </div>
       <!-- CTA -->
@@ -393,6 +872,17 @@ function renderScenarioCards() {
     </div>`).join('')}
   </div>`;
 }
+
+/* Filter scenarios by text */
+window.advSimFilterScenarios = function(text) {
+  const content = document.getElementById('advsim-main-content');
+  if (!content) return;
+  // Only re-render the cards grid portion
+  content.innerHTML = renderScenarioCards(text);
+  // If text was typed, also update the search box value
+  const srch = document.getElementById('advsim-search');
+  if (srch && srch.value !== text) srch.value = text;
+};
 
 /* ════════════════════════════════════════════════════════════════
    SCENARIO DETAIL VIEW
