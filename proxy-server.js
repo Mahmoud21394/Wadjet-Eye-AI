@@ -43,6 +43,13 @@ function addCORS(res) {
 // ── Generic HTTPS proxy ───────────────────────────────────────
 function proxyRequest(targetUrl, req, res, extraHeaders = {}) {
   const parsed = new URL(targetUrl);
+
+  // Strip headers that cause issues when proxying
+  const STRIP_HEADERS = new Set([
+    'host','origin','referer','connection','transfer-encoding',
+    'content-length','keep-alive','upgrade','te','trailers',
+  ]);
+
   const options = {
     hostname: parsed.hostname,
     port:     parsed.port || 443,
@@ -51,7 +58,7 @@ function proxyRequest(targetUrl, req, res, extraHeaders = {}) {
     headers:  {
       ...Object.fromEntries(
         Object.entries(req.headers).filter(([k]) =>
-          !['host','origin','referer','connection'].includes(k.toLowerCase())
+          !STRIP_HEADERS.has(k.toLowerCase())
         )
       ),
       host: parsed.hostname,
@@ -61,16 +68,43 @@ function proxyRequest(targetUrl, req, res, extraHeaders = {}) {
 
   const proxyReq = https.request(options, (proxyRes) => {
     addCORS(res);
-    res.writeHead(proxyRes.statusCode, {
-      'Content-Type': proxyRes.headers['content-type'] || 'application/json',
+
+    // Buffer the full response body, then forward.
+    // This avoids transfer-encoding/chunked issues with piping large responses.
+    const chunks = [];
+    proxyRes.on('data', chunk => chunks.push(chunk));
+    proxyRes.on('end', () => {
+      const body = Buffer.concat(chunks);
+      if (!res.headersSent) {
+        res.writeHead(proxyRes.statusCode, {
+          'Content-Type':   proxyRes.headers['content-type'] || 'application/json',
+          'Content-Length': body.length,
+        });
+      }
+      res.end(body);
     });
-    proxyRes.pipe(res, { end: true });
+    proxyRes.on('error', (err) => {
+      console.error('[Proxy Response Error]', targetUrl, err.message);
+      if (!res.headersSent) {
+        addCORS(res);
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+      }
+      res.end(JSON.stringify({ error: 'Proxy response error', message: err.message }));
+    });
+  });
+
+  // 30-second timeout for slow upstream APIs (e.g. OTX for large result sets)
+  proxyReq.setTimeout(30000, () => {
+    proxyReq.destroy(new Error('Upstream timeout after 30s'));
   });
 
   proxyReq.on('error', (err) => {
     console.error('[Proxy Error]', targetUrl, err.message);
-    addCORS(res);
-    res.writeHead(502, { 'Content-Type': 'application/json' });
+    if (!res.headersSent) {
+      addCORS(res);
+      res.writeHead(err.message.includes('timeout') ? 504 : 502,
+        { 'Content-Type': 'application/json' });
+    }
     res.end(JSON.stringify({ error: 'Proxy error', message: err.message }));
   });
 
@@ -139,37 +173,79 @@ function serveStatic(reqPath, res) {
 }
 
 // ── NVD parameter auto-correction ────────────────────────────
+const NVD_MAX_RANGE_DAYS = 120; // NVD rejects date ranges > 120 days with 404
+
+/**
+ * nvdToISOZ — normalises a date string to ISO-8601 with trailing Z (UTC).
+ * NVD requires timezone info; missing Z causes intermittent 404 on date-range queries.
+ */
+function nvdToISOZ(dateStr) {
+  if (!dateStr) return dateStr;
+  const s = String(dateStr).trim();
+  // Already has Z or offset → re-parse to canonical form
+  if (/Z$|[+-]\d{2}:?\d{2}$/.test(s)) {
+    return new Date(s).toISOString().replace(/\.\d{3}Z$/, '.000Z');
+  }
+  if (/\.\d{3}$/.test(s)) return s + 'Z';
+  if (/T\d{2}:\d{2}:\d{2}$/.test(s)) return s + '.000Z';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s + 'T00:00:00.000Z';
+  return new Date(s).toISOString().replace(/\.\d{3}Z$/, '.000Z');
+}
+
 function nvdAutoCorrectQS(rawQS) {
   // Parse query params and auto-fix known NVD 404 causes:
   // 1. pubStartDate without pubEndDate → add pubEndDate = now
   // 2. cveId not uppercase → uppercase it
-  // 3. Missing .000 milliseconds on dates → add them
+  // 3. Missing timezone (no Z) on dates → append Z for unambiguous UTC
+  // 4. Missing .000 milliseconds on dates → add them
+  // 5. Date range > 120 days → clamp to 120 days (NVD hard limit)
   const params = new URLSearchParams(rawQS);
 
   if (params.get('cveId')) {
     params.set('cveId', params.get('cveId').toUpperCase());
   }
 
-  const pubStart = params.get('pubStartDate');
-  const pubEnd   = params.get('pubEndDate');
+  let pubStart = params.get('pubStartDate');
+  let pubEnd   = params.get('pubEndDate');
+
   if (pubStart && !pubEnd) {
-    params.set('pubEndDate', new Date().toISOString().slice(0,19) + '.000');
-    console.log('[NVD Auto-fix] Added missing pubEndDate:', params.get('pubEndDate'));
+    pubEnd = nvdToISOZ(new Date().toISOString());
+    params.set('pubEndDate', pubEnd);
+    console.log('[NVD Auto-fix] Added missing pubEndDate:', pubEnd);
   }
   if (pubEnd && !pubStart) {
     const s = new Date(pubEnd);
     s.setDate(s.getDate() - 30);
-    params.set('pubStartDate', s.toISOString().slice(0,19) + '.000');
-    console.log('[NVD Auto-fix] Added missing pubStartDate:', params.get('pubStartDate'));
+    pubStart = nvdToISOZ(s.toISOString());
+    params.set('pubStartDate', pubStart);
+    console.log('[NVD Auto-fix] Added missing pubStartDate:', pubStart);
   }
 
+  // Normalise dates to ISO-8601 UTC (Z suffix)
   ['pubStartDate','pubEndDate'].forEach(k => {
     const v = params.get(k);
-    if (v && !/\.\d{3}$/.test(v)) {
-      params.set(k, v.slice(0,19) + '.000');
-      console.log(`[NVD Auto-fix] Fixed date format for ${k}:`, params.get(k));
+    if (v) {
+      const fixed = nvdToISOZ(v);
+      if (fixed !== v) {
+        params.set(k, fixed);
+        console.log(`[NVD Auto-fix] Normalised date timezone for ${k}: "${v}" → "${fixed}"`);
+      }
     }
   });
+
+  // Enforce ≤120 day range (NVD returns 404 for wider ranges)
+  pubStart = params.get('pubStartDate');
+  pubEnd   = params.get('pubEndDate');
+  if (pubStart && pubEnd) {
+    const startMs  = new Date(pubStart).getTime();
+    const endMs    = new Date(pubEnd).getTime();
+    const diffDays = (endMs - startMs) / 86400000;
+    if (diffDays > NVD_MAX_RANGE_DAYS) {
+      const clampedStart = nvdToISOZ(new Date(endMs - NVD_MAX_RANGE_DAYS * 86400000).toISOString());
+      params.set('pubStartDate', clampedStart);
+      console.log(`[NVD Auto-fix] Clamped date range from ${Math.round(diffDays)} to ${NVD_MAX_RANGE_DAYS} days → pubStartDate=${clampedStart}`);
+    }
+  }
 
   return params.toString();
 }
