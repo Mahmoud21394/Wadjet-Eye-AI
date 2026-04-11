@@ -21,6 +21,10 @@
   <link rel="stylesheet" href="css/login-v20.css" />
   <!-- Cyber Defense Brain Design System v2.0 — All new AI modules unified design language -->
   <link rel="stylesheet" href="css/cyber-brain-design-system.css" />
+  <!-- Global Animation System v1.0 — Page transitions, card anims, skeleton loaders, button effects -->
+  <link rel="stylesheet" href="css/animation-system.css" />
+  <!-- Unified SOC Modules v2.0 — Shared components for ThreatGraph, MalwareDNA, Settings, all CDS modules -->
+  <link rel="stylesheet" href="css/soc-modules-v2.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -1225,6 +1229,21 @@
 <script src="js/platform-fixes-v22.js"></script>
 
 <!-- ═══════════════════════════════════════════════════════════
+     WADJET-EYE v23.0 — Animation System + Dark Web Fix + Adversary Sim
+     Load order:
+       1. animation-system.js   — skeleton factory + page transitions + ripple
+       2. darkweb-ultimate.js   — DW v7.0 with 100% working tabs (window.* onclick)
+       3. adversary-sim.js      — 8 real-world attack chain simulations + SOC UI
+     MUST load AFTER platform-fixes-v22.js
+═══════════════════════════════════════════════════════════ -->
+<!-- Animation Orchestrator v1.0 — Skeleton loaders, counter anims, page transitions -->
+<script src="js/animation-system.js"></script>
+<!-- Dark Web Intelligence ULTIMATE v7.0 — Root cause fix: all tabs use window.* scope -->
+<script src="js/darkweb-ultimate.js"></script>
+<!-- Adversary Simulation Engine v1.0 — 8 MITRE-mapped attack chains, interactive SOC UI -->
+<script src="js/adversary-sim.js"></script>
+
+<!-- ═══════════════════════════════════════════════════════════
      AUTONOMOUS CYBER DEFENSE BRAIN v1.0
      Malware Analysis Lab · Cognitive Layer · Predictive Engine
      Attack Graph · Malware DNA · Adversary Sim · Autonomous Agent
@@ -1238,6 +1257,16 @@
 <script src="js/cyber-brain-modules.js"></script>
 <!-- Differentiator Modules v1.0 — SOC Memory, Threat Graph, Digital Risk, Attack Storyline -->
 <script src="js/differentiator-modules.js"></script>
+<!-- ─── v24.0 Replacements ─────────────────────────────────────────────────
+     threat-graph-brain.js  — Full D3 force graph, WebSocket live feed,
+                              node profiling, timeline replay, analytics
+     malware-dna-v2.js      — Unified with CDS design system,
+                              YARA generation, behavior profiling, evolution
+     settings-v3.js         — Fixed bindings, validation, payload, fallback
+──────────────────────────────────────────────────────────────────────────── -->
+<script src="js/threat-graph-brain.js"></script>
+<script src="js/malware-dna-v2.js"></script>
+<script src="js/settings-v3.js"></script>
 <!-- Innovation Modules v1.0 — What-If Simulator, Security Memory Brain, Autonomous Agent -->
 <script src="js/innovation-modules.js"></script>
 
