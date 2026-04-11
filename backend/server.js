@@ -75,6 +75,11 @@ const settingsRoutes    = require('./routes/settings');
 const newsRoutes          = require('./routes/news');
 // ── v5.3 New Routes ───────────────────────────────────────────────
 const threatActorRoutes   = require('./routes/threat-actors');
+// ── v6.0 New Routes ───────────────────────────────────────────────
+const cveIntelRoutes      = require('./routes/cve-intelligence');
+const adversarySimRoutes  = require('./routes/adversary-sim');
+const threatGraphRoutes   = require('./routes/threat-graph');
+const whatifRoutes        = require('./routes/whatif');
 
 // ── Realtime ─────────────────────────────────────────────────────
 const { initWebSockets } = require('./realtime/websockets');
@@ -289,6 +294,10 @@ app.use('/api/settings',  settingsRoutes);
 app.use('/api/news',           newsRoutes);
 // ── v5.3 New Routes ───────────────────────────────────────────────
 app.use('/api/threat-actors',  threatActorRoutes);
+app.use('/api/cve',            cveIntelRoutes);
+app.use('/api/adversary-sim',  adversarySimRoutes);
+app.use('/api/threat-graph',   threatGraphRoutes);
+app.use('/api/whatif',         whatifRoutes);
 
 // ════════════════════════════════════════════════════════════════
 //  404 HANDLER — catches all unmatched routes
