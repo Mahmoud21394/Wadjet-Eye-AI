@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Dark Web Intelligence Module v6.0
+ *  EYEbot AI — Dark Web Intelligence Module v6.0
  *  Complete redesign matching Threat Actor Intelligence style
  *  Features: 5 tabs, animated cards, slide-in detail panel,
  *            loading skeletons, real-time filters, hover effects
@@ -163,13 +163,13 @@ window.renderDarkWeb = function() {
         </span>
       </div>
       <div class="p19-header__right">
-        <button class="p19-btn p19-btn--ghost p19-btn--sm" onclick="_dwRefresh()">
+        <button class="p19-btn p19-btn--ghost p19-btn--sm" onclick="window._dwRefresh()">
           <i class="fas fa-sync-alt"></i> <span>Refresh</span>
         </button>
-        <button class="p19-btn p19-btn--ghost p19-btn--sm" onclick="_dwExport()">
+        <button class="p19-btn p19-btn--ghost p19-btn--sm" onclick="window._dwExport()">
           <i class="fas fa-download"></i> <span>Export</span>
         </button>
-        <button class="p19-btn p19-btn--red p19-btn--sm" onclick="_dwAlert()">
+        <button class="p19-btn p19-btn--red p19-btn--sm" onclick="window._dwAlert()">
           <i class="fas fa-bell"></i> <span>Set Alert</span>
         </button>
       </div>
@@ -212,23 +212,23 @@ window.renderDarkWeb = function() {
 
   <!-- Tabs -->
   <div class="p19-tabs" id="dw-tabs">
-    <div class="p19-tab active" data-tab="marketplace" onclick="_dwTab('marketplace')">
+    <div class="p19-tab active" data-tab="marketplace" onclick="window._dwTab('marketplace')">
       <i class="fas fa-store" style="font-size:.85em"></i> Marketplace
       <span class="p19-tab-badge">${DW_DATA.marketplace.length}</span>
     </div>
-    <div class="p19-tab" data-tab="ransomware" onclick="_dwTab('ransomware')">
+    <div class="p19-tab" data-tab="ransomware" onclick="window._dwTab('ransomware')">
       <i class="fas fa-lock" style="font-size:.85em"></i> Ransomware
       <span class="p19-tab-badge">${DW_DATA.ransomware.length}</span>
     </div>
-    <div class="p19-tab" data-tab="credentials" onclick="_dwTab('credentials')">
+    <div class="p19-tab" data-tab="credentials" onclick="window._dwTab('credentials')">
       <i class="fas fa-key" style="font-size:.85em"></i> Credentials
       <span class="p19-tab-badge">${DW_DATA.credentials.length}</span>
     </div>
-    <div class="p19-tab" data-tab="forums" onclick="_dwTab('forums')">
+    <div class="p19-tab" data-tab="forums" onclick="window._dwTab('forums')">
       <i class="fas fa-comments" style="font-size:.85em"></i> Forums
       <span class="p19-tab-badge">${DW_DATA.forums.length}</span>
     </div>
-    <div class="p19-tab" data-tab="onion" onclick="_dwTab('onion')">
+    <div class="p19-tab" data-tab="onion" onclick="window._dwTab('onion')">
       <i class="fas fa-globe" style="font-size:.85em"></i> Onion Monitor
       <span class="p19-tab-badge">${onlineOnions}</span>
     </div>
@@ -243,7 +243,7 @@ window.renderDarkWeb = function() {
   <div class="p19-detail-panel" id="dw-detail-panel">
     <div id="dw-detail-inner"></div>
   </div>
-  <div id="dw-overlay" onclick="_dwClosDetail()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:7999;animation:p19-fadeInFast .2s"></div>
+  <div id="dw-overlay" onclick="window._dwClosDetail()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:7999;animation:p19-fadeInFast .2s"></div>
   `;
 
   // Animate KPI values

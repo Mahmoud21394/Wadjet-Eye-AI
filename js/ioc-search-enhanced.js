@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — IOC Registry Search Enhancement v2.0
+ *  EYEbot AI — IOC Registry Search Enhancement v2.0
  *  - Real-time type detection and validation
  *  - Supports: IP, IPv6, Domain, URL, Hash (MD5/SHA1/SHA256/SHA512),
  *              Email, CVE, CIDR, ASN, Filename, Registry Key

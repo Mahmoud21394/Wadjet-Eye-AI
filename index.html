@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Wadjet-Eye AI — Cyber Threat Intelligence Platform</title>
+  <title>EYEbot AI — Cyber Threat Intelligence Platform</title>
   <link rel="icon" type="image/png" href="images/wadjet-logo.png" />
   <link rel="stylesheet" href="css/style.css" />
   <link rel="stylesheet" href="css/modals.css" />
@@ -37,9 +37,9 @@
   <div class="login-particles" id="loginParticles"></div>
   <div class="login-card">
     <div class="login-logo">
-      <img src="images/wadjet-logo.png" alt="Wadjet-Eye AI Logo" class="login-logo-img" />
+      <img src="images/wadjet-logo.png" alt="EYEbot AI Logo" class="login-logo-img" />
       <div>
-        <div class="login-logo-name">Wadjet-Eye AI</div>
+        <div class="login-logo-name">EYEbot AI</div>
         <div class="login-logo-tagline">AI-Agentic Cyber Threat Intelligence Platform v17.0</div>
       </div>
     </div>
@@ -83,9 +83,9 @@
 <aside id="sidebar" class="sidebar">
   <div class="sidebar-header">
     <div class="logo-wrap">
-      <img src="images/wadjet-logo.png" alt="Wadjet-Eye AI" class="sidebar-logo-img" />
+      <img src="images/wadjet-logo.png" alt="EYEbot AI" class="sidebar-logo-img" />
       <div class="logo-text">
-        <span class="logo-name">Wadjet-Eye AI</span>
+        <span class="logo-name">EYEbot AI</span>
         <span class="logo-tagline">v17.0 · <span id="sidebarTenant">MSSP Global</span></span>
       </div>
     </div>
@@ -94,6 +94,7 @@
 
   <div class="sidebar-nav-scroll">
 
+    <!-- ════ 1. OPERATIONS ════ -->
     <div class="sidebar-section-label">OPERATIONS</div>
     <nav class="sidebar-nav">
       <a href="#" class="nav-item active" data-page="command-center">
@@ -112,16 +113,11 @@
         <i class="fas fa-broadcast-tower"></i><span>Live Detections</span>
         <span class="nav-badge badge-green blink">LIVE</span>
       </a>
-    </nav>
-
-    <!-- ════ INTELLIGENCE ════ -->
-    <div class="sidebar-section-label">INTELLIGENCE</div>
-    <nav class="sidebar-nav">
       <a href="#" class="nav-item" data-page="threat-actors">
         <i class="fas fa-user-secret"></i><span>Threat Actors</span>
       </a>
       <a href="#" class="nav-item" data-page="dark-web">
-        <i class="fas fa-spider"></i><span>Dark Web</span>
+        <i class="fas fa-spider"></i><span>Dark Web Intelligence</span>
       </a>
       <a href="#" class="nav-item" data-page="exposure">
         <i class="fas fa-bug"></i><span>CVE Intelligence</span>
@@ -129,60 +125,7 @@
       </a>
     </nav>
 
-    <!-- ════ SOC OPERATIONS ════ -->
-    <div class="sidebar-section-label">SOC OPERATIONS</div>
-    <nav class="sidebar-nav">
-      <a href="#" class="nav-item" data-page="soc-operations">
-        <i class="fas fa-shield-virus"></i><span>SOC Operations</span>
-      </a>
-      <a href="#" class="nav-item" data-page="ai-orchestrator">
-        <i class="fas fa-robot"></i><span>AI Orchestrator</span>
-        <span class="nav-badge badge-cyan">AI</span>
-      </a>
-      <a href="#" class="nav-item" data-page="playbooks">
-        <i class="fas fa-book"></i><span>Playbooks</span>
-      </a>
-    </nav>
-
-    <!-- ════ ADVANCED SOC ════ -->
-    <div class="sidebar-section-label">ADVANCED SOC</div>
-    <nav class="sidebar-nav">
-      <a href="#" class="nav-item" data-page="executive-dashboard">
-        <i class="fas fa-chart-line"></i><span>Executive Dashboard</span>
-      </a>
-      <a href="#" class="nav-item" data-page="kill-chain">
-        <i class="fas fa-sitemap"></i><span>Kill Chain View</span>
-      </a>
-      <a href="#" class="nav-item" data-page="case-management">
-        <i class="fas fa-folder-open"></i><span>Case Management</span>
-      </a>
-      <a href="#" class="nav-item" data-page="threat-hunting">
-        <i class="fas fa-search"></i><span>Threat Hunting</span>
-      </a>
-      <a href="#" class="nav-item" data-page="detection-engineering">
-        <i class="fas fa-code"></i><span>Detection Engineering</span>
-      </a>
-      <a href="#" class="nav-item" data-page="soar">
-        <i class="fas fa-bolt"></i><span>SOAR Automation</span>
-      </a>
-      <a href="#" class="nav-item" data-page="live-feeds">
-        <i class="fas fa-rss"></i><span>Live Threat Feeds</span>
-      </a>
-      <a href="#" class="nav-item" data-page="sysmon">
-        <i class="fas fa-file-code"></i><span>Sysmon Analyzer</span>
-      </a>
-      <a href="#" class="nav-item" data-page="cyber-news">
-        <i class="fas fa-newspaper"></i><span>Cyber News</span>
-      </a>
-      <a href="#" class="nav-item" data-page="mitre-attack">
-        <i class="fas fa-th"></i><span>MITRE ATT&CK</span>
-      </a>
-      <a href="#" class="nav-item" data-page="geo-threats">
-        <i class="fas fa-globe"></i><span>Geo Threat Map</span>
-      </a>
-    </nav>
-
-    <!-- ════ CYBER DEFENSE BRAIN ════ -->
+    <!-- ════ 2. CYBER DEFENSE BRAIN ════ -->
     <div class="sidebar-section-label" style="color:#00d4ff;opacity:1;">🧠 CYBER DEFENSE BRAIN</div>
     <nav class="sidebar-nav">
       <a href="#" class="nav-item" data-page="malware-lab">
@@ -221,7 +164,7 @@
       </a>
     </nav>
 
-    <!-- ════ INNOVATIONS ════ -->
+    <!-- ════ 3. INNOVATIONS ════ -->
     <div class="sidebar-section-label" style="color:#f97316;opacity:1;">🚀 INNOVATIONS</div>
     <nav class="sidebar-nav">
       <a href="#" class="nav-item" data-page="whatif-simulator">
@@ -233,6 +176,59 @@
       </a>
       <a href="#" class="nav-item" data-page="autonomous-agent">
         <i class="fas fa-robot"></i><span>Autonomous SOC Agent</span>
+      </a>
+    </nav>
+
+    <!-- ════ 4. SOC OPERATIONS ════ -->
+    <div class="sidebar-section-label">SOC OPERATIONS</div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item" data-page="soc-operations">
+        <i class="fas fa-shield-virus"></i><span>SOC Operations</span>
+      </a>
+      <a href="#" class="nav-item" data-page="ai-orchestrator">
+        <i class="fas fa-robot"></i><span>AI Orchestrator</span>
+        <span class="nav-badge badge-cyan">AI</span>
+      </a>
+      <a href="#" class="nav-item" data-page="playbooks">
+        <i class="fas fa-book"></i><span>Playbooks</span>
+      </a>
+    </nav>
+
+    <!-- ════ 5. ADVANCED SOC ════ -->
+    <div class="sidebar-section-label">ADVANCED SOC</div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item" data-page="executive-dashboard">
+        <i class="fas fa-chart-line"></i><span>Executive Dashboard</span>
+      </a>
+      <a href="#" class="nav-item" data-page="kill-chain">
+        <i class="fas fa-sitemap"></i><span>Kill Chain View</span>
+      </a>
+      <a href="#" class="nav-item" data-page="case-management">
+        <i class="fas fa-folder-open"></i><span>Case Management</span>
+      </a>
+      <a href="#" class="nav-item" data-page="threat-hunting">
+        <i class="fas fa-search"></i><span>Threat Hunting</span>
+      </a>
+      <a href="#" class="nav-item" data-page="detection-engineering">
+        <i class="fas fa-code"></i><span>Detection Engineering</span>
+      </a>
+      <a href="#" class="nav-item" data-page="soar">
+        <i class="fas fa-bolt"></i><span>SOAR Automation</span>
+      </a>
+      <a href="#" class="nav-item" data-page="live-feeds">
+        <i class="fas fa-rss"></i><span>Live Threat Feeds</span>
+      </a>
+      <a href="#" class="nav-item" data-page="sysmon">
+        <i class="fas fa-file-code"></i><span>Sysmon Analyzer</span>
+      </a>
+      <a href="#" class="nav-item" data-page="cyber-news">
+        <i class="fas fa-newspaper"></i><span>Cyber News</span>
+      </a>
+      <a href="#" class="nav-item" data-page="mitre-attack">
+        <i class="fas fa-th"></i><span>MITRE ATT&CK</span>
+      </a>
+      <a href="#" class="nav-item" data-page="geo-threats">
+        <i class="fas fa-globe"></i><span>Geo Threat Map</span>
       </a>
     </nav>
 
@@ -540,7 +536,7 @@
         <div class="ai-chat-main">
           <div class="ai-chat-header">
             <div class="ai-header-left">
-              <img src="images/wadjet-logo.png" alt="Wadjet" style="width:28px;height:28px;object-fit:contain;border-radius:4px;" />
+              <img src="images/wadjet-logo.png" alt="EYEbot AI" style="width:28px;height:28px;object-fit:contain;border-radius:4px;" />
               <div style="margin-left:8px;">
                 <div class="ai-status-indicator">
                   <span class="ai-pulse-dot"></span>
@@ -567,10 +563,10 @@
           <div class="ai-messages" id="aiMessages">
             <div class="ai-welcome">
               <div class="ai-welcome-icon">
-                <img src="images/wadjet-logo.png" alt="Wadjet-Eye AI" style="width:56px;height:56px;object-fit:contain;" />
+                <img src="images/wadjet-logo.png" alt="EYEbot AI" style="width:56px;height:56px;object-fit:contain;" />
               </div>
               <div class="ai-welcome-text">
-                <h3>Wadjet-Eye Agentic AI</h3>
+                <h3>EYEbot Agentic AI</h3>
                 <p>Autonomous threat investigation engine. I select tools, observe results, reason iteratively, and build a provable evidence trail — up to 12 autonomous iterations per query.</p>
                 <div class="ai-suggestion-chips">
                   <button class="suggestion-chip" onclick="sendSuggestion(this)">Investigate 185.220.101.45 for C2 activity</button>

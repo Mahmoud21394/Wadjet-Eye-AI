@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  ThreatPilot AI — CTI REST API Routes v3.0
+ *  EYEbot AI — CTI REST API Routes v3.0
  *  backend/routes/cti.js
  *
  *  Endpoints:

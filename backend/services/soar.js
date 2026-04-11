@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  ThreatPilot AI — Lightweight SOAR Engine v3.0
+ *  EYEbot AI — Lightweight SOAR Engine v3.0
  *  backend/services/soar.js
  *
  *  Capabilities:

@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  ThreatPilot AI — Live Threat Feed Collectors
+ *  EYEbot AI — Live Threat Feed Collectors
  *  Route: /api/collectors/*
  *
  *  Pulls real IOC data from:

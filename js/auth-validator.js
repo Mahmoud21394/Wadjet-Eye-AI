@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Global Auth Validator & API Health Monitor v5.3
+ *  EYEbot AI — Global Auth Validator & API Health Monitor v5.3
  *  js/auth-validator.js
  *
  *  PURPOSE:

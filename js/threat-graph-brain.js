@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Threat Intelligence Graph Brain v2.0
+ *  EYEbot AI — Threat Intelligence Graph Brain v2.0
  *  FILE: js/threat-graph-brain.js
  *
  *  Interactive graph visualization of threat actors, malware, 

@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Reports & Exports v2.0 + Pricing v3.0 + Settings v3.0
+ *  EYEbot AI — Reports & Exports v2.0 + Pricing v3.0 + Settings v3.0
  *  Combined module with all three:
  *  - Reports: PDF/CSV/JSON exports with real data
  *  - Pricing: Admin-editable plans with monthly/annual toggle
@@ -312,7 +312,7 @@ ${(report.summary?.top_mitre||[]).map(t=>`<div class="list-item">• ${t}</div>`
 <h2>Recommendations</h2>
 ${(report.summary?.recommendations||[]).map((r,i)=>`<div class="list-item"><strong>${i+1}.</strong> ${r}</div>`).join('')}
 
-<footer>Wadjet-Eye AI — Cyber Threat Intelligence Platform v19.0 &nbsp;|&nbsp; Confidential</footer>
+<footer>EYEbot AI — Cyber Threat Intelligence Platform v19.0 &nbsp;|&nbsp; Confidential</footer>
 </body></html>`;
 
   const w = window.open('','_blank');
@@ -612,7 +612,7 @@ window._pricingSaveEdit = function(btn) {
    ███████╗ SETTINGS MODULE v3.0 — HTTP 400 FIX
 ══════════════════════════════════════════════════════ */
 const SETTINGS_DEFAULT = {
-  general:    { platform_name:'Wadjet-Eye AI', platform_url:'', timezone:'UTC', language:'en', logo_url:'', maintenance_mode:false, debug_mode:false },
+  general:    { platform_name:'EYEbot AI', platform_url:'', timezone:'UTC', language:'en', logo_url:'', maintenance_mode:false, debug_mode:false },
   ai:         { provider:'platform', model:'gpt-4o', openai_key:'', claude_key:'', max_tokens:1500, temperature:0.3, auto_investigate:true },
   threat_feeds:{ vt_key:'', abuseipdb_key:'', shodan_key:'', otx_key:'', auto_sync:true, sync_interval_hours:6 },
   notifications:{ email_alerts:true, slack_webhook:'', teams_webhook:'', alert_threshold:'HIGH', digest_frequency:'daily' },

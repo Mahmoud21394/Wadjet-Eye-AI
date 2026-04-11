@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Live IOC Lookup & Threat Intelligence Feeds v2.0
+ *  EYEbot AI — Live IOC Lookup & Threat Intelligence Feeds v2.0
  *  Fixes: accurate results from VT, AbuseIPDB, Shodan, OTX
  *  Unified real-time results with clickable links, proper error handling
  * ══════════════════════════════════════════════════════════════════════

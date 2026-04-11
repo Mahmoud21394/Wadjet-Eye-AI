@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════════════════════
-   ThreatPilot AI — Mock Data Layer
+   EYEbot AI — Mock Data Layer
    All realistic threat intelligence data for demo
    ══════════════════════════════════════════════════════════ */
 

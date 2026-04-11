@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Platform Settings UI v5.1 (PRODUCTION)
+ *  EYEbot AI — Platform Settings UI v5.1 (PRODUCTION)
  *  FILE: js/platform-settings.js
  *
  *  Loads and saves real platform configuration via /api/settings.

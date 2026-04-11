@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Comprehensive Cybersecurity Playbooks
+ *  EYEbot AI — Comprehensive Cybersecurity Playbooks
  *  All major incident response & threat hunting playbooks
  * ══════════════════════════════════════════════════════════
  */

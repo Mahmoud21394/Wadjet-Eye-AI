@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Live GEO Threat Map v5.0
+ *  EYEbot AI — Live GEO Threat Map v5.0
  *  js/leaflet-geo-map.js
  *
  *  Primary:  Radware Live Threat Map embedded via iframe

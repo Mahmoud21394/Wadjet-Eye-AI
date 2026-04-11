@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — "EYE AI" Global Branding Module v1.0
+ *  EYEbot AI — "EYEbot AI" Global Branding Module v1.0
  *  Applies the icon/logo globally across:
  *    • Login screen
  *    • Navbar / sidebar header
@@ -15,8 +15,8 @@
    BRANDING CONSTANTS
 ───────────────────────────────────────────── */
 const EYE_AI_BRAND = {
-  name:       'Wadjet-Eye AI',
-  shortName:  'EYE AI',
+  name:       'EYEbot AI',
+  shortName:  'EYEbot AI',
   tagline:    'AI-Agentic Cyber Threat Intelligence Platform',
   version:    'v17.0',
   logoPath:   'images/wadjet-logo.png',
@@ -46,7 +46,7 @@ function initEyeAIBranding() {
   _applyTopbarBranding();
   _injectFooterBar();
   _applyPageTitleBranding();
-  console.info('[EYE AI Branding] ✅ Applied globally');
+  console.info('[EYEbot AI Branding] ✅ Applied globally');
 }
 
 /* ─────────────────────────────────────────────
@@ -262,7 +262,7 @@ function _injectFooterBar() {
       <span style="color:#333">·</span>
       <span style="color:#333">TLS 1.3 · Zero-Trust</span>
       <span style="color:#333">·</span>
-      <span style="color:#2d4a6e">© 2025 Wadjet-Eye AI</span>
+      <span style="color:#2d4a6e">© 2025 EYEbot AI</span>
     </div>
     <style>
       @keyframes footerPulse { 0%,100%{opacity:1} 50%{opacity:.4} }
@@ -305,3 +305,7 @@ if (document.readyState === 'loading') {
 } else {
   setTimeout(initEyeAIBranding, 100);
 }
+
+// Backward compatibility alias
+window.EYE_AI_BRAND = EYE_AI_BRAND;
+window.EYEBOT_AI_BRAND = EYE_AI_BRAND;

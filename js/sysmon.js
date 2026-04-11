@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Sysmon Log Analyzer v2.0
+ *  EYEbot AI — Sysmon Log Analyzer v2.0
  *  js/sysmon.js
  *
  *  Full Sysmon XML log analysis module:
@@ -570,4 +570,4 @@ window._sysmonInvestigateAI = () => {
 window.renderSysmonAnalyzer = renderSysmonAnalyzer;
 window.renderSysmon         = renderSysmonAnalyzer;
 
-console.info('[Sysmon] Module loaded — Wadjet-Eye AI Sysmon Analyzer v2.0');
+console.info('[Sysmon] Module loaded — EYEbot AI Sysmon Analyzer v2.0');

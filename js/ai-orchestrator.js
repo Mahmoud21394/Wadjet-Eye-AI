@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  ThreatPilot AI — AI Orchestrator Frontend v3.0
+ *  EYEbot AI — AI Orchestrator Frontend v3.0
  *  js/ai-orchestrator.js
  *
  *  Provides:
@@ -300,7 +300,7 @@
         <div style="display:flex;align-items:center;gap:8px">
           <div style="width:32px;height:32px;background:linear-gradient(135deg,#1f6feb,#a855f7);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px">🤖</div>
           <div>
-            <div style="font-size:0.875em;font-weight:600;color:#e6edf3">ThreatPilot AI</div>
+            <div style="font-size:0.875em;font-weight:600;color:#e6edf3">EYEbot AI</div>
             <div style="font-size:0.7em;color:#3fb950">● Live</div>
           </div>
         </div>
@@ -315,7 +315,7 @@
         <!-- Welcome message -->
         <div style="text-align:center;padding:20px 0;color:#8b949e;font-size:0.8em">
           <div style="font-size:2em;margin-bottom:8px">🔐</div>
-          <div style="font-weight:600;color:#e6edf3;margin-bottom:4px">ThreatPilot AI Agent</div>
+          <div style="font-weight:600;color:#e6edf3;margin-bottom:4px">EYEbot AI Agent</div>
           <div>Ask me anything about your threat landscape</div>
         </div>
       </div>
@@ -354,7 +354,7 @@
   function buildFAB() {
     const btn = document.createElement('button');
     btn.id = 'ai-fab-btn';
-    btn.title = 'ThreatPilot AI Agent';
+    btn.title = 'EYEbot AI Agent';
     btn.style.cssText = `
       position:fixed; bottom:20px; right:20px;
       width:52px; height:52px; border-radius:50%;
