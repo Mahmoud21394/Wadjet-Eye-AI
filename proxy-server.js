@@ -280,28 +280,48 @@ function nvdAutoCorrectQS(rawQS) {
  * 7. On upstream 404 with empty body → returns safe fallback JSON.
  * 8. Dynamic error message: `NVD HTTP <status>: <actual response text>`.
  */
-function handleNVDProxy(parsedUrl, req, res) {
-  // ── Diagnostics sub-endpoint ──────────────────────────────
-  if (parsedUrl.pathname === '/proxy/nvd/diagnose') {
-    addCORS(res);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      endpoint:      NVD_BASE_URL,
-      proxy_paths:   ['/proxy/nvd', '/proxy/nvd/'],
-      valid_params:  ['resultsPerPage','startIndex','pubStartDate','pubEndDate','cvssV3Severity','keywordSearch','cveId'],
-      date_format:   'YYYY-MM-DDThh:mm:ss.000Z (both pubStartDate AND pubEndDate required)',
-      cve_format:    'CVE-YYYY-NNNNN (uppercase)',
-      severity_values: ['CRITICAL','HIGH','MEDIUM','LOW'],
-      rate_limit:    '5 req/30s (unauthenticated) | 50 req/30s (with apiKey)',
-      example_urls:  [
-        '/proxy/nvd?resultsPerPage=20',
-        '/proxy/nvd?cvssV3Severity=CRITICAL&resultsPerPage=10',
-        '/proxy/nvd?cveId=CVE-2024-21762',
-        '/proxy/nvd?pubStartDate=2026-01-01T00:00:00.000Z&pubEndDate=2026-04-11T23:59:59.000Z&resultsPerPage=20',
-      ],
-    }));
-    return;
-  }
+function handleNVD(req, res) {
+  const parsed = url.parse(req.url, true);
+  const qs = new URLSearchParams(parsed.query).toString();
+  const target = qs ? `${NVD_BASE}?${qs}` : NVD_BASE;
+
+  console.log('[NVD PROXY]', target);
+
+  const u = new URL(target);
+
+  const options = {
+    hostname: u.hostname,
+    path: u.pathname + u.search,
+    method: 'GET',
+    headers: {
+      'User-Agent': 'cve-proxy'
+    }
+  };
+
+  const pReq = https.request(options, pRes => {
+    let chunks = [];
+
+    pRes.on('data', d => chunks.push(d));
+    pRes.on('end', () => {
+      cors(res);
+
+      // ✅ forward real NVD status & headers
+      res.writeHead(pRes.statusCode, {
+        'Content-Type': pRes.headers['content-type'] || 'application/json'
+      });
+
+      res.end(Buffer.concat(chunks));
+    });
+  });
+
+  pReq.on('error', e => {
+    cors(res);
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: e.message }));
+  });
+
+  pReq.end();
+}
 
   // ── Build query string ────────────────────────────────────
   const rawQS = parsedUrl.query
