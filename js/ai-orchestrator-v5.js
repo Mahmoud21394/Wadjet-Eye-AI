@@ -44,6 +44,21 @@ const AIORCH = {
   toolsUsed:   new Set(),
 };
 
+/**
+ * _orchRefreshKeys — re-reads all API keys from localStorage at call-time.
+ * Ensures keys saved via Settings UI are picked up without page reload.
+ * Called before every enrichment pipeline invocation.
+ */
+function _orchRefreshKeys() {
+  AIORCH.apiKeys.openai     = localStorage.getItem('wadjet_openai_key')    || '';
+  AIORCH.apiKeys.claude     = localStorage.getItem('wadjet_claude_key')    || '';
+  AIORCH.apiKeys.virustotal = localStorage.getItem('wadjet_vt_key')        || '';
+  AIORCH.apiKeys.abuseipdb  = localStorage.getItem('wadjet_abuseipdb_key') || '';
+  AIORCH.apiKeys.shodan     = localStorage.getItem('wadjet_shodan_key')    || '';
+  AIORCH.apiKeys.otx        = localStorage.getItem('wadjet_otx_key')       || '';
+  AIORCH.aiProvider         = localStorage.getItem('wadjet_ai_provider')   || 'openai';
+}
+
 function _genId() {
   return 'sess-' + Math.random().toString(36).slice(2,10);
 }
@@ -335,6 +350,11 @@ Type your query or pick a quick prompt above to get started.`;
 async function _orchSendMessage(prompt) {
   if (!prompt.trim() || AIORCH.isThinking) return;
 
+  // ── Refresh API keys from localStorage at call-time ──────────
+  // This ensures keys saved via Settings UI are used immediately
+  // without requiring a page reload.
+  _orchRefreshKeys();
+
   AIORCH.isThinking = true;
   AIORCH.msgCount++;
 
@@ -373,19 +393,33 @@ async function _orchSendMessage(prompt) {
     if (detectedIOC && iocType && ['ip','domain','url','md5','sha1','sha256','sha512'].includes(iocType)) {
       _orchLog('ioc_detected', `${iocType}: ${detectedIOC}`);
 
-      // Show "gathering intel" message
+      // Show "gathering intel" status — explicitly state which sources are active vs missing key
+      const srcStatus = [
+        AIORCH.apiKeys.virustotal ? '🟢 VirusTotal' : '⬜ VirusTotal (no key)',
+        (iocType === 'ip' || iocType === 'domain')
+          ? (AIORCH.apiKeys.abuseipdb ? '🟢 AbuseIPDB' : '⬜ AbuseIPDB (no key)') : null,
+        iocType === 'ip'
+          ? (AIORCH.apiKeys.shodan ? '🟢 Shodan' : '⬜ Shodan (no key)') : null,
+        '🟢 OTX (public)',   // OTX general endpoint requires no key
+      ].filter(Boolean).join(' · ');
+
       const gatherMsg = document.createElement('div');
       gatherMsg.id = 'enrich-gathering-' + Date.now();
       gatherMsg.className = 'p19-msg p19-msg--assistant';
       gatherMsg.innerHTML = `<div class="p19-msg__avatar" style="background:rgba(168,85,247,.15);border:1px solid rgba(168,85,247,.2);color:var(--p19-purple)"><i class="fas fa-robot"></i></div>
-        <div class="p19-msg__bubble"><div style="font-size:.84em;color:var(--p19-t3)"><i class="fas fa-circle-notch fa-spin" style="margin-right:6px;color:var(--p19-cyan)"></i>Gathering intelligence from VirusTotal, AbuseIPDB, Shodan, OTX…</div></div>`;
+        <div class="p19-msg__bubble">
+          <div style="font-size:.84em;color:var(--p19-t3);margin-bottom:4px"><i class="fas fa-circle-notch fa-spin" style="margin-right:6px;color:var(--p19-cyan)"></i><strong style="color:var(--p19-t2)">Querying threat intelligence sources…</strong></div>
+          <div style="font-size:.76em;color:var(--p19-t4);margin-top:2px">${srcStatus}</div>
+          <div style="font-size:.72em;color:var(--p19-t4);margin-top:4px">IOC: <code style="color:var(--p19-cyan)">${_e(detectedIOC)}</code> · Type: <strong style="color:var(--p19-t2)">${iocType.toUpperCase()}</strong></div>
+        </div>`;
       const msgContainer = document.getElementById('orch-messages');
       if (msgContainer) { msgContainer.appendChild(gatherMsg); msgContainer.scrollTop = msgContainer.scrollHeight; }
 
+      // Run all enrichment sources in parallel — blocking until all resolve/reject
       enrichData = await _orchEnrichIOC(detectedIOC, iocType);
       const enrichContext = _buildEnrichContext(enrichData, detectedIOC, iocType);
 
-      // Remove gathering msg
+      // Remove gathering msg — replace with live results card immediately
       gatherMsg.remove();
 
       // Feed enriched context to AI
@@ -466,52 +500,71 @@ async function _callAI(messages, ioc) {
 
 /* ═══════════════════════════════════════════════════════
    IOC ENRICHMENT PIPELINE
+   Executes synchronously (blocking) with Promise.allSettled.
+   All sources run in parallel; results are aggregated into
+   a single object before returning. No background-only tasks.
+   Keys are read from AIORCH.apiKeys (refreshed from localStorage
+   by _orchRefreshKeys() before each invocation).
 ═══════════════════════════════════════════════════════ */
 async function _orchEnrichIOC(value, type) {
-  const results = {};
+  // Keys were refreshed by _orchRefreshKeys() in _orchSendMessage
+  const results = {
+    _meta: {
+      ioc:       value,
+      type:      type,
+      queriedAt: new Date().toISOString(),
+      keyStatus: {
+        virustotal: !!AIORCH.apiKeys.virustotal ? 'configured' : 'missing_api_key',
+        abuseipdb:  !!AIORCH.apiKeys.abuseipdb  ? 'configured' : 'missing_api_key',
+        shodan:     !!AIORCH.apiKeys.shodan      ? 'configured' : 'missing_api_key',
+        otx:        'public', // OTX /general endpoint is unauthenticated
+      }
+    }
+  };
   const tasks = [];
 
-  // VirusTotal — always run (show "not configured" if no key)
+  // ── VirusTotal ──────────────────────────────────────────────
   if (AIORCH.apiKeys.virustotal) {
     tasks.push(_vtLookup(value, type)
       .then(r  => { results.virustotal = r; })
-      .catch(e => { results.virustotal = { error: e.message }; }));
+      .catch(e => { results.virustotal = { error: e.message, source: 'virustotal' }; }));
   } else {
-    results.virustotal = { notConfigured: true };
+    results.virustotal = { notConfigured: true, status: 'missing_api_key',
+      hint: 'Add VirusTotal API key in Settings → Threat Feeds' };
   }
 
-  // AbuseIPDB — IP and domain
+  // ── AbuseIPDB — IP and domain ────────────────────────────────
   if (type === 'ip' || type === 'domain') {
     if (AIORCH.apiKeys.abuseipdb) {
       tasks.push(_abuseIPDBLookup(value)
         .then(r  => { results.abuseipdb = r; })
-        .catch(e => { results.abuseipdb = { error: e.message }; }));
+        .catch(e => { results.abuseipdb = { error: e.message, source: 'abuseipdb' }; }));
     } else {
-      results.abuseipdb = { notConfigured: true };
+      results.abuseipdb = { notConfigured: true, status: 'missing_api_key',
+        hint: 'Add AbuseIPDB API key in Settings → Threat Feeds' };
     }
   }
 
-  // Shodan — IP only
+  // ── Shodan — IP only ─────────────────────────────────────────
   if (type === 'ip') {
     if (AIORCH.apiKeys.shodan) {
       tasks.push(_shodanLookup(value)
         .then(r  => { results.shodan = r; })
-        .catch(e => { results.shodan = { error: e.message }; }));
+        .catch(e => { results.shodan = { error: e.message, source: 'shodan' }; }));
     } else {
-      results.shodan = { notConfigured: true };
+      results.shodan = { notConfigured: true, status: 'missing_api_key',
+        hint: 'Add Shodan API key in Settings → Threat Feeds' };
     }
   }
 
-  // OTX — always run
-  if (AIORCH.apiKeys.otx) {
-    tasks.push(_otxLookup(value, type)
-      .then(r  => { results.otx = r; })
-      .catch(e => { results.otx = { error: e.message }; }));
-  } else {
-    results.otx = { notConfigured: true };
-  }
+  // ── AlienVault OTX — public endpoint (no key required) ───────
+  // OTX /indicators/{type}/{value}/general is publicly accessible.
+  // Key is sent if available for higher rate limits only.
+  tasks.push(_otxLookup(value, type)
+    .then(r  => { results.otx = r; })
+    .catch(e => { results.otx = { error: e.message, source: 'otx' }; }));
 
-  // Run all in parallel — allSettled never throws
+  // ── Wait for all in parallel — blocking, synchronous result ──
   await Promise.allSettled(tasks);
   return results;
 }
@@ -591,12 +644,14 @@ async function _shodanLookup(ip) {
 }
 
 async function _otxLookup(value, type) {
-  const key = AIORCH.apiKeys.otx;
+  const key = AIORCH.apiKeys.otx; // Optional — OTX /general is public
   const otxType = type==='ip'?'IPv4':type==='domain'?'domain':type==='url'?'URL':'file';
-  // Use proxy to bypass CORS
-  const r = await fetch(`/proxy/otx/indicators/${otxType}/${encodeURIComponent(value)}/general`, {
-    headers: { 'X-OTX-API-KEY': key }
-  });
+  // Use proxy to bypass CORS.
+  // OTX /indicators/{type}/{value}/general is a PUBLIC endpoint — no key required.
+  // Key is included only if configured (grants higher rate limits).
+  const headers = {};
+  if (key) headers['X-OTX-API-KEY'] = key;
+  const r = await fetch(`/proxy/otx/indicators/${otxType}/${encodeURIComponent(value)}/general`, { headers });
   if (!r.ok) throw new Error(`OTX: HTTP ${r.status}`);
   const d = await r.json();
   const pulses = d.pulse_info?.pulses || [];
@@ -605,56 +660,75 @@ async function _otxLookup(value, type) {
   return {
     pulse_count:     d.pulse_info?.count || 0,
     threat_score:    d.base_indicator?.access_type || 'public',
+    indicator:       d.indicator,
+    reputation:      d.reputation || 0,
     tags,
     threatActors,
     malware_families:(d.malware_families||[]).slice(0,5).map(m=>m.display_name||m),
     pulses:          pulses.slice(0,5).map(p=>({ name: p.name, modified: p.modified, author: p.author?.username })),
+    keyUsed:         !!key,
   };
 }
 
 function _buildEnrichContext(data, value, type) {
-  let ctx = `IOC: ${value} (${type.toUpperCase()})\n\n`;
+  let ctx = `IOC: ${value} (${type.toUpperCase()})\n`;
+  // Include key status metadata in context
+  if (data._meta?.keyStatus) {
+    const ks = data._meta.keyStatus;
+    ctx += `Key status — VirusTotal: ${ks.virustotal}, AbuseIPDB: ${ks.abuseipdb}, Shodan: ${ks.shodan}, OTX: ${ks.otx}\n`;
+  }
+  ctx += '\n';
   let sourcesUsed = 0;
 
+  // VirusTotal
   if (data.virustotal && !data.virustotal.error && !data.virustotal.notConfigured) {
     const vt = data.virustotal;
     const verdict = vt.malicious > 5 ? 'MALICIOUS' : vt.malicious > 0 ? 'SUSPICIOUS' : 'CLEAN';
-    ctx += `VirusTotal: ${verdict} — ${vt.malicious}/${vt.total} engines flagged as malicious, ${vt.suspicious} suspicious. Reputation score: ${vt.reputation}. Country: ${vt.country||'Unknown'}. ASN: ${vt.as_owner||'Unknown'}.`;
+    ctx += `VirusTotal [LIVE]: ${verdict} — ${vt.malicious}/${vt.total} engines flagged as malicious, ${vt.suspicious} suspicious. Reputation: ${vt.reputation}. Country: ${vt.country||'Unknown'}. ASN: ${vt.as_owner||'Unknown'}.`;
     if (vt.maliciousEngines?.length) ctx += ` Detected by: ${vt.maliciousEngines.map(e=>e.name).join(', ')}.`;
     ctx += '\n';
     sourcesUsed++;
+  } else if (data.virustotal?.error) {
+    ctx += `VirusTotal [ERROR]: ${data.virustotal.error}\n`;
   } else if (data.virustotal?.notConfigured) {
-    ctx += `VirusTotal: API key not configured — manual review recommended at https://www.virustotal.com/gui/${type==='ip'?'ip-address':type==='domain'?'domain':'file'}/${value}\n`;
+    ctx += `VirusTotal [missing_api_key]: No key configured — add in Settings → Threat Feeds. Manual check: https://www.virustotal.com/gui/${type==='ip'?'ip-address':type==='domain'?'domain':'file'}/${value}\n`;
   }
 
+  // AbuseIPDB
   if (data.abuseipdb && !data.abuseipdb.error && !data.abuseipdb.notConfigured) {
     const ab = data.abuseipdb;
-    ctx += `AbuseIPDB: Abuse confidence score ${ab.abuseScore}/100, ${ab.totalReports} total reports. ISP: ${ab.isp||'Unknown'}. Country: ${ab.countryCode||'Unknown'}. Usage: ${ab.usageType||'unknown'}. Whitelisted: ${ab.isWhitelisted?'yes':'no'}.\n`;
+    ctx += `AbuseIPDB [LIVE]: Abuse confidence ${ab.abuseScore}/100, ${ab.totalReports} reports. ISP: ${ab.isp||'Unknown'}. Country: ${ab.countryCode||'Unknown'}. Usage: ${ab.usageType||'unknown'}. Whitelisted: ${ab.isWhitelisted?'yes':'no'}.\n`;
     sourcesUsed++;
+  } else if (data.abuseipdb?.error) {
+    ctx += `AbuseIPDB [ERROR]: ${data.abuseipdb.error}\n`;
   } else if (data.abuseipdb?.notConfigured) {
-    ctx += `AbuseIPDB: API key not configured.\n`;
+    ctx += `AbuseIPDB [missing_api_key]: No key configured — add in Settings → Threat Feeds.\n`;
   }
 
+  // Shodan
   if (data.shodan && !data.shodan.error && !data.shodan.notConfigured) {
     const sh = data.shodan;
-    ctx += `Shodan: Org: ${sh.org||'Unknown'}, Country: ${sh.country||'Unknown'}, OS: ${sh.os||'unknown'}. Open ports: ${sh.ports.join(', ')||'none'}. CVEs on host: ${sh.vulns.join(', ')||'none'}. Hostnames: ${sh.hostnames.join(', ')||'none'}.\n`;
+    ctx += `Shodan [LIVE]: Org: ${sh.org||'Unknown'}, Country: ${sh.country||'Unknown'}, OS: ${sh.os||'unknown'}. Open ports: ${sh.ports.join(', ')||'none'}. CVEs on host: ${sh.vulns.join(', ')||'none'}. Hostnames: ${sh.hostnames.join(', ')||'none'}.\n`;
     sourcesUsed++;
+  } else if (data.shodan?.error) {
+    ctx += `Shodan [ERROR]: ${data.shodan.error}\n`;
   } else if (data.shodan?.notConfigured) {
-    ctx += `Shodan: API key not configured.\n`;
+    ctx += `Shodan [missing_api_key]: No key configured — add in Settings → Threat Feeds.\n`;
   }
 
-  if (data.otx && !data.otx.error && !data.otx.notConfigured) {
+  // AlienVault OTX (always runs — public endpoint)
+  if (data.otx && !data.otx.error) {
     const otx = data.otx;
-    ctx += `AlienVault OTX: ${otx.pulse_count} threat pulses. Malware families: ${otx.malware_families.join(', ')||'none identified'}. Tags: ${otx.tags.slice(0,5).join(', ')||'none'}.`;
+    ctx += `AlienVault OTX [LIVE${otx.keyUsed ? '+KEY' : '/PUBLIC'}]: ${otx.pulse_count} threat pulses, reputation ${otx.reputation}. Malware families: ${otx.malware_families?.join(', ')||'none'}. Tags: ${otx.tags?.slice(0,5).join(', ')||'none'}.`;
     if (otx.pulses?.length) ctx += ` Recent pulses: ${otx.pulses.map(p=>p.name).join('; ')}.`;
     ctx += '\n';
     sourcesUsed++;
-  } else if (data.otx?.notConfigured) {
-    ctx += `AlienVault OTX: API key not configured.\n`;
+  } else if (data.otx?.error) {
+    ctx += `AlienVault OTX [ERROR]: ${data.otx.error}\n`;
   }
 
   if (sourcesUsed === 0) {
-    ctx += `\nNote: No threat intelligence API keys are configured. Analysis will be based on IOC pattern recognition only. Add VirusTotal, AbuseIPDB, Shodan, and OTX API keys in Settings → Threat Feeds for live enrichment.`;
+    ctx += `\nNote: No live threat intelligence data available. OTX public endpoint may have failed. Add VirusTotal, AbuseIPDB, and Shodan API keys in Settings → Threat Feeds for full enrichment coverage.`;
   }
   return ctx;
 }
@@ -664,7 +738,7 @@ function _buildEnrichContext(data, value, type) {
 function _renderEnrichCard(data, value, type) {
   const _score = (n, total) => total > 0 ? Math.round(n/total*100) : 0;
 
-  // Helper: "Not Configured" placeholder card
+  // Helper: "Not Configured" / missing_api_key placeholder card
   const _notCfgCard = (name, icon) => `
     <div style="background:rgba(71,85,105,0.06);border:1px dashed rgba(71,85,105,0.35);border-radius:10px;padding:12px 14px;flex:1;min-width:180px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
@@ -672,9 +746,9 @@ function _renderEnrichCard(data, value, type) {
           <i class="fas ${icon}" style="color:#475569;font-size:12px"></i>
         </div>
         <div style="font-weight:700;font-size:.82em;color:#64748b">${name}</div>
-        <div style="margin-left:auto;font-size:.66em;font-weight:700;color:#475569;background:rgba(71,85,105,.15);padding:2px 6px;border-radius:4px">NO KEY</div>
+        <div style="margin-left:auto;font-size:.62em;font-weight:700;color:#475569;background:rgba(71,85,105,.15);padding:2px 6px;border-radius:4px;font-family:monospace">missing_api_key</div>
       </div>
-      <div style="font-size:.74em;color:#475569;line-height:1.4">Add API key in <strong style="color:#94a3b8">Settings → Threat Feeds</strong> for live ${name} data.</div>
+      <div style="font-size:.74em;color:#475569;line-height:1.4">Status: <code style="color:#94a3b8">missing_api_key</code><br>Add API key in <strong style="color:#94a3b8">Settings → Threat Feeds</strong> for live ${name} data.</div>
     </div>`;
 
   // Helper: error card
@@ -776,14 +850,16 @@ function _renderEnrichCard(data, value, type) {
     </div>`;
   }
 
-  // OTX card
-  if (data.otx?.notConfigured) {
-    cards += _notCfgCard('AlienVault OTX', 'fa-satellite');
-  } else if (data.otx?.error) {
+  // OTX card — OTX /general endpoint is PUBLIC (no key required)
+  // Always renders live data or an error; never shows "not configured"
+  if (data.otx?.error) {
     cards += _errCard('AlienVault OTX', 'fa-satellite', data.otx.error);
   } else if (data.otx) {
     const otx = data.otx;
     const otxType = type==='ip'?'ip':type==='domain'?'domain':type==='url'?'url':'file';
+    const accessBadge = otx.keyUsed
+      ? `<div style="margin-left:auto;font-size:.7em;font-weight:800;color:#a855f7;background:rgba(168,85,247,.15);padding:2px 7px;border-radius:4px">${otx.pulse_count} PULSES</div>`
+      : `<div style="margin-left:auto;font-size:.62em;font-weight:700;color:#64748b;background:rgba(71,85,105,.15);padding:2px 6px;border-radius:4px;font-family:monospace">PUBLIC</div>`;
     cards += `
     <div style="background:rgba(168,85,247,0.08);border:1px solid rgba(168,85,247,0.25);border-radius:10px;padding:12px 14px;flex:1;min-width:200px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
@@ -791,22 +867,33 @@ function _renderEnrichCard(data, value, type) {
           <i class="fas fa-satellite" style="color:#a855f7;font-size:12px"></i>
         </div>
         <div style="font-weight:700;font-size:.82em;color:var(--p19-t1)">AlienVault OTX</div>
-        ${otx.pulse_count ? `<div style="margin-left:auto;font-size:.7em;font-weight:800;color:#a855f7;background:rgba(168,85,247,.15);padding:2px 7px;border-radius:4px">${otx.pulse_count} PULSES</div>` : ''}
+        ${accessBadge}
       </div>
       <div style="font-size:.78em;margin-bottom:6px">
         <span style="color:var(--p19-t4)">Threat Pulses: </span>
-        <strong style="color:var(--p19-t1)">${otx.pulse_count}</strong>
+        <strong style="color:${otx.pulse_count > 0 ? '#a855f7' : 'var(--p19-t1)'}">${otx.pulse_count}</strong>
+        <span style="color:var(--p19-t4);margin-left:8px">Reputation: </span>
+        <strong style="color:${otx.reputation < 0 ? '#ef4444' : '#22c55e'}">${otx.reputation}</strong>
       </div>
       ${otx.malware_families?.length ? `<div style="font-size:.72em;color:var(--p19-t4);margin-bottom:4px">Malware: <span style="color:#a855f7">${otx.malware_families.join(', ')}</span></div>` : ''}
       ${otx.tags?.length ? `<div style="font-size:.72em;color:var(--p19-t4);margin-bottom:4px">Tags: <span style="color:var(--p19-t2)">${otx.tags.slice(0,5).join(', ')}</span></div>` : ''}
-      ${otx.pulses?.length ? `<div style="font-size:.72em;color:var(--p19-t4)">Pulses: <span style="color:var(--p19-t2)">${otx.pulses.slice(0,2).map(p=>p.name).join('; ')}</span></div>` : ''}
+      ${otx.pulses?.length ? `<div style="font-size:.72em;color:var(--p19-t4)">Pulses: <span style="color:var(--p19-t2)">${otx.pulses.slice(0,2).map(p=>_e(p.name)).join('; ')}</span></div>` : ''}
       <a href="https://otx.alienvault.com/indicator/${otxType}/${encodeURIComponent(value)}" target="_blank" style="display:inline-block;margin-top:8px;font-size:.72em;color:#a855f7;text-decoration:none"><i class="fas fa-external-link-alt" style="font-size:.8em;margin-right:3px"></i>Full Report →</a>
     </div>`;
   }
 
+  // Build key-status summary line
+  const ks = data._meta?.keyStatus || {};
+  const statusDots = [
+    ks.virustotal === 'configured' ? '<span style="color:#22c55e">●</span> VT' : '<span style="color:#475569">●</span> VT',
+    ks.abuseipdb  === 'configured' ? '<span style="color:#22c55e">●</span> AIPDB' : '<span style="color:#475569">●</span> AIPDB',
+    ks.shodan     === 'configured' ? '<span style="color:#22c55e">●</span> Shodan' : '<span style="color:#475569">●</span> Shodan',
+    '<span style="color:#a855f7">●</span> OTX (public)',
+  ].join(' &nbsp;');
+
   return `
   <div style="margin:10px 0 14px;padding:14px;background:rgba(0,0,0,.2);border:1px solid var(--p19-border);border-radius:12px">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
       <i class="fas fa-satellite-dish" style="color:var(--p19-cyan);font-size:.85em"></i>
       <span style="font-size:.72em;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--p19-t4)">
         Multi-Source Intelligence Report
@@ -814,6 +901,7 @@ function _renderEnrichCard(data, value, type) {
       <span style="margin-left:4px;font-size:.72em;font-weight:700;color:var(--p19-cyan);font-family:monospace">${_e(value)}</span>
       <span style="margin-left:auto;font-size:.68em;color:var(--p19-t4)">${new Date().toLocaleTimeString()}</span>
     </div>
+    <div style="font-size:.68em;color:var(--p19-t4);margin-bottom:10px;line-height:1.6">${statusDots}</div>
     <div style="display:flex;flex-wrap:wrap;gap:10px">
       ${cards || '<div style="color:var(--p19-t4);font-size:.8em;padding:8px">No enrichment data available — add API keys in Settings → Threat Feeds.</div>'}
     </div>
