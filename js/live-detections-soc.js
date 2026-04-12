@@ -516,48 +516,233 @@ function _dsocUpdateSeverityCount(sev) {
 }
 
 /* ─────────────────────────────────────────────────────────────────
-   LIVE POLLING + WEBSOCKET
+   LIVE POLLING + SOCKET.IO REALTIME
+   ROOT CAUSE FIX (v32.1):
+   The backend uses Socket.IO (not raw WebSocket). Raw `new WebSocket()`
+   to a Socket.IO server fails because Socket.IO uses its own HTTP-upgrade
+   handshake at /socket.io/ — it does NOT accept connections at /ws/detections.
+   Fix: use the shared `io()` connection from api-client.js WS module
+   when socket.io-client is available, with a polling fallback.
 ───────────────────────────────────────────────────────────────── */
+
+/** Maximum reconnect attempts before falling back permanently to polling */
+const _DSOC_MAX_WS_RETRIES = 5;
+
 function _dsocStartPolling() {
   _dsocStopPolling();
-  _dsocConnectWS();
+  // _dsocConnectWS is async — call without await so it doesn't block render.
+  // Polling fallback in the setInterval will cover the gap if WS isn't ready.
+  _dsocConnectWS().catch(err => console.warn('[DetectSOC] WS connect error:', err.message));
+  // Polling fallback fires every 15 s when Socket.IO is not connected
   DetectSOC.pollTimer = setInterval(() => {
     if (!DetectSOC.paused && !DetectSOC.wsConn) _dsocPollNew();
   }, 15000);
 }
 
-function _dsocConnectWS() {
-  try {
-    const wsBase = (window.THREATPILOT_WS_URL || 'wss://wadjet-eye-ai.onrender.com').replace(/^http/,'ws');
-    const tok    = localStorage.getItem('wadjet_access_token') || '';
-    const ws     = new WebSocket(`${wsBase}/ws/detections${tok ? `?token=${tok}` : ''}`);
-    ws.onopen  = () => { DetectSOC.wsConn = ws; console.log('[DetectSOC] WebSocket connected ✅'); };
-    ws.onmessage = e => {
-      if (DetectSOC.paused) return;
-      try {
-        const msg = JSON.parse(e.data);
-        const evt = msg.data || msg;
-        if (evt && (evt.id || evt.type)) _dsocInjectLiveEvent(evt);
-      } catch (_) {}
-    };
-    ws.onclose  = () => { DetectSOC.wsConn = null; };
-    ws.onerror  = () => { ws.close(); DetectSOC.wsConn = null; };
-  } catch (_) { /* WS not available, fall back to polling */ }
+/**
+ * _dsocConnectWS — connect to the backend real-time stream.
+ *
+ * Strategy (in priority order):
+ *  1. Reuse the shared window.WS socket from api-client.js if already
+ *     connected. Uses WS.connectAsync() which refreshes the JWT first.
+ *  2. Create a dedicated socket if WS module is unavailable.
+ *  3. HTTP polling every 15 s if socket.io-client is not loaded.
+ *
+ * The backend (v3.2) accepts connections without a valid JWT (guest mode)
+ * so a stale token does NOT cause a hard reject.
+ */
+/**
+ * _dsocConnectWS — connect to the backend real-time stream.
+ *
+ * Strategy (in priority order):
+ *  1. Reuse the shared window.WS socket from api-client.js if it is
+ *     already connected — subscribe to `detection:event` on it and
+ *     emit `detections:start`.  This avoids opening a duplicate socket.
+ *  2. If window.WS exists but is not yet connected, call WS.connectAsync()
+ *     which refreshes the JWT first, then connects via Socket.IO.
+ *  3. If socket.io-client is unavailable, fall back to HTTP polling.
+ *
+ * The backend (websockets.js v3.2) allows connections without a valid
+ * JWT (guest mode), so a stale or missing token will not cause a hard
+ * connection failure — the client just gets limited access.
+ */
+async function _dsocConnectWS() {
+  // Guard: already connected
+  if (DetectSOC.wsConn) return;
+
+  DetectSOC._wsRetries = DetectSOC._wsRetries || 0;
+
+  // ── Strategy 1 & 2: Socket.IO via shared window.WS ─────────────
+  if (typeof io !== 'undefined') {
+    try {
+      let socket = null;
+
+      if (typeof window.WS !== 'undefined') {
+        // Check if the shared socket is already live
+        if (window.WS._socket?.connected) {
+          socket = window.WS._socket;
+          console.log('[DetectSOC] Reusing existing WS connection from api-client.js');
+        } else {
+          // connectAsync() refreshes token before connecting
+          socket = await window.WS.connectAsync();
+        }
+      }
+
+      // Fallback: create a dedicated socket if WS module is unavailable
+      if (!socket) {
+        const backendUrl = (window.THREATPILOT_API_URL || 'https://wadjet-eye-ai.onrender.com').replace(/\/$/, '');
+        const tok = _dsocGetToken();
+        socket = io(backendUrl, {
+          auth:                { token: tok },
+          transports:          ['websocket', 'polling'],
+          reconnection:        true,
+          reconnectionAttempts: _DSOC_MAX_WS_RETRIES,
+          reconnectionDelay:   3000,
+          reconnectionDelayMax: 15000,
+          timeout:             12000,
+        });
+      }
+
+      // ── Wire up event handlers ────────────────────────────────
+      const _onConnect = () => {
+        DetectSOC.wsConn    = socket;
+        DetectSOC._wsRetries = 0;
+        console.log('[DetectSOC] Socket.IO connected ✅');
+        socket.emit('detections:start');
+        const badge = document.getElementById('dsoc-ws-badge');
+        if (badge) { badge.textContent = '● Live'; badge.style.color = '#22c55e'; }
+      };
+
+      const _onDetection = evt => {
+        if (!DetectSOC.paused && evt && (evt.id || evt.type)) {
+          _dsocInjectLiveEvent(evt);
+        }
+      };
+
+      const _onConnectError = async err => {
+        console.warn('[DetectSOC] Socket.IO connect error:', err.message);
+        DetectSOC.wsConn = null;
+        DetectSOC._wsRetries++;
+
+        // If auth-related, attempt token refresh and push new token to socket
+        const isAuthErr = /auth|token|jwt|expired|invalid/i.test(err.message);
+        if (isAuthErr && typeof window.TokenStore !== 'undefined' && window.TokenStore.canRefresh()) {
+          console.info('[DetectSOC] Auth error — refreshing token…');
+          const ok = await (typeof refreshAccessToken === 'function'
+            ? refreshAccessToken()
+            : window.TokenStore.canRefresh() && false); // no-op if not available
+          if (ok && socket) {
+            socket.auth = { token: _dsocGetToken() };
+          }
+        }
+
+        if (DetectSOC._wsRetries >= _DSOC_MAX_WS_RETRIES) {
+          console.warn('[DetectSOC] Max WS retries reached — switching to polling');
+          try { socket.disconnect(); } catch(_) {}
+          const badge = document.getElementById('dsoc-ws-badge');
+          if (badge) { badge.textContent = '◌ Polling'; badge.style.color = '#f59e0b'; }
+        }
+      };
+
+      const _onDisconnect = reason => {
+        DetectSOC.wsConn = null;
+        console.log('[DetectSOC] Socket.IO disconnected:', reason);
+        const badge = document.getElementById('dsoc-ws-badge');
+        if (badge) { badge.textContent = '◌ Reconnecting…'; badge.style.color = '#f59e0b'; }
+      };
+
+      // Handle server-sent token expiry notification (from websockets.js v3.2)
+      const _onTokenExpired = () => {
+        console.warn('[DetectSOC] Server notified: token expired — triggering refresh');
+        if (typeof window.TokenStore !== 'undefined' && window.TokenStore.canRefresh()) {
+          // Use global refreshAccessToken if available (from api-client.js IIFE)
+          const refreshFn = typeof refreshAccessToken === 'function'
+            ? refreshAccessToken
+            : null;
+          if (refreshFn) {
+            refreshFn().then(ok => {
+              if (ok && socket) {
+                const tok = _dsocGetToken();
+                socket.auth = { token: tok };
+                socket.emit('auth:refresh', { token: tok });
+              }
+            });
+          }
+        }
+      };
+
+      // Only add listeners if not already wired (avoid duplicates on reuse)
+      if (socket !== window.WS?._socket || !socket._dsocListened) {
+        socket.on('connect',          _onConnect);
+        socket.on('detection:event',  _onDetection);
+        socket.on('connect_error',    _onConnectError);
+        socket.on('disconnect',       _onDisconnect);
+        socket.on('auth:token_expired', _onTokenExpired);
+        socket._dsocListened = true;
+      }
+
+      // If already connected, fire onConnect immediately
+      if (socket.connected) _onConnect();
+
+      // Store reference so _dsocStopPolling can close it
+      DetectSOC._ioSocket = socket;
+
+      return; // Socket.IO strategy initiated — polling acts as safety net
+    } catch (err) {
+      console.warn('[DetectSOC] Socket.IO init error:', err.message, '— falling back to polling');
+    }
+  } else {
+    console.warn('[DetectSOC] socket.io-client not loaded — using polling fallback');
+  }
+
+  // ── Strategy 3: HTTP polling fallback ──────────────────────────
+  const badge = document.getElementById('dsoc-ws-badge');
+  if (badge) { badge.textContent = '◌ Polling'; badge.style.color = '#f59e0b'; }
+}
+
+/**
+ * _dsocGetToken — retrieve the best available auth token.
+ * Uses window.TokenStore (api-client.js) as primary source so it
+ * is always consistent with the authenticated session.  Falls back
+ * to checking all known storage keys directly.
+ */
+function _dsocGetToken() {
+  // Primary: use the shared TokenStore from api-client.js
+  if (typeof window.TokenStore !== 'undefined' && window.TokenStore.get) {
+    const t = window.TokenStore.get();
+    if (t) return t;
+  }
+  // Fallback: check all known storage keys used by various auth modules
+  return sessionStorage.getItem('we_access_token')
+      || localStorage.getItem('we_access_token')
+      || sessionStorage.getItem('wadjet_access_token')
+      || localStorage.getItem('wadjet_access_token')
+      || localStorage.getItem('sb-access-token')
+      || '';
 }
 
 async function _dsocPollNew() {
   try {
-    const res   = await _dApiGet('/cti/detections?limit=10&sort=created_at&order=desc');
-    const rows  = res?.data || [];
+    const res     = await _dApiGet('/cti/detections?limit=10&sort=created_at&order=desc');
+    const rows    = res?.data || [];
     const prevIds = new Set(DetectSOC.data.map(r => r.id));
-    const fresh = rows.filter(r => !prevIds.has(r.id));
+    const fresh   = rows.filter(r => !prevIds.has(r.id));
     fresh.forEach(r => _dsocInjectLiveEvent(r));
   } catch (_) {}
 }
 
 function _dsocStopPolling() {
   if (DetectSOC.pollTimer) { clearInterval(DetectSOC.pollTimer); DetectSOC.pollTimer = null; }
-  if (DetectSOC.wsConn)    { try { DetectSOC.wsConn.close(); } catch(_){} DetectSOC.wsConn = null; }
+  // Stop socket.io detection stream
+  if (DetectSOC._ioSocket) {
+    try { DetectSOC._ioSocket.emit('detections:stop'); } catch(_) {}
+    // Only disconnect if we created it (not the shared WS.socket)
+    if (DetectSOC._ioSocket !== (typeof window.WS !== 'undefined' ? window.WS._socket : null)) {
+      try { DetectSOC._ioSocket.disconnect(); } catch(_) {}
+    }
+    DetectSOC._ioSocket = null;
+  }
+  DetectSOC.wsConn = null;
 }
 
 /* ─────────────────────────────────────────────────────────────────
@@ -741,8 +926,18 @@ window.stopDetections = function() {
 })();
 
 // FIX-D: Re-render on auth events if on detections page
-['auth:restored', 'auth:login', 'auth:token-refreshed'].forEach(evt => {
-  window.addEventListener(evt, () => {
+['auth:restored', 'auth:login', 'auth:token-refreshed', 'auth:token_refreshed'].forEach(evt => {
+  window.addEventListener(evt, (e) => {
+    // After a token refresh, push the new token to the active WS socket
+    if (evt === 'auth:token_refreshed' && DetectSOC._ioSocket) {
+      const tok = _dsocGetToken();
+      try {
+        DetectSOC._ioSocket.auth = { token: tok };
+        // Re-authenticate the socket with the server
+        DetectSOC._ioSocket.emit('auth:refresh', { token: tok });
+      } catch (_) {}
+    }
+
     const activePage = document.querySelector('.page.active');
     if (activePage && activePage.id === 'page-detections') {
       DetectSOC.loading = false;
