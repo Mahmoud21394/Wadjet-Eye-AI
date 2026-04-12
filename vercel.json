@@ -4,15 +4,15 @@
   "outputDirectory": ".",
 
   "rewrites": [
-    { "source": "/proxy/nvd/(.*)", "destination": "/api/proxy/nvd?_path=$1" },
-    { "source": "/proxy/nvd",      "destination": "/api/proxy/nvd" },
+    { "source": "/proxy/nvd/:path*", "destination": "/api/proxy/nvd" },
+    { "source": "/proxy/nvd",        "destination": "/api/proxy/nvd" },
 
-    { "source": "/proxy/vt/:path*",         "destination": "/api/proxy/vt?_path=:path*" },
-    { "source": "/proxy/shodan/:path*",     "destination": "/api/proxy/shodan?_path=:path*" },
-    { "source": "/proxy/otx/:path*",        "destination": "/api/proxy/otx?_path=:path*" },
-    { "source": "/proxy/abuseipdb/:path*",  "destination": "/api/proxy/abuseipdb?_path=:path*" },
-    { "source": "/proxy/openai/:path*",     "destination": "/api/proxy/openai?_path=:path*" },
-    { "source": "/proxy/claude/:path*",     "destination": "/api/proxy/claude?_path=:path*" },
+    { "source": "/proxy/vt/:path*",        "destination": "/api/proxy/vt?_path=:path*" },
+    { "source": "/proxy/shodan/:path*",    "destination": "/api/proxy/shodan?_path=:path*" },
+    { "source": "/proxy/otx/:path*",       "destination": "/api/proxy/otx?_path=:path*" },
+    { "source": "/proxy/abuseipdb/:path*", "destination": "/api/proxy/abuseipdb?_path=:path*" },
+    { "source": "/proxy/openai/:path*",    "destination": "/api/proxy/openai?_path=:path*" },
+    { "source": "/proxy/claude/:path*",    "destination": "/api/proxy/claude?_path=:path*" },
 
     { "source": "/proxy/vt",        "destination": "/api/proxy/vt" },
     { "source": "/proxy/shodan",    "destination": "/api/proxy/shodan" },
@@ -34,12 +34,12 @@
   ],
 
   "functions": {
-    "api/proxy/nvd.js":      { "maxDuration": 30 },
-    "api/proxy/vt.js":       { "maxDuration": 30 },
-    "api/proxy/shodan.js":   { "maxDuration": 30 },
-    "api/proxy/otx.js":      { "maxDuration": 30 },
-    "api/proxy/abuseipdb.js":{ "maxDuration": 30 },
-    "api/proxy/openai.js":   { "maxDuration": 30 },
-    "api/proxy/claude.js":   { "maxDuration": 30 }
+    "api/proxy/nvd.js":       { "maxDuration": 30 },
+    "api/proxy/vt.js":        { "maxDuration": 30 },
+    "api/proxy/shodan.js":    { "maxDuration": 30 },
+    "api/proxy/otx.js":       { "maxDuration": 30 },
+    "api/proxy/abuseipdb.js": { "maxDuration": 30 },
+    "api/proxy/openai.js":    { "maxDuration": 30 },
+    "api/proxy/claude.js":    { "maxDuration": 30 }
   }
 }

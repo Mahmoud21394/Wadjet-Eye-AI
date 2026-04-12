@@ -384,6 +384,13 @@ const PAGE_CONFIG = {
   'pricing':         { title:'Pricing Plans',           breadcrumb:'Platform / Subscription Tiers',          onEnter:()=>renderPricing(),        onLeave:()=>{} },
 };
 
+// ── Expose PAGE_CONFIG on window so late-loading modules (campaigns-soc.js,
+// live-detections-soc.js, ioc-intelligence.js, live-pages-patch.js) can
+// patch onEnter/onLeave at runtime.
+// `const` at script top-level does NOT create a window property — we must
+// assign explicitly.
+window.PAGE_CONFIG = PAGE_CONFIG;
+
 let currentPage = 'command-center';
 let _navLock = false;  // prevent double-navigation during async render
 

@@ -248,8 +248,16 @@ window.renderDarkWeb = function() {
 
   // Animate KPI values
   setTimeout(() => _dwAnimateKPIs(), 100);
-  // Render initial tab
-  _dwTab('marketplace');
+  // Render initial tab — use window._dwTab explicitly so the lookup always
+  // resolves to the window property, regardless of any script-scoped _dwTab
+  // variable in other files (e.g. darkweb.js defines `let _dwTab = 'marketplace'`
+  // at script scope which would shadow a bare `_dwTab` name lookup).
+  if (typeof window._dwTab === 'function') {
+    window._dwTab('marketplace');
+  } else {
+    console.warn('[DarkWeb v6] window._dwTab not ready — tab render deferred');
+    setTimeout(() => { if (typeof window._dwTab === 'function') window._dwTab('marketplace'); }, 50);
+  }
 };
 
 /* ═══════════════════════════════════════════════════════
@@ -832,7 +840,7 @@ window._dwClosDetail = function() {
 ═══════════════════════════════════════════════════════ */
 window._dwRefresh = function() {
   _toast('Refreshing dark web intelligence feeds…', 'info');
-  _dwTab(_DW.tab);
+  if (typeof window._dwTab === 'function') window._dwTab(_DW.tab);
 };
 
 window._dwExport = function() {
