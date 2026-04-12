@@ -382,6 +382,20 @@ const PAGE_CONFIG = {
   'rbac-admin':      { title:'RBAC Administration',     breadcrumb:'Platform / Access Control',              onEnter:()=>renderRBACAdmin(),      onLeave:()=>{} },
   'branding':        { title:'White-Label Branding',    breadcrumb:'Platform / Brand Management',            onEnter:()=>renderBranding(),       onLeave:()=>{} },
   'pricing':         { title:'Pricing Plans',           breadcrumb:'Platform / Subscription Tiers',          onEnter:()=>renderPricing(),        onLeave:()=>{} },
+  /* ── RAKAY AI Analyst ── */
+  'rakay':           { title:'RAKAY — AI Security Analyst', breadcrumb:'AI Analyst / Conversational Security',
+    onEnter: () => {
+      if (typeof window.renderRAKAY === 'function') {
+        window.renderRAKAY();
+      } else {
+        const p = document.getElementById('page-rakay');
+        if (p) p.innerHTML = '<div style="padding:40px;text-align:center;color:#8b949e"><i class="fas fa-circle-notch fa-spin fa-2x"></i><br><br>RAKAY module loading…</div>';
+      }
+    },
+    onLeave: () => {
+      if (typeof window.stopRAKAY === 'function') window.stopRAKAY();
+    },
+  },
 };
 
 // ── Expose PAGE_CONFIG on window so late-loading modules (campaigns-soc.js,
