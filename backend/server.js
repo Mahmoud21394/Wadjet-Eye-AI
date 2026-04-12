@@ -80,6 +80,7 @@ const cveIntelRoutes      = require('./routes/cve-intelligence');
 const adversarySimRoutes  = require('./routes/adversary-sim');
 const threatGraphRoutes   = require('./routes/threat-graph');
 const whatifRoutes        = require('./routes/whatif');
+const rakayRoutes         = require('./routes/rakay');
 
 // ── Realtime ─────────────────────────────────────────────────────
 const { initWebSockets } = require('./realtime/websockets');
@@ -318,6 +319,8 @@ app.use('/api/cve',            cveIntelRoutes);
 app.use('/api/adversary-sim',  adversarySimRoutes);
 app.use('/api/threat-graph',   threatGraphRoutes);
 app.use('/api/whatif',         whatifRoutes);
+// ── v5.4 RAKAY AI Analyst Module ──────────────────────────────────────────
+app.use('/api/RAKAY',          rakayRoutes);
 
 // ════════════════════════════════════════════════════════════════
 //  404 HANDLER — catches all unmatched routes
