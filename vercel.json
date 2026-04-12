@@ -3,43 +3,22 @@
   "buildCommand": "echo 'No build required — static site'",
   "outputDirectory": ".",
   "rewrites": [
-    /*
-     * NVD PROXY — single flat rule, NO :path* capture.
-     *
-     * ROOT CAUSE FIX: The previous rules included:
-     *   { "source": "/proxy/nvd/diagnose", "destination": "/api/proxy/nvd?_path=diagnose" }
-     *   { "source": "/proxy/nvd/:path*",   "destination": "/api/proxy/nvd?_path=:path*"   }
-     *
-     * The ':path*' rule caused Vercel to inject '_path' (and sometimes 'path') into
-     * the function's query string.  These non-NVD params leaked through nvdAutoCorrect
-     * (which previously did NOT whitelist) and ended up in the upstream NVD URL as
-     * "?...&path=" — an invalid parameter that NVD API 2.0 rejects with HTTP 404.
-     *
-     * FIX:
-     *   • Use a single catch-all source pattern /proxy/nvd(.*) that forwards everything
-     *     to /api/proxy/nvd.  Vercel merges the original query string automatically.
-     *   • The NVD handler (api/proxy/nvd.js v2.0) reads ONLY from req.query and
-     *     enforces a strict whitelist — any injected 'path' or '_path' is dropped
-     *     before the upstream URL is built.
-     *   • Diagnose sub-path handled inside the handler via req.query._path check.
-     */
-    { "source": "/proxy/nvd/(.*)", "destination": "/api/proxy/nvd?_path=$1" },
-    { "source": "/proxy/nvd",      "destination": "/api/proxy/nvd" },
+  { "source": "/proxy/nvd", "destination": "/api/proxy/nvd" },
 
-    { "source": "/proxy/vt/:path*",         "destination": "/api/proxy/vt?_path=:path*" },
-    { "source": "/proxy/shodan/:path*",     "destination": "/api/proxy/shodan?_path=:path*" },
-    { "source": "/proxy/otx/:path*",        "destination": "/api/proxy/otx?_path=:path*" },
-    { "source": "/proxy/abuseipdb/:path*",  "destination": "/api/proxy/abuseipdb?_path=:path*" },
-    { "source": "/proxy/openai/:path*",     "destination": "/api/proxy/openai?_path=:path*" },
-    { "source": "/proxy/claude/:path*",     "destination": "/api/proxy/claude?_path=:path*" },
+  { "source": "/proxy/vt/:path*",         "destination": "/api/proxy/vt?_path=:path*" },
+  { "source": "/proxy/shodan/:path*",     "destination": "/api/proxy/shodan?_path=:path*" },
+  { "source": "/proxy/otx/:path*",        "destination": "/api/proxy/otx?_path=:path*" },
+  { "source": "/proxy/abuseipdb/:path*",  "destination": "/api/proxy/abuseipdb?_path=:path*" },
+  { "source": "/proxy/openai/:path*",     "destination": "/api/proxy/openai?_path=:path*" },
+  { "source": "/proxy/claude/:path*",     "destination": "/api/proxy/claude?_path=:path*" },
 
-    { "source": "/proxy/vt",        "destination": "/api/proxy/vt" },
-    { "source": "/proxy/shodan",    "destination": "/api/proxy/shodan" },
-    { "source": "/proxy/otx",       "destination": "/api/proxy/otx" },
-    { "source": "/proxy/abuseipdb", "destination": "/api/proxy/abuseipdb" },
-    { "source": "/proxy/openai",    "destination": "/api/proxy/openai" },
-    { "source": "/proxy/claude",    "destination": "/api/proxy/claude" }
-  ],
+  { "source": "/proxy/vt",        "destination": "/api/proxy/vt" },
+  { "source": "/proxy/shodan",    "destination": "/api/proxy/shodan" },
+  { "source": "/proxy/otx",       "destination": "/api/proxy/otx" },
+  { "source": "/proxy/abuseipdb", "destination": "/api/proxy/abuseipdb" },
+  { "source": "/proxy/openai",    "destination": "/api/proxy/openai" },
+  { "source": "/proxy/claude",    "destination": "/api/proxy/claude" }
+]
   "headers": [
     {
       "source": "/api/(.*)",
