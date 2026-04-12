@@ -1,20 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<script>
-(function () {
-  window.PAGE_CONFIG = {
-    tenant: "MSSP Global Operations",
-    version: "v20",
-    branding: "Wadjet-Eye AI",
-    modules: {
-      campaigns: true,
-      detections: true,
-      cyberbrain: true
-    }
-  };
-})();
-</script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Wadjet-Eye AI — Cyber Threat Intelligence Platform</title>
@@ -1203,9 +1189,7 @@
      PLATFORM v20.0 — Critical Fixes + Advanced Login
      Load LAST — overrides all previous module renderers
 ═══════════════════════════════════════════════════════════ -->
-<!-- 1. PAGE CONFIG -->
-<script>window.PAGE_CONFIG = {...}</script>
-  <!-- Platform Critical Fixes v20.0 — Settings UPSERT, data pipelines, nav freeze, pricing -->
+<!-- Platform Critical Fixes v20.0 — Settings UPSERT, data pipelines, nav freeze, pricing -->
 <script src="js/platform-fixes-v20.js"></script>
 <!-- Platform Utilities v20.0 — Toast system, mobile sidebar, keyboard shortcuts -->
 <script src="js/platform-utils-v20.js"></script>
@@ -1392,9 +1376,8 @@
       _installDirectInterceptor();
     }
   }
-    document.addEventListener('DOMContentLoaded', function () {
-     setTimeout(_tryWire, 0);
-  });
+  _tryWire();
+
   /* ─── Direct interceptor (fallback if PAGE_CONFIG never exists) ─── */
   function _installDirectInterceptor() {
     document.addEventListener('click', function(e) {
