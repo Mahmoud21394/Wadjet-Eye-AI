@@ -581,10 +581,15 @@ async function _vtLookup(value, type) {
   }
   if (!subPath) return { error: 'Unsupported IOC type for VirusTotal' };
 
-  // Use proxy to bypass CORS
-  const r = await fetch(`/proxy/vt${subPath}`, { headers: { 'x-apikey': key } });
-  if (!r.ok) throw new Error(`VT: HTTP ${r.status}`);
+  // SECURITY: VT API key is injected server-side by /api/proxy/vt (Vercel) or
+  // proxy-server.js (local dev). Never send keys from the frontend.
+  const r = await fetch(`/proxy/vt${subPath}`);
   const d = await r.json();
+  // Handle missing_api_key proxy response
+  if (d.error === 'missing_api_key' || d.status === 'missing_api_key') {
+    throw new Error('VirusTotal: missing_api_key — set VT_API_KEY in Vercel environment variables');
+  }
+  if (!r.ok && !d.data) throw new Error(`VT: HTTP ${r.status}`);
   const stats = d.data?.attributes?.last_analysis_stats || {};
   const engines = d.data?.attributes?.last_analysis_results || {};
   const maliciousEngines = Object.entries(engines)
@@ -608,13 +613,14 @@ async function _vtLookup(value, type) {
 }
 
 async function _abuseIPDBLookup(ip) {
-  const key = AIORCH.apiKeys.abuseipdb;
-  // Use proxy to bypass CORS
-  const r = await fetch(`/proxy/abuseipdb/check?ipAddress=${ip}&maxAgeInDays=90&verbose`, {
-    headers: { 'Key': key, 'Accept': 'application/json' }
-  });
-  if (!r.ok) throw new Error(`AbuseIPDB: HTTP ${r.status}`);
+  // SECURITY: AbuseIPDB API key is injected server-side by /api/proxy/abuseipdb (Vercel).
+  const r = await fetch(`/proxy/abuseipdb/check?ipAddress=${ip}&maxAgeInDays=90&verbose`);
   const d = await r.json();
+  // Handle missing_api_key proxy response
+  if (d.error === 'missing_api_key' || d.status === 'missing_api_key') {
+    throw new Error('AbuseIPDB: missing_api_key — set ABUSEIPDB_API_KEY in Vercel environment variables');
+  }
+  if (!r.ok && !d.data) throw new Error(`AbuseIPDB: HTTP ${r.status}`);
   return {
     abuseScore:    d.data?.abuseConfidenceScore || 0,
     totalReports:  d.data?.totalReports || 0,
@@ -628,11 +634,17 @@ async function _abuseIPDBLookup(ip) {
 }
 
 async function _shodanLookup(ip) {
-  const key = AIORCH.apiKeys.shodan;
-  // Use proxy to bypass CORS
-  const r = await fetch(`/proxy/shodan/shodan/host/${ip}?key=${key}`);
-  if (!r.ok) throw new Error(`Shodan: HTTP ${r.status}`);
+  // SECURITY: Shodan API key is NEVER sent in the URL.
+  // The Vercel /api/proxy/shodan serverless function injects the key from
+  // the SHODAN_API_KEY environment variable server-side.
+  // If running via local proxy-server.js, key is stripped from client params and re-added.
+  const r = await fetch(`/proxy/shodan/shodan/host/${ip}`);
   const d = await r.json();
+  // Handle missing_api_key response from proxy
+  if (d.status === 'missing_api_key' || d.error === 'missing_api_key') {
+    throw new Error('Shodan: missing_api_key — set SHODAN_API_KEY in Vercel environment variables');
+  }
+  if (!r.ok && !d.country_name) throw new Error(`Shodan: HTTP ${r.status}`);
   return {
     country:  d.country_name || '',
     org:      d.org          || '',
@@ -648,10 +660,9 @@ async function _otxLookup(value, type) {
   const otxType = type==='ip'?'IPv4':type==='domain'?'domain':type==='url'?'URL':'file';
   // Use proxy to bypass CORS.
   // OTX /indicators/{type}/{value}/general is a PUBLIC endpoint — no key required.
-  // Key is included only if configured (grants higher rate limits).
-  const headers = {};
-  if (key) headers['X-OTX-API-KEY'] = key;
-  const r = await fetch(`/proxy/otx/indicators/${otxType}/${encodeURIComponent(value)}/general`, { headers });
+  // The Vercel /api/proxy/otx function injects OTX_API_KEY from env if available.
+  // Never forward the key in the client request — let the proxy handle it.
+  const r = await fetch(`/proxy/otx/indicators/${otxType}/${encodeURIComponent(value)}/general`);
   if (!r.ok) throw new Error(`OTX: HTTP ${r.status}`);
   const d = await r.json();
   const pulses = d.pulse_info?.pulses || [];

@@ -100,11 +100,10 @@ window.detectIOCType = detectIOCType;
    API CALLS
 ═══════════════════════════════════════════════════════ */
 async function _vtCheck(value, iocType) {
-  const key = LIOF.apiKeys.virustotal;
-  if (!key) return { source:'virustotal', status:'no_key', message:'API key not configured' };
-
+  // SECURITY: API key is NOT sent by the client.
+  // The Vercel /api/proxy/vt serverless function injects VT_API_KEY server-side.
+  // No key check needed — proxy returns {status:'missing_api_key'} when key is absent.
   try {
-    const base = 'https://www.virustotal.com/api/v3';
     let endpoint = '';
     const type = iocType.type;
 
@@ -118,10 +117,11 @@ async function _vtCheck(value, iocType) {
       endpoint = `/files/${value}`;
     else return { source:'virustotal', status:'unsupported', message:'IOC type not supported by VT' };
 
-    const r = await fetch(`${base}${endpoint}`, { headers: { 'x-apikey': key } });
+    const r = await fetch(`/proxy/vt${endpoint}`);
     if (r.status === 404) return { source:'virustotal', status:'not_found', message:'Not found in VirusTotal' };
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
+    if (d?.status === 'missing_api_key') return { source:'virustotal', status:'missing_api_key', message: d.message || 'VT_API_KEY not set in Vercel env' };
     const attr = d.data?.attributes || {};
     const stats = attr.last_analysis_stats || {};
     const total = Object.values(stats).reduce((s,v)=>s+(v||0),0);
@@ -152,15 +152,13 @@ async function _vtCheck(value, iocType) {
 }
 
 async function _abuseIPDBCheck(value) {
-  const key = LIOF.apiKeys.abuseipdb;
-  if (!key) return { source:'abuseipdb', status:'no_key', message:'API key not configured' };
-
+  // SECURITY: API key is NOT sent by the client.
+  // The Vercel /api/proxy/abuseipdb serverless function injects ABUSEIPDB_API_KEY server-side.
   try {
-    const r = await fetch(`https://api.abuseipdb.com/api/v2/check?ipAddress=${encodeURIComponent(value)}&maxAgeInDays=90&verbose`, {
-      headers: { 'Key': key, 'Accept': 'application/json' }
-    });
+    const r = await fetch(`/proxy/abuseipdb/check?ipAddress=${encodeURIComponent(value)}&maxAgeInDays=90&verbose`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
+    if (d?.status === 'missing_api_key') return { source:'abuseipdb', status:'missing_api_key', message: d.message || 'ABUSEIPDB_API_KEY not set in Vercel env' };
     const data = d.data || {};
     const score = data.abuseConfidenceScore || 0;
     const verdict = score > 75 ? 'MALICIOUS' : score > 25 ? 'SUSPICIOUS' : 'CLEAN';
@@ -186,14 +184,15 @@ async function _abuseIPDBCheck(value) {
 }
 
 async function _shodanCheck(value) {
-  const key = LIOF.apiKeys.shodan;
-  if (!key) return { source:'shodan', status:'no_key', message:'API key not configured' };
-
+  // SECURITY: Shodan API key is NEVER sent in the URL.
+  // The Vercel /api/proxy/shodan serverless function injects SHODAN_API_KEY server-side.
+  // The local proxy-server.js also strips ?key= from client and re-adds from env.
   try {
-    const r = await fetch(`https://api.shodan.io/shodan/host/${value}?key=${key}`);
+    const r = await fetch(`/proxy/shodan/shodan/host/${value}`);
     if (r.status === 404) return { source:'shodan', status:'not_found', message:'No Shodan data for this IP' };
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
+    if (d?.status === 'missing_api_key') return { source:'shodan', status:'missing_api_key', message: d.message || 'SHODAN_API_KEY not set in Vercel env' };
 
     return {
       source:    'shodan', status: 'success',
@@ -217,17 +216,15 @@ async function _shodanCheck(value) {
 }
 
 async function _otxCheck(value, iocType) {
-  const key = LIOF.apiKeys.otx;
-  if (!key) return { source:'otx', status:'no_key', message:'API key not configured' };
-
+  // OTX /indicators/{type}/{value}/general is a PUBLIC endpoint — no key required.
+  // The Vercel /api/proxy/otx function injects OTX_API_KEY from env if available.
+  // Never forward the key in the client request — let the proxy handle it.
   try {
     const typeMap = { ip:'IPv4', domain:'domain', url:'URL', hash_md5:'file', hash_sha1:'file', hash_sha256:'file', hash_sha512:'file' };
     const otxType = typeMap[iocType.type];
     if (!otxType) return { source:'otx', status:'unsupported', message:'IOC type not supported by OTX' };
 
-    const r = await fetch(`https://otx.alienvault.com/api/v1/indicators/${otxType}/${encodeURIComponent(value)}/general`, {
-      headers: { 'X-OTX-API-KEY': key }
-    });
+    const r = await fetch(`/proxy/otx/indicators/${otxType}/${encodeURIComponent(value)}/general`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
 

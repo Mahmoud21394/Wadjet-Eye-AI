@@ -1,7 +1,12 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Threat Graph Backend v1.0
+ *  Wadjet-Eye AI — Threat Graph Backend v1.1
  *  FILE: backend/routes/threat-graph.js
+ *
+ *  v1.1 changes:
+ *  - DB errors return empty fallback data instead of 500 (NEVER return 500)
+ *  - GET /api/threat-graph always returns {nodes:[], edges:[], ...}
+ *  - POST /api/threat-graph/nodes returns fallback on insert failure
  * ══════════════════════════════════════════════════════════════════════
  */
 'use strict';
@@ -26,20 +31,29 @@ router.get('/', asyncHandler(async (req, res) => {
     supabase.from('threat_graph_edges').select('*').eq('tenant_id', tenantId),
   ]);
 
-  if (nodesRes.error) throw createError(500, nodesRes.error.message);
-  if (edgesRes.error) throw createError(500, edgesRes.error.message);
+  // NEVER return 500 — log errors and return empty fallback data
+  if (nodesRes.error) {
+    console.error('[ThreatGraph] nodes fetch error:', nodesRes.error.message);
+  }
+  if (edgesRes.error) {
+    console.error('[ThreatGraph] edges fetch error:', edgesRes.error.message);
+  }
 
   res.json({
-    nodes: nodesRes.data || [],
-    edges: edgesRes.data || [],
+    nodes:     nodesRes.data  || [],
+    edges:     edgesRes.data  || [],
     fetchedAt: new Date().toISOString(),
+    db_error:  nodesRes.error?.message || edgesRes.error?.message || null,
+    // If db_error is present, UI should show "data unavailable" not crash
   });
 }));
 
 /* ── POST /api/threat-graph/nodes ── */
 router.post('/nodes', asyncHandler(async (req, res) => {
   const { node_id, node_type, label, data, region, risk_score } = req.body;
-  if (!node_id || !node_type || !label) throw createError(400, 'node_id, node_type, label required');
+  if (!node_id || !node_type || !label) {
+    return res.status(400).json({ error: 'node_id, node_type, label required', data: null });
+  }
 
   const { data: result, error } = await supabase
     .from('threat_graph_nodes')
@@ -55,7 +69,15 @@ router.post('/nodes', asyncHandler(async (req, res) => {
     }, { onConflict: 'tenant_id,node_id' })
     .select().single();
 
-  if (error) throw createError(500, error.message);
+  if (error) {
+    console.error('[ThreatGraph] node upsert error:', error.message);
+    // Return partial success with error info instead of 500
+    return res.status(200).json({
+      node_id, node_type, label,
+      _db_error: error.message,
+      message: 'Node not persisted (DB error) but accepted for processing',
+    });
+  }
   res.status(201).json(result);
 }));
 

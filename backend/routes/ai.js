@@ -226,8 +226,17 @@ async function callAI(messages, options = {}) {
     }
   }
 
-  // 4. No AI available
-  throw new Error(`All AI providers failed: ${errors.join('; ')}`);
+  // 4. No AI available — return structured fallback instead of throwing
+  // This prevents 500 errors when no AI key is configured.
+  console.warn('[AI] All providers failed/unconfigured. Returning structured fallback.');
+  return {
+    content:  `[AI Unavailable] No AI provider is configured on the server. ` +
+              `Set OPENAI_API_KEY or GEMINI_API_KEY in Render environment variables. ` +
+              `Errors: ${errors.join('; ') || 'No keys configured.'}`,
+    provider: 'fallback',
+    model:    'none',
+    tokens:   0,
+  };
 }
 
 /* ════════════════════════════════════════════════
@@ -321,10 +330,28 @@ router.post('/analyze', verifyToken, asyncHandler(async (req, res) => {
    Interactive SOC investigation session
 ═══════════════════════════════════════════════ */
 router.post('/chat', verifyToken, asyncHandler(async (req, res) => {
-  const { message, history = [] } = req.body;
+  // Accept two payload formats:
+  //   1. { message: "...", history: [...] }  — standard format
+  //   2. { messages: [{role,content},...] }   — OpenAI-compatible format (sent by frontend orchestrator)
+  let message  = req.body.message;
+  let history  = req.body.history || [];
+
+  if (!message && Array.isArray(req.body.messages)) {
+    // OpenAI-compatible format: extract last user message as `message`, rest as history
+    const msgs   = req.body.messages;
+    const lastUser = [...msgs].reverse().find(m => m.role === 'user');
+    message = lastUser?.content || '';
+    history = msgs.filter(m => m !== lastUser && m.role !== 'system');
+  }
 
   if (!message) {
-    return res.status(400).json({ error: 'message is required' });
+    return res.status(400).json({
+      error:   'message is required',
+      formats: [
+        '{ "message": "analyze 101.99.20.163", "history": [] }',
+        '{ "messages": [{"role":"user","content":"analyze 101.99.20.163"}] }',
+      ],
+    });
   }
 
   // Limit history to last 10 exchanges (20 messages)

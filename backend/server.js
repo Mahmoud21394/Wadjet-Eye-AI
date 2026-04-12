@@ -258,6 +258,26 @@ app.get('/health', async (req, res) => {
   res.status(200).json(health);
 });
 
+// ── /api/health alias (same as /health, no JWT required) ──────
+app.get('/api/health', async (req, res) => {
+  const health = {
+    status:      'OK',
+    service:     'Wadjet-Eye AI Backend',
+    version:     '3.1.0',
+    timestamp:   new Date().toISOString(),
+    uptime_s:    Math.floor(process.uptime()),
+    memory_mb:   Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+  };
+  try {
+    const { supabase } = require('./config/supabase');
+    const start = Date.now();
+    await supabase.from('tenants').select('id').limit(1);
+    health.db_latency_ms = Date.now() - start;
+    health.db = 'connected';
+  } catch { health.db = 'unreachable'; }
+  res.status(200).json(health);
+});
+
 // ════════════════════════════════════════════════════════════════
 //  PUBLIC ROUTES — No JWT required
 // ════════════════════════════════════════════════════════════════

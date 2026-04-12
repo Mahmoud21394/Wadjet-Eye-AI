@@ -1,0 +1,43 @@
+{
+  "version": 2,
+  "buildCommand": "echo 'No build required — static site'",
+  "outputDirectory": ".",
+  "rewrites": [
+    { "source": "/proxy/nvd/diagnose",      "destination": "/api/proxy/nvd?_path=diagnose" },
+    { "source": "/proxy/nvd/:path*",        "destination": "/api/proxy/nvd?_path=:path*" },
+    { "source": "/proxy/nvd",               "destination": "/api/proxy/nvd" },
+
+    { "source": "/proxy/vt/:path*",         "destination": "/api/proxy/vt?_path=:path*" },
+    { "source": "/proxy/shodan/:path*",     "destination": "/api/proxy/shodan?_path=:path*" },
+    { "source": "/proxy/otx/:path*",        "destination": "/api/proxy/otx?_path=:path*" },
+    { "source": "/proxy/abuseipdb/:path*",  "destination": "/api/proxy/abuseipdb?_path=:path*" },
+    { "source": "/proxy/openai/:path*",     "destination": "/api/proxy/openai?_path=:path*" },
+    { "source": "/proxy/claude/:path*",     "destination": "/api/proxy/claude?_path=:path*" },
+
+    { "source": "/proxy/vt",        "destination": "/api/proxy/vt" },
+    { "source": "/proxy/shodan",    "destination": "/api/proxy/shodan" },
+    { "source": "/proxy/otx",       "destination": "/api/proxy/otx" },
+    { "source": "/proxy/abuseipdb", "destination": "/api/proxy/abuseipdb" },
+    { "source": "/proxy/openai",    "destination": "/api/proxy/openai" },
+    { "source": "/proxy/claude",    "destination": "/api/proxy/claude" }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin",  "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET, POST, PUT, PATCH, DELETE, OPTIONS" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization, x-api-key, apiKey, x-apikey, anthropic-version, X-OTX-API-KEY, Key, Accept" }
+      ]
+    }
+  ],
+  "functions": {
+    "api/proxy/nvd.js":      { "maxDuration": 30 },
+    "api/proxy/vt.js":       { "maxDuration": 30 },
+    "api/proxy/shodan.js":   { "maxDuration": 30 },
+    "api/proxy/otx.js":      { "maxDuration": 30 },
+    "api/proxy/abuseipdb.js":{ "maxDuration": 30 },
+    "api/proxy/openai.js":   { "maxDuration": 30 },
+    "api/proxy/claude.js":   { "maxDuration": 30 }
+  }
+}

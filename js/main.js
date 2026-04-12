@@ -419,21 +419,37 @@ function navigateTo(pageId, opts) {
 
   currentPage = pageId;
 
-  // ── 5. Run onEnter asynchronously (avoids blocking UI thread) ──
+  // ── 5. Run onEnter asynchronously with guaranteed navLock release ──
+  // CRITICAL FIX: navLock MUST be released in a finally block so that
+  // any error, rejected promise, or sync exception cannot permanently freeze navigation.
   if (cfg?.onEnter) {
     _navLock = true;
-    // Use requestAnimationFrame to yield to browser before running heavy render
+    window._navLockStart = Date.now();
+
+    // Safety timeout: force-release navLock after 8s regardless of outcome
+    const navLockSafetyTimer = setTimeout(() => {
+      if (_navLock) {
+        _navLock = false;
+        console.warn(`[Nav] navLock force-released after 8s safety timeout (page: ${pageId})`);
+      }
+    }, 8000);
+
+    // Yield to browser paint before running heavy page render
     requestAnimationFrame(() => {
-      setTimeout(() => {
+      setTimeout(async () => {
         try {
           const result = cfg.onEnter(opts);
-          if (result && typeof result.catch === 'function') {
-            result.catch(e => console.warn(`[Nav] ${pageId} onEnter error:`, e.message));
+          // If onEnter returns a Promise, await it so catch fires correctly
+          if (result && typeof result.then === 'function') {
+            await result.catch(e => console.warn(`[Nav] ${pageId} onEnter async error:`, e.message));
           }
         } catch (e) {
           console.warn(`[Nav] ${pageId} onEnter sync error:`, e.message);
+        } finally {
+          // ALWAYS release navLock — no exception can leave it stuck
+          _navLock = false;
+          clearTimeout(navLockSafetyTimer);
         }
-        _navLock = false;
       }, 0);
     });
   }

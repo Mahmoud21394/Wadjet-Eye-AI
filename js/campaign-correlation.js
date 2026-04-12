@@ -235,6 +235,7 @@ async function runCorrelation(opts = {}) {
 
   try {
     // Step 1: Try backend /ingest/correlate endpoint
+    // STRICT VALIDATION: Do NOT log success unless the API returned a real result.
     try {
       const res = await _corApi('/ingest/correlate', {
         method: 'POST',
@@ -244,15 +245,32 @@ async function runCorrelation(opts = {}) {
           auto:             opts.auto  || false,
         }),
       });
+
+      // Verify the response is a real success — not a silent 404 or empty body
+      if (!res || typeof res !== 'object') {
+        throw new Error('Backend returned empty/invalid response');
+      }
+      // Must have at least one recognized field to be a genuine correlation result
+      const hasResult = ('campaigns_created' in res) || ('new_campaigns' in res)
+                     || ('campaigns_updated' in res) || ('status' in res);
+      if (!hasResult) {
+        throw new Error(`Backend response missing expected fields: ${JSON.stringify(res).slice(0,100)}`);
+      }
+
       CorrelationEngine.results.created = res.campaigns_created || res.new_campaigns || 0;
       CorrelationEngine.results.updated = res.campaigns_updated || 0;
-      _corLog(`Backend correlation: +${CorrelationEngine.results.created} created, ${CorrelationEngine.results.updated} updated`, 'success');
 
-      // Refresh campaigns UI
+      // Only log success when we have verified real data from the backend
+      _corLog(
+        `Backend correlation complete: +${CorrelationEngine.results.created} campaigns created, ` +
+        `${CorrelationEngine.results.updated} updated (real backend response)`,
+        'success'
+      );
+
       _refreshCampaignsUI();
       return CorrelationEngine.results;
     } catch (backendErr) {
-      _corLog(`Backend /correlate unavailable (${backendErr.message}) → client-side fallback`, 'warn');
+      _corLog(`Backend /correlate unavailable: ${backendErr.message} → using client-side fallback`, 'warn');
     }
 
     // Step 2: Client-side correlation fallback
