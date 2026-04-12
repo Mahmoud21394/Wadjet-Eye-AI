@@ -116,7 +116,11 @@ function _detectIOC(v) {
   if (/^[a-fA-F0-9]{40}$/.test(v))       return 'sha1';
   if (/^[a-fA-F0-9]{32}$/.test(v))       return 'md5';
   if (/^[a-fA-F0-9]{128}$/.test(v))      return 'sha512';
-  if (/^\d+\.\d+\.\d+\.\d+(\/\d+)?$/.test(v)) return 'ip';
+  // Plain IPv4 only (no CIDR) — CIDR ranges cause OTX HTTP 400
+  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(v)) {
+    const parts = v.split('.');
+    if (parts.every(p => { const n = parseInt(p, 10); return n >= 0 && n <= 255; })) return 'ip';
+  }
   if (/^https?:\/\//i.test(v))           return 'url';
   if (/^[a-zA-Z0-9][a-zA-Z0-9\-\.]{1,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$/.test(v)) return 'domain';
   if (/^CVE-\d{4}-\d+$/i.test(v))        return 'cve';
@@ -657,17 +661,100 @@ async function _shodanLookup(ip) {
 
 async function _otxLookup(value, type) {
   const key = AIORCH.apiKeys.otx; // Optional — OTX /general is public
-  const otxType = type==='ip'?'IPv4':type==='domain'?'domain':type==='url'?'URL':'file';
-  // Use proxy to bypass CORS.
-  // OTX /indicators/{type}/{value}/general is a PUBLIC endpoint — no key required.
-  // The Vercel /api/proxy/otx function injects OTX_API_KEY from env if available.
-  // Never forward the key in the client request — let the proxy handle it.
-  const r = await fetch(`/proxy/otx/indicators/${otxType}/${encodeURIComponent(value)}/general`);
+
+  // ── Input validation before sending any HTTP request ────────
+  // OTX API returns HTTP 400 for:
+  //   • IPv4 with CIDR notation (e.g. "1.2.3.4/24")
+  //   • Private/loopback IPs (10.x, 192.168.x, 127.x)
+  //   • Hash types other than md5/sha1/sha256 submitted as 'file'
+  //   • Empty or whitespace-only values
+  // We catch these here to avoid a 400 that shows as ERROR in the UI.
+
+  const v = String(value || '').trim();
+  if (!v) throw new Error('OTX: empty indicator value');
+
+  // Strip CIDR notation for IP addresses — OTX wants a plain IP
+  let cleanValue = v;
+  if (type === 'ip') {
+    // Reject CIDR ranges — OTX /IPv4 endpoint requires a single IP
+    if (v.includes('/')) {
+      throw new Error(`OTX: CIDR ranges not supported (got "${v}") — provide a single IP address`);
+    }
+    // Validate it's a real routable IPv4 (OTX rejects private/reserved ranges)
+    const parts = v.split('.');
+    if (parts.length !== 4 || parts.some(p => isNaN(p) || p < 0 || p > 255)) {
+      throw new Error(`OTX: invalid IPv4 address "${v}"`);
+    }
+    // Note: OTX does accept private-range IPs for reputation queries
+    // (returns empty results) — only block completely invalid ones above.
+  }
+
+  if (type === 'url') {
+    // URL must be encoded properly and must start with http(s)
+    if (!/^https?:\/\//i.test(v)) {
+      throw new Error(`OTX: URL must start with http:// or https:// (got "${v.slice(0,50)}")`);
+    }
+  }
+
+  if (type === 'domain') {
+    // Basic domain validation
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9\-\.]{1,250}$/.test(v)) {
+      throw new Error(`OTX: invalid domain format "${v.slice(0,50)}"`);
+    }
+  }
+
+  // Map internal type names → OTX endpoint type segment
+  const OTX_TYPE_MAP = {
+    ip:     'IPv4',
+    domain: 'domain',
+    url:    'url',      // OTX uses lowercase 'url' not 'URL'
+    md5:    'file',
+    sha1:   'file',
+    sha256: 'file',
+    sha512: 'file',
+  };
+  const otxType = OTX_TYPE_MAP[type] || 'general';
+
+  // For file hashes, OTX uses /file/{hash} not /file/general
+  const endpointValue = (type === 'url')
+    ? encodeURIComponent(cleanValue)  // URL-encode full URL
+    : encodeURIComponent(cleanValue);
+
+  const proxyUrl = `/proxy/otx/indicators/${otxType}/${endpointValue}/general`;
+
+  let r;
+  try {
+    r = await fetch(proxyUrl, { signal: AbortSignal.timeout ? AbortSignal.timeout(12000) : undefined });
+  } catch (netErr) {
+    throw new Error(`OTX: network error — ${netErr.message}`);
+  }
+
+  if (r.status === 400) {
+    // OTX returns 400 for unsupported indicator types/formats
+    let detail = '';
+    try { const j = await r.json(); detail = j.detail || j.error || ''; } catch {}
+    throw new Error(`OTX: indicator format rejected by API${detail ? ': ' + detail : ''} — value="${v}", type="${otxType}"`);
+  }
+  if (r.status === 404) {
+    // OTX returns 404 for unknown indicators (legitimate — means no data)
+    return {
+      pulse_count: 0, threat_score: 'public', indicator: v, reputation: 0,
+      tags: [], threatActors: [], malware_families: [], pulses: [],
+      keyUsed: !!key, notFound: true,
+    };
+  }
   if (!r.ok) throw new Error(`OTX: HTTP ${r.status}`);
-  const d = await r.json();
+
+  let d;
+  try {
+    d = await r.json();
+  } catch (parseErr) {
+    throw new Error(`OTX: invalid JSON response — ${parseErr.message}`);
+  }
+
   const pulses = d.pulse_info?.pulses || [];
-  const tags = [...new Set(pulses.flatMap(p=>p.tags||[]))].slice(0,8);
-  const threatActors = [...new Set(pulses.map(p=>p.author?.username).filter(Boolean))].slice(0,5);
+  const tags = [...new Set(pulses.flatMap(p => p.tags || []))].slice(0, 8);
+  const threatActors = [...new Set(pulses.map(p => p.author?.username).filter(Boolean))].slice(0, 5);
   return {
     pulse_count:     d.pulse_info?.count || 0,
     threat_score:    d.base_indicator?.access_type || 'public',
@@ -675,8 +762,8 @@ async function _otxLookup(value, type) {
     reputation:      d.reputation || 0,
     tags,
     threatActors,
-    malware_families:(d.malware_families||[]).slice(0,5).map(m=>m.display_name||m),
-    pulses:          pulses.slice(0,5).map(p=>({ name: p.name, modified: p.modified, author: p.author?.username })),
+    malware_families: (d.malware_families || []).slice(0, 5).map(m => m.display_name || m),
+    pulses:          pulses.slice(0, 5).map(p => ({ name: p.name, modified: p.modified, author: p.author?.username })),
     keyUsed:         !!key,
   };
 }

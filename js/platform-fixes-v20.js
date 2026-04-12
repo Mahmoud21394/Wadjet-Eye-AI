@@ -554,40 +554,41 @@
     if (!_origNavigateTo) return;
 
     window.navigateTo = function (page, params) {
-      // Debounce rapid clicks
+      // Debounce rapid clicks (80 ms) to prevent double-fire from keyboard
+      // shortcut + mouse click arriving in the same tick.
       if (_navDebounce) clearTimeout(_navDebounce);
       _navDebounce = setTimeout(() => {
-        // Skip if same page
+        // Skip if same page is already shown (main.js also checks this, but
+        // checking here avoids the 80 ms delay on same-page no-ops).
         if (_currentPage === page) return;
 
-        // Abort in-flight fetch/render
+        // Abort any in-flight AbortController from the previous navigation.
         if (_navController) {
           try { _navController.abort(); } catch {}
         }
         _navController = new AbortController();
-
-        // Store current
         _currentPage = page;
 
-        // Clear any lingering skeleton/loading states from previous page
+        // Clear any lingering skeleton/loading states from previous page.
         const prev = document.querySelector('.page.active .page-loading');
         if (prev) prev.remove();
 
-        // Show skeleton briefly (max 2s)
+        // Show page skeleton for 2.5 s max so the UI never stays blank.
         const pageEl = document.getElementById('page-' + page);
         if (pageEl && !pageEl.querySelector('.page-data-loaded')) {
           const skels = pageEl.querySelectorAll('.skel');
           if (!skels.length) {
             _showPageSkeleton(pageEl);
           }
-          // Auto-clear skeleton after 2s to prevent stalls
           setTimeout(() => {
             const s = pageEl.querySelector('.pf-skeleton');
             if (s) s.remove();
           }, 2500);
         }
 
-        // Call original
+        // Call the canonical navigateTo from main.js.
+        // main.js handles: page switching, breadcrumb update, navLock
+        // with try/finally guarantee, and 8 s safety timer.
         try {
           _origNavigateTo.call(this, page, params);
         } catch (err) {
@@ -600,7 +601,7 @@
     // Expose abort signal for modules that need it
     window._getNavController = () => _navController;
 
-    console.log('[PlatformFix] ✅ Navigation freeze fix installed');
+    console.log('[PlatformFix] ✅ Navigation freeze fix installed (debounce wrapper)');
   }
 
   function _showPageSkeleton(pageEl) {
