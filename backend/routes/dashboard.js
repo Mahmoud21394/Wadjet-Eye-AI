@@ -31,9 +31,10 @@ router.get('/overview', asyncHandler(async (req, res) => {
     supabase.from('alerts').select('*', { count: 'exact', head: true }).eq('tenant_id', tenantId).gte('created_at', since24h),
   ]);
 
-  if (ae) throw createError(500, ae.message);
-  if (ce) throw createError(500, ce.message);
-  if (ie) throw createError(500, ie.message);
+  // Log errors but NEVER return 500 — use empty arrays as fallback
+  if (ae) console.error('[Dashboard/overview] alerts error:', ae.message);
+  if (ce) console.error('[Dashboard/overview] cases error:', ce.message);
+  if (ie) console.error('[Dashboard/overview] iocs error:', ie.message);
 
   const alerts = alertsData || [];
   const cases  = casesData  || [];
@@ -219,7 +220,8 @@ router.get('/trends', asyncHandler(async (req, res) => {
     .gte('created_at', since)
     .order('created_at', { ascending: true });
 
-  if (error) throw createError(500, error.message);
+  // NEVER return 500 — use empty data on DB error
+  if (error) { console.error('[Dashboard/trends] error:', error.message); }
 
   const byDay = {};
   (data || []).forEach(alert => {
@@ -244,7 +246,8 @@ router.get('/top-iocs', asyncHandler(async (req, res) => {
     .order('risk_score', { ascending: false })
     .limit(limit);
 
-  if (error) throw createError(500, error.message);
+  // NEVER return 500 — return empty array on DB error
+  if (error) console.error('[Dashboard/top-iocs] error:', error.message);
   res.json(data || []);
 }));
 
@@ -259,7 +262,8 @@ router.get('/recent-alerts', asyncHandler(async (req, res) => {
     .order('created_at', { ascending: false })
     .limit(limit);
 
-  if (error) throw createError(500, error.message);
+  // NEVER return 500 — return empty array on DB error
+  if (error) console.error('[Dashboard/recent-alerts] error:', error.message);
   res.json(data || []);
 }));
 

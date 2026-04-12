@@ -470,13 +470,53 @@ const server = http.createServer((req, res) => {
   }
 
   // ── Generic proxy routes ──────────────────────────────────
+  // SECURITY: API keys are injected from env vars server-side.
+  // Client requests MUST NOT include API keys in URLs or headers —
+  // the proxy strips and replaces them from process.env.
   for (const route of PROXY_ROUTES) {
     if (reqPath.startsWith(route.prefix)) {
-      const subPath   = reqPath.slice(route.prefix.length - 1); // keep leading /
-      const qs        = parsedUrl.search || '';
+      const subPath      = reqPath.slice(route.prefix.length - 1); // keep leading /
+      let   qs           = parsedUrl.search || '';
+      const extraHeaders = {};
+
+      // Strip client-sent Shodan key from URL; inject from env
+      if (route.prefix === '/proxy/shodan/') {
+        const qp = new URLSearchParams(parsedUrl.query || '');
+        qp.delete('key');
+        const shodanKey = process.env.SHODAN_API_KEY;
+        if (shodanKey) qp.set('key', shodanKey);
+        qs = qp.toString() ? '?' + qp.toString() : '';
+      }
+      // Inject VT key from env (never from client)
+      if (route.prefix === '/proxy/vt/') {
+        const vtKey = process.env.VT_API_KEY;
+        if (vtKey) extraHeaders['x-apikey'] = vtKey;
+      }
+      // Inject AbuseIPDB key from env
+      if (route.prefix === '/proxy/abuseipdb/') {
+        const abuseKey = process.env.ABUSEIPDB_API_KEY;
+        if (abuseKey) { extraHeaders['Key'] = abuseKey; extraHeaders['Accept'] = 'application/json'; }
+      }
+      // Inject OTX key from env (optional — public endpoint works without)
+      if (route.prefix === '/proxy/otx/') {
+        const otxKey = process.env.OTX_API_KEY;
+        if (otxKey) extraHeaders['X-OTX-API-KEY'] = otxKey;
+      }
+      // Inject OpenAI key from env
+      if (route.prefix === '/proxy/openai/') {
+        const openaiKey = process.env.OPENAI_API_KEY;
+        if (openaiKey) extraHeaders['Authorization'] = `Bearer ${openaiKey}`;
+      }
+      // Inject Claude key from env
+      if (route.prefix === '/proxy/claude/') {
+        const claudeKey = process.env.CLAUDE_API_KEY;
+        if (claudeKey) { extraHeaders['x-api-key'] = claudeKey; extraHeaders['anthropic-version'] = '2023-06-01'; }
+      }
+
       const targetUrl = route.target(subPath + qs);
-      console.log(`[Proxy] ${req.method} ${reqPath}${qs} → ${targetUrl}`);
-      proxyRequest(targetUrl, req, res);
+      const logUrl    = targetUrl.replace(/([?&]key=)[^&\s]+/, '$1***');
+      console.log(`[Proxy] ${req.method} ${reqPath} → ${logUrl}`);
+      proxyRequest(targetUrl, req, res, extraHeaders);
       return;
     }
   }
