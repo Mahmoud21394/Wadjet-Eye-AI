@@ -1568,92 +1568,88 @@
   }
 
   /* ════════════════════════════════════════════════════════════════════════
-     FIX #9 — NAVIGATION FREEZE / COMPONENT STACKING
+     FIX #9 — NAVIGATION FREEZE / COMPONENT STACKING  (v22 — revised)
      Root cause: Pages use both display:none/block AND classList.active toggling
      inconsistently. When a page is navigated to, the old page's DOM remains
      visible because both systems fight each other.
-     Also: _navLock never releases on error, causing permanent freeze.
-     Fix: Unified page visibility system + lock timeout + state cleanup.
+
+     IMPORTANT — v22 NO LONGER re-wraps window.navigateTo.
+     main.js already contains the canonical navigateTo with a proper
+     try/finally block and an 8s safety timer that always releases _navLock.
+     platform-fixes-v20.js adds debouncing on top of that.
+     Stacking a THIRD wrapper (this file, v22) caused a 3-second force-release
+     timer that fired BEFORE a legitimate page render finished, sporadically
+     setting _navLock = false while the page was still loading, then allowing
+     a second concurrent navigation that produced the "navLock force-released"
+     console warning and page stacking.
+
+     v22 now provides:
+       _v22ShowPage(pageId) — unified page-visibility helper (display + class)
+       navLock watchdog     — passive 1 s interval, only releases if lock age
+                              exceeds 10 s (10 s > main.js 8 s safety timer)
+       _navLock property    — getter/setter that records lock start time
+     v22 does NOT modify window.navigateTo.
   ════════════════════════════════════════════════════════════════════════ */
   function _fixNavigation() {
-    // Install unified page switcher
+    // ── Unified page-visibility helper ─────────────────────────
     window._v22ShowPage = function (pageId) {
-      // 1. Hide ALL pages — use both classList and display to handle mixed implementations
+      // Hide ALL pages — use both classList and display to cover
+      // modules that use one or the other approach.
       document.querySelectorAll('.page, [id^="page-"]').forEach(p => {
+        if (!p.id) return;
+        if (p.id === `page-${pageId}`) return; // will show below
         p.classList.remove('active');
-        if (p.id && p.id !== `page-${pageId}`) {
-          // Only hide pages that are NOT the target
-          if (p.id !== `page-${pageId}`) {
-            p.style.display = 'none';
-          }
-        }
+        p.style.display = 'none';
       });
 
-      // 2. Show target page
+      // Show target page
       const target = document.getElementById(`page-${pageId}`);
       if (target) {
-        target.style.display = '';  // Remove inline display:none
+        target.style.display = '';  // remove inline display:none
         target.classList.add('active');
       }
     };
 
-    // Patch navigateTo to use unified system and fix lock timeout
-    const _origNavigateTo = window.navigateTo;
-    window.navigateTo = function (pageId, opts) {
-      // Always release navLock after 3s max (prevents permanent freeze)
-      if (window._navLockTimer) clearTimeout(window._navLockTimer);
-      window._navLockTimer = setTimeout(() => {
-        window._navLock = false;
-        console.warn('[v22] navLock force-released after timeout');
-      }, 3000);
-
-      // Hide all stacked components before showing target
-      window._v22ShowPage(pageId);
-
-      // Call original navigateTo
-      if (typeof _origNavigateTo === 'function') {
-        try { _origNavigateTo(pageId, opts); } catch (e) {
-          console.warn('[v22] navigateTo error (recovered):', e.message);
+    // ── Passive navLock watchdog — do NOT replace navigateTo ───
+    // Only auto-release the lock if it has been held for more than
+    // 10 seconds (safely above main.js's 8 s timer, so we only
+    // fire in truly catastrophic cases where the safety timer itself
+    // failed).
+    setInterval(() => {
+      if (window._navLock) {
+        const lockAge = Date.now() - (window._navLockStart || 0);
+        if (lockAge > 10000) {
           window._navLock = false;
+          console.warn('[v22] navLock auto-released (stuck >10s)');
         }
       }
-    };
+    }, 1000);
 
-    // Patch nav link click handler to prevent double-fire
+    // ── _navLock property — record timestamp when acquired ──────
+    // Only define if not already defined (main.js may have set it).
+    if (!Object.getOwnPropertyDescriptor(window, '_navLock')?.get) {
+      Object.defineProperty(window, '_navLock', {
+        get: function () { return window.__navLockVal; },
+        set: function (v) {
+          window.__navLockVal = v;
+          if (v) window._navLockStart = Date.now();
+        },
+        configurable: true,
+      });
+    }
+
+    // ── Patch nav-item click to call _v22ShowPage (CSS-only fix) ─
+    // This fires BEFORE the main navigateTo handler so page display
+    // is set synchronously, preventing a flash of the wrong page.
     document.addEventListener('click', function (e) {
       const navItem = e.target.closest('.nav-item[data-page]');
       if (!navItem) return;
       const page = navItem.dataset.page;
       if (!page) return;
-
-      // Remove previous active
-      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-      navItem.classList.add('active');
-
-      // Ensure page container visible
       window._v22ShowPage(page);
-    }, true);  // capture phase — before other handlers
+    }, true); // capture phase
 
-    // Fix: auto-release navLock every 5s if stuck
-    setInterval(() => {
-      if (window._navLock) {
-        const lockAge = Date.now() - (window._navLockStart || 0);
-        if (lockAge > 5000) {
-          window._navLock = false;
-          console.warn('[v22] navLock auto-released (stuck >5s)');
-        }
-      }
-    }, 1000);
-
-    // Patch original _navLock setter to record timestamp
-    Object.defineProperty(window, '_navLock', {
-      get: function () { return window.__navLockVal; },
-      set: function (v) {
-        window.__navLockVal = v;
-        if (v) window._navLockStart = Date.now();
-      },
-      configurable: true
-    });
+    console.log('[v22] ✅ Fix #9: Navigation stability (watchdog-only mode — no navigateTo re-wrap)');
   }
 
   /* ════════════════════════════════════════════════════════════════════════
