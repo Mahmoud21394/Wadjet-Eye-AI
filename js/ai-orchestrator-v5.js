@@ -152,16 +152,39 @@ async function _callOpenAI(messages, model='gpt-4o') {
 
   const systemPrompt = {
     role: 'system',
-    content: `You are Wadjet-Eye AI, an expert cybersecurity analyst and threat intelligence specialist. 
-You analyze IOCs (IPs, domains, URLs, file hashes), correlate threat data, identify APT groups, 
-map MITRE ATT&CK techniques, and provide actionable intelligence reports.
-When analyzing IOCs, always structure your response with:
-1. **Verdict**: MALICIOUS/SUSPICIOUS/CLEAN with confidence %
-2. **Threat Summary**: What this indicator represents
-3. **Threat Actors**: Known groups associated with this IOC (if any)
-4. **Recommended Actions**: Immediate steps for SOC analysts
-5. **MITRE ATT&CK**: Relevant techniques (T-codes with names)
-Be concise, professional, and actionable.`
+    content: `You are Wadjet-Eye AI — a senior cybersecurity analyst and threat intelligence specialist embedded in a SOC platform.
+
+## Output Rules (MANDATORY — follow exactly):
+- Be DIRECT and CONCISE. No filler text, no preambles.
+- Use structured markdown with clear section headers.
+- Every IOC analysis MUST include these exact sections in this order:
+
+## Verdict
+[MALICIOUS | SUSPICIOUS | LOW RISK | CLEAN | UNKNOWN] — Confidence: XX%
+One sentence explaining the verdict.
+
+## Threat Summary
+What this IOC represents, observed behavior, hosting context.
+
+## Threat Actors / Attribution
+Named groups or "No known attribution" — never omit this section.
+
+## MITRE ATT&CK Techniques
+| Technique | ID | Tactic |
+|---|---|---|
+| Name | T#### | Tactic |
+List only confirmed or strongly suspected techniques.
+
+## Immediate Actions (SOC Playbook)
+1. **[Action]**: Specific step with detail
+2. **[Action]**: ...
+(minimum 3 actions, maximum 6)
+
+## Investigation Links
+Auto-generated below — do not repeat manual links.
+
+---
+For non-IOC queries, use structured headers with bullet points. Be precise and actionable.`
   };
 
   // Use local proxy to avoid CORS
@@ -195,9 +218,17 @@ async function _callClaude(messages, model='claude-3-5-sonnet-20241022') {
   const key = AIORCH.apiKeys.claude;
   if (!key) throw new Error('Claude API key not configured. Go to API Keys to add your key.');
 
-  const systemPrompt = `You are Wadjet-Eye AI, a cybersecurity threat intelligence expert. 
-Analyze IOCs, map MITRE ATT&CK techniques, identify threat actors, and provide actionable intel reports.
-Structure responses with: Verdict, Threat Summary, Threat Actors, Recommended Actions, and MITRE ATT&CK mappings.`;
+  const systemPrompt = `You are Wadjet-Eye AI — a senior cybersecurity analyst embedded in a SOC platform.
+
+## Output Rules (MANDATORY):
+Be DIRECT. Use structured markdown. Every IOC analysis MUST include:
+## Verdict → [MALICIOUS/SUSPICIOUS/LOW RISK/CLEAN/UNKNOWN] — Confidence: XX%
+## Threat Summary → What this IOC represents in 2-3 sentences
+## Threat Actors / Attribution → Named groups or "No known attribution"
+## MITRE ATT&CK Techniques → Table with Technique, ID, Tactic
+## Immediate Actions (SOC Playbook) → 3-6 numbered steps with bold action names
+
+For non-IOC queries: use clear headers, bullet points, be concise and actionable.`;
 
   // Use local proxy to avoid CORS
   const endpoint = '/proxy/claude/v1/messages';
@@ -574,7 +605,6 @@ async function _orchEnrichIOC(value, type) {
 }
 
 async function _vtLookup(value, type) {
-  const key = AIORCH.apiKeys.virustotal;
   let subPath = '';
   if (type==='ip')     subPath = `/ip_addresses/${value}`;
   else if (type==='domain') subPath = `/domains/${value}`;
@@ -587,16 +617,40 @@ async function _vtLookup(value, type) {
 
   // SECURITY: VT API key is injected server-side by /api/proxy/vt (Vercel) or
   // proxy-server.js (local dev). Never send keys from the frontend.
-  const r = await fetch(`/proxy/vt${subPath}`);
-  if (!response.ok) {
-    throw new Error(`API Error: ${r.status} ${r.statusText}`);
-}
-  const d = await r.json();
+  let r;
+  try {
+    r = await fetch(`/proxy/vt${subPath}`, {
+      signal: AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined,
+    });
+  } catch (netErr) {
+    throw new Error(`VirusTotal: network error — ${netErr.message}`);
+  }
+
+  // Read body as text first — proxy may return HTML error page
+  const text = await r.text().catch(() => '');
+
+  // Parse as JSON safely
+  let d;
+  try {
+    d = JSON.parse(text);
+  } catch (_) {
+    // Non-JSON (HTML 401/403 from VT or proxy) → treat as missing key
+    if (r.status === 401 || r.status === 403) {
+      throw new Error('VirusTotal: missing_api_key — set VT_API_KEY in environment variables');
+    }
+    throw new Error(`VirusTotal: invalid response (HTTP ${r.status}) — ${text.slice(0, 100)}`);
+  }
+
   // Handle missing_api_key proxy response
   if (d.error === 'missing_api_key' || d.status === 'missing_api_key') {
-    throw new Error('VirusTotal: missing_api_key — set VT_API_KEY in Vercel environment variables');
+    throw new Error('VirusTotal: missing_api_key — set VT_API_KEY in environment variables');
   }
-  if (!r.ok && !d.data) throw new Error(`VT: HTTP ${r.status}`);
+  // Handle VT API-level errors
+  if (d.error?.code === 'AuthenticationRequiredError' || d.error?.code === 'WrongCredentialsError') {
+    throw new Error(`VirusTotal: authentication failed — ${d.error.message || 'invalid API key'}`);
+  }
+  if (!r.ok && !d.data) throw new Error(`VT: HTTP ${r.status} — ${d.error?.message || text.slice(0, 100)}`);
+
   const stats = d.data?.attributes?.last_analysis_stats || {};
   const engines = d.data?.attributes?.last_analysis_results || {};
   const maliciousEngines = Object.entries(engines)
@@ -621,13 +675,25 @@ async function _vtLookup(value, type) {
 
 async function _abuseIPDBLookup(ip) {
   // SECURITY: AbuseIPDB API key is injected server-side by /api/proxy/abuseipdb (Vercel).
-  const r = await fetch(`/proxy/abuseipdb/check?ipAddress=${ip}&maxAgeInDays=90&verbose`);
-  const d = await r.json();
+  let r;
+  try {
+    r = await fetch(`/proxy/abuseipdb/check?ipAddress=${encodeURIComponent(ip)}&maxAgeInDays=90&verbose`, {
+      signal: AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined,
+    });
+  } catch (netErr) {
+    throw new Error(`AbuseIPDB: network error — ${netErr.message}`);
+  }
+  const text = await r.text().catch(() => '');
+  let d;
+  try { d = JSON.parse(text); } catch (_) {
+    if (r.status === 401 || r.status === 403) throw new Error('AbuseIPDB: missing_api_key — set ABUSEIPDB_API_KEY in environment variables');
+    throw new Error(`AbuseIPDB: invalid response (HTTP ${r.status})`);
+  }
   // Handle missing_api_key proxy response
   if (d.error === 'missing_api_key' || d.status === 'missing_api_key') {
-    throw new Error('AbuseIPDB: missing_api_key — set ABUSEIPDB_API_KEY in Vercel environment variables');
+    throw new Error('AbuseIPDB: missing_api_key — set ABUSEIPDB_API_KEY in environment variables');
   }
-  if (!r.ok && !d.data) throw new Error(`AbuseIPDB: HTTP ${r.status}`);
+  if (!r.ok && !d.data) throw new Error(`AbuseIPDB: HTTP ${r.status} — ${d.errors?.[0]?.detail || text.slice(0,100)}`);
   return {
     abuseScore:    d.data?.abuseConfidenceScore || 0,
     totalReports:  d.data?.totalReports || 0,
@@ -645,13 +711,29 @@ async function _shodanLookup(ip) {
   // The Vercel /api/proxy/shodan serverless function injects the key from
   // the SHODAN_API_KEY environment variable server-side.
   // If running via local proxy-server.js, key is stripped from client params and re-added.
-  const r = await fetch(`/proxy/shodan/shodan/host/${ip}`);
-  const d = await r.json();
+  let r;
+  try {
+    r = await fetch(`/proxy/shodan/shodan/host/${encodeURIComponent(ip)}`, {
+      signal: AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined,
+    });
+  } catch (netErr) {
+    throw new Error(`Shodan: network error — ${netErr.message}`);
+  }
+  const text = await r.text().catch(() => '');
+  let d;
+  try { d = JSON.parse(text); } catch (_) {
+    if (r.status === 401 || r.status === 403) throw new Error('Shodan: missing_api_key — set SHODAN_API_KEY in environment variables');
+    if (r.status === 404) return { country:'', org:'No data', os:'', ports:[], vulns:[], hostnames:[], notFound:true };
+    throw new Error(`Shodan: invalid response (HTTP ${r.status})`);
+  }
   // Handle missing_api_key response from proxy
   if (d.status === 'missing_api_key' || d.error === 'missing_api_key') {
-    throw new Error('Shodan: missing_api_key — set SHODAN_API_KEY in Vercel environment variables');
+    throw new Error('Shodan: missing_api_key — set SHODAN_API_KEY in environment variables');
   }
-  if (!r.ok && !d.country_name) throw new Error(`Shodan: HTTP ${r.status}`);
+  if (d.error === 'Not Found' || r.status === 404) {
+    return { country:'', org:'No Shodan data for this IP', os:'', ports:[], vulns:[], hostnames:[], notFound:true };
+  }
+  if (!r.ok && !d.country_name) throw new Error(`Shodan: HTTP ${r.status} — ${d.error || text.slice(0,100)}`);
   return {
     country:  d.country_name || '',
     org:      d.org          || '',
@@ -735,7 +817,11 @@ async function _otxLookup(value, type) {
   if (r.status === 400) {
     // OTX returns 400 for unsupported indicator types/formats
     let detail = '';
-    try { const j = await r.json(); detail = j.detail || j.error || ''; } catch {}
+    try {
+      const txt = await r.text();
+      const j = JSON.parse(txt);
+      detail = j.detail || j.error || '';
+    } catch {}
     throw new Error(`OTX: indicator format rejected by API${detail ? ': ' + detail : ''} — value="${v}", type="${otxType}"`);
   }
   if (r.status === 404) {
@@ -748,11 +834,18 @@ async function _otxLookup(value, type) {
   }
   if (!r.ok) throw new Error(`OTX: HTTP ${r.status}`);
 
+  // Read body as text first — proxy might return HTML error on some network issues
+  const bodyText = await r.text().catch(() => '');
   let d;
   try {
-    d = await r.json();
+    d = JSON.parse(bodyText);
   } catch (parseErr) {
-    throw new Error(`OTX: invalid JSON response — ${parseErr.message}`);
+    // If we got HTML (e.g. Cloudflare block or proxy error), give a clear message
+    const preview = bodyText.slice(0, 80).replace(/[\r\n]+/g, ' ');
+    if (bodyText.trimStart().startsWith('<')) {
+      throw new Error(`OTX: proxy returned HTML instead of JSON — possible rate limit or network issue. Preview: ${preview}`);
+    }
+    throw new Error(`OTX: invalid JSON response — ${parseErr.message}. Preview: ${preview}`);
   }
 
   const pulses = d.pulse_info?.pulses || [];
@@ -837,177 +930,206 @@ function _buildEnrichContext(data, value, type) {
 // Render enrichment data as a visual card in the chat
 // Shows all 4 source cards: live data, error, or "not configured"
 function _renderEnrichCard(data, value, type) {
-  const _score = (n, total) => total > 0 ? Math.round(n/total*100) : 0;
+  // ── Verdict badge ────────────────────────────────────────────
+  const vt  = data.virustotal;
+  const ab  = data.abuseipdb;
+  const sh  = data.shodan;
+  const otx = data.otx;
 
-  // Helper: "Not Configured" / missing_api_key placeholder card
-  const _notCfgCard = (name, icon) => `
-    <div style="background:rgba(71,85,105,0.06);border:1px dashed rgba(71,85,105,0.35);border-radius:10px;padding:12px 14px;flex:1;min-width:180px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <div style="width:28px;height:28px;background:rgba(71,85,105,0.12);border-radius:6px;display:flex;align-items:center;justify-content:center">
-          <i class="fas ${icon}" style="color:#475569;font-size:12px"></i>
+  // Compute overall verdict from available data
+  let verdictLevel = 'UNKNOWN';
+  let verdictColor = '#64748b';
+  let verdictIcon  = 'fa-question-circle';
+
+  if (vt && !vt.error && !vt.notConfigured) {
+    if (vt.malicious > 10)      { verdictLevel = 'MALICIOUS';  verdictColor = '#ef4444'; verdictIcon = 'fa-skull-crossbones'; }
+    else if (vt.malicious > 2)  { verdictLevel = 'SUSPICIOUS'; verdictColor = '#f97316'; verdictIcon = 'fa-exclamation-triangle'; }
+    else if (vt.malicious > 0)  { verdictLevel = 'LOW RISK';   verdictColor = '#f59e0b'; verdictIcon = 'fa-exclamation-circle'; }
+    else                         { verdictLevel = 'CLEAN';      verdictColor = '#22c55e'; verdictIcon = 'fa-check-circle'; }
+  } else if (ab && !ab.error && !ab.notConfigured) {
+    if (ab.abuseScore > 75)     { verdictLevel = 'MALICIOUS';  verdictColor = '#ef4444'; verdictIcon = 'fa-skull-crossbones'; }
+    else if (ab.abuseScore > 25) { verdictLevel = 'SUSPICIOUS'; verdictColor = '#f97316'; verdictIcon = 'fa-exclamation-triangle'; }
+    else                         { verdictLevel = 'CLEAN';      verdictColor = '#22c55e'; verdictIcon = 'fa-check-circle'; }
+  } else if (otx && !otx.error) {
+    if (otx.pulse_count > 10)   { verdictLevel = 'SUSPICIOUS'; verdictColor = '#f97316'; verdictIcon = 'fa-exclamation-triangle'; }
+    else if (otx.pulse_count > 0){ verdictLevel = 'MONITORED'; verdictColor = '#f59e0b'; verdictIcon = 'fa-eye'; }
+    else                         { verdictLevel = 'NO HITS';    verdictColor = '#22c55e'; verdictIcon = 'fa-check-circle'; }
+  }
+
+  // ── Source status dots ───────────────────────────────────────
+  const dot = (name, ok, errMsg) => {
+    const color = ok ? '#22c55e' : errMsg ? '#ef4444' : '#475569';
+    const title = ok ? 'Live data' : errMsg || 'Not configured';
+    return `<span title="${_e(title)}" style="display:inline-flex;align-items:center;gap:3px;font-size:11px;color:${color};font-weight:600;">
+      <span style="width:6px;height:6px;border-radius:50%;background:${color};display:inline-block;"></span>${name}</span>`;
+  };
+
+  const vtOk  = vt  && !vt.error  && !vt.notConfigured;
+  const abOk  = ab  && !ab.error  && !ab.notConfigured;
+  const shOk  = sh  && !sh.error  && !sh.notConfigured && !sh.notFound;
+  const otxOk = otx && !otx.error;
+
+  const statusRow = [
+    dot('VT',    vtOk,  vt?.error),
+    dot('AIPDB', abOk,  ab?.error),
+    type === 'ip' ? dot('Shodan', shOk, sh?.error) : null,
+    dot('OTX',   otxOk, otx?.error),
+  ].filter(Boolean).join('<span style="color:#334155;padding:0 4px">·</span>');
+
+  // ── Source cards ─────────────────────────────────────────────
+  const card = (title, icon, accentColor, content, footerLink) => `
+    <div style="background:rgba(15,23,42,0.6);border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:14px;flex:1;min-width:190px;max-width:260px;display:flex;flex-direction:column;gap:6px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+        <div style="width:30px;height:30px;background:${accentColor}20;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <i class="fas ${icon}" style="color:${accentColor};font-size:13px;"></i>
         </div>
-        <div style="font-weight:700;font-size:.82em;color:#64748b">${name}</div>
-        <div style="margin-left:auto;font-size:.62em;font-weight:700;color:#475569;background:rgba(71,85,105,.15);padding:2px 6px;border-radius:4px;font-family:monospace">missing_api_key</div>
+        <span style="font-weight:700;font-size:13px;color:#e2e8f0;">${title}</span>
       </div>
-      <div style="font-size:.74em;color:#475569;line-height:1.4">Status: <code style="color:#94a3b8">missing_api_key</code><br>Add API key in <strong style="color:#94a3b8">Settings → Threat Feeds</strong> for live ${name} data.</div>
+      <div style="flex:1;font-size:12px;line-height:1.65;">${content}</div>
+      ${footerLink ? `<div style="padding-top:6px;border-top:1px solid rgba(255,255,255,0.06);">${footerLink}</div>` : ''}
     </div>`;
 
-  // Helper: error card
-  const _errCard = (name, icon, errMsg) => `
-    <div style="background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);border-radius:10px;padding:12px 14px;flex:1;min-width:180px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <div style="width:28px;height:28px;background:rgba(239,68,68,0.12);border-radius:6px;display:flex;align-items:center;justify-content:center">
-          <i class="fas ${icon}" style="color:#ef4444;font-size:12px"></i>
-        </div>
-        <div style="font-weight:700;font-size:.82em;color:#94a3b8">${name}</div>
-        <div style="margin-left:auto;font-size:.66em;font-weight:700;color:#ef4444;background:rgba(239,68,68,.12);padding:2px 6px;border-radius:4px">ERROR</div>
-      </div>
-      <div style="font-size:.74em;color:#ef4444;word-break:break-word">${_e(errMsg)}</div>
+  const kv = (label, val, valColor) =>
+    `<div style="display:flex;justify-content:space-between;align-items:baseline;padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
+      <span style="color:#64748b;">${label}</span>
+      <strong style="color:${valColor||'#cbd5e1'};margin-left:8px;text-align:right;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${val}</strong>
     </div>`;
+
+  const errContent = (msg) => `<span style="color:#f87171;font-size:11px;">${_e(msg)}</span>`;
+  const missingContent = (name) => `<div style="color:#475569;font-size:11px;">Not configured.<br>Add ${name} API key in<br><strong style="color:#94a3b8;">Settings → Threat Feeds</strong></div>`;
+
+  const extLink = (href, label, color) =>
+    `<a href="${href}" target="_blank" rel="noopener" style="color:${color||'#22d3ee'};font-size:11px;text-decoration:none;"><i class="fas fa-external-link-alt" style="margin-right:3px;font-size:9px;"></i>${label}</a>`;
 
   let cards = '';
 
-  // VirusTotal card
-  if (data.virustotal?.notConfigured) {
-    cards += _notCfgCard('VirusTotal', 'fa-virus');
-  } else if (data.virustotal?.error) {
-    cards += _errCard('VirusTotal', 'fa-virus', data.virustotal.error);
-  } else if (data.virustotal) {
-    const vt = data.virustotal;
-    const pct = _score(vt.malicious, vt.total);
+  // VirusTotal
+  if (vt?.notConfigured) {
+    cards += card('VirusTotal', 'fa-virus', '#3b82f6', missingContent('VirusTotal'),
+      extLink(`https://www.virustotal.com/gui/${type==='ip'?'ip-address':type==='domain'?'domain':'file'}/${value}`, 'Check manually →', '#3b82f6'));
+  } else if (vt?.error) {
+    cards += card('VirusTotal', 'fa-virus', '#ef4444',
+      errContent(vt.error),
+      extLink(`https://www.virustotal.com/gui/${type==='ip'?'ip-address':type==='domain'?'domain':'file'}/${value}`, 'Check manually →', '#3b82f6'));
+  } else if (vt) {
+    const pct  = vt.total > 0 ? Math.round(vt.malicious / vt.total * 100) : 0;
+    const vc   = vt.malicious > 10 ? '#ef4444' : vt.malicious > 2 ? '#f97316' : vt.malicious > 0 ? '#f59e0b' : '#22c55e';
     const verdict = vt.malicious > 10 ? 'MALICIOUS' : vt.malicious > 2 ? 'SUSPICIOUS' : vt.malicious > 0 ? 'LOW RISK' : 'CLEAN';
-    const verdictColor = vt.malicious > 10 ? '#ef4444' : vt.malicious > 2 ? '#f97316' : vt.malicious > 0 ? '#f59e0b' : '#22c55e';
-    cards += `
-    <div style="background:rgba(37,99,235,0.08);border:1px solid rgba(37,99,235,0.25);border-radius:10px;padding:12px 14px;flex:1;min-width:200px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-        <div style="width:28px;height:28px;background:rgba(37,99,235,0.15);border-radius:6px;display:flex;align-items:center;justify-content:center">
-          <i class="fas fa-virus" style="color:#3b82f6;font-size:12px"></i>
-        </div>
-        <div style="font-weight:700;font-size:.82em;color:var(--p19-t1)">VirusTotal</div>
-        <div style="margin-left:auto;font-size:.7em;font-weight:800;color:${verdictColor};background:${verdictColor}20;padding:2px 7px;border-radius:4px">${verdict}</div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:.78em">
-        <div><span style="color:var(--p19-t4)">Malicious</span><br><strong style="color:#ef4444;font-size:1.1em">${vt.malicious}</strong>/${vt.total}</div>
-        <div><span style="color:var(--p19-t4)">Suspicious</span><br><strong style="color:#f59e0b">${vt.suspicious}</strong></div>
-        <div><span style="color:var(--p19-t4)">Country</span><br><strong style="color:var(--p19-t2)">${vt.country||'—'}</strong></div>
-        <div><span style="color:var(--p19-t4)">Reputation</span><br><strong style="color:${vt.reputation<0?'#ef4444':'#22c55e'}">${vt.reputation}</strong></div>
-      </div>
-      ${vt.maliciousEngines?.length ? `<div style="margin-top:8px;font-size:.72em;color:var(--p19-t4)">Detected by: <span style="color:#ef4444">${vt.maliciousEngines.slice(0,4).map(e=>e.name).join(', ')}</span></div>` : ''}
-      <a href="https://www.virustotal.com/gui/${type==='ip'?'ip-address':type==='domain'?'domain':'file'}/${value}" target="_blank" style="display:inline-block;margin-top:8px;font-size:.72em;color:var(--p19-blue);text-decoration:none"><i class="fas fa-external-link-alt" style="font-size:.8em;margin-right:3px"></i>Full Report →</a>
-    </div>`;
+    const vtContent = [
+      kv('Detection', `${vt.malicious}/${vt.total} (${pct}%)`, vc),
+      kv('Suspicious', vt.suspicious, vt.suspicious > 0 ? '#f59e0b' : '#22c55e'),
+      vt.country ? kv('Country', vt.country) : '',
+      vt.as_owner ? kv('ASN / Org', vt.as_owner.slice(0, 25)) : '',
+      kv('Reputation', vt.reputation >= 0 ? `+${vt.reputation}` : `${vt.reputation}`, vt.reputation < 0 ? '#ef4444' : '#22c55e'),
+    ].join('');
+    const engineList = vt.maliciousEngines?.length
+      ? `<div style="margin-top:6px;font-size:10px;color:#ef4444;">Flagged by: ${vt.maliciousEngines.slice(0,4).map(e=>e.name).join(', ')}</div>` : '';
+    cards += card(`VirusTotal <span style="font-size:10px;font-weight:800;color:${vc};background:${vc}20;padding:1px 6px;border-radius:4px;margin-left:4px;">${verdict}</span>`,
+      'fa-virus', '#3b82f6', vtContent + engineList,
+      extLink(`https://www.virustotal.com/gui/${type==='ip'?'ip-address':type==='domain'?'domain':'file'}/${value}`, 'Full Report →', '#3b82f6'));
   }
 
-  // AbuseIPDB card
-  if (data.abuseipdb?.notConfigured) {
-    cards += _notCfgCard('AbuseIPDB', 'fa-shield-alt');
-  } else if (data.abuseipdb?.error) {
-    cards += _errCard('AbuseIPDB', 'fa-shield-alt', data.abuseipdb.error);
-  } else if (data.abuseipdb) {
-    const ab = data.abuseipdb;
-    const riskColor = ab.abuseScore > 75 ? '#ef4444' : ab.abuseScore > 25 ? '#f97316' : '#22c55e';
-    cards += `
-    <div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);border-radius:10px;padding:12px 14px;flex:1;min-width:200px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-        <div style="width:28px;height:28px;background:rgba(239,68,68,0.15);border-radius:6px;display:flex;align-items:center;justify-content:center">
-          <i class="fas fa-shield-alt" style="color:#ef4444;font-size:12px"></i>
-        </div>
-        <div style="font-weight:700;font-size:.82em;color:var(--p19-t1)">AbuseIPDB</div>
-        <div style="margin-left:auto;font-size:.7em;font-weight:800;color:${riskColor};background:${riskColor}20;padding:2px 7px;border-radius:4px">${ab.abuseScore}% RISK</div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:.78em">
-        <div><span style="color:var(--p19-t4)">Reports</span><br><strong style="color:var(--p19-t1)">${ab.totalReports}</strong></div>
-        <div><span style="color:var(--p19-t4)">Country</span><br><strong style="color:var(--p19-t2)">${ab.countryCode||'—'}</strong></div>
-        <div><span style="color:var(--p19-t4)">ISP</span><br><strong style="color:var(--p19-t2);font-size:.9em">${(ab.isp||'—').slice(0,20)}</strong></div>
-        <div><span style="color:var(--p19-t4)">Type</span><br><strong style="color:var(--p19-t2);font-size:.85em">${ab.usageType||'—'}</strong></div>
-      </div>
-      <a href="https://www.abuseipdb.com/check/${value}" target="_blank" style="display:inline-block;margin-top:8px;font-size:.72em;color:#ef4444;text-decoration:none"><i class="fas fa-external-link-alt" style="font-size:.8em;margin-right:3px"></i>Full Report →</a>
-    </div>`;
+  // AbuseIPDB
+  if (ab?.notConfigured) {
+    cards += card('AbuseIPDB', 'fa-shield-alt', '#ef4444', missingContent('AbuseIPDB'),
+      type === 'ip' ? extLink(`https://www.abuseipdb.com/check/${value}`, 'Check manually →', '#ef4444') : '');
+  } else if (ab?.error) {
+    cards += card('AbuseIPDB', 'fa-shield-alt', '#ef4444', errContent(ab.error),
+      type === 'ip' ? extLink(`https://www.abuseipdb.com/check/${value}`, 'Check manually →', '#ef4444') : '');
+  } else if (ab) {
+    const rc = ab.abuseScore > 75 ? '#ef4444' : ab.abuseScore > 25 ? '#f97316' : '#22c55e';
+    const abContent = [
+      kv('Abuse Score', `${ab.abuseScore}%`, rc),
+      kv('Reports', ab.totalReports, ab.totalReports > 0 ? '#f59e0b' : '#22c55e'),
+      ab.countryCode ? kv('Country', ab.countryCode) : '',
+      ab.isp ? kv('ISP', ab.isp.slice(0, 25)) : '',
+      ab.usageType ? kv('Usage Type', ab.usageType) : '',
+    ].join('');
+    cards += card(`AbuseIPDB <span style="font-size:10px;font-weight:800;color:${rc};background:${rc}20;padding:1px 6px;border-radius:4px;margin-left:4px;">${ab.abuseScore}% RISK</span>`,
+      'fa-shield-alt', '#ef4444', abContent,
+      extLink(`https://www.abuseipdb.com/check/${value}`, 'Full Report →', '#ef4444'));
   }
 
-  // Shodan card
-  if (data.shodan?.notConfigured) {
-    cards += _notCfgCard('Shodan', 'fa-server');
-  } else if (data.shodan?.error) {
-    cards += _errCard('Shodan', 'fa-server', data.shodan.error);
-  } else if (data.shodan) {
-    const sh = data.shodan;
-    cards += `
-    <div style="background:rgba(249,115,22,0.08);border:1px solid rgba(249,115,22,0.25);border-radius:10px;padding:12px 14px;flex:1;min-width:200px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-        <div style="width:28px;height:28px;background:rgba(249,115,22,0.15);border-radius:6px;display:flex;align-items:center;justify-content:center">
-          <i class="fas fa-server" style="color:#f97316;font-size:12px"></i>
-        </div>
-        <div style="font-weight:700;font-size:.82em;color:var(--p19-t1)">Shodan</div>
-        ${sh.vulns?.length ? `<div style="margin-left:auto;font-size:.7em;font-weight:800;color:#ef4444;background:rgba(239,68,68,.15);padding:2px 7px;border-radius:4px">${sh.vulns.length} VULNS</div>` : ''}
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:.78em">
-        <div><span style="color:var(--p19-t4)">Org</span><br><strong style="color:var(--p19-t2);font-size:.9em">${(sh.org||'—').slice(0,20)}</strong></div>
-        <div><span style="color:var(--p19-t4)">Country</span><br><strong style="color:var(--p19-t2)">${sh.country||'—'}</strong></div>
-        <div><span style="color:var(--p19-t4)">Open Ports</span><br><strong style="color:#f97316">${sh.ports?.slice(0,6).join(', ')||'none'}</strong></div>
-        <div><span style="color:var(--p19-t4)">OS</span><br><strong style="color:var(--p19-t2)">${sh.os||'unknown'}</strong></div>
-      </div>
-      ${sh.vulns?.length ? `<div style="margin-top:8px;font-size:.72em;color:#ef4444">CVEs: ${sh.vulns.join(', ')}</div>` : ''}
-      <a href="https://www.shodan.io/host/${value}" target="_blank" style="display:inline-block;margin-top:8px;font-size:.72em;color:#f97316;text-decoration:none"><i class="fas fa-external-link-alt" style="font-size:.8em;margin-right:3px"></i>Full Report →</a>
-    </div>`;
+  // Shodan (IP only)
+  if (type === 'ip') {
+    if (sh?.notConfigured) {
+      cards += card('Shodan', 'fa-server', '#f97316', missingContent('Shodan'),
+        extLink(`https://www.shodan.io/host/${value}`, 'Check manually →', '#f97316'));
+    } else if (sh?.error) {
+      cards += card('Shodan', 'fa-server', '#ef4444', errContent(sh.error),
+        extLink(`https://www.shodan.io/host/${value}`, 'Check manually →', '#f97316'));
+    } else if (sh?.notFound) {
+      cards += card('Shodan', 'fa-server', '#64748b',
+        `<span style="color:#475569;font-size:12px;">No Shodan data for this IP.<br>Host may not be internet-facing or scanned yet.</span>`,
+        extLink(`https://www.shodan.io/host/${value}`, 'Check manually →', '#f97316'));
+    } else if (sh) {
+      const shContent = [
+        sh.org ? kv('Org', sh.org.slice(0, 25)) : '',
+        sh.country ? kv('Country', sh.country) : '',
+        kv('Open Ports', sh.ports?.length ? sh.ports.slice(0,6).join(', ') : 'none', sh.ports?.length ? '#f97316' : '#22c55e'),
+        sh.os ? kv('OS', sh.os) : '',
+        sh.vulns?.length ? kv('CVEs on host', sh.vulns.slice(0,3).join(', '), '#ef4444') : kv('CVEs on host', 'None known', '#22c55e'),
+      ].join('');
+      const vulnBadge = sh.vulns?.length
+        ? `<span style="font-size:10px;font-weight:800;color:#ef4444;background:#ef444420;padding:1px 6px;border-radius:4px;margin-left:4px;">${sh.vulns.length} VULNS</span>` : '';
+      cards += card(`Shodan${vulnBadge}`, 'fa-server', '#f97316', shContent,
+        extLink(`https://www.shodan.io/host/${value}`, 'Full Report →', '#f97316'));
+    }
   }
 
-  // OTX card — OTX /general endpoint is PUBLIC (no key required)
-  // Always renders live data or an error; never shows "not configured"
-  if (data.otx?.error) {
-    cards += _errCard('AlienVault OTX', 'fa-satellite', data.otx.error);
-  } else if (data.otx) {
-    const otx = data.otx;
-    const otxType = type==='ip'?'ip':type==='domain'?'domain':type==='url'?'url':'file';
-    const accessBadge = otx.keyUsed
-      ? `<div style="margin-left:auto;font-size:.7em;font-weight:800;color:#a855f7;background:rgba(168,85,247,.15);padding:2px 7px;border-radius:4px">${otx.pulse_count} PULSES</div>`
-      : `<div style="margin-left:auto;font-size:.62em;font-weight:700;color:#64748b;background:rgba(71,85,105,.15);padding:2px 6px;border-radius:4px;font-family:monospace">PUBLIC</div>`;
-    cards += `
-    <div style="background:rgba(168,85,247,0.08);border:1px solid rgba(168,85,247,0.25);border-radius:10px;padding:12px 14px;flex:1;min-width:200px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-        <div style="width:28px;height:28px;background:rgba(168,85,247,0.15);border-radius:6px;display:flex;align-items:center;justify-content:center">
-          <i class="fas fa-satellite" style="color:#a855f7;font-size:12px"></i>
-        </div>
-        <div style="font-weight:700;font-size:.82em;color:var(--p19-t1)">AlienVault OTX</div>
-        ${accessBadge}
-      </div>
-      <div style="font-size:.78em;margin-bottom:6px">
-        <span style="color:var(--p19-t4)">Threat Pulses: </span>
-        <strong style="color:${otx.pulse_count > 0 ? '#a855f7' : 'var(--p19-t1)'}">${otx.pulse_count}</strong>
-        <span style="color:var(--p19-t4);margin-left:8px">Reputation: </span>
-        <strong style="color:${otx.reputation < 0 ? '#ef4444' : '#22c55e'}">${otx.reputation}</strong>
-      </div>
-      ${otx.malware_families?.length ? `<div style="font-size:.72em;color:var(--p19-t4);margin-bottom:4px">Malware: <span style="color:#a855f7">${otx.malware_families.join(', ')}</span></div>` : ''}
-      ${otx.tags?.length ? `<div style="font-size:.72em;color:var(--p19-t4);margin-bottom:4px">Tags: <span style="color:var(--p19-t2)">${otx.tags.slice(0,5).join(', ')}</span></div>` : ''}
-      ${otx.pulses?.length ? `<div style="font-size:.72em;color:var(--p19-t4)">Pulses: <span style="color:var(--p19-t2)">${otx.pulses.slice(0,2).map(p=>_e(p.name)).join('; ')}</span></div>` : ''}
-      <a href="https://otx.alienvault.com/indicator/${otxType}/${encodeURIComponent(value)}" target="_blank" style="display:inline-block;margin-top:8px;font-size:.72em;color:#a855f7;text-decoration:none"><i class="fas fa-external-link-alt" style="font-size:.8em;margin-right:3px"></i>Full Report →</a>
-    </div>`;
+  // OTX
+  if (otx?.error) {
+    cards += card('AlienVault OTX', 'fa-satellite', '#a855f7', errContent(otx.error),
+      extLink(`https://otx.alienvault.com/indicator/${type==='ip'?'ip':type==='domain'?'domain':'file'}/${encodeURIComponent(value)}`, 'Check manually →', '#a855f7'));
+  } else if (otx) {
+    const pulseColor = otx.pulse_count > 10 ? '#ef4444' : otx.pulse_count > 0 ? '#f59e0b' : '#22c55e';
+    const otxContent = [
+      kv('Threat Pulses', otx.pulse_count, pulseColor),
+      kv('Reputation', otx.reputation < 0 ? otx.reputation : `+${otx.reputation}`, otx.reputation < 0 ? '#ef4444' : '#22c55e'),
+      otx.malware_families?.length ? kv('Malware', otx.malware_families.slice(0,2).join(', '), '#a855f7') : '',
+      otx.tags?.length ? kv('Tags', otx.tags.slice(0,3).join(', ')) : '',
+    ].join('');
+    const pulseSample = otx.pulses?.length
+      ? `<div style="margin-top:6px;font-size:10px;color:#94a3b8;">Latest: "${_e(otx.pulses[0].name?.slice(0,40))}"</div>` : '';
+    const badge = otx.pulse_count > 0
+      ? `<span style="font-size:10px;font-weight:800;color:${pulseColor};background:${pulseColor}20;padding:1px 6px;border-radius:4px;margin-left:4px;">${otx.pulse_count} PULSES</span>` : '';
+    cards += card(`OTX${badge}`, 'fa-satellite', '#a855f7', otxContent + pulseSample,
+      extLink(`https://otx.alienvault.com/indicator/${type==='ip'?'ip':type==='domain'?'domain':'file'}/${encodeURIComponent(value)}`, 'Full Report →', '#a855f7'));
   }
 
-  // Build key-status summary line
-  const ks = data._meta?.keyStatus || {};
-  const statusDots = [
-    ks.virustotal === 'configured' ? '<span style="color:#22c55e">●</span> VT' : '<span style="color:#475569">●</span> VT',
-    ks.abuseipdb  === 'configured' ? '<span style="color:#22c55e">●</span> AIPDB' : '<span style="color:#475569">●</span> AIPDB',
-    ks.shodan     === 'configured' ? '<span style="color:#22c55e">●</span> Shodan' : '<span style="color:#475569">●</span> Shodan',
-    '<span style="color:#a855f7">●</span> OTX (public)',
-  ].join(' &nbsp;');
+  // ── Overall Summary Bar ──────────────────────────────────────
+  const iocLabel = type === 'ip' ? '🌐 IP' : type === 'domain' ? '🔗 Domain' : type === 'url' ? '🔗 URL' : '🧬 Hash';
 
   return `
-  <div style="margin:10px 0 14px;padding:14px;background:rgba(0,0,0,.2);border:1px solid var(--p19-border);border-radius:12px">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-      <i class="fas fa-satellite-dish" style="color:var(--p19-cyan);font-size:.85em"></i>
-      <span style="font-size:.72em;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--p19-t4)">
-        Multi-Source Intelligence Report
-      </span>
-      <span style="margin-left:4px;font-size:.72em;font-weight:700;color:var(--p19-cyan);font-family:monospace">${_e(value)}</span>
-      <span style="margin-left:auto;font-size:.68em;color:var(--p19-t4)">${new Date().toLocaleTimeString()}</span>
+  <div style="background:linear-gradient(135deg,rgba(15,23,42,0.95),rgba(30,27,75,0.6));border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:16px 18px;margin:8px 0 12px;">
+
+    <!-- Header: IOC + Verdict -->
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <i class="fas fa-satellite-dish" style="color:#22d3ee;font-size:14px;"></i>
+        <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;">Multi-Source Intel Report</span>
+        <span style="font-size:12px;font-weight:700;color:#22d3ee;font-family:monospace;background:rgba(34,211,238,0.1);padding:2px 8px;border-radius:6px;">${iocLabel}: ${_e(value)}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <i class="fas ${verdictIcon}" style="color:${verdictColor};font-size:14px;"></i>
+        <span style="font-size:13px;font-weight:800;color:${verdictColor};">${verdictLevel}</span>
+        <span style="font-size:10px;color:#475569;">${new Date().toLocaleTimeString()}</span>
+      </div>
     </div>
-    <div style="font-size:.68em;color:var(--p19-t4);margin-bottom:10px;line-height:1.6">${statusDots}</div>
-    <div style="display:flex;flex-wrap:wrap;gap:10px">
-      ${cards || '<div style="color:var(--p19-t4);font-size:.8em;padding:8px">No enrichment data available — add API keys in Settings → Threat Feeds.</div>'}
+
+    <!-- Source status dots -->
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,0.06);">
+      ${statusRow}
     </div>
+
+    <!-- Source cards grid -->
+    <div style="display:flex;flex-wrap:wrap;gap:10px;">
+      ${cards || `<div style="color:#475569;font-size:12px;padding:8px;">No enrichment data — add API keys in Settings → Threat Feeds for full analysis.</div>`}
+    </div>
+
   </div>`;
 }
+
 
 /* ═══════════════════════════════════════════════════════
    MESSAGE RENDERING
@@ -1098,44 +1220,80 @@ function _orchIOCLinks(ioc, type) {
   </div>`;
 }
 
-// Simple markdown formatter
+// ─── Markdown → HTML formatter ──────────────────────────────────
+// CRITICAL: Process markdown FIRST (before HTML-escaping the rest),
+// then escape any remaining raw HTML. This prevents the common bug
+// where bold/italic/backtick markers get escaped before the regex runs.
 function _formatMd(text) {
   if (!text) return '';
-  let html = _e(text)
-    // Code blocks
-    .replace(/```[\s\S]*?```/g, m => `<pre style="background:rgba(0,0,0,.3);border:1px solid var(--p19-border);border-radius:6px;padding:10px;font-family:'JetBrains Mono',monospace;font-size:.82em;overflow-x:auto;margin:8px 0">${m.slice(3,-3).trim()}</pre>`)
-    // Inline code
-    .replace(/`([^`]+)`/g, '<code style="background:rgba(0,0,0,.3);border:1px solid var(--p19-border);border-radius:3px;padding:1px 5px;font-family:\'JetBrains Mono\',monospace;font-size:.88em">$1</code>')
-    // Headers
-    .replace(/^### (.+)$/gm, '<h4 style="margin:10px 0 4px;font-size:.88em;color:var(--p19-cyan)">$1</h4>')
-    .replace(/^## (.+)$/gm, '<h3 style="margin:12px 0 6px;font-size:.95em;color:var(--p19-t1)">$1</h3>')
-    .replace(/^# (.+)$/gm, '<h2 style="margin:12px 0 6px;font-size:1.05em;color:var(--p19-t1)">$1</h2>')
-    // Bold
-    .replace(/\*\*(.+?)\*\*/g, '<strong style="color:var(--p19-t1)">$1</strong>')
-    // Italic
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    // Tables
-    .replace(/\|(.+)\|/g, m => {
-      const cells = m.split('|').filter(c=>c.trim());
-      return '<tr>' + cells.map(c=>`<td style="padding:4px 8px;border:1px solid var(--p19-border)">${c.trim()}</td>`).join('') + '</tr>';
+
+  // Step 1: Extract and protect code blocks (before any escaping)
+  const codeBlocks = [];
+  let safe = text
+    // Fenced code blocks  ```...```
+    .replace(/```([\s\S]*?)```/g, (_, code) => {
+      const idx = codeBlocks.length;
+      codeBlocks.push(`<pre style="background:rgba(0,0,0,.35);border:1px solid var(--p19-border);border-radius:8px;padding:10px 14px;font-family:'JetBrains Mono',monospace;font-size:.82em;overflow-x:auto;margin:8px 0;white-space:pre-wrap;">${_e(code.trim())}</pre>`);
+      return `\x00CODE${idx}\x00`;
     })
-    // Bullets
-    .replace(/^[-*] (.+)$/gm, '<li style="margin:2px 0">$1</li>')
-    // Numbered
-    .replace(/^\d+\. (.+)$/gm, '<li style="margin:2px 0">$1</li>')
-    // Horizontal rule
-    .replace(/^---$/gm, '<hr style="border:none;border-top:1px solid var(--p19-border);margin:10px 0">')
-    // Links — real links
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener" style="color:var(--p19-cyan);text-decoration:underline">$1</a>')
-    // Line breaks
-    .replace(/\n/g, '<br>');
+    // Inline code  `...`
+    .replace(/`([^`\n]+)`/g, (_, code) => {
+      const idx = codeBlocks.length;
+      codeBlocks.push(`<code style="background:rgba(0,0,0,.3);border:1px solid var(--p19-border);border-radius:3px;padding:1px 5px;font-family:'JetBrains Mono',monospace;font-size:.88em;color:#22d3ee;">${_e(code)}</code>`);
+      return `\x00CODE${idx}\x00`;
+    });
 
-  // Wrap lists
-  html = html.replace(/(<li[^>]*>.*?<\/li>\s*)+/g, m => `<ul style="margin:4px 0;padding-left:16px">${m}</ul>`);
-  // Wrap table rows
-  html = html.replace(/(<tr>.*?<\/tr>\s*)+/g, m => `<table style="border-collapse:collapse;width:100%;margin:8px 0;font-size:.85em">${m}</table>`);
+  // Step 2: Apply markdown transformations on the safe string
+  safe = safe
+    // Headers (## Verdict, ## Summary etc)
+    .replace(/^#### (.+)$/gm, '<h5 style="margin:8px 0 3px;font-size:.85em;color:#a855f7;font-weight:700;">$1</h5>')
+    .replace(/^### (.+)$/gm, '<h4 style="margin:10px 0 4px;font-size:.9em;color:#22d3ee;font-weight:700;border-bottom:1px solid rgba(34,211,238,.2);padding-bottom:3px;">$1</h4>')
+    .replace(/^## (.+)$/gm, '<h3 style="margin:14px 0 6px;font-size:1em;color:#f1f5f9;font-weight:800;border-left:3px solid #3b82f6;padding-left:8px;">$1</h3>')
+    .replace(/^# (.+)$/gm,  '<h2 style="margin:14px 0 6px;font-size:1.1em;color:#f1f5f9;font-weight:800;">$1</h2>')
+    // Bold + italic (order matters)
+    .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong style="color:#f1f5f9;font-weight:700;">$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em style="color:#cbd5e1;">$1</em>')
+    // Horizontal rules
+    .replace(/^---+$/gm, '<hr style="border:none;border-top:1px solid rgba(255,255,255,.08);margin:12px 0;">')
+    // Markdown links
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener" style="color:#22d3ee;text-decoration:underline;word-break:break-all;">$1</a>')
+    // Bare URLs  
+    .replace(/(?<![="'])(https?:\/\/[^\s<>"',)]+)/g, '<a href="$1" target="_blank" rel="noopener" style="color:#22d3ee;text-decoration:underline;word-break:break-all;">$1</a>')
+    // Bullet lists — convert to styled list items
+    .replace(/^[ \t]*[-*•] (.+)$/gm, '<li class="_md-li" style="margin:3px 0;padding-left:4px;">$1</li>')
+    // Numbered lists
+    .replace(/^[ \t]*(\d+)\. (.+)$/gm, '<li class="_md-li _md-ol" style="margin:3px 0;padding-left:4px;">$2</li>')
+    // Tables — convert | col | col | rows
+    .replace(/^\|(.+)\|$/gm, (m) => {
+      // Skip separator rows like |---|---|
+      if (/^\|[-:\s|]+\|$/.test(m)) return '<tr class="_md-tr-sep"></tr>';
+      const cells = m.slice(1, -1).split('|').map(c => c.trim());
+      return '<tr class="_md-tr">' + cells.map(c => `<td style="padding:5px 10px;border:1px solid rgba(255,255,255,.1);color:#cbd5e1;">${c}</td>`).join('') + '</tr>';
+    });
 
-  return html;
+  // Step 3: HTML-escape any remaining raw < > & in plain text sections
+  // We need to escape characters NOT inside our already-inserted HTML tags
+  // Simple approach: escape the text nodes only (between HTML tags)
+  safe = safe.replace(/(?<=^|>)[^<]*/g, chunk => chunk.replace(/&(?![a-zA-Z#]\w*;)/g, '&amp;'));
+
+  // Step 4: Convert line breaks to <br>, but NOT inside block elements
+  safe = safe.replace(/\n\n+/g, '<br><br>').replace(/\n/g, '<br>');
+
+  // Step 5: Restore code blocks
+  safe = safe.replace(/\x00CODE(\d+)\x00/g, (_, idx) => codeBlocks[+idx] || '');
+
+  // Step 6: Wrap list items in <ul>/<ol>
+  safe = safe.replace(/(<li class="_md-li(?! _md-ol)[^"]*"[^>]*>[\s\S]*?<\/li>(\s*|<br>)*)+/g,
+    m => `<ul style="margin:6px 0;padding-left:20px;list-style:disc;">${m.replace(/<br>/g,'')}</ul>`);
+  safe = safe.replace(/(<li class="_md-li _md-ol"[^>]*>[\s\S]*?<\/li>(\s*|<br>)*)+/g,
+    m => `<ol style="margin:6px 0;padding-left:20px;">${m.replace(/<br>/g,'')}</ol>`);
+
+  // Step 7: Wrap table rows
+  safe = safe.replace(/((?:<tr class="_md-tr[^"]*"[^>]*>[\s\S]*?<\/tr>)\s*)+/g,
+    m => `<div style="overflow-x:auto;margin:8px 0;"><table style="border-collapse:collapse;width:100%;font-size:.85em;">${m.replace(/<tr class="_md-tr-sep"[^>]*>.*?<\/tr>/g, '')}</table></div>`);
+
+  return `<div style="line-height:1.7;font-size:.9em;color:#cbd5e1;">${safe}</div>`;
 }
 
 /* ═══════════════════════════════════════════════════════
