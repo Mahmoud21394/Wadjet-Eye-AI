@@ -588,6 +588,9 @@ async function _vtLookup(value, type) {
   // SECURITY: VT API key is injected server-side by /api/proxy/vt (Vercel) or
   // proxy-server.js (local dev). Never send keys from the frontend.
   const r = await fetch(`/proxy/vt${subPath}`);
+  if (!response.ok) {
+    throw new Error(`API Error: ${r.status} ${r.statusText}`);
+}
   const d = await r.json();
   // Handle missing_api_key proxy response
   if (d.error === 'missing_api_key' || d.status === 'missing_api_key') {
