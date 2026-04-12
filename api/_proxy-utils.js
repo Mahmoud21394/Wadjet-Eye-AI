@@ -184,10 +184,39 @@ function nvdToISOZ(dateStr) {
   return new Date(s).toISOString().replace(/\.\d{3}Z$/, '.000Z');
 }
 
-function nvdAutoCorrect(params) {
-  const p = new URLSearchParams(params);
+// ── NVD parameter whitelist ────────────────────────────────────────────────────
+// ONLY these keys are forwarded to NVD API 2.0.  Everything else — including
+// Vercel routing metadata ('path', '_path') — is silently dropped.
+const NVD_PARAM_WHITELIST = new Set([
+  'pubStartDate', 'pubEndDate', 'startIndex', 'resultsPerPage',
+  'cvssV3Severity', 'keywordSearch', 'cveId', 'apiKey',
+]);
 
+/**
+ * nvdAutoCorrect — takes a raw query string, applies the NVD param whitelist
+ * (drops 'path', '_path', and any other non-NVD keys), then normalises dates.
+ *
+ * @param {string} rawQS  Raw URL query string (e.g. from req.url after '?')
+ * @returns {string}      Cleaned URLSearchParams string safe for NVD API 2.0
+ */
+function nvdAutoCorrect(rawQS) {
+  const raw = new URLSearchParams(rawQS || '');
+
+  // ── STEP 1: Whitelist — only forward NVD-accepted params ─────────────────
+  const p = new URLSearchParams();
+  for (const [k, v] of raw.entries()) {
+    if (!NVD_PARAM_WHITELIST.has(k)) {
+      // Log dropped params so they are visible in Vercel function logs
+      if (k) console.warn(`[nvdAutoCorrect] Dropped non-NVD param: "${k}" = "${v}"`);
+      continue;
+    }
+    if (v === '' || v === null || v === undefined) continue; // skip empty values
+    p.set(k, v);
+  }
+
+  // ── STEP 2: Normalise ────────────────────────────────────────────────────
   if (p.get('cveId')) p.set('cveId', p.get('cveId').toUpperCase());
+  if (p.get('cvssV3Severity')) p.set('cvssV3Severity', p.get('cvssV3Severity').toUpperCase());
 
   let pubStart = p.get('pubStartDate');
   let pubEnd   = p.get('pubEndDate');
@@ -195,13 +224,13 @@ function nvdAutoCorrect(params) {
   if (pubStart && !pubEnd) { pubEnd = nvdToISOZ(new Date().toISOString()); p.set('pubEndDate', pubEnd); }
   if (pubEnd && !pubStart) { const s = new Date(pubEnd); s.setDate(s.getDate()-30); pubStart = nvdToISOZ(s.toISOString()); p.set('pubStartDate', pubStart); }
 
-  ['pubStartDate','pubEndDate'].forEach(k => { const v=p.get(k); if(v){ const f=nvdToISOZ(v); if(f!==v) p.set(k,f); } });
+  ['pubStartDate','pubEndDate'].forEach(k => { const v = p.get(k); if (v) { const f = nvdToISOZ(v); if (f !== v) p.set(k, f); } });
 
   pubStart = p.get('pubStartDate'); pubEnd = p.get('pubEndDate');
   if (pubStart && pubEnd) {
     const diff = (new Date(pubEnd) - new Date(pubStart)) / 86400000;
     if (diff > NVD_MAX_RANGE_DAYS) {
-      p.set('pubStartDate', nvdToISOZ(new Date(new Date(pubEnd) - NVD_MAX_RANGE_DAYS*86400000).toISOString()));
+      p.set('pubStartDate', nvdToISOZ(new Date(new Date(pubEnd) - NVD_MAX_RANGE_DAYS * 86400000).toISOString()));
     }
   }
 
@@ -224,25 +253,50 @@ module.exports = { setCORS, sendJSON, readBody, proxyUpstream, nvdAutoCorrect, n
  * @param {string} prefix  Route prefix to strip (e.g. '/proxy/vt')
  * @returns {string}  Sub-path starting with '/', including original query string
  */
+/**
+ * extractSubPath — resolve the sub-path for a proxy handler.
+ *
+ * FIX v2.0: The previous implementation tried to strip the EXTERNAL route prefix
+ * (e.g. '/proxy/vt') from req.url.  But in Vercel serverless functions, req.url is
+ * the INTERNAL function URL (e.g. '/api/proxy/vt'), so the regex never matched and
+ * subPath was left as '/api/proxy/vt' — breaking query extraction for handlers that
+ * parsed the path rather than the query string.
+ *
+ * Fix: When _path is injected by Vercel rewrite, use it directly.
+ * When there is NO _path (plain route with no :path* segment), subPath = '/' and
+ * all query params (minus _path) are passed as-is through remainingQS.
+ *
+ * Vercel rewrites pass `/proxy/vt/ip_addresses/1.2.3.4?foo=bar` as:
+ *   req.url = "/api/proxy/vt?_path=ip_addresses%2F1.2.3.4&foo=bar"
+ *
+ * We reconstruct the full sub-path + original query string from:
+ *   1. _path param   → the URL-decoded path segment
+ *   2. All other query params → forwarded as-is (minus _path itself)
+ *
+ * @param {object} req     Vercel/Node req
+ * @param {string} prefix  Route prefix (unused now, kept for API compatibility)
+ * @returns {string}  Sub-path starting with '/', including original query string
+ */
 function extractSubPath(req, prefix) {
-  const rawUrl  = req.url || '';
-  const qIndex  = rawUrl.indexOf('?');
-  const pathPart = qIndex >= 0 ? rawUrl.slice(0, qIndex) : rawUrl;
-  const qsPart   = qIndex >= 0 ? rawUrl.slice(qIndex + 1) : '';
-  const params   = new URLSearchParams(qsPart);
+  const rawUrl = req.url || '';
+  const qIndex = rawUrl.indexOf('?');
+  const qsPart = qIndex >= 0 ? rawUrl.slice(qIndex + 1) : '';
+  const params  = new URLSearchParams(qsPart);
 
   // _path is injected by Vercel rewrite; it contains the captured :path* segment
-  const injectedPath = params.get('_path') || '';
-  params.delete('_path'); // don't forward Vercel's internal param upstream
+  const injectedPath = params.get('_path');  // null if absent, '' if present but empty
+  params.delete('_path'); // always remove — never forward to upstream
 
-  // Reconstruct sub-path: prefer _path over stripping the function prefix
+  // Reconstruct sub-path:
+  //   • _path present AND non-empty → use it as the path segment
+  //   • _path absent or empty       → no extra path; subPath = '/'
   let subPath;
-  if (injectedPath) {
-    subPath = '/' + injectedPath;
+  if (injectedPath !== null && injectedPath !== '') {
+    // URL-decode in case Vercel percent-encoded slashes (%2F)
+    const decoded = decodeURIComponent(injectedPath);
+    subPath = decoded.startsWith('/') ? decoded : '/' + decoded;
   } else {
-    // Fallback: strip the function route prefix from the URL path
-    const stripped = pathPart.replace(new RegExp(`^${prefix}`, 'i'), '') || '/';
-    subPath = stripped.startsWith('/') ? stripped : '/' + stripped;
+    subPath = '/';
   }
 
   const remainingQS = params.toString();

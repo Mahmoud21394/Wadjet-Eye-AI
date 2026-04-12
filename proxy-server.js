@@ -200,36 +200,62 @@ function nvdToISOZ(dateStr) {
   return new Date(s).toISOString().replace(/\.\d{3}Z$/, '.000Z');
 }
 
+// ── NVD parameter whitelist ────────────────────────────────────────────────────
+// ROOT CAUSE FIX: Any key NOT in this set is dropped before building the
+// upstream NVD URL. This permanently blocks 'path', '_path', and any other
+// stray params that would cause NVD API to return HTTP 404.
+const NVD_ALLOWED_PARAMS = new Set([
+  'pubStartDate', 'pubEndDate', 'startIndex', 'resultsPerPage',
+  'cvssV3Severity', 'keywordSearch', 'cveId', 'apiKey',
+]);
+
 /**
- * nvdAutoCorrectQS — auto-fixes common NVD 404 causes in a raw query string.
- * Returns a corrected URLSearchParams string.
+ * nvdAutoCorrectQS — applies whitelist + auto-fixes common NVD 404 causes.
  *
  * Fixes applied:
+ *   0. WHITELIST: drop any key not in NVD_ALLOWED_PARAMS (incl. 'path', '_path')
  *   1. cveId not uppercase → uppercase
- *   2. pubStartDate without pubEndDate → add pubEndDate = now
- *   3. pubEndDate without pubStartDate → add pubStartDate = 30 days ago
- *   4. Missing Z timezone on dates → append Z
- *   5. Date range > 120 days → clamp to 120 days
+ *   2. cvssV3Severity not uppercase → uppercase
+ *   3. pubStartDate without pubEndDate → add pubEndDate = now
+ *   4. pubEndDate without pubStartDate → add pubStartDate = 30 days ago
+ *   5. Missing Z timezone on dates → append Z
+ *   6. Date range > 120 days → clamp to 120 days
  */
 function nvdAutoCorrectQS(rawQS) {
-  const params = new URLSearchParams(rawQS);
+  const raw = new URLSearchParams(rawQS || '');
+
+  // Fix 0: Whitelist — build a clean params object with ONLY allowed keys
+  const params = new URLSearchParams();
+  for (const [k, v] of raw.entries()) {
+    if (!NVD_ALLOWED_PARAMS.has(k)) {
+      if (k) console.warn(`[NVD Proxy] Dropped non-NVD param: "${k}" = "${v}"`);
+      continue;
+    }
+    if (v === '' || v === null || v === undefined) continue;
+    params.set(k, v);
+  }
 
   // Fix 1: cveId uppercase
   if (params.get('cveId')) {
     params.set('cveId', params.get('cveId').toUpperCase());
   }
 
+  // Fix 2: severity uppercase
+  if (params.get('cvssV3Severity')) {
+    params.set('cvssV3Severity', params.get('cvssV3Severity').toUpperCase());
+  }
+
   let pubStart = params.get('pubStartDate');
   let pubEnd   = params.get('pubEndDate');
 
-  // Fix 2: pubStartDate without pubEndDate
+  // Fix 3: pubStartDate without pubEndDate
   if (pubStart && !pubEnd) {
     pubEnd = nvdToISOZ(new Date().toISOString());
     params.set('pubEndDate', pubEnd);
     console.log('[NVD Auto-fix] Added missing pubEndDate:', pubEnd);
   }
 
-  // Fix 3: pubEndDate without pubStartDate
+  // Fix 4: pubEndDate without pubStartDate
   if (pubEnd && !pubStart) {
     const s = new Date(pubEnd);
     s.setDate(s.getDate() - 30);
@@ -238,19 +264,19 @@ function nvdAutoCorrectQS(rawQS) {
     console.log('[NVD Auto-fix] Added missing pubStartDate:', pubStart);
   }
 
-  // Fix 4: Normalise dates to ISO-8601 UTC (Z suffix)
+  // Fix 5: Normalise dates to ISO-8601 UTC (Z suffix)
   ['pubStartDate', 'pubEndDate'].forEach(k => {
     const v = params.get(k);
     if (v) {
       const fixed = nvdToISOZ(v);
       if (fixed !== v) {
         params.set(k, fixed);
-        console.log(`[NVD Auto-fix] Normalised date for ${k}: "${v}" → "${fixed}"`);
+        console.log(`[NVD Auto-fix] Normalised ${k}: "${v}" → "${fixed}"`);
       }
     }
   });
 
-  // Fix 5: Enforce ≤120 day range
+  // Fix 6: Enforce ≤120 day range
   pubStart = params.get('pubStartDate');
   pubEnd   = params.get('pubEndDate');
   if (pubStart && pubEnd) {
@@ -260,7 +286,7 @@ function nvdAutoCorrectQS(rawQS) {
     if (diffDays > NVD_MAX_RANGE_DAYS) {
       const clampedStart = nvdToISOZ(new Date(endMs - NVD_MAX_RANGE_DAYS * 86400000).toISOString());
       params.set('pubStartDate', clampedStart);
-      console.log(`[NVD Auto-fix] Clamped ${Math.round(diffDays)} day range to ${NVD_MAX_RANGE_DAYS} days → pubStartDate=${clampedStart}`);
+      console.log(`[NVD Auto-fix] Clamped ${Math.round(diffDays)}-day range → pubStartDate=${clampedStart}`);
     }
   }
 
@@ -304,19 +330,39 @@ function handleNVDProxy(parsedUrl, req, res) {
   }
 
   // ── Build query string ────────────────────────────────────
+  // Use parsedUrl.query (already parsed object from url.parse(req.url, true))
+  // to get the raw params, then pass as URLSearchParams string to nvdAutoCorrectQS.
+  // nvdAutoCorrectQS will apply the whitelist and drop any 'path' / '_path' keys.
   const rawQS = parsedUrl.query
     ? new URLSearchParams(parsedUrl.query).toString()
     : '';
 
-  // MANDATORY DEBUG LOG 1: incoming query
-  console.log(`[NVD Proxy] Incoming query: "${rawQS || '(none)'}"`);
+  // MANDATORY LOG 1: show exactly what arrived (before whitelist)
+  console.log(`[NVD PROXY] Incoming query  : "${rawQS || '(none)'}"`);
 
-  const fixedQS      = nvdAutoCorrectQS(rawQS);
+  const fixedQS      = nvdAutoCorrectQS(rawQS); // whitelist + date correction
   const qs           = fixedQS ? '?' + fixedQS : '';
 
-  // MANDATORY DEBUG LOG 2: constructed NVD URL
+  // MANDATORY LOG 2: show the PARAMS after whitelist + correction
+  const cleanParamsObj = Object.fromEntries(new URLSearchParams(fixedQS));
+  console.log(`[NVD PROXY] PARAMS (clean)  :`, JSON.stringify(cleanParamsObj));
+
+  // MANDATORY LOG 3: show the final NVD URL
   const nvdTargetUrl = `${NVD_BASE_URL}${qs}`;
-  console.log(`[NVD Proxy] Constructed NVD URL: ${nvdTargetUrl}`);
+  console.log(`[NVD PROXY] FINAL URL       :`, nvdTargetUrl);
+
+  // Safety check: 'path=' must NEVER appear in the URL sent to NVD
+  if (/[?&]path=/.test(nvdTargetUrl)) {
+    console.error('[NVD PROXY] ❌ CRITICAL: "path=" in final NVD URL — aborting!');
+    addCORS(res);
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      success: false, source: 'nvd',
+      error: 'Internal proxy error: forbidden "path" param would cause NVD 404',
+      httpStatus: 500,
+    }));
+    return;
+  }
 
   // ── Forward request ───────────────────────────────────────
   const parsed2 = new URL(nvdTargetUrl);
@@ -341,8 +387,8 @@ function handleNVDProxy(parsedUrl, req, res) {
   };
 
   const nvdReq = https.request(nvdOptions, (nvdRes) => {
-    // MANDATORY DEBUG LOG 3: response status
-    console.log(`[NVD Proxy] Response status: ${nvdRes.statusCode} for ${nvdTargetUrl}`);
+    // MANDATORY LOG 4: response status from NVD
+    console.log(`[NVD PROXY] STATUS          : ${nvdRes.statusCode} for ${nvdTargetUrl}`);
 
     const chunks = [];
     nvdRes.on('data', c => chunks.push(c));
