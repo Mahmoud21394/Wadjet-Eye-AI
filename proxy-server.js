@@ -335,6 +335,8 @@ function handleNVDProxy(parsedUrl, req, res) {
         Object.entries(req.headers).filter(([k]) => !STRIP.has(k.toLowerCase()))
       ),
       host: parsed2.hostname,
+      // Inject NVD API key from env to get 50 req/30s (vs 5 req/30s unauthenticated)
+      ...(process.env.NVD_API_KEY ? { 'apiKey': process.env.NVD_API_KEY } : {}),
     },
   };
 
@@ -484,18 +486,36 @@ const server = http.createServer((req, res) => {
         const qp = new URLSearchParams(parsedUrl.query || '');
         qp.delete('key');
         const shodanKey = process.env.SHODAN_API_KEY;
-        if (shodanKey) qp.set('key', shodanKey);
+        if (!shodanKey) {
+          addCORS(res);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'missing_api_key', status: 'missing_api_key', message: 'SHODAN_API_KEY not configured on server' }));
+          return;
+        }
+        qp.set('key', shodanKey);
         qs = qp.toString() ? '?' + qp.toString() : '';
       }
       // Inject VT key from env (never from client)
       if (route.prefix === '/proxy/vt/') {
         const vtKey = process.env.VT_API_KEY;
-        if (vtKey) extraHeaders['x-apikey'] = vtKey;
+        if (!vtKey) {
+          addCORS(res);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'missing_api_key', status: 'missing_api_key', message: 'VT_API_KEY not configured on server' }));
+          return;
+        }
+        extraHeaders['x-apikey'] = vtKey;
       }
       // Inject AbuseIPDB key from env
       if (route.prefix === '/proxy/abuseipdb/') {
         const abuseKey = process.env.ABUSEIPDB_API_KEY;
-        if (abuseKey) { extraHeaders['Key'] = abuseKey; extraHeaders['Accept'] = 'application/json'; }
+        if (!abuseKey) {
+          addCORS(res);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'missing_api_key', status: 'missing_api_key', message: 'ABUSEIPDB_API_KEY not configured on server' }));
+          return;
+        }
+        extraHeaders['Key'] = abuseKey; extraHeaders['Accept'] = 'application/json';
       }
       // Inject OTX key from env (optional — public endpoint works without)
       if (route.prefix === '/proxy/otx/') {
@@ -529,5 +549,6 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n🚀 Wadjet-Eye AI Proxy Server v31.0 running on port ${PORT}`);
   console.log(`   Static: ${STATIC}`);
   console.log(`   NVD proxy: /proxy/nvd (no slash) + /proxy/nvd/ (with slash) → ${NVD_BASE_URL}`);
+  console.log(`   NVD rate limit: ${process.env.NVD_API_KEY ? '50 req/30s (authenticated)' : '5 req/30s (unauthenticated — set NVD_API_KEY for higher limits)'}`);
   console.log(`   Other proxies: /proxy/vt/ /proxy/abuseipdb/ /proxy/shodan/ /proxy/otx/ /proxy/openai/ /proxy/claude/\n`);
 });
