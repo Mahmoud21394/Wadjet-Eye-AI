@@ -1392,8 +1392,9 @@
       _installDirectInterceptor();
     }
   }
-  _tryWire();
-
+    document.addEventListener('DOMContentLoaded', function () {
+     setTimeout(_tryWire, 0);
+  });
   /* ─── Direct interceptor (fallback if PAGE_CONFIG never exists) ─── */
   function _installDirectInterceptor() {
     document.addEventListener('click', function(e) {
