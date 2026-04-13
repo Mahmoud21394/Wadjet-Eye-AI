@@ -156,16 +156,19 @@ class RAKAYEngine {
     while (iteration < MAX_TOOL_ITERATIONS) {
       iteration++;
 
-      // Call LLM
-      const llmResponse = await provider.chat(msgHistory, {
-        tools:     useTools ? TOOL_SCHEMAS : undefined,
-        maxTokens: MAX_RESPONSE_TOKENS,
+      // Call LLM — provider.chat(messages, tools, opts)
+      const llmTools    = useTools ? TOOL_SCHEMAS : [];
+      const llmResponse = await provider.chat(msgHistory, llmTools, {
+        max_tokens: MAX_RESPONSE_TOKENS,
       });
 
-      totalTokens += llmResponse.usage?.total_tokens || 0;
+      totalTokens += llmResponse.usage?.total_tokens || llmResponse.usage?.totalTokens || 0;
+
+      // Normalise: provider returns camelCase toolCalls, also handle snake_case tool_calls
+      const toolCalls = llmResponse.toolCalls || llmResponse.tool_calls || [];
 
       // ── Case A: No tool calls — we have the final response ────────────────
-      if (!llmResponse.tool_calls || llmResponse.tool_calls.length === 0) {
+      if (!toolCalls.length) {
         finalText = llmResponse.content || '';
         break;
       }
@@ -173,9 +176,11 @@ class RAKAYEngine {
       // ── Case B: LLM requested tool calls ─────────────────────────────────
       const toolCallResults = [];
 
-      for (const tc of llmResponse.tool_calls) {
-        const toolName   = tc.function?.name || tc.name;
-        const toolArgs   = _parseToolArgs(tc.function?.arguments || tc.arguments || '{}');
+      for (const tc of toolCalls) {
+        // provider normalises: { id, name, arguments }  OR  { id, function: { name, arguments } }
+        const toolName   = tc.name || tc.function?.name;
+        const rawArgs    = tc.arguments || tc.function?.arguments || {};
+        const toolArgs   = typeof rawArgs === 'string' ? _parseToolArgs(rawArgs) : rawArgs;
         const callId     = tc.id || `call_${Date.now()}_${toolName}`;
 
         console.log(`[RAKAYEngine] Tool call: ${toolName}`, toolArgs);
@@ -205,10 +210,18 @@ class RAKAYEngine {
       }
 
       // Append assistant turn (with tool calls) to the conversation
+      // OpenAI format requires tool_calls in the message for subsequent requests
       msgHistory.push({
         role:       'assistant',
         content:    llmResponse.content || null,
-        tool_calls: llmResponse.tool_calls,
+        tool_calls: toolCalls.map(tc => ({
+          id:       tc.id,
+          type:     'function',
+          function: {
+            name:      tc.name || tc.function?.name,
+            arguments: JSON.stringify(tc.arguments || tc.function?.arguments || {}),
+          },
+        })),
       });
 
       // Append tool results

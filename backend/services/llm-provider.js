@@ -93,8 +93,12 @@ class OpenAIProvider {
       temperature: opts.temperature ?? 0.2,
       max_tokens:  opts.max_tokens  ?? 4096,
     };
-    if (tools.length > 0) {
-      payload.tools       = tools.map(t => ({ type: 'function', function: t }));
+    if (tools && tools.length > 0) {
+      // Handle both: raw function defs and already-wrapped { type, function } objects
+      payload.tools = tools.map(t => {
+        if (t.type === 'function' && t.function) return t; // already wrapped
+        return { type: 'function', function: t };
+      });
       payload.tool_choice = 'auto';
     }
 
@@ -287,31 +291,45 @@ class MockProvider {
     let content = '';
     const toolCalls = [];
 
-    if (lower.includes('sigma') || lower.includes('detection rule')) {
-      toolCalls.push({ id: 'mock_tc_1', name: 'generate_sigma_rule', arguments: { description: userMsg } });
-    } else if (lower.includes('kql')) {
-      toolCalls.push({ id: 'mock_tc_1', name: 'generate_kql_query', arguments: { description: userMsg } });
-    } else if (lower.includes('cve-') || lower.includes('enrich')) {
-      toolCalls.push({ id: 'mock_tc_1', name: 'enrich_ioc', arguments: { value: userMsg.match(/CVE-[\d-]+|[\d.]+\.[\d.]+\.[\d.]+/)?.[0] || userMsg } });
-    } else if (lower.includes('mitre') || lower.includes('t1')) {
-      toolCalls.push({ id: 'mock_tc_1', name: 'lookup_mitre_technique', arguments: { technique_id: userMsg.match(/T\d{4}(?:\.\d{3})?/i)?.[0] || 'T1059' } });
-    } else {
-      content = `I'm RAKAY, your AI security analyst. I can help you with:
-- **Sigma rule generation** from behavioral descriptions
-- **KQL query generation** for Microsoft Defender / Sentinel
-- **IOC enrichment** (IPs, domains, file hashes, CVEs)
-- **MITRE ATT&CK** technique analysis and coverage mapping
-- **Threat actor profiling** and TTPs
-- **Incident response** playbook guidance
+    // Only trigger tool calls when tools are provided AND keyword matches
+    if (tools && tools.length > 0) {
+      if (lower.includes('sigma') && !lower.includes('kql')) {
+        toolCalls.push({ id: 'mock_tc_1', name: 'sigma_search', arguments: { query: userMsg.slice(0, 100) } });
+      } else if (lower.includes('kql') || lower.includes('sentinel') || lower.includes('splunk')) {
+        toolCalls.push({ id: 'mock_tc_1', name: 'kql_generate', arguments: { description: userMsg.slice(0, 200), siem: lower.includes('splunk') ? 'splunk' : 'sentinel' } });
+      } else if (lower.includes('cve-') || lower.includes('enrich') || lower.match(/(?:\d{1,3}\.){3}\d{1,3}/)) {
+        const iocMatch = userMsg.match(/CVE-[\d-]+|(?:\d{1,3}\.){3}\d{1,3}|[a-f0-9]{32,64}/i);
+        toolCalls.push({ id: 'mock_tc_1', name: 'ioc_enrich', arguments: { ioc: iocMatch?.[0] || userMsg.slice(0, 80), ioc_type: 'auto' } });
+      } else if ((lower.includes('mitre') || lower.match(/t\d{4}/i)) && !lower.includes('sigma')) {
+        const techId = userMsg.match(/T\d{4}(?:\.\d{3})?/i)?.[0] || 'T1059';
+        toolCalls.push({ id: 'mock_tc_1', name: 'mitre_lookup', arguments: { query: techId } });
+      } else if (lower.includes('apt') || lower.includes('threat actor') || lower.includes('lazarus') || lower.includes('apt29')) {
+        const actorMatch = userMsg.match(/APT\s*\d+|Lazarus|Cozy Bear|Fancy Bear|Volt Typhoon|Sandworm/i)?.[0] || 'APT29';
+        toolCalls.push({ id: 'mock_tc_1', name: 'threat_actor_profile', arguments: { actor: actorMatch } });
+      }
+    }
 
-What threat or detection challenge can I help you with today?`;
+    // If no tool calls triggered, generate a text response
+    if (!toolCalls.length) {
+      if (lower.includes('sigma')) {
+        content = `Here's a Sigma detection rule template:\n\n\`\`\`yaml\ntitle: Detect Suspicious Activity\nstatus: experimental\ndescription: Detects suspicious process execution\nlogsource:\n  category: process_creation\n  product: windows\ndetection:\n  selection:\n    CommandLine|contains:\n      - '-enc'\n      - '-encodedcommand'\n      - 'bypass'\n  condition: selection\nlevel: high\ntags:\n  - attack.execution\n  - attack.t1059.001\n\`\`\`\n\n*Demo mode — configure OPENAI_API_KEY or ANTHROPIC_API_KEY on the server for AI-generated rules.*`;
+      } else if (lower.includes('kql')) {
+        content = `Here's a KQL detection query:\n\n\`\`\`kql\nDeviceProcessEvents\n| where Timestamp > ago(1h)\n| where FileName in~ ("powershell.exe", "pwsh.exe")\n| where ProcessCommandLine has_any ("-enc", "-bypass", "hidden")\n| project Timestamp, DeviceName, AccountName, ProcessCommandLine\n| order by Timestamp desc\n\`\`\`\n\n*Demo mode — configure OPENAI_API_KEY for precise, context-aware queries.*`;
+      } else if (lower.includes('mitre') || lower.match(/t\d{4}/i)) {
+        const techId = userMsg.match(/T\d{4}(?:\.\d{3})?/i)?.[0];
+        content = techId
+          ? `**MITRE ATT&CK ${techId}** — Looking this up in the knowledge base...\n\nCommon techniques:\n- **T1059.001** PowerShell — adversaries use encoded commands to bypass logging\n- **T1566.001** Spearphishing Attachment — initial access via malicious documents\n- **T1190** Exploit Public-Facing Application — vulnerability exploitation\n\n*Demo mode — configure OPENAI_API_KEY for detailed technique analysis.*`
+          : `**MITRE ATT&CK Framework**\n\nI can look up any technique (e.g., T1059.001) and provide:\n- Technique description and examples\n- Detection recommendations\n- Mitigation strategies\n- Real-world usage by threat actors\n\n*Demo mode — configure OPENAI_API_KEY for full analysis.*`;
+      } else {
+        content = `I'm **RAKAY**, your AI Security Analyst assistant.\n\n**Available capabilities:**\n- 🔍 **Sigma rules** — search and generate YAML detection rules\n- 📊 **KQL/SPL/Lucene** — Microsoft Sentinel, Splunk, Elastic queries\n- 🛡️ **IOC enrichment** — IPs, domains, hashes, CVEs\n- 🗺️ **MITRE ATT&CK** — technique details, tactics, mitigations\n- 👤 **Threat actors** — APT profiles and TTPs\n- 🐛 **CVE lookups** — NVD vulnerability database\n\n**Status:** ${tools && tools.length > 0 ? `Tool-calling enabled (${tools.length} tools available)` : 'Text-only mode'}\n\nWhat security challenge can I help you with today?`;
+      }
     }
 
     return {
       content,
       toolCalls,
       finishReason: toolCalls.length > 0 ? 'tool_calls' : 'stop',
-      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      usage: { promptTokens: 100, completionTokens: Math.ceil(content.length / 4), totalTokens: 150 },
       model: this.model,
     };
   }
