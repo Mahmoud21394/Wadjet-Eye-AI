@@ -40,6 +40,9 @@ const { optionalAuth } = require('../middleware/auth');
 const router = express.Router();
 
 // ── JWT for demo token generation ─────────────────────────────────────────────
+// ---- ENGINE SINGLETON (critical for Render / serverless) ----
+let _engineSingleton = null;
+let _engineKey = null;
 let _jwt = null;
 function getJWT() {
   if (_jwt) return _jwt;
@@ -211,10 +214,10 @@ async function _queueChat(opts) {
 
   let lastErr;
 
-  // Provider-aware retry with exponential backoff
+  // 🔁 Provider-aware retry (handles OpenAI / Anthropic 429 correctly)
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
-      console.log(`[RAKAY] LLM_CALL attempt=${attempt+1} session=${shortSid}`);
+      console.log(`[RAKAY] LLM_CALL attempt=${attempt + 1} session=${shortSid}`);
 
       const result = await engine.chat({
         message,
@@ -230,10 +233,8 @@ async function _queueChat(opts) {
 
     } catch (err) {
       lastErr = err;
-
       const msg = String(err.message || '').toLowerCase();
 
-      // Detect provider rate limit / overload
       const isRateLimit =
         msg.includes('429') ||
         msg.includes('rate limit') ||
@@ -241,10 +242,10 @@ async function _queueChat(opts) {
         msg.includes('too many requests');
 
       if (!isRateLimit) {
-        throw err; // real error — do not retry
+        throw err; // real error
       }
 
-      const delay = 1200 * (attempt + 1); // 1.2s → 2.4s → 3.6s → 4.8s
+      const delay = 1200 * (attempt + 1);
       console.warn(`[RAKAY] LLM_429_BACKOFF session=${shortSid} waiting ${delay}ms`);
       await new Promise(r => setTimeout(r, delay));
     }
@@ -307,29 +308,39 @@ function _getDemoSecret() {
 
 // ── Per-request engine factory ────────────────────────────────────────────────
 function _getEngine(req, ctxApiKeys = {}) {
-  // API key priority: server env vars → request context (from frontend settings)
   const serverKey   = process.env.RAKAY_OPENAI_KEY    || process.env.OPENAI_API_KEY;
-  const serverAnth  = process.env.RAKAY_ANTHROPIC_KEY  || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
+  const serverAnth  = process.env.RAKAY_ANTHROPIC_KEY || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
   const ctxOpenAI   = ctxApiKeys.openai_key;
   const ctxClaude   = ctxApiKeys.claude_key;
 
-  // Determine provider: server env takes priority, then context, then default
   let provider = process.env.RAKAY_PROVIDER;
   if (!provider) {
-    if (serverKey  || ctxOpenAI)  provider = 'openai';
+    if (serverKey || ctxOpenAI) provider = 'openai';
     else if (serverAnth || ctxClaude) provider = 'anthropic';
-    else provider = 'mock'; // graceful degradation
+    else provider = 'mock';
   }
 
   const apiKey = provider === 'anthropic'
-    ? (serverAnth  || ctxClaude  || undefined)
-    : (serverKey   || ctxOpenAI  || undefined);
+    ? (serverAnth || ctxClaude)
+    : (serverKey || ctxOpenAI);
 
-  return new RAKAYEngine({
+  // 🔑 cache key ensures we only rebuild if key/provider changes
+  const key = `${provider}:${apiKey}`;
+
+  if (_engineSingleton && _engineKey === key) {
+    return _engineSingleton;
+  }
+
+  console.log(`[RAKAY] ENGINE_INIT provider=${provider} (once per container)`);
+
+  _engineSingleton = new RAKAYEngine({
     provider,
-    model:   req.user?.rakay_model || process.env.RAKAY_MODEL,
+    model: process.env.RAKAY_MODEL,
     apiKey,
   });
+
+  _engineKey = key;
+  return _engineSingleton;
 }
 
 function _getUserCtx(req) {
@@ -588,16 +599,6 @@ router.post('/chat', chatLimiter, optionalAuth, requireRAKAYAuth, async (req, re
         error:   'AI provider key invalid or missing. Set RAKAY_OPENAI_KEY on the server.',
         code:    'LLM_UNAVAILABLE',
         details: process.env.NODE_ENV !== 'production' ? err.message : undefined,
-      });
-    }
-    if (err.message?.includes('rate limit') || err.message?.toLowerCase?.()?.includes('quota') || err.message?.includes('429')) {
-      // DO NOT retry — return controlled error to UI
-      console.warn(`[RAKAY] LLM_PROVIDER_RATE_LIMIT session=${shortSid} — returning 503 (no retry)`);
-      res.set('Retry-After', '60');
-      return res.status(503).json({
-        error:   'AI provider is temporarily rate-limited. This is a provider-side limit, not a usage error. Please try again in ~60 seconds.',
-        code:    'LLM_PROVIDER_BUSY',
-        retryAfter: 60,
       });
     }
 
