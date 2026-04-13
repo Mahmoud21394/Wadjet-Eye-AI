@@ -209,20 +209,49 @@ async function _queueChat(opts) {
 
   const engine = _getEngine(req, ctxApiKeys);
 
-  console.log(`[RAKAY] LLM_CALL_EXECUTED_ONCE session=${shortSid} provider=${engine.provider || 'unknown'}`);
+  let lastErr;
 
-  const result = await engine.chat({
-    message,
-    sessionId,
-    tenantId,
-    userId,
-    context,
-    useTools,
-  });
+  // Provider-aware retry with exponential backoff
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      console.log(`[RAKAY] LLM_CALL attempt=${attempt+1} session=${shortSid}`);
 
-  console.log(`[RAKAY] LLM_CALL_COMPLETE session=${shortSid} tokens=${result.tokens_used || 0} model=${result.model || 'unknown'}`);
+      const result = await engine.chat({
+        message,
+        sessionId,
+        tenantId,
+        userId,
+        context,
+        useTools,
+      });
 
-  return result;
+      console.log(`[RAKAY] LLM_CALL_COMPLETE session=${shortSid} tokens=${result.tokens_used || 0}`);
+      return result;
+
+    } catch (err) {
+      lastErr = err;
+
+      const msg = String(err.message || '').toLowerCase();
+
+      // Detect provider rate limit / overload
+      const isRateLimit =
+        msg.includes('429') ||
+        msg.includes('rate limit') ||
+        msg.includes('quota') ||
+        msg.includes('too many requests');
+
+      if (!isRateLimit) {
+        throw err; // real error — do not retry
+      }
+
+      const delay = 1200 * (attempt + 1); // 1.2s → 2.4s → 3.6s → 4.8s
+      console.warn(`[RAKAY] LLM_429_BACKOFF session=${shortSid} waiting ${delay}ms`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+
+  console.error(`[RAKAY] LLM_FAILED_AFTER_RETRIES session=${shortSid}`);
+  throw lastErr;
 }
 
 // ── Auth middleware: JWT required OR RAKAY service key OR demo token ──────────
