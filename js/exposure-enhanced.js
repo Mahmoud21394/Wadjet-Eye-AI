@@ -532,14 +532,10 @@ window._expSyncFeeds = function() {
   if (typeof showToast === 'function')
     showToast('🔄 Syncing CISA KEV and NVD feeds…', 'info');
 
-  const payload = {
-    source: 'cisa_kev',          // or whatever your backend expects
-    force: true
-  };
-
   _expFetch('/cti/vulnerabilities/sync', {
     method: 'POST',
-    body: JSON.stringify(payload)
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source: 'all', days: 7 })
   })
   .then(() => {
     if (typeof showToast === 'function')
