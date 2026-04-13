@@ -23,8 +23,8 @@ module.exports = async function handler(req, res) {
     res.writeHead(204); res.end(); return;
   }
 
-  // Key resolution: env var → hardcoded fallback
-  const otxKey = process.env.OTX_API_KEY || OTX_API_KEY;
+  // Always use hardcoded key — Vercel env vars may contain old/different keys
+  const otxKey = OTX_API_KEY;
 
   const afterProxy = extractSubPath(req);
   const targetUrl  = `${OTX_BASE}${afterProxy}`;

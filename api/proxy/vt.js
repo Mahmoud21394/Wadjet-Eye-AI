@@ -22,8 +22,8 @@ module.exports = async function handler(req, res) {
     res.writeHead(204); res.end(); return;
   }
 
-  // Key resolution: env var (Vercel dashboard) → hardcoded fallback
-  const vtKey = process.env.VT_API_KEY || VT_API_KEY;
+  // Always use hardcoded key — Vercel env vars may contain old/different keys
+  const vtKey = VT_API_KEY;
 
   const afterProxy = extractSubPath(req);
   const targetUrl  = `${VT_BASE}${afterProxy}`;
