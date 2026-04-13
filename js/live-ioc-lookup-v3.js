@@ -97,12 +97,74 @@ function detectIOCType(v) {
 window.detectIOCType = detectIOCType;
 
 /* ═══════════════════════════════════════════════════════
-   API CALLS
+   API CALLS  (v4.0 — dual-mode: Vercel /proxy/* first, Render backend /api/intel/* fallback)
+═══════════════════════════════════════════════════════
+
+  ROOT CAUSE SUMMARY (2026-04-13):
+  ┌─────────────────────────────────────────────────────────────────────────────────┐
+  │ BUG-1 VirusTotal  — /proxy/vt/* returned HTML (index.html fallback) on Render  │
+  │                     → JSON.parse error: Unexpected token '<'                    │
+  │ BUG-2 AbuseIPDB   — /api/abuseipdb/check does not exist → HTTP 404             │
+  │                     (proxy only exists under /proxy/abuseipdb/ via Vercel,     │
+  │                      no such path on Render backend)                            │
+  │ BUG-3 Shodan      — /api/shodan/shodan/host/* does not exist → HTTP 403        │
+  │                     (Shodan proxy only on Vercel; Render has no /api/shodan)   │
+  │ BUG-4 OTX         — /proxy/otx/* returned HTML on Render → JSON parse error    │
+  │ BUG-5 URLhaus     — Direct browser fetch('https://urlhaus-api.abuse.ch/v1/…')  │
+  │                     blocked by CORS policy → 401 Unauthorized                  │
+  └─────────────────────────────────────────────────────────────────────────────────┘
+
+  FIX STRATEGY (each source):
+  • VT / AbuseIPDB / Shodan / OTX:  try /proxy/* first (works on Vercel + local
+    proxy-server.js); if response is NOT JSON (Content-Type check + HTML sniff),
+    fall back to POST /api/intel/{source} on the Render backend.
+  • URLhaus: route through /proxy/urlhaus/* (added to vercel.json + proxy-server.js)
+    instead of calling abuse.ch directly from the browser.
 ═══════════════════════════════════════════════════════ */
+
+/* ── Adaptive fetch helper ─────────────────────────────────────────────
+   1. Tries the Vercel/local /proxy/* route first.
+   2. If the response Content-Type is text/html (i.e. the static-site SPA
+      fallback was returned instead of the proxy), throws with the hint
+      'HTML_RESPONSE' so callers know to use the backend fallback.
+   3. Returns parsed JSON on success.
+──────────────────────────────────────────────────────────────────────── */
+async function _proxyFetch(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { Accept: 'application/json', ...(opts.headers || {}) } });
+  const ct = r.headers.get('content-type') || '';
+  // If server returned HTML (SPA fallback) treat it as a proxy-not-available error
+  if (ct.includes('text/html')) {
+    throw Object.assign(new Error('HTML_RESPONSE — proxy not available on this host'), { isHtmlFallback: true });
+  }
+  if (r.status === 404) return { __status404: true };
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+/* ── Backend API fallback fetch ────────────────────────────────────────
+   Calls the Render Express backend at /api/intel/{endpoint}.
+──────────────────────────────────────────────────────────────────────── */
+async function _backendFetch(endpoint, body) {
+  const base  = (window.THREATPILOT_API_URL || 'https://wadjet-eye-ai.onrender.com').replace(/\/$/, '');
+  const token = localStorage.getItem('wadjet_access_token') || localStorage.getItem('tp_access_token') || '';
+  const r = await fetch(`${base}/api/intel/${endpoint}`, {
+    method:  'POST',
+    headers: {
+      'Content-Type':  'application/json',
+      'Accept':        'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  const ct = r.headers.get('content-type') || '';
+  if (ct.includes('text/html')) throw new Error('Backend returned HTML — not logged in or backend offline');
+  if (!r.ok) throw new Error(`Backend HTTP ${r.status}`);
+  return r.json();
+}
+
 async function _vtCheck(value, iocType) {
-  // SECURITY: API key is NOT sent by the client.
-  // The Vercel /api/proxy/vt serverless function injects VT_API_KEY server-side.
-  // No key check needed — proxy returns {status:'missing_api_key'} when key is absent.
+  // FIX BUG-1: Try Vercel /proxy/vt/* first; if HTML fallback returned, use
+  //            backend POST /api/intel/virustotal instead.
   try {
     let endpoint = '';
     const type = iocType.type;
@@ -117,11 +179,32 @@ async function _vtCheck(value, iocType) {
       endpoint = `/files/${value}`;
     else return { source:'virustotal', status:'unsupported', message:'IOC type not supported by VT' };
 
-    const r = await fetch(`/proxy/vt${endpoint}`);
-    if (r.status === 404) return { source:'virustotal', status:'not_found', message:'Not found in VirusTotal' };
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const d = await r.json();
-    if (d?.status === 'missing_api_key') return { source:'virustotal', status:'missing_api_key', message: d.message || 'VT_API_KEY not set in Vercel env' };
+    let d;
+    try {
+      // PRIMARY: Vercel serverless /proxy/vt  (also works on local proxy-server.js)
+      const res = await _proxyFetch(`/proxy/vt${endpoint}`);
+      if (res.__status404) return { source:'virustotal', status:'not_found', message:'Not found in VirusTotal' };
+      d = res;
+    } catch (proxyErr) {
+      // FALLBACK: Render backend /api/intel/virustotal
+      console.warn('[IOC Lookup] VT proxy failed, using backend fallback:', proxyErr.message);
+      d = await _backendFetch('virustotal', { ioc: value, type });
+      // Backend returns a different shape — normalise
+      if (d.fromCache !== undefined || d.risk_score !== undefined) {
+        return {
+          source: 'virustotal', status: d.reputation ? 'success' : 'error',
+          verdict: d.reputation === 'malicious' ? 'MALICIOUS' : d.reputation === 'suspicious' ? 'SUSPICIOUS' : 'CLEAN',
+          malicious: d.malicious_count || 0, suspicious: d.suspicious_count || 0,
+          total: d.total_engines || 0, reputation: d.reputation_score || 0,
+          country: d.country || '', as_owner: d.as_owner || '',
+          url: type==='ip' ? `https://www.virustotal.com/gui/ip-address/${value}` :
+               type==='domain' ? `https://www.virustotal.com/gui/domain/${value}` :
+               type==='url'    ? `https://www.virustotal.com/gui/url/${btoa(value).replace(/=/g,'')}` :
+               `https://www.virustotal.com/gui/file/${value}`,
+        };
+      }
+    }
+    if (d?.status === 'missing_api_key') return { source:'virustotal', status:'no_key', message: d.message || 'VT_API_KEY not configured' };
     const attr = d.data?.attributes || {};
     const stats = attr.last_analysis_stats || {};
     const total = Object.values(stats).reduce((s,v)=>s+(v||0),0);
@@ -152,13 +235,37 @@ async function _vtCheck(value, iocType) {
 }
 
 async function _abuseIPDBCheck(value) {
-  // SECURITY: API key is NOT sent by the client.
-  // The Vercel /api/proxy/abuseipdb serverless function injects ABUSEIPDB_API_KEY server-side.
+  // FIX BUG-2: /api/abuseipdb/check does not exist on Render — the correct Vercel
+  //            proxy is /proxy/abuseipdb/check. Falls back to backend /api/intel/abuseipdb.
   try {
-    const r = await fetch(`/proxy/abuseipdb/check?ipAddress=${encodeURIComponent(value)}&maxAgeInDays=90&verbose`);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const d = await r.json();
-    if (d?.status === 'missing_api_key') return { source:'abuseipdb', status:'missing_api_key', message: d.message || 'ABUSEIPDB_API_KEY not set in Vercel env' };
+    let d;
+    try {
+      // PRIMARY: Vercel proxy (also available in local proxy-server.js)
+      d = await _proxyFetch(`/proxy/abuseipdb/check?ipAddress=${encodeURIComponent(value)}&maxAgeInDays=90&verbose`);
+    } catch (proxyErr) {
+      // FALLBACK: Render backend /api/intel/abuseipdb
+      console.warn('[IOC Lookup] AbuseIPDB proxy failed, using backend fallback:', proxyErr.message);
+      const bd = await _backendFetch('abuseipdb', { ip: value });
+      // Backend shape: { abuse_score, total_reports, country_name, isp, is_tor, ... }
+      const sc = bd.abuse_score ?? bd.abuseConfidenceScore ?? 0;
+      const verdict = sc > 75 ? 'MALICIOUS' : sc > 25 ? 'SUSPICIOUS' : 'CLEAN';
+      return {
+        source: 'abuseipdb', status: 'success', verdict,
+        abuse_score:    sc,
+        total_reports:  bd.total_reports  || bd.totalReports  || 0,
+        distinct_users: bd.distinct_users || bd.numDistinctUsers || 0,
+        country_code:   bd.country_code   || bd.countryCode   || '',
+        country_name:   bd.country_name   || bd.countryName   || '',
+        isp:            bd.isp            || '',
+        domain:         bd.domain         || '',
+        is_tor:         bd.is_tor         || bd.isTor         || false,
+        is_whitelisted: bd.is_whitelisted || bd.isWhitelisted || false,
+        usage_type:     bd.usage_type     || bd.usageType     || '',
+        last_reported:  bd.last_reported  || bd.lastReportedAt || null,
+        url: `https://www.abuseipdb.com/check/${value}`,
+      };
+    }
+    if (d?.status === 'missing_api_key') return { source:'abuseipdb', status:'no_key', message: d.message || 'ABUSEIPDB_API_KEY not configured' };
     const data = d.data || {};
     const score = data.abuseConfidenceScore || 0;
     const verdict = score > 75 ? 'MALICIOUS' : score > 25 ? 'SUSPICIOUS' : 'CLEAN';
@@ -184,15 +291,37 @@ async function _abuseIPDBCheck(value) {
 }
 
 async function _shodanCheck(value) {
-  // SECURITY: Shodan API key is NEVER sent in the URL.
-  // The Vercel /api/proxy/shodan serverless function injects SHODAN_API_KEY server-side.
-  // The local proxy-server.js also strips ?key= from client and re-adds from env.
+  // FIX BUG-3: /api/shodan/* does not exist on Render → 403. Correct Vercel proxy
+  //            is /proxy/shodan/shodan/host/{ip}. Falls back to /api/intel/shodan.
   try {
-    const r = await fetch(`/proxy/shodan/shodan/host/${value}`);
-    if (r.status === 404) return { source:'shodan', status:'not_found', message:'No Shodan data for this IP' };
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const d = await r.json();
-    if (d?.status === 'missing_api_key') return { source:'shodan', status:'missing_api_key', message: d.message || 'SHODAN_API_KEY not set in Vercel env' };
+    let d;
+    try {
+      // PRIMARY: Vercel proxy (also available in local proxy-server.js)
+      const res = await _proxyFetch(`/proxy/shodan/shodan/host/${value}`);
+      if (res.__status404) return { source:'shodan', status:'not_found', message:'No Shodan data for this IP' };
+      d = res;
+    } catch (proxyErr) {
+      // FALLBACK: Render backend /api/intel/shodan
+      console.warn('[IOC Lookup] Shodan proxy failed, using backend fallback:', proxyErr.message);
+      const bd = await _backendFetch('shodan', { ip: value });
+      return {
+        source: 'shodan', status: 'success',
+        country:   bd.country      || bd.country_name || '',
+        city:      bd.city         || '',
+        org:       bd.org          || '',
+        isp:       bd.isp          || '',
+        os:        bd.os           || '',
+        ports:     (bd.ports       || []).slice(0,12),
+        vulns:     (bd.vulns       || bd.vulnerabilities || []).slice(0,8),
+        hostnames: (bd.hostnames   || []).slice(0,5),
+        tags:      (bd.tags        || []),
+        domains:   (bd.domains     || []).slice(0,5),
+        asn:       bd.asn          || '',
+        last_update: bd.last_update || '',
+        url: `https://www.shodan.io/host/${value}`,
+      };
+    }
+    if (d?.status === 'missing_api_key') return { source:'shodan', status:'no_key', message: d.message || 'SHODAN_API_KEY not configured' };
 
     return {
       source:    'shodan', status: 'success',
@@ -216,17 +345,35 @@ async function _shodanCheck(value) {
 }
 
 async function _otxCheck(value, iocType) {
-  // OTX /indicators/{type}/{value}/general is a PUBLIC endpoint — no key required.
-  // The Vercel /api/proxy/otx function injects OTX_API_KEY from env if available.
-  // Never forward the key in the client request — let the proxy handle it.
+  // FIX BUG-4: /proxy/otx/* returned HTML on Render → JSON parse error.
+  //            Falls back to POST /api/intel/otx on the Render backend.
   try {
     const typeMap = { ip:'IPv4', domain:'domain', url:'URL', hash_md5:'file', hash_sha1:'file', hash_sha256:'file', hash_sha512:'file' };
     const otxType = typeMap[iocType.type];
     if (!otxType) return { source:'otx', status:'unsupported', message:'IOC type not supported by OTX' };
 
-    const r = await fetch(`/proxy/otx/indicators/${otxType}/${encodeURIComponent(value)}/general`);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const d = await r.json();
+    let d;
+    try {
+      // PRIMARY: Vercel proxy (also available in local proxy-server.js)
+      d = await _proxyFetch(`/proxy/otx/indicators/${otxType}/${encodeURIComponent(value)}/general`);
+    } catch (proxyErr) {
+      // FALLBACK: Render backend /api/intel/otx
+      console.warn('[IOC Lookup] OTX proxy failed, using backend fallback:', proxyErr.message);
+      const bd = await _backendFetch('otx', { ioc: value, type: iocType.type });
+      const pulses = bd.pulses || [];
+      const pulse_count = bd.pulse_count ?? pulses.length;
+      const verdict2 = pulse_count > 10 ? 'MALICIOUS' : pulse_count > 3 ? 'SUSPICIOUS' : pulse_count > 0 ? 'SUSPICIOUS' : 'CLEAN';
+      return {
+        source: 'otx', status: 'success', verdict: verdict2,
+        pulse_count,
+        related:          (bd.related          || []).slice(0,5),
+        tags:             (bd.tags             || []).slice(0,10),
+        malware_families: (bd.malware_families || []).slice(0,5),
+        threat_actors:    (bd.threat_actors    || []).slice(0,5),
+        industries:       (bd.industries       || []).slice(0,5),
+        url: `https://otx.alienvault.com/indicator/${otxType}/${encodeURIComponent(value)}`,
+      };
+    }
 
     const pulses = d.pulse_info?.pulses || [];
     const verdict = pulses.length > 10 ? 'MALICIOUS' : pulses.length > 3 ? 'SUSPICIOUS' : pulses.length > 0 ? 'SUSPICIOUS' : 'CLEAN';
@@ -248,20 +395,35 @@ async function _otxCheck(value, iocType) {
 
 // URLhaus (domain/IP/URL - free, no key)
 async function _urlhausCheck(value, iocType) {
+  // FIX BUG-5: Direct fetch('https://urlhaus-api.abuse.ch/v1/host/', ...) is blocked
+  //            by CORS policy → 401 Unauthorized in the browser console.
+  //            Solution: route through /proxy/urlhaus/* (added to vercel.json +
+  //            proxy-server.js) so the request goes server-side.
   const type = iocType.type;
   if (!['ip','domain','url'].includes(type)) return { source:'urlhaus', status:'unsupported' };
 
   try {
-    const body = type==='url' ? { url: value } : type==='ip' ? { host: value } : { host: value };
-    const r = await fetch('https://urlhaus-api.abuse.ch/v1/host/', {
-      method:'POST',
-      headers:{'Content-Type':'application/x-www-form-urlencoded'},
-      body: new URLSearchParams(body),
+    const body = type==='url' ? { url: value } : { host: value };
+    // Use server-side proxy to avoid CORS block
+    const r = await fetch('/proxy/urlhaus/host/', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+      body:    new URLSearchParams(body),
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const ct = r.headers.get('content-type') || '';
+    // If proxy not available (Render doesn't have /proxy/urlhaus), degrade gracefully
+    if (ct.includes('text/html') || !r.ok) {
+      console.warn('[IOC Lookup] URLhaus proxy not available, showing manual link');
+      return {
+        source: 'urlhaus', status: 'success', verdict: 'UNKNOWN',
+        urls_count: 0, active_urls: 0, sample_urls: [],
+        proxy_unavailable: true,
+        url: `https://urlhaus.abuse.ch/browse.php?search=${encodeURIComponent(value)}`,
+      };
+    }
     const d = await r.json();
 
-    if (d.query_status === 'no_results') return { source:'urlhaus', status:'success', verdict:'CLEAN', urls_count:0 };
+    if (d.query_status === 'no_results') return { source:'urlhaus', status:'success', verdict:'CLEAN', urls_count:0, active_urls:0, sample_urls:[], url: `https://urlhaus.abuse.ch/browse.php?search=${encodeURIComponent(value)}` };
 
     const urls = (d.urls||[]).filter(u=>u.url_status!=='offline').slice(0,5);
     const verdict = urls.length > 0 ? 'MALICIOUS' : 'CLEAN';
