@@ -8,20 +8,27 @@
     { "source": "/proxy/nvd",        "destination": "/api/proxy/nvd" },
 
     { "source": "/proxy/vt/:path*",        "destination": "/api/proxy/vt?_path=:path*" },
-    { "source": "/proxy/shodan/:path*",    "destination": "/api/proxy/shodan?_path=:path*" },
-    { "source": "/proxy/otx/:path*",       "destination": "/api/proxy/otx?_path=:path*" },
-    { "source": "/proxy/abuseipdb/:path*", "destination": "/api/proxy/abuseipdb?_path=:path*" },
-    { "source": "/proxy/openai/:path*",    "destination": "/api/proxy/openai?_path=:path*" },
-    { "source": "/proxy/claude/:path*",    "destination": "/api/proxy/claude?_path=:path*" },
-    { "source": "/proxy/urlhaus/:path*",  "destination": "/api/proxy/urlhaus?_path=:path*" },
+    { "source": "/proxy/vt",               "destination": "/api/proxy/vt" },
 
-    { "source": "/proxy/vt",        "destination": "/api/proxy/vt" },
-    { "source": "/proxy/shodan",    "destination": "/api/proxy/shodan" },
-    { "source": "/proxy/otx",       "destination": "/api/proxy/otx" },
-    { "source": "/proxy/abuseipdb", "destination": "/api/proxy/abuseipdb" },
-    { "source": "/proxy/openai",    "destination": "/api/proxy/openai" },
-    { "source": "/proxy/claude",    "destination": "/api/proxy/claude" },
-    { "source": "/proxy/urlhaus",   "destination": "/api/proxy/urlhaus" }
+    { "source": "/proxy/shodan/:path*",    "destination": "/api/proxy/shodan?_path=:path*" },
+    { "source": "/proxy/shodan",           "destination": "/api/proxy/shodan" },
+
+    { "source": "/proxy/otx/:path*",       "destination": "/api/proxy/otx?_path=:path*" },
+    { "source": "/proxy/otx",              "destination": "/api/proxy/otx" },
+
+    { "source": "/proxy/abuseipdb/:path*", "destination": "/api/proxy/abuseipdb?_path=:path*" },
+    { "source": "/proxy/abuseipdb",        "destination": "/api/proxy/abuseipdb" },
+
+    { "source": "/proxy/urlhaus/host/",    "destination": "/api/proxy/urlhaus?_path=host%2F" },
+    { "source": "/proxy/urlhaus/url/",     "destination": "/api/proxy/urlhaus?_path=url%2F" },
+    { "source": "/proxy/urlhaus/:path*",   "destination": "/api/proxy/urlhaus?_path=:path*" },
+    { "source": "/proxy/urlhaus",          "destination": "/api/proxy/urlhaus" },
+
+    { "source": "/proxy/openai/:path*",    "destination": "/api/proxy/openai?_path=:path*" },
+    { "source": "/proxy/openai",           "destination": "/api/proxy/openai" },
+
+    { "source": "/proxy/claude/:path*",    "destination": "/api/proxy/claude?_path=:path*" },
+    { "source": "/proxy/claude",           "destination": "/api/proxy/claude" }
   ],
 
   "headers": [
@@ -31,6 +38,12 @@
         { "key": "Access-Control-Allow-Origin",  "value": "*" },
         { "key": "Access-Control-Allow-Methods", "value": "GET, POST, PUT, PATCH, DELETE, OPTIONS" },
         { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization, x-api-key, apiKey, x-apikey, anthropic-version, X-OTX-API-KEY, Key, Accept, Auth-Key, X-Client-VT-Key, X-Client-Abuse-Key, X-Client-Shodan-Key, X-Client-OTX-Key" }
+      ]
+    },
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin",  "value": "*" }
       ]
     }
   ],
