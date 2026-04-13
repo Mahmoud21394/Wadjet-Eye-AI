@@ -287,7 +287,7 @@ async function _dsocLoadFeed() {
       ...(f.source   ? { source:   f.source }   : {}),
     });
 
-    const res  = await _dApiGet(`/cti/detections?${qs}`);
+    const res  = await _dApiGet(`/detections?${qs}`);
     const rows = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : []);
 
     DetectSOC.data  = rows;
