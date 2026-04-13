@@ -300,7 +300,7 @@ router.get('/vulnerabilities/:id', asyncHandler(async (req, res) => {
 }));
 
 // POST /api/cti/vulnerabilities
-router.post('/vulnerabilities', asyncHandler(async (req, res) => {
+router.post('/vulnerabilities/sync', asyncHandler(async (req, res) => {
   const { cve_id, description, severity, cvss_score, cvss_vector,
           affected_products, references, patch_available, exploited_in_wild,
           threat_actors, campaigns, mitre_techniques, tags } = req.body;
