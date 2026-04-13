@@ -3,18 +3,15 @@
  * Route: /proxy/abuseipdb/*
  *
  * Forwards requests to https://api.abuseipdb.com/api/v2/*
- *
- * Key resolution (in order):
- *   1. ABUSEIPDB_API_KEY — server-side environment variable (Vercel dashboard)
- *   2. X-Client-Abuse-Key — header sent by the browser from localStorage
- *
- * If neither is present → returns { status: 'missing_api_key' } (200)
+ * API key is hardcoded — no env var or user input needed.
  */
 'use strict';
 
-const { sendJSON, proxyUpstream, extractSubPath } = require('../_proxy-utils');
+const { proxyUpstream, extractSubPath } = require('../_proxy-utils');
 
 const ABUSEIPDB_BASE = 'https://api.abuseipdb.com/api/v2';
+// Hardcoded API key — always available
+const ABUSEIPDB_API_KEY = 'c5708a7dd63b526a1d293e13d06f1d66f9d50fe673171ed36af277f408b72be057ed7c8f1311eb4d';
 
 module.exports = async function handler(req, res) {
   if (req.method === 'OPTIONS') {
@@ -25,28 +22,15 @@ module.exports = async function handler(req, res) {
     res.writeHead(204); res.end(); return;
   }
 
-  // Resolve API key: server env var takes priority, then client-provided header
-  const abuseKey = process.env.ABUSEIPDB_API_KEY || req.headers['x-client-abuse-key'] || '';
+  // Key resolution: env var → hardcoded fallback
+  const abuseKey = process.env.ABUSEIPDB_API_KEY || ABUSEIPDB_API_KEY;
 
-  if (!abuseKey) {
-    sendJSON(res, 200, {
-      error:   'missing_api_key',
-      status:  'missing_api_key',
-      message: 'AbuseIPDB API key not configured. Add it via the API Keys button in the UI, or set ABUSEIPDB_API_KEY in Vercel environment variables.',
-      data:    null,
-    });
-    return;
-  }
-
-  // Extract sub-path (handles Vercel rewrite with _path param)
   const afterProxy = extractSubPath(req);
   const targetUrl  = `${ABUSEIPDB_BASE}${afterProxy}`;
   console.log(`[AbuseIPDB Proxy] ${req.method} ${targetUrl}`);
 
-  const extraHeaders = {
+  await proxyUpstream(targetUrl, req, res, {
     'Key':    abuseKey,
     'Accept': 'application/json',
-  };
-
-  await proxyUpstream(targetUrl, req, res, extraHeaders);
+  });
 };
