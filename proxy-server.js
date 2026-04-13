@@ -17,6 +17,7 @@ const https = require('https');
 const fs    = require('fs');
 const path  = require('path');
 const url   = require('url');
+const zlib  = require('zlib');
 
 const PORT   = 3000;
 const STATIC = __dirname;
@@ -47,14 +48,35 @@ function addCORS(res) {
   res.setHeader('Access-Control-Max-Age', '86400');
 }
 
+// ── Decompress buffer ────────────────────────────────────────
+function decompressBuffer(buf, encoding) {
+  const enc = (encoding || '').toLowerCase().trim();
+  return new Promise((resolve) => {
+    if (enc === 'gzip' || enc === 'x-gzip') {
+      zlib.gunzip(buf, (err, result) => resolve(err ? buf : result));
+    } else if (enc === 'deflate') {
+      zlib.inflate(buf, (err, result) => {
+        if (err) zlib.inflateRaw(buf, (e2, r2) => resolve(e2 ? buf : r2));
+        else resolve(result);
+      });
+    } else if (enc === 'br') {
+      zlib.brotliDecompress(buf, (err, result) => resolve(err ? buf : result));
+    } else {
+      resolve(buf);
+    }
+  });
+}
+
 // ── Generic HTTPS proxy ───────────────────────────────────────
 function proxyRequest(targetUrl, req, res, extraHeaders = {}) {
   const parsed = new URL(targetUrl);
 
   // Strip headers that cause issues when proxying
+  // Important: strip 'accept-encoding' so upstream sends uncompressed JSON
   const STRIP_HEADERS = new Set([
     'host','origin','referer','connection','transfer-encoding',
     'content-length','keep-alive','upgrade','te','trailers',
+    'accept-encoding',
   ]);
 
   const options = {
@@ -68,7 +90,9 @@ function proxyRequest(targetUrl, req, res, extraHeaders = {}) {
           !STRIP_HEADERS.has(k.toLowerCase())
         )
       ),
-      host: parsed.hostname,
+      host:              parsed.hostname,
+      'Accept':          'application/json',
+      'Accept-Encoding': 'identity', // request no compression
       ...extraHeaders,
     },
   };
@@ -76,16 +100,20 @@ function proxyRequest(targetUrl, req, res, extraHeaders = {}) {
   const proxyReq = https.request(options, (proxyRes) => {
     addCORS(res);
 
-    // Buffer the full response body, then forward.
-    // This avoids transfer-encoding/chunked issues with piping large responses.
     const chunks = [];
     proxyRes.on('data', chunk => chunks.push(chunk));
-    proxyRes.on('end', () => {
-      const body = Buffer.concat(chunks);
+    proxyRes.on('end', async () => {
+      let body = Buffer.concat(chunks);
+      // Decompress if upstream ignored Accept-Encoding: identity
+      const enc = proxyRes.headers['content-encoding'] || '';
+      if (enc && enc !== 'identity') {
+        body = await decompressBuffer(body, enc);
+      }
       if (!res.headersSent) {
         res.writeHead(proxyRes.statusCode, {
           'Content-Type':   proxyRes.headers['content-type'] || 'application/json',
           'Content-Length': body.length,
+          // Do NOT forward Content-Encoding — we've already decompressed
         });
       }
       res.end(body);

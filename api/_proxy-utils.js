@@ -2,6 +2,7 @@
 
 const https = require('https');
 const http  = require('http');
+const zlib  = require('zlib');
 
 // ── CORS ──────────────────────────────────────────────────────
 const CORS_HEADERS = {
@@ -34,63 +35,124 @@ function readBody(req) {
   });
 }
 
+// ── Decompress buffer (gzip / deflate / br) ───────────────────
+function decompressBody(buf, encoding) {
+  const enc = (encoding || '').toLowerCase().trim();
+  return new Promise((resolve, reject) => {
+    if (enc === 'gzip' || enc === 'x-gzip') {
+      zlib.gunzip(buf, (err, r) => err ? reject(err) : resolve(r));
+    } else if (enc === 'deflate') {
+      zlib.inflate(buf, (err, r) => {
+        if (err) zlib.inflateRaw(buf, (e2, r2) => e2 ? reject(e2) : resolve(r2));
+        else resolve(r);
+      });
+    } else if (enc === 'br') {
+      zlib.brotliDecompress(buf, (err, r) => err ? reject(err) : resolve(r));
+    } else {
+      resolve(buf);
+    }
+  });
+}
+
+// ── Auto-detect gzip by magic bytes and decompress ────────────
+async function ensureDecompressed(buf, contentEncoding) {
+  // First try declared encoding
+  if (contentEncoding && contentEncoding !== 'identity') {
+    try {
+      return await decompressBody(buf, contentEncoding);
+    } catch (_) { /* fall through to magic-byte detection */ }
+  }
+  // Detect gzip magic bytes: 0x1f 0x8b
+  if (buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b) {
+    try { return await decompressBody(buf, 'gzip'); } catch (_) {}
+  }
+  // Detect brotli (no reliable magic, skip)
+  return buf;
+}
+
 // ── Generic upstream request ───────────────────────────────────
 async function proxyUpstream(targetUrl, req, res, extraHeaders = {}, bodyOverride = null) {
   const parsed  = new URL(targetUrl);
   const isHttps = parsed.protocol === 'https:';
   const lib     = isHttps ? https : http;
 
-  const STRIP = new Set([
-    'host','origin','referer','connection','transfer-encoding',
-    'content-length','keep-alive','upgrade','te','trailers',
+  // Headers stripped from incoming request before forwarding
+  const STRIP_REQ = new Set([
+    'host', 'origin', 'referer', 'connection', 'transfer-encoding',
+    'content-length', 'keep-alive', 'upgrade', 'te', 'trailers',
+    'accept-encoding',   // strip so upstream returns plain JSON
   ]);
 
   let bodyBuf = bodyOverride;
-  if (bodyBuf === null && ['POST','PUT','PATCH'].includes(req.method)) {
+  if (bodyBuf === null && ['POST', 'PUT', 'PATCH'].includes(req.method)) {
     bodyBuf = await readBody(req);
   }
 
   const fwdHeaders = {
     ...Object.fromEntries(
-      Object.entries(req.headers || {}).filter(([k]) => !STRIP.has(k.toLowerCase()))
+      Object.entries(req.headers || {}).filter(([k]) => !STRIP_REQ.has(k.toLowerCase()))
     ),
-    host: parsed.hostname,
-    Accept: 'application/json',   // ✅ critical
+    host:              parsed.hostname,
+    'Accept':          'application/json',
+    'Accept-Encoding': 'identity',   // ask upstream for no compression
     ...extraHeaders,
   };
 
-  if (bodyBuf?.length) {
-    fwdHeaders['content-length'] = bodyBuf.length;
+  if (bodyBuf && bodyBuf.length) {
+    fwdHeaders['content-length'] = String(bodyBuf.length);
   }
 
   const options = {
     hostname: parsed.hostname,
-    port: parsed.port || (isHttps ? 443 : 80),
-    path: parsed.pathname + parsed.search,
-    method: req.method || 'GET',
-    headers: fwdHeaders,
-    timeout: 30000,
+    port:     parsed.port || (isHttps ? 443 : 80),
+    path:     parsed.pathname + parsed.search,
+    method:   req.method || 'GET',
+    headers:  fwdHeaders,
+    timeout:  30000,
   };
 
   return new Promise((resolve) => {
-    const upReq = lib.request(options, (upRes) => {
+    const upReq = lib.request(options, async (upRes) => {
       const chunks = [];
-      upRes.on('data', c => chunks.push(c));
-      upRes.on('end', () => {
-        const body = Buffer.concat(chunks);
+      upRes.on('data',  c => chunks.push(c));
+      upRes.on('end', async () => {
+        let body = Buffer.concat(chunks);
+
+        // Decompress — handles both declared and undeclared (magic-byte) gzip
+        const enc = upRes.headers['content-encoding'] || '';
+        body = await ensureDecompressed(body, enc);
+
+        // Reply to client — never send Content-Encoding (body is now plain)
         setCORS(res);
         res.writeHead(upRes.statusCode || 200, {
-          'Content-Type': upRes.headers['content-type'] || 'application/json',
+          'Content-Type':   upRes.headers['content-type'] || 'application/json',
           'Content-Length': body.length,
           ...CORS_HEADERS,
         });
         res.end(body);
         resolve();
       });
+
+      upRes.on('error', () => {
+        if (!res.headersSent) sendJSON(res, 502, { error: 'upstream_read_error' });
+        resolve();
+      });
     });
 
-    upReq.on('error', () => resolve());
-    if (bodyBuf?.length) upReq.write(bodyBuf);
+    upReq.on('timeout', () => {
+      upReq.destroy();
+      if (!res.headersSent)
+        sendJSON(res, 504, { error: 'upstream_timeout', message: 'Upstream API timed out after 30s' });
+      resolve();
+    });
+
+    upReq.on('error', (err) => {
+      if (!res.headersSent)
+        sendJSON(res, 502, { error: 'upstream_error', message: err.message });
+      resolve();
+    });
+
+    if (bodyBuf && bodyBuf.length) upReq.write(bodyBuf);
     upReq.end();
   });
 }
@@ -106,34 +168,29 @@ function nvdToISOZ(dateStr) {
   return new Date(s).toISOString().replace(/\.\d{3}Z$/, '.000Z');
 }
 
-// ✅ apiKey REMOVED from whitelist
 const NVD_PARAM_WHITELIST = new Set([
-  'pubStartDate','pubEndDate','startIndex','resultsPerPage',
-  'cvssV3Severity','keywordSearch','cveId'
+  'pubStartDate', 'pubEndDate', 'startIndex', 'resultsPerPage',
+  'cvssV3Severity', 'keywordSearch', 'cveId',
 ]);
 
 function nvdAutoCorrect(rawQS) {
   const raw = new URLSearchParams(rawQS || '');
-  const p = new URLSearchParams();
-
-  for (const [k,v] of raw.entries()) {
-    if (!NVD_PARAM_WHITELIST.has(k)) continue;
-    if (!v) continue;
-    p.set(k,v);
+  const p   = new URLSearchParams();
+  for (const [k, v] of raw.entries()) {
+    if (!NVD_PARAM_WHITELIST.has(k) || !v) continue;
+    p.set(k, v);
   }
-
-  if (p.get('cveId')) p.set('cveId', p.get('cveId').toUpperCase());
+  if (p.get('cveId'))        p.set('cveId',        p.get('cveId').toUpperCase());
   if (p.get('cvssV3Severity')) p.set('cvssV3Severity', p.get('cvssV3Severity').toUpperCase());
-
-  ['pubStartDate','pubEndDate'].forEach(k=>{
-    const v=p.get(k);
-    if(v)p.set(k,nvdToISOZ(v));
+  ['pubStartDate', 'pubEndDate'].forEach(k => {
+    const v = p.get(k);
+    if (v) p.set(k, nvdToISOZ(v));
   });
-
   return p.toString();
 }
 
-// ── extractSubPath (defined BEFORE export) ───────────────────
+// ── extractSubPath ────────────────────────────────────────────
+// Works with both Vercel rewrites (?_path=...) and routes ($1 capture groups)
 function extractSubPath(req) {
   const rawUrl = req.url || '';
   const qIndex = rawUrl.indexOf('?');
@@ -145,7 +202,9 @@ function extractSubPath(req) {
 
   let subPath = '/';
   if (injectedPath) {
-    const decoded = decodeURIComponent(injectedPath);
+    // decode but preserve slashes (don't double-decode)
+    let decoded = injectedPath;
+    try { decoded = decodeURIComponent(injectedPath); } catch (_) {}
     subPath = decoded.startsWith('/') ? decoded : '/' + decoded;
   }
 
@@ -158,6 +217,8 @@ module.exports = {
   sendJSON,
   readBody,
   proxyUpstream,
+  decompressBody,
+  ensureDecompressed,
   nvdAutoCorrect,
   nvdToISOZ,
   extractSubPath,
