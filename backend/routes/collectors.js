@@ -98,6 +98,30 @@ async function upsertIOCs(tenantId, iocs) {
   return imported;
 }
 
+// ── GET /api/collectors  — root listing (aliases /status) ────────
+// Fixes 404 when frontend calls GET /api/collectors without a sub-path.
+// Returns same shape as /status plus a `collectors` array for compatibility.
+router.get('/', verifyToken, asyncHandler(async (req, res) => {
+  const feeds = Object.entries(lastPull).map(([id, ts]) => ({
+    id,
+    name:      { otx:'AlienVault OTX', abuseipdb:'AbuseIPDB', virustotal:'VirusTotal', shodan:'Shodan' }[id],
+    last_pull: ts ? new Date(ts).toISOString() : null,
+    can_pull:  canPull(id),
+    api_key_set: !!process.env[{
+      otx:'OTX_API_KEY', abuseipdb:'ABUSEIPDB_API_KEY',
+      virustotal:'VIRUSTOTAL_API_KEY', shodan:'SHODAN_API_KEY'
+    }[id]],
+    status: ts ? 'active' : 'idle',
+  }));
+  console.log(`[COLLECTORS] GET / — listing ${feeds.length} collectors`);
+  res.json({
+    collectors: feeds,  // frontend expects `collectors` array
+    feeds,              // alias for compatibility
+    count:     feeds.length,
+    timestamp: new Date().toISOString(),
+  });
+}));
+
 // ── GET /api/collectors/status ──────────────────────────────────
 router.get('/status', verifyToken, asyncHandler(async (req, res) => {
   const feeds = Object.entries(lastPull).map(([id, ts]) => ({

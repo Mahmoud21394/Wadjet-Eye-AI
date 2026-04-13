@@ -510,8 +510,10 @@ async function iocdbLoadPage(page = 1) {
 
     const iocs  = Array.isArray(res.data) ? res.data : (Array.isArray(res) ? res : []);
     IOCDB.data  = iocs;
-    // Prefer res.total > res.count > res.pagination.total > iocs.length
-    IOCDB.total = res.total || res.count || res.pagination?.total || iocs.length || 0;
+    // Handle total=-1 (backend returned unknown count due to timeout on COUNT query)
+    // Fall back to iocs.length as a lower bound.
+    const rawTotal = res.total ?? res.count ?? res.pagination?.total;
+    IOCDB.total = (rawTotal === -1 || rawTotal == null) ? iocs.length : rawTotal;
 
     console.log(`[IOC-Intel] Loaded page ${page}: ${iocs.length} IOCs, total=${IOCDB.total}`);
 
@@ -537,18 +539,20 @@ async function iocdbLoadPage(page = 1) {
 
   } catch (err) {
     console.error('[IOC-Intel] iocdbLoadPage error:', err);
-    const isAuth = err.message?.includes('401') || err.message?.includes('auth') ||
-                   err.message?.includes('Unauthorized') || err.message?.includes('Authentication');
+    const isAuth    = err.message?.includes('401') || err.message?.includes('auth') ||
+                      err.message?.includes('Unauthorized') || err.message?.includes('Authentication');
+    const isTimeout = err.message?.includes('503') || err.message?.includes('timeout') ||
+                      err.message?.includes('timed out');
+
+    let hint = 'Ensure backend is running and you are authenticated. Check backend logs for details.';
+    if (isAuth)    hint = 'Authentication error — your session may have expired. <a href="javascript:void(0)" onclick="window.location.reload()" style="color:#22d3ee">Refresh page</a>';
+    if (isTimeout) hint = 'The database query timed out (large IOC table). Try adding filters or a smaller page size.';
+
     if (inner) inner.innerHTML = `
       <div style="padding:32px;text-align:center;color:#ef4444">
         <i class="fas fa-exclamation-triangle fa-2x" style="display:block;margin-bottom:10px"></i>
         <strong>${_esc(err.message)}</strong><br>
-        <small style="color:#8b949e">
-          ${isAuth
-            ? 'Authentication error — your session may have expired. <a href="javascript:void(0)" onclick="window.location.reload()" style="color:#22d3ee">Refresh page</a>'
-            : 'Ensure backend is running and you are authenticated. Check backend logs for details.'
-          }
-        </small><br><br>
+        <small style="color:#8b949e">${hint}</small><br><br>
         <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:8px">
           <button onclick="iocdbRunDiagnostic()" style="padding:7px 14px;background:#ff8c0020;border:1px solid #ff8c00;color:#ff8c00;border-radius:6px;cursor:pointer;font-size:.82em">
             🔍 Run Diagnostic
