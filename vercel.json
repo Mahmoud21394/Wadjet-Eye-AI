@@ -13,13 +13,15 @@
     { "source": "/proxy/abuseipdb/:path*", "destination": "/api/proxy/abuseipdb?_path=:path*" },
     { "source": "/proxy/openai/:path*",    "destination": "/api/proxy/openai?_path=:path*" },
     { "source": "/proxy/claude/:path*",    "destination": "/api/proxy/claude?_path=:path*" },
+    { "source": "/proxy/urlhaus/:path*",  "destination": "/api/proxy/urlhaus?_path=:path*" },
 
     { "source": "/proxy/vt",        "destination": "/api/proxy/vt" },
     { "source": "/proxy/shodan",    "destination": "/api/proxy/shodan" },
     { "source": "/proxy/otx",       "destination": "/api/proxy/otx" },
     { "source": "/proxy/abuseipdb", "destination": "/api/proxy/abuseipdb" },
     { "source": "/proxy/openai",    "destination": "/api/proxy/openai" },
-    { "source": "/proxy/claude",    "destination": "/api/proxy/claude" }
+    { "source": "/proxy/claude",    "destination": "/api/proxy/claude" },
+    { "source": "/proxy/urlhaus",   "destination": "/api/proxy/urlhaus" }
   ],
 
   "headers": [
@@ -40,6 +42,7 @@
     "api/proxy/otx.js":       { "maxDuration": 30 },
     "api/proxy/abuseipdb.js": { "maxDuration": 30 },
     "api/proxy/openai.js":    { "maxDuration": 30 },
-    "api/proxy/claude.js":    { "maxDuration": 30 }
+    "api/proxy/claude.js":    { "maxDuration": 30 },
+    "api/proxy/urlhaus.js":   { "maxDuration": 30 }
   }
 }

@@ -138,6 +138,8 @@ const PROXY_ROUTES = [
   { prefix: '/proxy/openai/',     target: (p) => `https://api.openai.com${p}` },
   // Anthropic Claude
   { prefix: '/proxy/claude/',     target: (p) => `https://api.anthropic.com${p}` },
+  // URLhaus — free public API, no key required; proxy exists to bypass browser CORS
+  { prefix: '/proxy/urlhaus/',    target: (p) => `https://urlhaus-api.abuse.ch/v1${p}` },
 ];
 
 // ── Static file server ────────────────────────────────────────
@@ -596,5 +598,5 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`   Static: ${STATIC}`);
   console.log(`   NVD proxy: /proxy/nvd (no slash) + /proxy/nvd/ (with slash) → ${NVD_BASE_URL}`);
   console.log(`   NVD rate limit: ${process.env.NVD_API_KEY ? '50 req/30s (authenticated)' : '5 req/30s (unauthenticated — set NVD_API_KEY for higher limits)'}`);
-  console.log(`   Other proxies: /proxy/vt/ /proxy/abuseipdb/ /proxy/shodan/ /proxy/otx/ /proxy/openai/ /proxy/claude/\n`);
+  console.log(`   Other proxies: /proxy/vt/ /proxy/abuseipdb/ /proxy/shodan/ /proxy/otx/ /proxy/openai/ /proxy/claude/ /proxy/urlhaus/\n`);
 });
