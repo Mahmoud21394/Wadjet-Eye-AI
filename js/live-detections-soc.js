@@ -248,7 +248,7 @@ async function renderLiveDetectionsSOC() {
 ───────────────────────────────────────────────────────────────── */
 async function _dsocLoadKPIs() {
   try {
-    const res  = await _dApiGet('/cti/detections?limit=200');
+    const res  = await _dApiGet('/detections?limit=200');
     const rows = res?.data || [];
     const counts = { critical:0, high:0, medium:0, low:0, info:0 };
     rows.forEach(r => {
@@ -723,7 +723,7 @@ function _dsocGetToken() {
 
 async function _dsocPollNew() {
   try {
-    const res     = await _dApiGet('/cti/detections?limit=10&sort=created_at&order=desc');
+    const res = await _dApiGet('/detections?limit=10&sort=created_at&order=desc');
     const rows    = res?.data || [];
     const prevIds = new Set(DetectSOC.data.map(r => r.id));
     const fresh   = rows.filter(r => !prevIds.has(r.id));
@@ -820,7 +820,7 @@ window._dsocTagCampaign = async function(id) {
   if (typeof showToast === 'function') showToast('🔗 Correlating event with campaigns…', 'info', 2000);
   try {
     if (window.authFetch)
-      await window.authFetch(`/cti/detections/${id}/correlate`, { method:'POST', body: JSON.stringify({ auto:true }) });
+      await window.authFetch(`/detections/${id}/correlate`, { method:'POST', body: JSON.stringify({ auto:true }) });
     if (typeof showToast === 'function') showToast('✅ Event correlated to active campaigns', 'success', 3000);
     await _dsocLoadFeed();
   } catch (err) {
@@ -841,7 +841,7 @@ window._dsocCreateCase = function(id) {
 window._dsocCorrelateEvent = async function(id) {
   try {
     if (window.authFetch)
-      await window.authFetch(`/cti/detections/${id}/correlate`, { method:'POST', body: JSON.stringify({ auto:true }) });
+      await window.authFetch(`/detections/${id}/correlate`, { method:'POST', body: JSON.stringify({ auto:true }) });
     if (typeof showToast === 'function') showToast('✅ Event correlated to campaign cluster', 'success');
   } catch (err) {
     if (typeof showToast === 'function') showToast(`❌ Correlation failed: ${err.message}`, 'error');
