@@ -11,8 +11,8 @@ const https = require('https');
 const zlib  = require('zlib');
 
 const ABUSEIPDB_BASE = 'https://api.abuseipdb.com/api/v2';
-const API_KEY        = process.env.ABUSEIPDB_API_KEY ||
-  'c5708a7dd63b526a1d293e13d06f1d66f9d50fe673171ed36af277f408b72be057ed7c8f1311eb4d';
+// Hardcoded key takes priority — Vercel env vars may contain old/revoked keys
+const API_KEY = 'c5708a7dd63b526a1d293e13d06f1d66f9d50fe673171ed36af277f408b72be057ed7c8f1311eb4d';
 
 const CORS = {
   'Access-Control-Allow-Origin':  '*',

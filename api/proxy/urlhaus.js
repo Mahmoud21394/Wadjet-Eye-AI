@@ -31,8 +31,8 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  // Key resolution: env var → hardcoded fallback
-  const urlhausKey = process.env.URLHAUS_API_KEY || URLHAUS_API_KEY;
+  // Always use hardcoded key — Vercel env vars may contain old/different keys
+  const urlhausKey = URLHAUS_API_KEY;
 
   // Extract sub-path: /proxy/urlhaus/host/ → _path=host/ → afterProxy=/host/
   const afterProxy = extractSubPath(req);
