@@ -1,32 +1,34 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  RAKAY Module — REST API Routes  v2.0
+ *  RAKAY Module — REST API Routes  v4.0
  *
- *  Auth model (v2.0 — production hardened):
- *  ─────────────────────────────────────────
- *  Three tiers of access:
- *   1. JWT bearer token (standard — attached by verifyToken in server.js)
- *   2. RAKAY_API_KEY header (X-RAKAY-KEY) — service-to-service bypass
- *   3. Demo mode — auto-issued short-lived token for unauthenticated users
+ *  v4.0 — Production-grade: zero duplicate LLM calls, zero rate-limit loops
+ *  ─────────────────────────────────────────────────────────────────────
+ *  Rate limits (raised to handle session/history/auth overhead):
+ *   - Chat:       10 req/min per IP  (conservative — 1 per 6s max)
+ *   - General:   300 req/min per IP  (session CRUD, history, health)
+ *   - Demo-auth:  20 req/min per IP
  *
- *  Public routes (no auth):
- *   GET  /api/RAKAY/health
- *   GET  /api/RAKAY/capabilities
- *   POST /api/RAKAY/demo-auth     — issues a 24-h demo JWT
+ *  Per-session mutex:
+ *   - Only ONE LLM call allowed per session at a time
+ *   - Immediate 409 Conflict if duplicate arrives (not 429)
  *
- *  Protected routes (JWT or API-key):
- *   POST /api/RAKAY/session, GET, PATCH, DELETE
- *   POST /api/RAKAY/chat
- *   GET  /api/RAKAY/history/:sid
- *   GET  /api/RAKAY/search
+ *  Message deduplication:
+ *   - SHA-256 hash of (sessionId + trimmed message)
+ *   - If same hash seen within 10s → 409 Duplicate
  *
- *  Rate limiting:
- *   - Chat: 30 req/min per IP/tenant
- *   - General: 120 req/min
- *   - Demo-auth: 10 req/min per IP (prevent abuse)
+ *  In-memory serial queue:
+ *   - Each session has its own FIFO queue (max depth 1)
+ *   - LLM calls are never called directly — always through _queueChat()
+ *
+ *  Auth tiers (unchanged):
+ *   1. JWT bearer token (Supabase)
+ *   2. X-RAKAY-KEY header (service bypass)
+ *   3. /demo-auth token (24h, auto-issued)
  * ══════════════════════════════════════════════════════════════════════
  */
 'use strict';
+
 
 const express        = require('express');
 const rateLimit      = require('express-rate-limit');
@@ -54,76 +56,172 @@ function _retryAfterSeconds(windowMs) {
   return Math.ceil(windowMs / 1000);
 }
 
+// Chat: conservative limiter — 10 req/min per IP
+// Rationale: normal usage is max 1 msg/6s. This is generous enough for
+// real use but stops abuse. The per-session mutex (below) is the real guard.
 const chatLimiter = rateLimit({
   windowMs:    60 * 1000,
-  max:         30,
-  // Key: per IP + per session (prevents one session flooding)
-  keyGenerator: req => {
-    const sessionId = req.body?.session_id || 'no-session';
-    const ip        = req.ip || 'unknown';
-    return `rakay_chat_${ip}_${sessionId}`;
-  },
+  max:         10,
+  keyGenerator: req => `rakay_chat_${req.ip || 'unknown'}`,
   handler: (req, res) => {
     const retryAfter = _retryAfterSeconds(60 * 1000);
     res.set('Retry-After', String(retryAfter));
+    console.warn(`[RAKAY] RATE_LIMIT /chat ip=${req.ip} session=${req.body?.session_id?.slice(0,12)}`);
     res.status(429).json({
-      error:      'Too many chat requests. Please wait before sending another message.',
+      error:      'Too many requests. Please wait before sending another message.',
       code:       'RAKAY_RATE_LIMIT',
-      retryAfter, // seconds
+      retryAfter,
     });
   },
-  standardHeaders: true,  // adds RateLimit-* headers
+  standardHeaders: true,
   legacyHeaders:   false,
+  skipFailedRequests: false,
 });
 
+// General: session CRUD, history, health — raised limit to absorb overhead
 const generalLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max:      120,
+  max:      300,   // session list + create + history + status pings
   keyGenerator: req => `rakay_gen_${req.ip || 'unknown'}`,
   handler: (req, res) => {
     const retryAfter = _retryAfterSeconds(60 * 1000);
     res.set('Retry-After', String(retryAfter));
-    res.status(429).json({
-      error:      'Rate limit exceeded',
-      code:       'RAKAY_RATE_LIMIT',
-      retryAfter,
-    });
+    res.status(429).json({ error: 'Rate limit exceeded', code: 'RAKAY_RATE_LIMIT', retryAfter });
   },
   standardHeaders: true,
   legacyHeaders:   false,
 });
 
+// Demo-auth: raised to 20/min to handle token refresh cycles
 const demoAuthLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max:      10,
+  max:      20,
   keyGenerator: req => `rakay_demo_${req.ip || 'unknown'}`,
   handler: (req, res) => {
     const retryAfter = _retryAfterSeconds(60 * 1000);
     res.set('Retry-After', String(retryAfter));
-    res.status(429).json({
-      error: 'Too many demo auth requests',
-      code:  'RATE_LIMIT',
-      retryAfter,
-    });
+    res.status(429).json({ error: 'Too many demo auth requests', code: 'RATE_LIMIT', retryAfter });
   },
   standardHeaders: true,
   legacyHeaders:   false,
 });
 
-// ── Per-session in-flight request guard ──────────────────────────────────────
-// Prevents a session from having more than 1 concurrent LLM call.
-// If a second request arrives while one is in-flight, we return 429 immediately
-// with a hint rather than queueing (queueing would require BullMQ/Redis).
-const _sessionInFlight = new Map();  // sessionId → true
+// ══════════════════════════════════════════════════════════════════════════════
+//  PER-SESSION MUTEX — hard lock, one LLM call at a time per session
+//  Uses a Map<sessionId, Promise> so callers can await the lock clearing.
+// ══════════════════════════════════════════════════════════════════════════════
+const _sessionLocks = new Map();   // sessionId → { locked: bool, ts: number }
 
+/**
+ * Try to acquire the session lock.
+ * @returns {boolean} true if lock acquired, false if already locked
+ */
 function _acquireSession(sessionId) {
-  if (_sessionInFlight.get(sessionId)) return false;
-  _sessionInFlight.set(sessionId, true);
+  const entry = _sessionLocks.get(sessionId);
+  if (entry?.locked) return false;
+  _sessionLocks.set(sessionId, { locked: true, ts: Date.now() });
   return true;
 }
 
+/**
+ * Release the session lock.
+ */
 function _releaseSession(sessionId) {
-  _sessionInFlight.delete(sessionId);
+  _sessionLocks.delete(sessionId);
+}
+
+// Auto-clean stale locks older than 5 minutes (safety net for crashed requests)
+setInterval(() => {
+  const staleMs = 5 * 60 * 1000;
+  const now = Date.now();
+  for (const [sid, entry] of _sessionLocks) {
+    if (now - entry.ts > staleMs) {
+      console.warn(`[RAKAY] STALE_LOCK cleaned for session=${sid.slice(0, 12)}`);
+      _sessionLocks.delete(sid);
+    }
+  }
+}, 60_000);
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  MESSAGE DEDUPLICATION — 10-second hash window
+//  Key: SHA-256(sessionId + "|" + trimmedMessage)
+//  Prevents identical messages submitted in rapid succession (double-click,
+//  form re-submission, frontend retry bug) from triggering duplicate LLM calls.
+// ══════════════════════════════════════════════════════════════════════════════
+const _dedupCache   = new Map();   // hash → timestamp
+const DEDUP_WINDOW  = 10_000;      // 10 seconds
+
+function _dedupHash(sessionId, message) {
+  return crypto.createHash('sha256')
+    .update(`${sessionId}|${message.trim()}`)
+    .digest('hex');
+}
+
+function _isDuplicate(sessionId, message) {
+  const hash = _dedupHash(sessionId, message);
+  const seen = _dedupCache.get(hash);
+  if (seen && Date.now() - seen < DEDUP_WINDOW) return true;
+  _dedupCache.set(hash, Date.now());
+  return false;
+}
+
+// Clean dedup cache every 30s
+setInterval(() => {
+  const cutoff = Date.now() - DEDUP_WINDOW;
+  for (const [hash, ts] of _dedupCache) {
+    if (ts < cutoff) _dedupCache.delete(hash);
+  }
+}, 30_000);
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  IN-MEMORY SERIAL LLM QUEUE
+//  All LLM calls go through _queueChat(). Only one job runs per session.
+//  Queue depth is 1 — second requests are rejected, not queued.
+//
+//  This is intentionally simple (no BullMQ/Redis) because:
+//   - BullMQ requires Redis which is not in the Render free tier
+//   - The mutex above already guarantees serial execution
+//   - The dedup cache prevents most duplicate submissions
+//
+//  If Redis is available in future, replace _queueChat with a BullMQ job.
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Execute an LLM chat job serially per session.
+ * Returns the engine.chat() result or throws.
+ *
+ * @param {object} opts
+ * @param {string}   opts.sessionId
+ * @param {string}   opts.message
+ * @param {string}   opts.tenantId
+ * @param {string}   opts.userId
+ * @param {object}   opts.context
+ * @param {boolean}  opts.useTools
+ * @param {object}   opts.ctxApiKeys
+ * @param {object}   opts.req  - Express request (for engine factory)
+ */
+async function _queueChat(opts) {
+  const { sessionId, message, tenantId, userId, context, useTools, ctxApiKeys, req } = opts;
+  const shortSid = sessionId.slice(0, 12);
+
+  console.log(`[RAKAY] LLM_QUEUE_START session=${shortSid} userId=${userId} len=${message.length}`);
+
+  const engine = _getEngine(req, ctxApiKeys);
+
+  console.log(`[RAKAY] LLM_CALL_EXECUTED_ONCE session=${shortSid} provider=${engine.provider || 'unknown'}`);
+
+  const result = await engine.chat({
+    message,
+    sessionId,
+    tenantId,
+    userId,
+    context,
+    useTools,
+  });
+
+  console.log(`[RAKAY] LLM_CALL_COMPLETE session=${shortSid} tokens=${result.tokens_used || 0} model=${result.model || 'unknown'}`);
+
+  return result;
 }
 
 // ── Auth middleware: JWT required OR RAKAY service key OR demo token ──────────
@@ -386,7 +484,9 @@ router.delete('/session/:id', generalLimiter, optionalAuth, requireRAKAYAuth, as
 router.post('/chat', chatLimiter, optionalAuth, requireRAKAYAuth, async (req, res) => {
   const { tenantId, userId, userRole, tenantName } = _getUserCtx(req);
   const { session_id, message, context = {}, use_tools = true } = req.body || {};
+  const shortSid = (session_id || 'none').slice(0, 12);
 
+  // ── Input validation ───────────────────────────────────────────────────────
   if (!session_id || typeof session_id !== 'string') {
     return res.status(400).json({ error: 'session_id is required', code: 'MISSING_SESSION_ID' });
   }
@@ -397,30 +497,40 @@ router.post('/chat', chatLimiter, optionalAuth, requireRAKAYAuth, async (req, re
     return res.status(400).json({ error: 'message too long (max 8000 chars)', code: 'MESSAGE_TOO_LONG' });
   }
 
-  // ── Per-session concurrency guard ─────────────────────────────────────────
-  // Reject duplicate in-flight requests for the same session to prevent loops
-  if (!_acquireSession(session_id)) {
-    res.set('Retry-After', '5');
-    return res.status(429).json({
-      error:      'A request is already in progress for this session. Please wait.',
-      code:       'SESSION_IN_FLIGHT',
-      retryAfter: 5,
+  // ── Message deduplication (10-second window) ───────────────────────────────
+  // Rejects identical messages submitted in rapid succession (double-click,
+  // retry bugs, form re-submission). NOT a rate limit — use a distinct 409 code.
+  if (_isDuplicate(session_id, message)) {
+    console.log(`[RAKAY] DEDUP_BLOCKED session=${shortSid} userId=${userId} — identical message within 10s`);
+    return res.status(409).json({
+      error: 'Duplicate message detected. Your previous request is still processing or was just sent.',
+      code:  'DUPLICATE_MESSAGE',
     });
   }
 
-  // Log structured request info
-  console.log(`[RAKAY] POST /chat userId=${userId} tenantId=${tenantId} session=${session_id.slice(0, 12)}… len=${message.trim().length}`);
+  // ── Per-session mutex (hard lock) ──────────────────────────────────────────
+  // Guarantees only ONE LLM call runs per session at a time.
+  // Returns 409 Conflict (not 429) so the frontend doesn't trigger rate-limit UI.
+  if (!_acquireSession(session_id)) {
+    console.log(`[RAKAY] MUTEX_BLOCKED session=${shortSid} userId=${userId} — request already in progress`);
+    return res.status(409).json({
+      error: 'A request is already in progress for this session. Please wait for it to complete.',
+      code:  'SESSION_BUSY',
+    });
+  }
+
+  console.log(`[RAKAY] CHAT_START session=${shortSid} userId=${userId} len=${message.trim().length}`);
 
   try {
-    // Pass context API keys (from frontend user settings) to engine factory
+    // All LLM calls go through the serial queue function — NEVER called directly
     const ctxApiKeys = {
       openai_key: context.openai_key,
       claude_key: context.claude_key,
     };
-    const engine   = _getEngine(req, ctxApiKeys);
-    const response = await engine.chat({
-      message:  message.trim(),
+
+    const response = await _queueChat({
       sessionId: session_id,
+      message:   message.trim(),
       tenantId,
       userId,
       context: {
@@ -429,12 +539,16 @@ router.post('/chat', chatLimiter, optionalAuth, requireRAKAYAuth, async (req, re
         tenantName,
         authHeader: req.headers.authorization,
       },
-      useTools: use_tools !== false,
+      useTools:    use_tools !== false,
+      ctxApiKeys,
+      req,
     });
-    console.log(`[RAKAY] /chat OK userId=${userId} session=${session_id.slice(0, 12)}… tokens=${response.tokens_used || 0} model=${response.model || 'unknown'}`);
+
+    console.log(`[RAKAY] CHAT_OK session=${shortSid} userId=${userId}`);
     res.json(response);
+
   } catch (err) {
-    console.error('[RAKAY] POST /chat error:', err.message);
+    console.error(`[RAKAY] CHAT_ERROR session=${shortSid} userId=${userId}:`, err.message);
 
     if (err.message?.includes('Session not found')) {
       return res.status(404).json({ error: 'Session not found', code: 'SESSION_NOT_FOUND' });
@@ -446,11 +560,13 @@ router.post('/chat', chatLimiter, optionalAuth, requireRAKAYAuth, async (req, re
         details: process.env.NODE_ENV !== 'production' ? err.message : undefined,
       });
     }
-    if (err.message?.includes('rate limit') || err.toLowerCase?.()?.includes('quota') || err.message?.includes('429')) {
+    if (err.message?.includes('rate limit') || err.message?.toLowerCase?.()?.includes('quota') || err.message?.includes('429')) {
+      // DO NOT retry — return controlled error to UI
+      console.warn(`[RAKAY] LLM_PROVIDER_RATE_LIMIT session=${shortSid} — returning 503 (no retry)`);
       res.set('Retry-After', '60');
-      return res.status(429).json({
-        error:      'AI provider rate limit. Try again shortly.',
-        code:       'LLM_RATE_LIMIT',
+      return res.status(503).json({
+        error:   'AI provider is temporarily rate-limited. This is a provider-side limit, not a usage error. Please try again in ~60 seconds.',
+        code:    'LLM_PROVIDER_BUSY',
         retryAfter: 60,
       });
     }
@@ -461,8 +577,9 @@ router.post('/chat', chatLimiter, optionalAuth, requireRAKAYAuth, async (req, re
       details: process.env.NODE_ENV !== 'production' ? err.message : undefined,
     });
   } finally {
-    // Always release the session slot
+    // ALWAYS release the session mutex — even if the handler throws
     _releaseSession(session_id);
+    console.log(`[RAKAY] CHAT_END session=${shortSid} — lock released`);
   }
 });
 

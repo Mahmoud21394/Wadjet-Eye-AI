@@ -1,29 +1,31 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  RAKAY Module — Frontend UI  v3.0
+ *  RAKAY Module — Frontend UI  v4.0
  *  Wadjet-Eye AI Platform — Conversational Security Analyst
  *
- *  v3.0 Changes (WebSocket & Rate-Limit Hardening):
- *   ✅ WebSocket: native ws to /ws/detections (not Socket.IO client)
- *   ✅ WS reconnect: exponential backoff, MAX 5 retries, then gives up
- *   ✅ WS state machine: DISCONNECTED → CONNECTING → CONNECTED → CLOSING
- *   ✅ Duplicate WS prevention: only 1 active connection at a time
- *   ✅ Request debounce: 300ms on _rakaySubmit; disables send button
- *   ✅ Duplicate request prevention: abort pending fetch before new one
- *   ✅ Rate-limit recovery: reads Retry-After header, waits, re-enables UI
- *   ✅ Auto-trigger loop prevention: _sendMessage guards RAKAY.loading
- *   ✅ Structured logs: [RAKAY WS] prefix, state transitions, error types
- *   ✅ Token refresh on WS 401/4001 close code
+ *  v4.0 — Zero duplicate LLM calls, zero rate-limit loops (production-grade)
+ *  ──────────────────────────────────────────────────────────────────────
+ *  CRITICAL FIXES:
+ *   ✅ _api() defaults to retries=0 — NO automatic retries on any call
+ *   ✅ requestInFlight flag set SYNCHRONOUSLY before any await
+ *   ✅ Message dedup: frontend-side hash check (mirrors backend dedup)
+ *   ✅ Single event listener per button: delegated from stable container
+ *   ✅ No auto-trigger loops: _renderMessages() never sends any request
+ *   ✅ 409 DUPLICATE_MESSAGE / SESSION_BUSY → silent discard (no UI error)
+ *   ✅ 503 LLM_PROVIDER_BUSY → informational message, no 60s UI freeze
+ *   ✅ WS completely isolated — zero API calls from WebSocket handlers
+ *   ✅ AbortController per request, cleaned up in finally
+ *   ✅ 300ms debounce + RAKAY.loading guard (double protection)
  *
- *  v2.0 (retained):
- *   ✅ Auto demo-auth, health ping, real-time status, retry with backoff
- *   ✅ Tool trace, markdown renderer, session sidebar, localStorage fallback
+ *  v3.0 (retained):
+ *   ✅ WS state machine, max 5 retries, exponential backoff
+ *   ✅ Token management, demo-auth, health ping
  * ══════════════════════════════════════════════════════════════════════
  */
 (function () {
   'use strict';
 
-  const MODULE_VERSION = '3.0';
+  const MODULE_VERSION = '4.0';
 
   // ── Constants ─────────────────────────────────────────────────────────────
   const LS_RAKAY_TOKEN       = 'rakay_demo_token';
@@ -31,13 +33,43 @@
   const LS_KEY_SESSIONS      = 'rakay_sessions_v1';
   const LS_KEY_MSGS          = sid => `rakay_msgs_${sid}`;
 
-  // ── WebSocket constants ───────────────────────────────────────────────────
-  const WS_MAX_RETRIES    = 5;       // max reconnect attempts then give up
-  const WS_BASE_DELAY_MS  = 1500;    // initial reconnect delay
-  const WS_MAX_DELAY_MS   = 60_000;  // cap reconnect delay at 60s
-  const WS_PING_INTERVAL  = 25_000;  // client-side keepalive ping
+  // ── Frontend deduplication (mirrors backend 10s window) ───────────────────
+  const FE_DEDUP_WINDOW_MS = 10_000;
+  const _feDedupCache = new Map();  // hash → timestamp
 
-  // WebSocket state machine values
+  function _feDedupHash(sessionId, message) {
+    // Simple hash using sessionId + message content
+    const str = `${sessionId}|${message.trim()}`;
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const ch = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + ch;
+      hash |= 0;
+    }
+    return hash.toString(36);
+  }
+
+  function _feIsDuplicate(sessionId, message) {
+    const hash = _feDedupHash(sessionId, message);
+    const seen = _feDedupCache.get(hash);
+    if (seen && Date.now() - seen < FE_DEDUP_WINDOW_MS) {
+      log.warn(`[DEDUP] Duplicate message blocked (hash=${hash}) — same message within 10s`);
+      return true;
+    }
+    _feDedupCache.set(hash, Date.now());
+    // Auto-clean old entries
+    for (const [h, ts] of _feDedupCache) {
+      if (Date.now() - ts > FE_DEDUP_WINDOW_MS * 2) _feDedupCache.delete(h);
+    }
+    return false;
+  }
+
+  // ── WebSocket constants ───────────────────────────────────────────────────
+  const WS_MAX_RETRIES    = 5;
+  const WS_BASE_DELAY_MS  = 1500;
+  const WS_MAX_DELAY_MS   = 60_000;
+  const WS_PING_INTERVAL  = 25_000;
+
   const WS_STATE = { DISCONNECTED: 'DISCONNECTED', CONNECTING: 'CONNECTING', CONNECTED: 'CONNECTED', CLOSING: 'CLOSING' };
 
   const API_BASE = () =>
@@ -68,7 +100,8 @@
     // Request control
     _currentFetch:    null,   // AbortController for in-flight chat request
     _submitDebounce:  null,   // debounce timer for send button
-    _rateLimitUntil:  0,      // timestamp (ms) until rate-limit lifts
+    _rateLimitUntil:  0,      // timestamp (ms) until rate-limit lifts (not used for 409s)
+    requestInFlight:  false,  // SYNCHRONOUS flag — set before any await, cleared in finally
   };
 
   let _rendered = false;
@@ -252,10 +285,15 @@
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  //  API CLIENT — with retry, auth, structured error handling
+  //  API CLIENT — retries=0 by default (NO automatic retries)
+  //
+  //  CRITICAL: Default retries changed from 2 → 0.
+  //  With retries=2, one user message could generate up to 9 API requests
+  //  (session create ×3 + chat ×3 + history ×3), easily hitting rate limits.
+  //  All calls now fail-fast and use localStorage as fallback.
   // ══════════════════════════════════════════════════════════════════════════
   async function _api(method, path, body = null, opts = {}) {
-    const { retries = 2, skipAuth = false, abortSignal } = opts;
+    const { retries = 0, skipAuth = false, abortSignal } = opts;  // retries=0: no auto-retry
     const url = `${API_BASE()}/api/RAKAY${path}`;
 
     // Resolve token
@@ -464,30 +502,49 @@
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  //  CHAT API
+  //  CHAT API — hardened send with zero-duplicate guarantee
+  //
+  //  Layers of protection (in order of execution):
+  //   1. RAKAY.requestInFlight — synchronous flag set BEFORE any await
+  //   2. RAKAY.loading — UI state flag (same flag, belt-and-suspenders)
+  //   3. FE dedup hash — frontend mirrors backend's 10s dedup window
+  //   4. 300ms debounce on submit button (in _rakaySubmit)
+  //   5. Backend mutex (SESSION_BUSY → 409 Conflict)
+  //   6. Backend dedup hash (DUPLICATE_MESSAGE → 409 Conflict)
+  //
+  //  Logs: LLM CALL EXECUTED ONCE is printed in the backend _queueChat().
+  //  Frontend logs: SEND_START / SEND_COMPLETE / SEND_BLOCKED_* for tracing.
   // ══════════════════════════════════════════════════════════════════════════
   async function _sendMessage(message) {
     if (!message.trim()) return;
 
-    // ── Guard: only one request at a time ──────────────────────────────────
+    // ── Layer 1: Synchronous requestInFlight flag (set BEFORE any await) ──
+    // This is the primary guard. It's synchronous so even rapid back-to-back
+    // calls in the same microtask queue cannot both pass.
+    if (RAKAY.requestInFlight) {
+      log.warn('[SEND] SEND_BLOCKED_INFLIGHT — request already in flight');
+      return;
+    }
+
+    // ── Layer 2: UI loading flag (same protection, different name) ─────────
     if (RAKAY.loading) {
-      log.warn('Request already in progress — ignoring duplicate submit');
+      log.warn('[SEND] SEND_BLOCKED_LOADING — UI loading flag active');
       return;
     }
 
-    // ── Guard: rate-limit cooldown ─────────────────────────────────────────
-    const now = Date.now();
-    if (RAKAY._rateLimitUntil > now) {
-      const waitSec = Math.ceil((RAKAY._rateLimitUntil - now) / 1000);
-      _appendError(`Rate limit active. Please wait ${waitSec}s before sending again.`);
+    // ── Layer 3: Frontend message deduplication (10s window) ───────────────
+    // Prevents identical messages from being sent twice within 10 seconds.
+    // This catches: rapid double-click, Enter spam, form re-submission.
+    if (_feIsDuplicate(RAKAY.sessionId, message)) {
+      log.warn('[SEND] SEND_BLOCKED_DEDUP — identical message within 10s window');
       return;
     }
 
-    // ── Cancel any previous in-flight fetch (shouldn't happen due to loading guard, but belt-and-suspenders)
-    if (RAKAY._currentFetch) {
-      RAKAY._currentFetch.abort();
-      RAKAY._currentFetch = null;
-    }
+    // ── SET FLAGS SYNCHRONOUSLY — no awaits before this point ─────────────
+    RAKAY.requestInFlight = true;
+    RAKAY.loading         = true;
+
+    log.info(`[SEND] SEND_START session=${RAKAY.sessionId?.slice(0, 12)} len=${message.trim().length}`);
 
     const userMsg = {
       id:         _uid(),
@@ -498,7 +555,6 @@
     };
 
     RAKAY.messages.push(userMsg);
-    RAKAY.loading = true;
     _renderMessages();
     _setInputEnabled(false);
     _showTyping();
@@ -512,7 +568,7 @@
       _renderSidebar();
     }
 
-    // Create abort controller for this request
+    // Create AbortController — allows cancellation on stopRAKAY()
     const abortCtrl = new AbortController();
     RAKAY._currentFetch = abortCtrl;
 
@@ -520,7 +576,6 @@
       const context = {
         currentPage:      window.currentPage || 'rakay',
         platform_context: { page: window.currentPage },
-        // Include API keys from platform settings for AI providers
         openai_key:  _lsGet('openai_api_key')  || _lsGet('wadjet_openai_key')  || undefined,
         claude_key:  _lsGet('claude_api_key')   || _lsGet('wadjet_claude_key')  || undefined,
       };
@@ -530,7 +585,11 @@
         message:    message.trim(),
         context,
         use_tools:  true,
-      }, { abortSignal: abortCtrl.signal });
+      }, {
+        retries:     0,             // NEVER retry chat calls — causes rate limit loops
+        abortSignal: abortCtrl.signal,
+        timeout:     90_000,        // 90s timeout for LLM calls
+      });
 
       _hideTyping();
 
@@ -556,6 +615,7 @@
           _lsSetSessions(RAKAY.sessions);
         }
 
+        log.info(`[SEND] SEND_COMPLETE tokens=${data.tokens_used || 0} model=${data.model || 'unknown'}`);
         _renderMessages();
         _renderSidebar();
         _scrollToBottom();
@@ -566,66 +626,95 @@
       _hideTyping();
       _handleChatError(err, message);
     } finally {
-      RAKAY.loading = false;
-      RAKAY._currentFetch = null;
+      // ALWAYS clear ALL flags — even on error/abort
+      RAKAY.requestInFlight = false;
+      RAKAY.loading         = false;
+      RAKAY._currentFetch   = null;
       _setInputEnabled(true);
       _focusInput();
+      log.debug('[SEND] SEND_FLAGS_CLEARED');
     }
   }
 
   function _handleChatError(err, originalMessage) {
     // Ignore AbortError (request was cancelled intentionally)
     if (err.name === 'AbortError') {
-      log.debug('Chat request aborted');
+      log.debug('[SEND] Request aborted (intentional)');
       return;
     }
 
     const isNetworkErr = err.name === 'TypeError' || err.message?.includes('fetch')
-      || err.message?.includes('Failed to fetch') || err.name === 'AbortError';
+      || err.message?.includes('Failed to fetch');
 
-    log.error('Chat error:', err.status || '', err.code || '', err.message);
+    log.error('[SEND] SEND_ERROR status=%s code=%s msg=%s', err.status || 'network', err.code || '', err.message);
 
+    // Network error → fall back to offline mode
     if (isNetworkErr || RAKAY.backendOnline === false) {
       _appendLocalResponse(originalMessage);
       return;
     }
 
+    // ── 409 Conflict: duplicate or session-busy ────────────────────────────
+    // These are NOT rate-limit errors — the user's message was already being
+    // processed. Silently discard — do NOT show "rate limit" messages.
+    // Remove the user's message bubble from the UI (it was a duplicate).
+    if (err.status === 409) {
+      if (err.code === 'DUPLICATE_MESSAGE') {
+        log.warn('[SEND] DEDUP_409 — backend confirmed duplicate, discarding');
+        // Remove the user message we just added (it's a dupe)
+        RAKAY.messages.pop();
+        _renderMessages();
+        _showToast('Message already sent — please wait for the response', 'info', 2500);
+      } else if (err.code === 'SESSION_BUSY') {
+        log.warn('[SEND] MUTEX_409 — session busy, discarding');
+        RAKAY.messages.pop();
+        _renderMessages();
+        _showToast('Previous message still processing — please wait', 'info', 2500);
+      } else {
+        log.warn('[SEND] 409 Conflict:', err.code);
+        RAKAY.messages.pop();
+        _renderMessages();
+      }
+      return;
+    }
+
+    // ── 401 Unauthorized: re-auth ──────────────────────────────────────────
     if (err.status === 401 || err.code === 'RAKAY_AUTH_REQUIRED' || err.code === 'DEMO_TOKEN_EXPIRED') {
       _appendError('Session expired. Refreshing authentication…');
       _lsDel(LS_RAKAY_TOKEN);
       _lsDel(LS_RAKAY_TOKEN_EXP);
       RAKAY.authToken = null;
-      // Auto-retry after re-auth
       setTimeout(async () => {
         const t = await _ensureAuth();
         if (t) {
-          log.info('Re-auth success — please resend your message');
+          log.info('[SEND] Re-auth success — please resend your message');
           _showToast('Session refreshed — please resend your message', 'info');
         }
       }, 500);
       return;
     }
 
-    if (err.status === 503 || err.code === 'LLM_UNAVAILABLE') {
-      _appendError('AI provider is unavailable. The server may need an API key configured. Check Settings → AI Configuration.');
+    // ── 503 LLM provider busy (rate-limited BY provider, not by us) ────────
+    // This is a transient provider-side issue — NOT a user error.
+    // Do NOT show "wait 60s" or lock the UI.
+    if (err.status === 503 || err.code === 'LLM_PROVIDER_BUSY') {
+      _appendError('The AI provider is temporarily busy. Please try again in a few seconds — your message was not rate-limited.');
       return;
     }
 
-    if (err.status === 429 || err.code === 'LLM_RATE_LIMIT' || err.code === 'RAKAY_RATE_LIMIT' || err.code === 'SESSION_IN_FLIGHT') {
-      // Read Retry-After from error body or default to 30s
+    // ── 503 LLM unavailable (missing API key) ─────────────────────────────
+    if (err.code === 'LLM_UNAVAILABLE') {
+      _appendError('AI provider is unavailable. The server needs an API key. Check Settings → AI Configuration.');
+      return;
+    }
+
+    // ── 429: Only show UI lock if it's truly a rate limit from our limiter ─
+    // With the new limits (10 req/min) this should never happen in normal use.
+    if (err.status === 429 || err.code === 'RAKAY_RATE_LIMIT') {
       const retryAfterSec = err.body?.retryAfter || 30;
-      RAKAY._rateLimitUntil = Date.now() + (retryAfterSec * 1000);
-      log.warn(`Rate limit hit. Retry after ${retryAfterSec}s`);
-
-      // Show countdown in UI
-      _appendError(`Rate limit reached. Please wait ${retryAfterSec}s before sending another message.`);
-
-      // Re-enable input after the cooldown
-      setTimeout(() => {
-        RAKAY._rateLimitUntil = 0;
-        _setInputEnabled(true);
-        _showToast('Rate limit lifted — you can send messages again', 'success');
-      }, retryAfterSec * 1000);
+      log.warn(`[SEND] RATE_LIMIT_429 — retryAfter=${retryAfterSec}s (check for duplicate call bug)`);
+      // Show informational message, NOT a UI lock
+      _appendError(`Too many requests — this should not happen in normal usage. Please wait ${retryAfterSec}s.`);
       return;
     }
 
