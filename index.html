@@ -24,7 +24,7 @@
   <!-- Global Animation System v1.0 — Page transitions, card anims, skeleton loaders, button effects -->
   <link rel="stylesheet" href="css/animation-system.css" />
   <!-- Unified SOC Modules v2.0 — Shared components for ThreatGraph, MalwareDNA, Settings, all CDS modules -->
-  <link rel="stylesheet" href="css/soc-modules-v2.css" />
+  <link rel="stylesheet" href="css/sidebar-v2.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -94,184 +94,259 @@
 
   <div class="sidebar-nav-scroll">
 
-    <!-- ════ 1. OPERATIONS ════ -->
-    <div class="sidebar-section-label">OPERATIONS</div>
-    <nav class="sidebar-nav">
-      <a href="#" class="nav-item active" data-page="command-center">
-        <i class="fas fa-tachometer-alt"></i><span>Command Center</span>
-        <span class="nav-badge badge-red" id="nb-critical">0</span>
-      </a>
-      <a href="#" class="nav-item" data-page="findings">
-        <i class="fas fa-crosshairs"></i><span>Findings</span>
-        <span class="nav-badge badge-orange" id="nb-findings">0</span>
-      </a>
-      <a href="#" class="nav-item" data-page="campaigns">
-        <i class="fas fa-chess-king"></i><span>Campaigns</span>
-        <span class="nav-badge badge-purple" id="nb-campaigns">0</span>
-      </a>
-      <a href="#" class="nav-item" data-page="detections">
-        <i class="fas fa-broadcast-tower"></i><span>Live Detections</span>
-        <span class="nav-badge badge-green blink">LIVE</span>
-      </a>
-      <a href="#" class="nav-item" data-page="threat-actors">
-        <i class="fas fa-user-secret"></i><span>Threat Actors</span>
-      </a>
-      <a href="#" class="nav-item" data-page="dark-web">
-        <i class="fas fa-spider"></i><span>Dark Web Intelligence</span>
-      </a>
-      <a href="#" class="nav-item" data-page="exposure">
-        <i class="fas fa-bug"></i><span>CVE Intelligence</span>
-        <span class="nav-badge" style="background:linear-gradient(90deg,#ef4444,#dc2626);color:white;font-size:8px;padding:1px 5px;border-radius:8px;">NVD</span>
-      </a>
-    </nav>
+    <!-- ════════════════════════════════════════
+         1. OPERATIONS
+    ════════════════════════════════════════ -->
+    <div class="nav-group nav-group--ops" data-group="ops">
+      <button class="nav-group-header" onclick="toggleNavGroup(this)">
+        <span class="nav-group-icon"><i class="fas fa-th-large"></i></span>
+        <span class="nav-group-label">Operations</span>
+        <span class="nav-group-count">7</span>
+        <i class="fas fa-chevron-down nav-group-chevron"></i>
+      </button>
+      <div class="nav-group-children">
+        <a href="#" class="nav-child active" data-page="command-center">
+          <i class="fas fa-tachometer-alt"></i><span>Command Center</span>
+          <span class="nav-child-badge badge-red" id="nb-critical">0</span>
+        </a>
+        <a href="#" class="nav-child" data-page="findings">
+          <i class="fas fa-crosshairs"></i><span>Findings</span>
+          <span class="nav-child-badge badge-orange" id="nb-findings">0</span>
+        </a>
+        <a href="#" class="nav-child" data-page="campaigns">
+          <i class="fas fa-chess-king"></i><span>Active Campaigns</span>
+          <span class="nav-child-badge badge-purple" id="nb-campaigns">0</span>
+        </a>
+        <a href="#" class="nav-child" data-page="detections">
+          <i class="fas fa-broadcast-tower"></i><span>Live Detections</span>
+          <span class="nav-child-badge badge-green blink">LIVE</span>
+        </a>
+        <a href="#" class="nav-child" data-page="threat-actors">
+          <i class="fas fa-user-secret"></i><span>Threat Actors</span>
+        </a>
+        <a href="#" class="nav-child" data-page="dark-web">
+          <i class="fas fa-spider"></i><span>Dark Web Intelligence</span>
+        </a>
+        <a href="#" class="nav-child" data-page="exposure">
+          <i class="fas fa-bug"></i><span>CVE Intelligence Engine</span>
+          <span class="nav-child-badge" style="background:linear-gradient(90deg,#ef4444,#dc2626);color:#fff;font-size:8px;padding:1px 5px;border-radius:8px;">NVD</span>
+        </a>
+      </div>
+    </div>
 
-    <!-- ════ 2. CYBER DEFENSE BRAIN ════ -->
-    <div class="sidebar-section-label" style="color:#00d4ff;opacity:1;">🧠 CYBER DEFENSE BRAIN</div>
-    <nav class="sidebar-nav">
-      <a href="#" class="nav-item" data-page="malware-lab">
-        <i class="fas fa-flask"></i><span>Malware Analysis Lab</span>
-        <span class="nav-badge" style="background:linear-gradient(90deg,#ef4444,#f97316);color:white;font-size:8px;padding:1px 5px;border-radius:8px;">LAB</span>
-      </a>
-      <a href="#" class="nav-item" data-page="cognitive-layer">
-        <i class="fas fa-brain"></i><span>Cognitive AI Layer</span>
-        <span class="nav-badge" style="background:linear-gradient(90deg,#a855f7,#6366f1);color:white;font-size:8px;padding:1px 5px;border-radius:8px;">XAI</span>
-      </a>
-      <a href="#" class="nav-item" data-page="predictive-engine">
-        <i class="fas fa-chart-line"></i><span>Predictive Threat Engine</span>
-      </a>
-      <a href="#" class="nav-item" data-page="attack-graph">
-        <i class="fas fa-sitemap"></i><span>Attack Graph Intelligence</span>
-      </a>
-      <a href="#" class="nav-item" data-page="malware-dna">
-        <i class="fas fa-dna"></i><span>Malware DNA Engine</span>
-      </a>
-      <a href="#" class="nav-item" data-page="adversary-sim">
-        <i class="fas fa-user-ninja"></i><span>Adversary Simulation Lab</span>
-        <span class="nav-badge" style="background:linear-gradient(90deg,#a855f7,#7c3aed);color:white;font-size:8px;padding:1px 5px;border-radius:8px;">NEW</span>
-      </a>
-      <a href="#" class="nav-item" data-page="soc-memory">
-        <i class="fas fa-memory"></i><span>SOC Memory Engine</span>
-      </a>
-      <a href="#" class="nav-item" data-page="threat-graph">
-        <i class="fas fa-project-diagram"></i><span>Threat Intel Graph</span>
-        <span class="nav-badge" style="background:linear-gradient(90deg,#22d3ee,#3b82f6);color:white;font-size:8px;padding:1px 5px;border-radius:8px;">LIVE</span>
-      </a>
-      <a href="#" class="nav-item" data-page="digital-risk">
-        <i class="fas fa-shield-virus"></i><span>Digital Risk Protection</span>
-      </a>
-      <a href="#" class="nav-item" data-page="attack-storyline">
-        <i class="fas fa-film"></i><span>Attack Storyline</span>
-      </a>
-    </nav>
+    <div class="nav-group-sep"></div>
 
-    <!-- ════ RAKAY AI ANALYST ════ -->
-    <div class="sidebar-section-label" style="color:#22d3ee;opacity:1;">🤖 AI ANALYST</div>
-    <nav class="sidebar-nav">
-      <a href="#" class="nav-item" data-page="rakay">
-        <i class="fas fa-robot"></i><span>RAKAY Analyst</span>
-        <span class="nav-badge" style="background:linear-gradient(90deg,#22d3ee,#0ea5e9);color:white;font-size:8px;padding:1px 5px;border-radius:8px;">NEW</span>
-      </a>
-    </nav>
+    <!-- ════════════════════════════════════════
+         2. CYBER DEFENSE BRAIN
+    ════════════════════════════════════════ -->
+    <div class="nav-group nav-group--brain" data-group="brain">
+      <button class="nav-group-header" onclick="toggleNavGroup(this)">
+        <span class="nav-group-icon"><i class="fas fa-brain"></i></span>
+        <span class="nav-group-label">Cyber Defense Brain</span>
+        <span class="nav-group-count">10</span>
+        <i class="fas fa-chevron-down nav-group-chevron"></i>
+      </button>
+      <div class="nav-group-children">
+        <a href="#" class="nav-child" data-page="malware-lab">
+          <i class="fas fa-flask"></i><span>Malware Analysis Lab</span>
+          <span class="nav-child-badge" style="background:linear-gradient(90deg,#ef4444,#f97316);color:#fff;font-size:8px;padding:1px 5px;border-radius:8px;">LAB</span>
+        </a>
+        <a href="#" class="nav-child" data-page="cognitive-layer">
+          <i class="fas fa-microchip"></i><span>Cognitive Security Layer</span>
+          <span class="nav-child-badge" style="background:linear-gradient(90deg,#a855f7,#6366f1);color:#fff;font-size:8px;padding:1px 5px;border-radius:8px;">XAI</span>
+        </a>
+        <a href="#" class="nav-child" data-page="predictive-engine">
+          <i class="fas fa-chart-line"></i><span>Predictive Threat Engine</span>
+        </a>
+        <a href="#" class="nav-child" data-page="attack-graph">
+          <i class="fas fa-sitemap"></i><span>Attack Graph Intelligence</span>
+        </a>
+        <a href="#" class="nav-child" data-page="malware-dna">
+          <i class="fas fa-dna"></i><span>Malware DNA Engine</span>
+        </a>
+        <a href="#" class="nav-child" data-page="adversary-sim">
+          <i class="fas fa-user-ninja"></i><span>Adversary Simulation Lab</span>
+          <span class="nav-child-badge" style="background:linear-gradient(90deg,#a855f7,#7c3aed);color:#fff;font-size:8px;padding:1px 5px;border-radius:8px;">NEW</span>
+        </a>
+        <a href="#" class="nav-child" data-page="soc-memory">
+          <i class="fas fa-memory"></i><span>SOC Memory Engine</span>
+        </a>
+        <a href="#" class="nav-child" data-page="threat-graph">
+          <i class="fas fa-project-diagram"></i><span>Threat Intelligence Graph</span>
+          <span class="nav-child-badge" style="background:linear-gradient(90deg,#22d3ee,#3b82f6);color:#fff;font-size:8px;padding:1px 5px;border-radius:8px;">LIVE</span>
+        </a>
+        <a href="#" class="nav-child" data-page="digital-risk">
+          <i class="fas fa-shield-virus"></i><span>Digital Risk Protection</span>
+        </a>
+        <a href="#" class="nav-child" data-page="attack-storyline">
+          <i class="fas fa-film"></i><span>Attack Storyline Generator</span>
+        </a>
+      </div>
+    </div>
 
-    <!-- ════ 3. INNOVATIONS ════ -->
-    <div class="sidebar-section-label" style="color:#f97316;opacity:1;">🚀 INNOVATIONS</div>
-    <nav class="sidebar-nav">
-      <a href="#" class="nav-item" data-page="whatif-simulator">
-        <i class="fas fa-chess"></i><span>What-If Simulator</span>
-        <span class="nav-badge" style="background:linear-gradient(90deg,#f97316,#ef4444);color:white;font-size:8px;padding:1px 5px;border-radius:8px;">v3</span>
-      </a>
-      <a href="#" class="nav-item" data-page="security-brain">
-        <i class="fas fa-brain"></i><span>Security Memory Brain</span>
-      </a>
-      <a href="#" class="nav-item" data-page="autonomous-agent">
-        <i class="fas fa-robot"></i><span>Autonomous SOC Agent</span>
-      </a>
-    </nav>
+    <div class="nav-group-sep"></div>
 
-    <!-- ════ 4. SOC OPERATIONS ════ -->
-    <div class="sidebar-section-label">SOC OPERATIONS</div>
-    <nav class="sidebar-nav">
-      <a href="#" class="nav-item" data-page="soc-operations">
-        <i class="fas fa-shield-virus"></i><span>SOC Operations</span>
-      </a>
-      <a href="#" class="nav-item" data-page="ai-orchestrator">
-        <i class="fas fa-robot"></i><span>AI Orchestrator</span>
-        <span class="nav-badge badge-cyan">AI</span>
-      </a>
-      <a href="#" class="nav-item" data-page="playbooks">
-        <i class="fas fa-book"></i><span>Playbooks</span>
-      </a>
-    </nav>
+    <!-- ════════════════════════════════════════
+         3. AI ANALYST
+    ════════════════════════════════════════ -->
+    <div class="nav-group nav-group--ai" data-group="ai">
+      <button class="nav-group-header" onclick="toggleNavGroup(this)">
+        <span class="nav-group-icon"><i class="fas fa-file-alt"></i></span>
+        <span class="nav-group-label">AI Analyst</span>
+        <span class="nav-group-count">1</span>
+        <i class="fas fa-chevron-down nav-group-chevron"></i>
+      </button>
+      <div class="nav-group-children">
+        <a href="#" class="nav-child" data-page="rakay">
+          <i class="fas fa-robot"></i><span>RAKAY — AI Security Analyst</span>
+          <span class="nav-child-badge" style="background:linear-gradient(90deg,#22d3ee,#0ea5e9);color:#fff;font-size:8px;padding:1px 5px;border-radius:8px;">NEW</span>
+        </a>
+      </div>
+    </div>
 
-    <!-- ════ 5. ADVANCED SOC ════ -->
-    <div class="sidebar-section-label">ADVANCED SOC</div>
-    <nav class="sidebar-nav">
-      <a href="#" class="nav-item" data-page="executive-dashboard">
-        <i class="fas fa-chart-line"></i><span>Executive Dashboard</span>
-      </a>
-      <a href="#" class="nav-item" data-page="kill-chain">
-        <i class="fas fa-sitemap"></i><span>Kill Chain View</span>
-      </a>
-      <a href="#" class="nav-item" data-page="case-management">
-        <i class="fas fa-folder-open"></i><span>Case Management</span>
-      </a>
-      <a href="#" class="nav-item" data-page="threat-hunting">
-        <i class="fas fa-search"></i><span>Threat Hunting</span>
-      </a>
-      <a href="#" class="nav-item" data-page="detection-engineering">
-        <i class="fas fa-code"></i><span>Detection Engineering</span>
-      </a>
-      <a href="#" class="nav-item" data-page="soar">
-        <i class="fas fa-bolt"></i><span>SOAR Automation</span>
-      </a>
-      <a href="#" class="nav-item" data-page="live-feeds">
-        <i class="fas fa-rss"></i><span>Live Threat Feeds</span>
-      </a>
-      <a href="#" class="nav-item" data-page="sysmon">
-        <i class="fas fa-file-code"></i><span>Sysmon Analyzer</span>
-      </a>
-      <a href="#" class="nav-item" data-page="cyber-news">
-        <i class="fas fa-newspaper"></i><span>Cyber News</span>
-      </a>
-      <a href="#" class="nav-item" data-page="mitre-attack">
-        <i class="fas fa-th"></i><span>MITRE ATT&CK</span>
-      </a>
-      <a href="#" class="nav-item" data-page="geo-threats">
-        <i class="fas fa-globe"></i><span>Geo Threat Map</span>
-      </a>
-    </nav>
+    <div class="nav-group-sep"></div>
 
-    <!-- ════ PLATFORM ════ -->
-    <div class="sidebar-section-label">PLATFORM</div>
-    <nav class="sidebar-nav">
-      <a href="#" class="nav-item" data-page="customers">
-        <i class="fas fa-building"></i><span>Tenants</span>
-      </a>
-      <a href="#" class="nav-item" data-page="collectors">
-        <i class="fas fa-satellite"></i><span>Threat Collectors</span>
-      </a>
-      <a href="#" class="nav-item" data-page="edr-siem">
-        <i class="fas fa-plug"></i><span>EDR / SIEM Webhooks</span>
-      </a>
-      <a href="#" class="nav-item" data-page="ioc-database">
-        <i class="fas fa-database"></i><span>IOC Database</span>
-      </a>
-      <a href="#" class="nav-item" data-page="reports">
-        <i class="fas fa-file-alt"></i><span>Reports</span>
-      </a>
-      <a href="#" class="nav-item" data-page="rbac-admin">
-        <i class="fas fa-users-cog"></i><span>RBAC Admin</span>
-      </a>
-      <a href="#" class="nav-item" data-page="branding">
-        <i class="fas fa-palette"></i><span>Branding</span>
-      </a>
-      <a href="#" class="nav-item" data-page="pricing">
-        <i class="fas fa-tags"></i><span>Pricing Plans</span>
-      </a>
-      <a href="#" class="nav-item" data-page="settings">
-        <i class="fas fa-cog"></i><span>Settings</span>
-      </a>
-    </nav>
+    <!-- ════════════════════════════════════════
+         4. INNOVATIONS
+    ════════════════════════════════════════ -->
+    <div class="nav-group nav-group--innovations" data-group="innovations">
+      <button class="nav-group-header" onclick="toggleNavGroup(this)">
+        <span class="nav-group-icon"><i class="fas fa-cog"></i></span>
+        <span class="nav-group-label">Innovations</span>
+        <span class="nav-group-count">3</span>
+        <i class="fas fa-chevron-down nav-group-chevron"></i>
+      </button>
+      <div class="nav-group-children">
+        <a href="#" class="nav-child" data-page="whatif-simulator">
+          <i class="fas fa-chess"></i><span>What-If Attack Simulator</span>
+          <span class="nav-child-badge" style="background:linear-gradient(90deg,#f97316,#ef4444);color:#fff;font-size:8px;padding:1px 5px;border-radius:8px;">v3</span>
+        </a>
+        <a href="#" class="nav-child" data-page="security-brain">
+          <i class="fas fa-brain"></i><span>Security Memory Brain</span>
+        </a>
+        <a href="#" class="nav-child" data-page="autonomous-agent">
+          <i class="fas fa-robot"></i><span>Autonomous SOC Agent</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="nav-group-sep"></div>
+
+    <!-- ════════════════════════════════════════
+         5. SOC OPERATIONS
+    ════════════════════════════════════════ -->
+    <div class="nav-group nav-group--soc" data-group="soc">
+      <button class="nav-group-header" onclick="toggleNavGroup(this)">
+        <span class="nav-group-icon"><i class="fas fa-users"></i></span>
+        <span class="nav-group-label">SOC Operations</span>
+        <span class="nav-group-count">3</span>
+        <i class="fas fa-chevron-down nav-group-chevron"></i>
+      </button>
+      <div class="nav-group-children">
+        <a href="#" class="nav-child" data-page="soc-operations">
+          <i class="fas fa-shield-alt"></i><span>SOC Operations</span>
+        </a>
+        <a href="#" class="nav-child" data-page="ai-orchestrator">
+          <i class="fas fa-robot"></i><span>AI Orchestrator</span>
+          <span class="nav-child-badge badge-cyan">AI</span>
+        </a>
+        <a href="#" class="nav-child" data-page="playbooks">
+          <i class="fas fa-book"></i><span>Response Playbooks</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="nav-group-sep"></div>
+
+    <!-- ════════════════════════════════════════
+         6. ADVANCED SOC
+    ════════════════════════════════════════ -->
+    <div class="nav-group nav-group--advanced" data-group="advanced">
+      <button class="nav-group-header" onclick="toggleNavGroup(this)">
+        <span class="nav-group-icon"><i class="fas fa-clipboard-list"></i></span>
+        <span class="nav-group-label">Advanced SOC</span>
+        <span class="nav-group-count">11</span>
+        <i class="fas fa-chevron-down nav-group-chevron"></i>
+      </button>
+      <div class="nav-group-children">
+        <a href="#" class="nav-child" data-page="executive-dashboard">
+          <i class="fas fa-chart-pie"></i><span>Executive Dashboard</span>
+        </a>
+        <a href="#" class="nav-child" data-page="kill-chain">
+          <i class="fas fa-sitemap"></i><span>Kill Chain View</span>
+        </a>
+        <a href="#" class="nav-child" data-page="case-management">
+          <i class="fas fa-folder-open"></i><span>Case Management</span>
+        </a>
+        <a href="#" class="nav-child" data-page="threat-hunting">
+          <i class="fas fa-search"></i><span>Threat Hunting Workspace</span>
+        </a>
+        <a href="#" class="nav-child" data-page="detection-engineering">
+          <i class="fas fa-code"></i><span>Detection Engineering</span>
+        </a>
+        <a href="#" class="nav-child" data-page="soar">
+          <i class="fas fa-bolt"></i><span>SOAR Automation</span>
+        </a>
+        <a href="#" class="nav-child" data-page="live-feeds">
+          <i class="fas fa-rss"></i><span>Live Threat Intel Feeds</span>
+        </a>
+        <a href="#" class="nav-child" data-page="sysmon">
+          <i class="fas fa-file-code"></i><span>Sysmon Log Analyzer</span>
+        </a>
+        <a href="#" class="nav-child" data-page="cyber-news">
+          <i class="fas fa-newspaper"></i><span>Cyber News</span>
+        </a>
+        <a href="#" class="nav-child" data-page="mitre-attack">
+          <i class="fas fa-th"></i><span>MITRE ATT&amp;CK Navigator</span>
+        </a>
+        <a href="#" class="nav-child" data-page="geo-threats">
+          <i class="fas fa-globe"></i><span>Live Cyber Threat Map</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="nav-group-sep"></div>
+
+    <!-- ════════════════════════════════════════
+         7. PLATFORM
+    ════════════════════════════════════════ -->
+    <div class="nav-group nav-group--platform" data-group="platform">
+      <button class="nav-group-header" onclick="toggleNavGroup(this)">
+        <span class="nav-group-icon"><i class="fas fa-cube"></i></span>
+        <span class="nav-group-label">Platform</span>
+        <span class="nav-group-count">9</span>
+        <i class="fas fa-chevron-down nav-group-chevron"></i>
+      </button>
+      <div class="nav-group-children">
+        <a href="#" class="nav-child" data-page="customers">
+          <i class="fas fa-building"></i><span>Tenant Management</span>
+        </a>
+        <a href="#" class="nav-child" data-page="collectors">
+          <i class="fas fa-satellite"></i><span>Threat Collectors</span>
+        </a>
+        <a href="#" class="nav-child" data-page="edr-siem">
+          <i class="fas fa-plug"></i><span>EDR / SIEM Webhooks</span>
+        </a>
+        <a href="#" class="nav-child" data-page="ioc-database">
+          <i class="fas fa-database"></i><span>IOC Database</span>
+        </a>
+        <a href="#" class="nav-child" data-page="reports">
+          <i class="fas fa-file-alt"></i><span>Reports</span>
+        </a>
+        <a href="#" class="nav-child" data-page="rbac-admin">
+          <i class="fas fa-users-cog"></i><span>RBAC Administration</span>
+        </a>
+        <a href="#" class="nav-child" data-page="branding">
+          <i class="fas fa-palette"></i><span>White-Label Branding</span>
+        </a>
+        <a href="#" class="nav-child" data-page="pricing">
+          <i class="fas fa-tags"></i><span>Pricing Plans</span>
+        </a>
+        <a href="#" class="nav-child" data-page="settings">
+          <i class="fas fa-cog"></i><span>Platform Settings</span>
+        </a>
+      </div>
+    </div>
 
   </div><!-- end sidebar-nav-scroll -->
 

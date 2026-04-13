@@ -425,8 +425,24 @@ function navigateTo(pageId, opts) {
   if (targetEl) targetEl.classList.add('active');
 
   // ── 3. Update nav highlight ──
-  document.querySelectorAll('.nav-item').forEach(item => {
+  // Support both old .nav-item and new .nav-child elements
+  document.querySelectorAll('.nav-item, .nav-child').forEach(item => {
     item.classList.toggle('active', item.dataset.page === pageId);
+  });
+  // Open the parent group that contains the active child and mark it
+  document.querySelectorAll('.nav-group').forEach(group => {
+    const hasActive = group.querySelector(`.nav-child[data-page="${pageId}"]`);
+    if (hasActive) {
+      group.classList.add('has-active');
+      // Auto-open the group if not already open
+      const header = group.querySelector('.nav-group-header');
+      const children = group.querySelector('.nav-group-children');
+      if (header && children && !header.classList.contains('open')) {
+        _openNavGroup(header, children);
+      }
+    } else {
+      group.classList.remove('has-active');
+    }
   });
 
   // ── 4. Update title/breadcrumb ──
@@ -463,6 +479,70 @@ function navigateTo(pageId, opts) {
   closeSearchResults();
 }
 
+/* ────────────────── COLLAPSIBLE NAV GROUPS ────────────────── */
+
+/**
+ * Open a nav group — sets max-height to the scrollHeight for smooth animation.
+ */
+function _openNavGroup(header, children) {
+  header.classList.add('open');
+  children.classList.add('open');
+  // Use scrollHeight for correct max-height animation target
+  children.style.maxHeight = children.scrollHeight + 'px';
+}
+
+/**
+ * Close a nav group.
+ */
+function _closeNavGroup(header, children) {
+  header.classList.remove('open');
+  children.classList.remove('open');
+  children.style.maxHeight = '0px';
+}
+
+/**
+ * Toggle a nav group open/closed.
+ * Called by the inline onclick="toggleNavGroup(this)" on each .nav-group-header.
+ */
+function toggleNavGroup(headerBtn) {
+  const group    = headerBtn.closest('.nav-group');
+  const children = group.querySelector('.nav-group-children');
+  if (!children) return;
+
+  const isOpen = headerBtn.classList.contains('open');
+
+  if (isOpen) {
+    _closeNavGroup(headerBtn, children);
+  } else {
+    _openNavGroup(headerBtn, children);
+  }
+}
+
+/**
+ * Initialise groups: open the one containing the current active page,
+ * close all others.
+ */
+function initNavGroups() {
+  document.querySelectorAll('.nav-group').forEach(group => {
+    const header   = group.querySelector('.nav-group-header');
+    const children = group.querySelector('.nav-group-children');
+    if (!header || !children) return;
+
+    // Check if this group has the active child
+    const hasActive = group.querySelector('.nav-child.active, .nav-item.active');
+    if (hasActive) {
+      _openNavGroup(header, children);
+      group.classList.add('has-active');
+    } else {
+      // Ensure closed state
+      children.style.maxHeight = '0px';
+    }
+  });
+}
+
+/* Expose globally (used by onclick in HTML) */
+window.toggleNavGroup = toggleNavGroup;
+
 /* ────────────────── SIDEBAR TOGGLE ────────────────── */
 function initSidebarToggle() {
   const toggle  = document.getElementById('sidebarToggle');
@@ -477,7 +557,8 @@ function initSidebarToggle() {
 
 /* ────────────────── NAV CLICK HANDLERS ────────────────── */
 function initNavLinks() {
-  document.querySelectorAll('.nav-item[data-page]').forEach(item => {
+  // Wire both old .nav-item and new .nav-child elements
+  document.querySelectorAll('.nav-item[data-page], .nav-child[data-page]').forEach(item => {
     item.addEventListener('click', (e) => {
       e.preventDefault();
       navigateTo(item.dataset.page);
@@ -1266,6 +1347,7 @@ function bootSequence() {
 function initApp() {
   updateUserUI();
   initNavLinks();
+  initNavGroups();   // Initialize collapsible nav groups
   initSidebarToggle();
   initGlobalSearch();
   initTextareaAutoResize();
