@@ -529,17 +529,23 @@ window._expRefresh = function() {
 };
 
 window._expSyncFeeds = function() {
-  if (typeof showToast === 'function') showToast('🔄 Syncing CISA KEV and NVD feeds…', 'info');
-  _expFetch('/cti/vulnerabilities/sync', {method:'POST'}).catch(()=>{});
-  setTimeout(() => { if (typeof showToast==='function') showToast('✅ Vulnerability feeds updated', 'success'); }, 2000);
-};
+  if (typeof showToast === 'function')
+    showToast('🔄 Syncing CISA KEV and NVD feeds…', 'info');
 
-window._expExport = function() {
-  const data = JSON.stringify(_EXP.data, null, 2);
-  const blob = new Blob([data], {type:'application/json'});
-  const a = document.createElement('a'); a.href=URL.createObjectURL(blob);
-  a.download=`exposure-report-${new Date().toISOString().slice(0,10)}.json`; a.click();
-  if (typeof showToast==='function') showToast('📊 Exposure report exported','success');
+  const payload = {
+    source: 'cisa_kev',          // or whatever your backend expects
+    force: true
+  };
+
+  _expFetch('/cti/vulnerabilities/sync', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+  .then(() => {
+    if (typeof showToast === 'function')
+      showToast('✅ Vulnerability feeds updated', 'success');
+  })
+  .catch(() => {});
 };
 
 window._expCreateTask  = id => { if (typeof showToast==='function') showToast(`✅ Remediation task created for ${id}`,'success'); };
