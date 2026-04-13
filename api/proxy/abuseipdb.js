@@ -3,10 +3,12 @@
  * Route: /proxy/abuseipdb/*
  *
  * Forwards requests to https://api.abuseipdb.com/api/v2/*
- * API key injected server-side from ABUSEIPDB_API_KEY env var.
  *
- * Environment variables:
- *   ABUSEIPDB_API_KEY — required
+ * Key resolution (in order):
+ *   1. ABUSEIPDB_API_KEY — server-side environment variable (Vercel dashboard)
+ *   2. X-Client-Abuse-Key — header sent by the browser from localStorage
+ *
+ * If neither is present → returns { status: 'missing_api_key' } (200)
  */
 'use strict';
 
@@ -18,23 +20,26 @@ module.exports = async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Key, Accept');
+    res.setHeader('Access-Control-Allow-Headers',
+      'Content-Type, Key, Accept, X-Client-Abuse-Key');
     res.writeHead(204); res.end(); return;
   }
 
-  const abuseKey = process.env.ABUSEIPDB_API_KEY;
+  // Resolve API key: server env var takes priority, then client-provided header
+  const abuseKey = process.env.ABUSEIPDB_API_KEY || req.headers['x-client-abuse-key'] || '';
+
   if (!abuseKey) {
     sendJSON(res, 200, {
-      error:  'missing_api_key',
-      status: 'missing_api_key',
-      message: 'ABUSEIPDB_API_KEY environment variable is not set. Add it in Vercel Dashboard → Settings → Environment Variables.',
-      data:   null,
+      error:   'missing_api_key',
+      status:  'missing_api_key',
+      message: 'AbuseIPDB API key not configured. Add it via the API Keys button in the UI, or set ABUSEIPDB_API_KEY in Vercel environment variables.',
+      data:    null,
     });
     return;
   }
 
   // Extract sub-path (handles Vercel rewrite with _path param)
-  const afterProxy = extractSubPath(req, '/proxy/abuseipdb');
+  const afterProxy = extractSubPath(req);
   const targetUrl  = `${ABUSEIPDB_BASE}${afterProxy}`;
   console.log(`[AbuseIPDB Proxy] ${req.method} ${targetUrl}`);
 

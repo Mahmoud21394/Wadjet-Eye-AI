@@ -43,7 +43,7 @@ const MIME = {
 function addCORS(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, apiKey, x-apikey, anthropic-version, anthropic-dangerous-direct-browser-access, X-OTX-API-KEY, Key, Accept');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, apiKey, x-apikey, anthropic-version, anthropic-dangerous-direct-browser-access, X-OTX-API-KEY, Key, Accept, X-Client-VT-Key, X-Client-Abuse-Key, X-Client-Shodan-Key, X-Client-OTX-Key');
   res.setHeader('Access-Control-Max-Age', '86400');
 }
 
@@ -529,45 +529,46 @@ const server = http.createServer((req, res) => {
       let   qs           = parsedUrl.search || '';
       const extraHeaders = {};
 
-      // Strip client-sent Shodan key from URL; inject from env
+      // Strip client-sent Shodan key from URL; inject from env or client header
       if (route.prefix === '/proxy/shodan/') {
         const qp = new URLSearchParams(parsedUrl.query || '');
         qp.delete('key');
-        const shodanKey = process.env.SHODAN_API_KEY;
+        // Key resolution: server env var → client header
+        const shodanKey = process.env.SHODAN_API_KEY || req.headers['x-client-shodan-key'] || '';
         if (!shodanKey) {
           addCORS(res);
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'missing_api_key', status: 'missing_api_key', message: 'SHODAN_API_KEY not configured on server' }));
+          res.end(JSON.stringify({ error: 'missing_api_key', status: 'missing_api_key', message: 'Shodan API key not configured. Add it via the API Keys button.' }));
           return;
         }
         qp.set('key', shodanKey);
         qs = qp.toString() ? '?' + qp.toString() : '';
       }
-      // Inject VT key from env (never from client)
+      // Inject VT key: server env var → client header
       if (route.prefix === '/proxy/vt/') {
-        const vtKey = process.env.VT_API_KEY;
+        const vtKey = process.env.VT_API_KEY || req.headers['x-client-vt-key'] || '';
         if (!vtKey) {
           addCORS(res);
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'missing_api_key', status: 'missing_api_key', message: 'VT_API_KEY not configured on server' }));
+          res.end(JSON.stringify({ error: 'missing_api_key', status: 'missing_api_key', message: 'VirusTotal API key not configured. Add it via the API Keys button.' }));
           return;
         }
         extraHeaders['x-apikey'] = vtKey;
       }
-      // Inject AbuseIPDB key from env
+      // Inject AbuseIPDB key: server env var → client header
       if (route.prefix === '/proxy/abuseipdb/') {
-        const abuseKey = process.env.ABUSEIPDB_API_KEY;
+        const abuseKey = process.env.ABUSEIPDB_API_KEY || req.headers['x-client-abuse-key'] || '';
         if (!abuseKey) {
           addCORS(res);
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'missing_api_key', status: 'missing_api_key', message: 'ABUSEIPDB_API_KEY not configured on server' }));
+          res.end(JSON.stringify({ error: 'missing_api_key', status: 'missing_api_key', message: 'AbuseIPDB API key not configured. Add it via the API Keys button.' }));
           return;
         }
         extraHeaders['Key'] = abuseKey; extraHeaders['Accept'] = 'application/json';
       }
-      // Inject OTX key from env (optional — public endpoint works without)
+      // Inject OTX key: server env var → client header (optional — public endpoint works without)
       if (route.prefix === '/proxy/otx/') {
-        const otxKey = process.env.OTX_API_KEY;
+        const otxKey = process.env.OTX_API_KEY || req.headers['x-client-otx-key'] || '';
         if (otxKey) extraHeaders['X-OTX-API-KEY'] = otxKey;
       }
       // Inject OpenAI key from env
