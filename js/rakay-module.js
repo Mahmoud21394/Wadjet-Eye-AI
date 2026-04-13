@@ -1,38 +1,44 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  RAKAY Module — Frontend UI  v2.0
+ *  RAKAY Module — Frontend UI  v3.0
  *  Wadjet-Eye AI Platform — Conversational Security Analyst
  *
- *  v2.0 Changes (Production-ready):
- *   ✅ Auto demo-auth: calls /api/RAKAY/demo-auth on first load if no JWT
- *   ✅ Real-time status: pings /api/RAKAY/health every 30s; shows ONLINE/OFFLINE
- *   ✅ Token management: stores RAKAY demo token in localStorage, auto-refreshes
- *   ✅ Retry logic: 3 attempts with exponential backoff on network errors
- *   ✅ Structured error display: distinct messages for auth/network/server errors
- *   ✅ Auth fallback chain: platform JWT → RAKAY demo token → service key
- *   ✅ WebSocket: connects to wss://…/ws/detections with token, auto-reconnects
- *   ✅ No silent failures: all errors logged with context
- *   ✅ Production API keys: reads OPENAI/Claude keys from localStorage settings
- *   ✅ Tool trace visualiser, markdown renderer, session sidebar unchanged
+ *  v3.0 Changes (WebSocket & Rate-Limit Hardening):
+ *   ✅ WebSocket: native ws to /ws/detections (not Socket.IO client)
+ *   ✅ WS reconnect: exponential backoff, MAX 5 retries, then gives up
+ *   ✅ WS state machine: DISCONNECTED → CONNECTING → CONNECTED → CLOSING
+ *   ✅ Duplicate WS prevention: only 1 active connection at a time
+ *   ✅ Request debounce: 300ms on _rakaySubmit; disables send button
+ *   ✅ Duplicate request prevention: abort pending fetch before new one
+ *   ✅ Rate-limit recovery: reads Retry-After header, waits, re-enables UI
+ *   ✅ Auto-trigger loop prevention: _sendMessage guards RAKAY.loading
+ *   ✅ Structured logs: [RAKAY WS] prefix, state transitions, error types
+ *   ✅ Token refresh on WS 401/4001 close code
  *
- *  Architecture:
- *   - Self-contained IIFE; exposes only window.renderRAKAY / window.stopRAKAY
- *   - API client: communicates with /api/RAKAY/* backend routes
- *   - Markdown renderer: inline, no external deps (marked.js loaded if present)
- *   - Session sidebar: list, create, rename, delete sessions
- *   - Persistent session storage: localStorage (fallback when backend offline)
+ *  v2.0 (retained):
+ *   ✅ Auto demo-auth, health ping, real-time status, retry with backoff
+ *   ✅ Tool trace, markdown renderer, session sidebar, localStorage fallback
  * ══════════════════════════════════════════════════════════════════════
  */
 (function () {
   'use strict';
 
-  const MODULE_VERSION = '2.0';
+  const MODULE_VERSION = '3.0';
 
   // ── Constants ─────────────────────────────────────────────────────────────
   const LS_RAKAY_TOKEN       = 'rakay_demo_token';
   const LS_RAKAY_TOKEN_EXP   = 'rakay_demo_token_exp';
   const LS_KEY_SESSIONS      = 'rakay_sessions_v1';
   const LS_KEY_MSGS          = sid => `rakay_msgs_${sid}`;
+
+  // ── WebSocket constants ───────────────────────────────────────────────────
+  const WS_MAX_RETRIES    = 5;       // max reconnect attempts then give up
+  const WS_BASE_DELAY_MS  = 1500;    // initial reconnect delay
+  const WS_MAX_DELAY_MS   = 60_000;  // cap reconnect delay at 60s
+  const WS_PING_INTERVAL  = 25_000;  // client-side keepalive ping
+
+  // WebSocket state machine values
+  const WS_STATE = { DISCONNECTED: 'DISCONNECTED', CONNECTING: 'CONNECTING', CONNECTED: 'CONNECTED', CLOSING: 'CLOSING' };
 
   const API_BASE = () =>
     (window.THREATPILOT_API_URL || 'https://wadjet-eye-ai.onrender.com').replace(/\/$/, '');
@@ -49,10 +55,20 @@
     backendOnline:    null,   // null=unknown, true=online, false=offline
     demoUser:         null,
     authToken:        null,   // resolved token used in API calls
-    wsConn:           null,   // WebSocket connection
-    wsReconnectTimer: null,
-    wsReconnectDelay: 2000,
     _authInProgress:  false,
+
+    // WebSocket state machine
+    wsConn:           null,   // active WebSocket instance
+    wsState:          WS_STATE.DISCONNECTED,
+    wsRetryCount:     0,      // current retry attempt
+    wsReconnectTimer: null,   // pending reconnect timer handle
+    wsReconnectDelay: WS_BASE_DELAY_MS,
+    wsPingTimer:      null,   // client-side keepalive interval
+
+    // Request control
+    _currentFetch:    null,   // AbortController for in-flight chat request
+    _submitDebounce:  null,   // debounce timer for send button
+    _rateLimitUntil:  0,      // timestamp (ms) until rate-limit lifts
   };
 
   let _rendered = false;
@@ -239,7 +255,7 @@
   //  API CLIENT — with retry, auth, structured error handling
   // ══════════════════════════════════════════════════════════════════════════
   async function _api(method, path, body = null, opts = {}) {
-    const { retries = 2, skipAuth = false } = opts;
+    const { retries = 2, skipAuth = false, abortSignal } = opts;
     const url = `${API_BASE()}/api/RAKAY${path}`;
 
     // Resolve token
@@ -258,12 +274,30 @@
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
       try {
-        const res = await fetch(url, {
-          method,
-          headers,
-          body:   body ? JSON.stringify(body) : undefined,
-          signal: AbortSignal.timeout(opts.timeout || 60_000),
-        });
+        // Combine external abort signal with timeout
+        const timeoutCtrl = new AbortController();
+        const timeoutId   = setTimeout(() => timeoutCtrl.abort(), opts.timeout || 60_000);
+
+        // Merge signals: abort if either the passed signal OR the timeout fires
+        let signal = timeoutCtrl.signal;
+        if (abortSignal) {
+          // Use AbortSignal.any if available (Chrome 116+), else fall back to just abortSignal
+          signal = (typeof AbortSignal.any === 'function')
+            ? AbortSignal.any([abortSignal, timeoutCtrl.signal])
+            : abortSignal;
+        }
+
+        let res;
+        try {
+          res = await fetch(url, {
+            method,
+            headers,
+            body:   body ? JSON.stringify(body) : undefined,
+            signal,
+          });
+        } finally {
+          clearTimeout(timeoutId);
+        }
 
         // Handle 401: token invalid/expired — try re-auth once
         if (res.status === 401 && !skipAuth && attempt === 0) {
@@ -287,13 +321,19 @@
           err.status    = res.status;
           err.code      = errBody.code;
           err.body      = errBody;
+          // Read Retry-After from response header if present
+          const retryAfterHdr = res.headers.get('Retry-After');
+          if (retryAfterHdr) err.body = { ...(err.body || {}), retryAfter: parseInt(retryAfterHdr, 10) || 30 };
           throw err;
         }
 
         return await res.json();
 
       } catch (err) {
-        const isNetworkErr = err.name === 'TypeError' || err.name === 'AbortError'
+        // Propagate AbortError immediately — don't retry
+        if (err.name === 'AbortError') throw err;
+
+        const isNetworkErr = err.name === 'TypeError'
           || err.message?.includes('fetch') || err.message?.includes('network')
           || err.message?.includes('Failed to fetch');
 
@@ -427,7 +467,27 @@
   //  CHAT API
   // ══════════════════════════════════════════════════════════════════════════
   async function _sendMessage(message) {
-    if (!message.trim() || RAKAY.loading) return;
+    if (!message.trim()) return;
+
+    // ── Guard: only one request at a time ──────────────────────────────────
+    if (RAKAY.loading) {
+      log.warn('Request already in progress — ignoring duplicate submit');
+      return;
+    }
+
+    // ── Guard: rate-limit cooldown ─────────────────────────────────────────
+    const now = Date.now();
+    if (RAKAY._rateLimitUntil > now) {
+      const waitSec = Math.ceil((RAKAY._rateLimitUntil - now) / 1000);
+      _appendError(`Rate limit active. Please wait ${waitSec}s before sending again.`);
+      return;
+    }
+
+    // ── Cancel any previous in-flight fetch (shouldn't happen due to loading guard, but belt-and-suspenders)
+    if (RAKAY._currentFetch) {
+      RAKAY._currentFetch.abort();
+      RAKAY._currentFetch = null;
+    }
 
     const userMsg = {
       id:         _uid(),
@@ -452,6 +512,10 @@
       _renderSidebar();
     }
 
+    // Create abort controller for this request
+    const abortCtrl = new AbortController();
+    RAKAY._currentFetch = abortCtrl;
+
     try {
       const context = {
         currentPage:      window.currentPage || 'rakay',
@@ -466,7 +530,7 @@
         message:    message.trim(),
         context,
         use_tools:  true,
-      });
+      }, { abortSignal: abortCtrl.signal });
 
       _hideTyping();
 
@@ -503,12 +567,19 @@
       _handleChatError(err, message);
     } finally {
       RAKAY.loading = false;
+      RAKAY._currentFetch = null;
       _setInputEnabled(true);
       _focusInput();
     }
   }
 
   function _handleChatError(err, originalMessage) {
+    // Ignore AbortError (request was cancelled intentionally)
+    if (err.name === 'AbortError') {
+      log.debug('Chat request aborted');
+      return;
+    }
+
     const isNetworkErr = err.name === 'TypeError' || err.message?.includes('fetch')
       || err.message?.includes('Failed to fetch') || err.name === 'AbortError';
 
@@ -528,7 +599,6 @@
       setTimeout(async () => {
         const t = await _ensureAuth();
         if (t) {
-          _appendError('');
           log.info('Re-auth success — please resend your message');
           _showToast('Session refreshed — please resend your message', 'info');
         }
@@ -541,8 +611,21 @@
       return;
     }
 
-    if (err.status === 429 || err.code === 'LLM_RATE_LIMIT' || err.code === 'RAKAY_RATE_LIMIT') {
-      _appendError('Rate limit reached. Please wait a moment before sending another message.');
+    if (err.status === 429 || err.code === 'LLM_RATE_LIMIT' || err.code === 'RAKAY_RATE_LIMIT' || err.code === 'SESSION_IN_FLIGHT') {
+      // Read Retry-After from error body or default to 30s
+      const retryAfterSec = err.body?.retryAfter || 30;
+      RAKAY._rateLimitUntil = Date.now() + (retryAfterSec * 1000);
+      log.warn(`Rate limit hit. Retry after ${retryAfterSec}s`);
+
+      // Show countdown in UI
+      _appendError(`Rate limit reached. Please wait ${retryAfterSec}s before sending another message.`);
+
+      // Re-enable input after the cooldown
+      setTimeout(() => {
+        RAKAY._rateLimitUntil = 0;
+        _setInputEnabled(true);
+        _showToast('Rate limit lifted — you can send messages again', 'success');
+      }, retryAfterSec * 1000);
       return;
     }
 
@@ -610,90 +693,235 @@
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  //  WEBSOCKET — connects to wss://.../ws/detections
+  //  WEBSOCKET v3 — Native WS to /ws/detections
+  //  State machine: DISCONNECTED → CONNECTING → CONNECTED → CLOSING
+  //  Max 5 retries with exponential backoff (1.5s → 3s → 6s → 12s → 24s → give up)
   // ══════════════════════════════════════════════════════════════════════════
   function _initWebSocket() {
     const baseUrl = API_BASE();
     const wsUrl   = baseUrl.replace(/^http/, 'ws') + '/ws/detections';
     const token   = RAKAY.authToken || _resolveToken();
 
+    // ── Pre-flight checks ─────────────────────────────────────────────────
     if (!token) {
-      log.debug('Skipping WebSocket — no token yet');
+      log.debug('[WS] Skipping — no auth token yet');
       return;
     }
 
-    // Close existing connection
+    // Prevent duplicate connections
+    if (RAKAY.wsState === WS_STATE.CONNECTING || RAKAY.wsState === WS_STATE.CONNECTED) {
+      log.debug('[WS] Already', RAKAY.wsState, '— skipping duplicate initWebSocket()');
+      return;
+    }
+
+    // Give up after max retries
+    if (RAKAY.wsRetryCount >= WS_MAX_RETRIES) {
+      log.warn(`[WS] Max retries (${WS_MAX_RETRIES}) reached — WebSocket disabled until page reload`);
+      _updateWsStatusBadge('disabled');
+      return;
+    }
+
+    // Close any stale connection
     if (RAKAY.wsConn) {
-      try { RAKAY.wsConn.close(); } catch {}
+      RAKAY.wsState = WS_STATE.CLOSING;
+      try { RAKAY.wsConn.close(1000, 'reconnecting'); } catch {}
       RAKAY.wsConn = null;
     }
 
+    RAKAY.wsState = WS_STATE.CONNECTING;
+    const retryLabel = RAKAY.wsRetryCount > 0 ? ` (retry ${RAKAY.wsRetryCount}/${WS_MAX_RETRIES})` : '';
+    log.info(`[WS] CONNECTING to ${wsUrl}${retryLabel}`);
+
+    let ws;
     try {
-      // Attach token as query param (standard WS auth pattern)
-      const urlWithToken = `${wsUrl}?token=${encodeURIComponent(token)}`;
-      log.info('Connecting WebSocket:', wsUrl);
-
-      const ws = new WebSocket(urlWithToken);
+      const wsUrlWithToken = `${wsUrl}?token=${encodeURIComponent(token)}`;
+      ws = new WebSocket(wsUrlWithToken);
       RAKAY.wsConn = ws;
-
-      ws.onopen = () => {
-        log.info('WebSocket connected to', wsUrl);
-        RAKAY.wsReconnectDelay = 2000; // Reset backoff
-        // Send auth message as well (some servers require in-band auth)
-        ws.send(JSON.stringify({ type: 'auth', token }));
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          _handleWsMessage(msg);
-        } catch (e) {
-          log.debug('WebSocket non-JSON message:', event.data?.slice(0, 100));
-        }
-      };
-
-      ws.onerror = (err) => {
-        log.warn('WebSocket error — will reconnect', err.type || '');
-      };
-
-      ws.onclose = (event) => {
-        RAKAY.wsConn = null;
-        if (event.code !== 1000 && event.code !== 1001) {
-          // Abnormal close — schedule reconnect with exponential backoff
-          const delay = Math.min(RAKAY.wsReconnectDelay, 60_000);
-          log.info(`WebSocket closed (code ${event.code}) — reconnecting in ${delay}ms`);
-          RAKAY.wsReconnectTimer = setTimeout(() => {
-            RAKAY.wsReconnectDelay = Math.min(RAKAY.wsReconnectDelay * 2, 60_000);
-            _initWebSocket();
-          }, delay);
-        } else {
-          log.info('WebSocket closed cleanly');
-        }
-      };
     } catch (err) {
-      log.warn('Could not create WebSocket:', err.message);
+      log.error('[WS] Could not create WebSocket:', err.message);
+      RAKAY.wsState = WS_STATE.DISCONNECTED;
+      _scheduleWsReconnect();
+      return;
+    }
+
+    // ── CONNECTED ─────────────────────────────────────────────────────────
+    ws.onopen = () => {
+      if (RAKAY.wsConn !== ws) return; // stale
+      RAKAY.wsState        = WS_STATE.CONNECTED;
+      RAKAY.wsRetryCount   = 0;                      // reset retry counter on success
+      RAKAY.wsReconnectDelay = WS_BASE_DELAY_MS;     // reset backoff
+      log.info('[WS] CONNECTED ✅', wsUrl);
+      _updateWsStatusBadge('connected');
+
+      // Send in-band auth as well (belt-and-suspenders)
+      _wsFrontendSend({ type: 'auth', token });
+
+      // Subscribe to detection stream
+      _wsFrontendSend({ type: 'detections:start' });
+
+      // Start client-side keepalive pings
+      _startWsPing(ws);
+    };
+
+    // ── MESSAGE ───────────────────────────────────────────────────────────
+    ws.onmessage = (event) => {
+      if (RAKAY.wsConn !== ws) return;
+      try {
+        const msg = JSON.parse(event.data);
+        _handleWsMessage(msg);
+      } catch {
+        log.debug('[WS] Non-JSON message:', event.data?.slice(0, 100));
+      }
+    };
+
+    // ── ERROR ─────────────────────────────────────────────────────────────
+    ws.onerror = (err) => {
+      if (RAKAY.wsConn !== ws) return;
+      log.warn('[WS] ERROR — will reconnect. type:', err.type || 'unknown');
+      _updateWsStatusBadge('error');
+    };
+
+    // ── CLOSE ─────────────────────────────────────────────────────────────
+    ws.onclose = (event) => {
+      if (RAKAY.wsConn !== ws) return; // stale close event
+
+      RAKAY.wsConn  = null;
+      RAKAY.wsState = WS_STATE.DISCONNECTED;
+      _stopWsPing();
+
+      const { code, reason, wasClean } = event;
+      log.info(`[WS] CLOSED code=${code} clean=${wasClean} reason="${reason || ''}"`);
+      _updateWsStatusBadge('disconnected');
+
+      // Token rejected — re-auth before reconnecting
+      if (code === 4001 || code === 4003) {
+        log.warn('[WS] Auth rejected (code', code, ') — clearing token and re-authing before reconnect');
+        _lsDel(LS_RAKAY_TOKEN);
+        _lsDel(LS_RAKAY_TOKEN_EXP);
+        RAKAY.authToken = null;
+        _ensureAuth().then(() => _scheduleWsReconnect());
+        return;
+      }
+
+      // Clean close (1000/1001) — do NOT reconnect
+      if (wasClean || code === 1000 || code === 1001) {
+        log.info('[WS] Clean close — not reconnecting');
+        return;
+      }
+
+      // Abnormal close (1006 etc.) — schedule reconnect with exponential backoff
+      _scheduleWsReconnect();
+    };
+  }
+
+  function _scheduleWsReconnect() {
+    if (RAKAY.wsReconnectTimer) return; // already scheduled
+
+    RAKAY.wsRetryCount++;
+    if (RAKAY.wsRetryCount > WS_MAX_RETRIES) {
+      log.warn(`[WS] Max retries (${WS_MAX_RETRIES}) exhausted — stopping reconnect`);
+      _updateWsStatusBadge('disabled');
+      return;
+    }
+
+    const delay = Math.min(RAKAY.wsReconnectDelay, WS_MAX_DELAY_MS);
+    RAKAY.wsReconnectDelay = Math.min(RAKAY.wsReconnectDelay * 2, WS_MAX_DELAY_MS);
+
+    log.info(`[WS] Scheduling reconnect in ${delay}ms (attempt ${RAKAY.wsRetryCount}/${WS_MAX_RETRIES})`);
+
+    RAKAY.wsReconnectTimer = setTimeout(() => {
+      RAKAY.wsReconnectTimer = null;
+      _initWebSocket();
+    }, delay);
+  }
+
+  function _startWsPing(ws) {
+    _stopWsPing();
+    RAKAY.wsPingTimer = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        _wsFrontendSend({ type: 'ping', ts: Date.now() });
+      } else {
+        _stopWsPing();
+      }
+    }, WS_PING_INTERVAL);
+  }
+
+  function _stopWsPing() {
+    if (RAKAY.wsPingTimer) {
+      clearInterval(RAKAY.wsPingTimer);
+      RAKAY.wsPingTimer = null;
     }
   }
 
+  function _wsFrontendSend(data) {
+    const ws = RAKAY.wsConn;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try { ws.send(JSON.stringify(data)); } catch {}
+  }
+
+  function _updateWsStatusBadge(state) {
+    const badge = document.getElementById('rakay-ws-badge');
+    if (!badge) return;
+    const map = {
+      connected:    { text: 'LIVE',       cls: 'ws-live'     },
+      disconnected: { text: 'WS ↻',       cls: 'ws-retry'    },
+      error:        { text: 'WS ERR',     cls: 'ws-error'    },
+      disabled:     { text: 'WS OFF',     cls: 'ws-disabled' },
+    };
+    const s = map[state] || map.disconnected;
+    badge.textContent = s.text;
+    badge.className   = `rakay-ws-badge ${s.cls}`;
+    badge.style.display = (state === 'connected' || state === 'error') ? 'inline-flex' : 'none';
+  }
+
   function _handleWsMessage(msg) {
-    // Live detections feed — show toast notification
-    if (msg.type === 'detection' || msg.type === 'alert') {
-      const severity = msg.severity || msg.level || 'info';
-      const title    = msg.title    || msg.rule_name || 'New Detection';
-      log.debug('WS detection:', severity, title);
-      _showToast(`🔔 ${title}`, severity === 'high' || severity === 'critical' ? 'error' : 'info');
+    switch (msg.type) {
+      case 'connected':
+        log.debug('[WS] Server confirmed connection. auth:', msg.auth);
+        break;
+      case 'auth_ok':
+        log.debug('[WS] Auth confirmed. userId:', msg.userId);
+        break;
+      case 'auth_failed':
+        log.warn('[WS] Server rejected auth:', msg.reason);
+        break;
+      case 'subscribed':
+        log.debug('[WS] Detection stream subscribed');
+        break;
+      case 'pong':
+        break; // keepalive pong received
+      case 'detection:event': {
+        // Live detections feed — show toast notification
+        const severity = msg.severity || 'info';
+        const title    = msg.title || msg.rule_name || 'New Detection';
+        log.debug('[WS] Detection:', severity, title);
+        _showToast(`🔔 ${title}`, severity === 'HIGH' || severity === 'CRITICAL' ? 'error' : 'info');
+        break;
+      }
+      default:
+        log.debug('[WS] Unknown message type:', msg.type);
     }
   }
 
   function _stopWebSocket() {
+    // Cancel pending reconnect
     if (RAKAY.wsReconnectTimer) {
       clearTimeout(RAKAY.wsReconnectTimer);
       RAKAY.wsReconnectTimer = null;
     }
+    _stopWsPing();
+
+    // Close active connection
     if (RAKAY.wsConn) {
+      RAKAY.wsState = WS_STATE.CLOSING;
       try { RAKAY.wsConn.close(1000, 'RAKAY module stopped'); } catch {}
       RAKAY.wsConn = null;
     }
+
+    RAKAY.wsState      = WS_STATE.DISCONNECTED;
+    RAKAY.wsRetryCount = 0;
+    RAKAY.wsReconnectDelay = WS_BASE_DELAY_MS;
+    log.info('[WS] Stopped');
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -1142,10 +1370,28 @@
   window._rakayNewChat = async function () { await _startNewChat(); };
 
   window._rakaySubmit = function () {
+    // Debounce: ignore rapid repeat clicks / keydowns
+    if (RAKAY._submitDebounce) return;
+
     const inp = document.getElementById('rakay-input');
     if (!inp) return;
     const msg = inp.value.trim();
     if (!msg) return;
+
+    // Guard: already loading
+    if (RAKAY.loading) {
+      log.debug('Submit ignored — request in progress');
+      return;
+    }
+
+    // Guard: rate-limit active
+    if (RAKAY._rateLimitUntil > Date.now()) return;
+
+    // Debounce window: 300ms prevents double-click / Enter spam
+    RAKAY._submitDebounce = setTimeout(() => {
+      RAKAY._submitDebounce = null;
+    }, 300);
+
     inp.value = '';
     inp.style.height = 'auto';
     _sendMessage(msg);
@@ -1511,6 +1757,17 @@
   .rakay-sidebar { width: 0; min-width: 0; overflow: hidden; }
   .rakay-sidebar.open { width: 260px; }
 }
+
+/* ── WebSocket live badge ─────────────── */
+.rakay-ws-badge {
+  font-size: 10px; font-weight: 700; letter-spacing: .6px;
+  padding: 2px 7px; border-radius: 10px; margin-right: 6px;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.rakay-ws-badge.ws-live     { background: #1a3f1a44; border: 1px solid #3fb95066; color: #3fb950; }
+.rakay-ws-badge.ws-retry    { background: #d2992222; border: 1px solid #d2992244; color: #d29922; }
+.rakay-ws-badge.ws-error    { background: #f8514922; border: 1px solid #f8514944; color: #f85149; }
+.rakay-ws-badge.ws-disabled { background: #21262d;   border: 1px solid #30363d;   color: #6e7681; }
 `;
     document.head.appendChild(style);
   }
@@ -1558,6 +1815,7 @@
         <div class="rakay-header-sub">Conversational threat intelligence · Detection engineering</div>
       </div>
       <div class="rakay-status-area">
+        <span class="rakay-ws-badge" id="rakay-ws-badge" style="display:none">LIVE</span>
         <div class="rakay-status-dot checking" id="rakay-status-dot" title="Checking backend…"></div>
         <span class="rakay-status-label checking" id="rakay-status-label">CONNECTING…</span>
       </div>
@@ -1610,6 +1868,11 @@
     page.innerHTML = _buildHTML();
     _rendered = true;
 
+    // Reset WS retry counter on fresh render
+    RAKAY.wsRetryCount     = 0;
+    RAKAY.wsReconnectDelay = WS_BASE_DELAY_MS;
+    RAKAY.wsState          = WS_STATE.DISCONNECTED;
+
     // ── Step 1: Check backend health first (no auth needed for /health)
     await _checkStatus();
 
@@ -1657,6 +1920,9 @@
   function stopRAKAY() {
     if (RAKAY.statusTimer)  { clearInterval(RAKAY.statusTimer);  RAKAY.statusTimer  = null; }
     if (RAKAY.pollingTimer) { clearInterval(RAKAY.pollingTimer); RAKAY.pollingTimer = null; }
+    if (RAKAY._submitDebounce) { clearTimeout(RAKAY._submitDebounce); RAKAY._submitDebounce = null; }
+    // Abort any in-flight chat request
+    if (RAKAY._currentFetch) { RAKAY._currentFetch.abort(); RAKAY._currentFetch = null; }
     _stopWebSocket();
     _rendered = false;
     log.info('Module stopped.');

@@ -343,7 +343,7 @@ app.use(errorHandler);
 // ════════════════════════════════════════════════════════════════
 //  WEBSOCKETS
 // ════════════════════════════════════════════════════════════════
-initWebSockets(io);
+initWebSockets(io, httpServer);
 
 // ════════════════════════════════════════════════════════════════
 //  SCHEDULER — starts CTI ingestion + SOAR cron jobs

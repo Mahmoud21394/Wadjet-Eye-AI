@@ -48,24 +48,47 @@ function getJWT() {
 const RAKAY_SERVICE_KEY = process.env.RAKAY_SERVICE_KEY || process.env.RAKAY_API_KEY || null;
 
 // ── Rate limiters ──────────────────────────────────────────────────────────────
+
+/** Compute seconds until the window resets (used in Retry-After header) */
+function _retryAfterSeconds(windowMs) {
+  return Math.ceil(windowMs / 1000);
+}
+
 const chatLimiter = rateLimit({
   windowMs:    60 * 1000,
   max:         30,
-  keyGenerator: req => `rakay_chat_${req.user?.id || req.user?.tenantId || req.ip}`,
-  handler:     (req, res) => res.status(429).json({
-    error:   'Too many chat requests. Please wait a moment.',
-    code:    'RAKAY_RATE_LIMIT',
-    retryAfter: 60,
-  }),
-  standardHeaders: true,
+  // Key: per IP + per session (prevents one session flooding)
+  keyGenerator: req => {
+    const sessionId = req.body?.session_id || 'no-session';
+    const ip        = req.ip || 'unknown';
+    return `rakay_chat_${ip}_${sessionId}`;
+  },
+  handler: (req, res) => {
+    const retryAfter = _retryAfterSeconds(60 * 1000);
+    res.set('Retry-After', String(retryAfter));
+    res.status(429).json({
+      error:      'Too many chat requests. Please wait before sending another message.',
+      code:       'RAKAY_RATE_LIMIT',
+      retryAfter, // seconds
+    });
+  },
+  standardHeaders: true,  // adds RateLimit-* headers
   legacyHeaders:   false,
 });
 
 const generalLimiter = rateLimit({
   windowMs: 60 * 1000,
   max:      120,
-  keyGenerator: req => `rakay_gen_${req.user?.id || req.ip}`,
-  handler: (req, res) => res.status(429).json({ error: 'Rate limit exceeded', code: 'RAKAY_RATE_LIMIT' }),
+  keyGenerator: req => `rakay_gen_${req.ip || 'unknown'}`,
+  handler: (req, res) => {
+    const retryAfter = _retryAfterSeconds(60 * 1000);
+    res.set('Retry-After', String(retryAfter));
+    res.status(429).json({
+      error:      'Rate limit exceeded',
+      code:       'RAKAY_RATE_LIMIT',
+      retryAfter,
+    });
+  },
   standardHeaders: true,
   legacyHeaders:   false,
 });
@@ -73,11 +96,35 @@ const generalLimiter = rateLimit({
 const demoAuthLimiter = rateLimit({
   windowMs: 60 * 1000,
   max:      10,
-  keyGenerator: req => `rakay_demo_${req.ip}`,
-  handler: (req, res) => res.status(429).json({ error: 'Too many demo auth requests', code: 'RATE_LIMIT' }),
+  keyGenerator: req => `rakay_demo_${req.ip || 'unknown'}`,
+  handler: (req, res) => {
+    const retryAfter = _retryAfterSeconds(60 * 1000);
+    res.set('Retry-After', String(retryAfter));
+    res.status(429).json({
+      error: 'Too many demo auth requests',
+      code:  'RATE_LIMIT',
+      retryAfter,
+    });
+  },
   standardHeaders: true,
   legacyHeaders:   false,
 });
+
+// ── Per-session in-flight request guard ──────────────────────────────────────
+// Prevents a session from having more than 1 concurrent LLM call.
+// If a second request arrives while one is in-flight, we return 429 immediately
+// with a hint rather than queueing (queueing would require BullMQ/Redis).
+const _sessionInFlight = new Map();  // sessionId → true
+
+function _acquireSession(sessionId) {
+  if (_sessionInFlight.get(sessionId)) return false;
+  _sessionInFlight.set(sessionId, true);
+  return true;
+}
+
+function _releaseSession(sessionId) {
+  _sessionInFlight.delete(sessionId);
+}
 
 // ── Auth middleware: JWT required OR RAKAY service key OR demo token ──────────
 function requireRAKAYAuth(req, res, next) {
@@ -350,6 +397,20 @@ router.post('/chat', chatLimiter, optionalAuth, requireRAKAYAuth, async (req, re
     return res.status(400).json({ error: 'message too long (max 8000 chars)', code: 'MESSAGE_TOO_LONG' });
   }
 
+  // ── Per-session concurrency guard ─────────────────────────────────────────
+  // Reject duplicate in-flight requests for the same session to prevent loops
+  if (!_acquireSession(session_id)) {
+    res.set('Retry-After', '5');
+    return res.status(429).json({
+      error:      'A request is already in progress for this session. Please wait.',
+      code:       'SESSION_IN_FLIGHT',
+      retryAfter: 5,
+    });
+  }
+
+  // Log structured request info
+  console.log(`[RAKAY] POST /chat userId=${userId} tenantId=${tenantId} session=${session_id.slice(0, 12)}… len=${message.trim().length}`);
+
   try {
     // Pass context API keys (from frontend user settings) to engine factory
     const ctxApiKeys = {
@@ -370,6 +431,7 @@ router.post('/chat', chatLimiter, optionalAuth, requireRAKAYAuth, async (req, re
       },
       useTools: use_tools !== false,
     });
+    console.log(`[RAKAY] /chat OK userId=${userId} session=${session_id.slice(0, 12)}… tokens=${response.tokens_used || 0} model=${response.model || 'unknown'}`);
     res.json(response);
   } catch (err) {
     console.error('[RAKAY] POST /chat error:', err.message);
@@ -384,8 +446,13 @@ router.post('/chat', chatLimiter, optionalAuth, requireRAKAYAuth, async (req, re
         details: process.env.NODE_ENV !== 'production' ? err.message : undefined,
       });
     }
-    if (err.message?.includes('rate limit') || err.message?.toLowerCase().includes('quota')) {
-      return res.status(429).json({ error: 'AI provider rate limit. Try again shortly.', code: 'LLM_RATE_LIMIT' });
+    if (err.message?.includes('rate limit') || err.toLowerCase?.()?.includes('quota') || err.message?.includes('429')) {
+      res.set('Retry-After', '60');
+      return res.status(429).json({
+        error:      'AI provider rate limit. Try again shortly.',
+        code:       'LLM_RATE_LIMIT',
+        retryAfter: 60,
+      });
     }
 
     res.status(500).json({
@@ -393,6 +460,9 @@ router.post('/chat', chatLimiter, optionalAuth, requireRAKAYAuth, async (req, re
       code:    'RAKAY_ERROR',
       details: process.env.NODE_ENV !== 'production' ? err.message : undefined,
     });
+  } finally {
+    // Always release the session slot
+    _releaseSession(session_id);
   }
 });
 
