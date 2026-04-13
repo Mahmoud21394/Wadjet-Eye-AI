@@ -72,7 +72,10 @@
     LAST_ACTIVITY: 'wadjet_last_activity',
     OFFLINE_MODE:  'wadjet_offline_mode',
   };
-
+  let _authReadyResolve;
+  const authReady = new Promise(res => {
+     _authReadyResolve = res;
+   });
   // Proactive refresh at 80% of TTL (e.g. 12 min for 15 min TTL)
   const REFRESH_THRESHOLD_RATIO = 0.80;
   // Default TTL if server doesn't tell us
@@ -383,6 +386,7 @@
       if (!PersistentTokenStore.hasSession()) {
         console.log('[PersistentAuth] No stored session — showing login screen');
         _dispatchEvent('auth:no-session');
+        _authReadyResolve(true);
         return false;
       }
 
@@ -609,6 +613,7 @@
 
     /** Restore session on page load */
     async restoreSession(backendUrl) {
+      _authReadyResolve(true);
       return SessionRestoreGate.restore(backendUrl);
     },
   };
