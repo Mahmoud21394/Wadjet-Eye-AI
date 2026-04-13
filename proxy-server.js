@@ -43,7 +43,7 @@ const MIME = {
 function addCORS(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, apiKey, x-apikey, anthropic-version, anthropic-dangerous-direct-browser-access, X-OTX-API-KEY, Key, Accept, X-Client-VT-Key, X-Client-Abuse-Key, X-Client-Shodan-Key, X-Client-OTX-Key');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, apiKey, x-apikey, anthropic-version, anthropic-dangerous-direct-browser-access, X-OTX-API-KEY, Key, Accept, Auth-Key, X-Client-VT-Key, X-Client-Abuse-Key, X-Client-Shodan-Key, X-Client-OTX-Key');
   res.setHeader('Access-Control-Max-Age', '86400');
 }
 
@@ -529,47 +529,35 @@ const server = http.createServer((req, res) => {
       let   qs           = parsedUrl.search || '';
       const extraHeaders = {};
 
-      // Strip client-sent Shodan key from URL; inject from env or client header
+      // ── Hardcoded API keys — always available, no env var needed ──
+      const HARDCODED_VT_KEY      = 'ebe28cff859d6364a86124619de26a2b9c5e2874789f8a9165ed38fb8c8c9ae0';
+      const HARDCODED_ABUSE_KEY   = 'c5708a7dd63b526a1d293e13d06f1d66f9d50fe673171ed36af277f408b72be057ed7c8f1311eb4d';
+      const HARDCODED_SHODAN_KEY  = '0sDDXz5M0275ddF1nQwH0zlGyVdfB380';
+      const HARDCODED_OTX_KEY     = 'a635f5b8ca93ae4863cdd7e8179f62d0edb1b6c57b3f291d';
+      const HARDCODED_URLHAUS_KEY = 'a635f5b8ca93ae4863cdd7e8179f62d0edb1b6c57b3f291d';
+
+      // Strip client-sent Shodan key from URL; inject resolved key
       if (route.prefix === '/proxy/shodan/') {
         const qp = new URLSearchParams(parsedUrl.query || '');
         qp.delete('key');
-        // Key resolution: server env var → client header
-        const shodanKey = process.env.SHODAN_API_KEY || req.headers['x-client-shodan-key'] || '';
-        if (!shodanKey) {
-          addCORS(res);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'missing_api_key', status: 'missing_api_key', message: 'Shodan API key not configured. Add it via the API Keys button.' }));
-          return;
-        }
+        const shodanKey = process.env.SHODAN_API_KEY || HARDCODED_SHODAN_KEY;
         qp.set('key', shodanKey);
         qs = qp.toString() ? '?' + qp.toString() : '';
       }
-      // Inject VT key: server env var → client header
+      // Inject VT key
       if (route.prefix === '/proxy/vt/') {
-        const vtKey = process.env.VT_API_KEY || req.headers['x-client-vt-key'] || '';
-        if (!vtKey) {
-          addCORS(res);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'missing_api_key', status: 'missing_api_key', message: 'VirusTotal API key not configured. Add it via the API Keys button.' }));
-          return;
-        }
+        const vtKey = process.env.VT_API_KEY || HARDCODED_VT_KEY;
         extraHeaders['x-apikey'] = vtKey;
       }
-      // Inject AbuseIPDB key: server env var → client header
+      // Inject AbuseIPDB key
       if (route.prefix === '/proxy/abuseipdb/') {
-        const abuseKey = process.env.ABUSEIPDB_API_KEY || req.headers['x-client-abuse-key'] || '';
-        if (!abuseKey) {
-          addCORS(res);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'missing_api_key', status: 'missing_api_key', message: 'AbuseIPDB API key not configured. Add it via the API Keys button.' }));
-          return;
-        }
+        const abuseKey = process.env.ABUSEIPDB_API_KEY || HARDCODED_ABUSE_KEY;
         extraHeaders['Key'] = abuseKey; extraHeaders['Accept'] = 'application/json';
       }
-      // Inject OTX key: server env var → client header (optional — public endpoint works without)
+      // Inject OTX key
       if (route.prefix === '/proxy/otx/') {
-        const otxKey = process.env.OTX_API_KEY || req.headers['x-client-otx-key'] || '';
-        if (otxKey) extraHeaders['X-OTX-API-KEY'] = otxKey;
+        const otxKey = process.env.OTX_API_KEY || HARDCODED_OTX_KEY;
+        extraHeaders['X-OTX-API-KEY'] = otxKey;
       }
       // Inject OpenAI key from env
       if (route.prefix === '/proxy/openai/') {
@@ -580,6 +568,11 @@ const server = http.createServer((req, res) => {
       if (route.prefix === '/proxy/claude/') {
         const claudeKey = process.env.CLAUDE_API_KEY;
         if (claudeKey) { extraHeaders['x-api-key'] = claudeKey; extraHeaders['anthropic-version'] = '2023-06-01'; }
+      }
+      // Inject URLhaus Auth-Key
+      if (route.prefix === '/proxy/urlhaus/') {
+        const urlhausKey = process.env.URLHAUS_API_KEY || HARDCODED_URLHAUS_KEY;
+        extraHeaders['Auth-Key'] = urlhausKey;
       }
 
       const targetUrl = route.target(subPath + qs);

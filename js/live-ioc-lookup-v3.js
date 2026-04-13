@@ -13,17 +13,12 @@
    STATE
 ═══════════════════════════════════════════════════════ */
 const LIOF = {
-  value:    null,
-  type:     null,
-  results:  {},
-  loading:  false,
-  history:  JSON.parse(localStorage.getItem('wadjet_ioc_history') || '[]').slice(0,20),
-  apiKeys: {
-    virustotal: localStorage.getItem('wadjet_vt_key')        || '',
-    abuseipdb:  localStorage.getItem('wadjet_abuseipdb_key') || '',
-    shodan:     localStorage.getItem('wadjet_shodan_key')    || '',
-    otx:        localStorage.getItem('wadjet_otx_key')       || '',
-  },
+  value:   null,
+  type:    null,
+  results: {},
+  loading: false,
+  history: JSON.parse(localStorage.getItem('wadjet_ioc_history') || '[]').slice(0,20),
+  // API keys are hardcoded in the proxy — no user input needed
 };
 
 /* ═══════════════════════════════════════════════════════
@@ -97,186 +92,83 @@ function detectIOCType(v) {
 window.detectIOCType = detectIOCType;
 
 /* ═══════════════════════════════════════════════════════
-   API CALLS  (v6.1 — three-layer: proxy with client-key → backend → graceful no-key)
+   API CALLS  (v8.0 — direct proxy, keys hardcoded server-side)
 ═══════════════════════════════════════════════════════
 
-  ROOT CAUSE SUMMARY (updated 2026-04-13):
-  ┌───────────────────────────────────────────────────────────────────────────────────┐
-  │ BUG-1  VirusTotal  — proxy returned HTML SPA fallback on Render → JSON crash     │
-  │ BUG-2  AbuseIPDB   — /api/abuseipdb/check route missing → HTTP 404               │
-  │ BUG-3  Shodan      — /api/shodan/shodan/host/* route missing → HTTP 403          │
-  │ BUG-4  OTX         — proxy returned HTML on Render → JSON crash                  │
-  │ BUG-5  URLhaus     — direct browser POST to abuse.ch blocked by CORS → 401       │
-  │ BUG-6  VT/All 503  — server env vars (VT_API_KEY etc.) not set on Vercel/Render  │
-  │                      → backend throws 503 'not configured'                       │
-  │                      LIOF.apiKeys holds user keys in localStorage but they were  │
-  │                      never forwarded to the proxy!                                │
-  │ BUG-7  URLhaus 404 — extractSubPath received POST body, returned wrong subpath   │
-  └───────────────────────────────────────────────────────────────────────────────────┘
-
-  FIX STRATEGY (v6.1):
-  ─────────────────────────────────────────────────────────
-  Layer 1 — /proxy/*  (Vercel serverless | local proxy-server.js)
-    • Client-stored API keys sent as custom headers:
-        X-Client-VT-Key, X-Client-Abuse-Key,
-        X-Client-Shodan-Key, X-Client-OTX-Key
-    • Proxy functions use server env var OR fall back to the
-      client-provided header — no env var needed on Vercel.
-    • HTML-sniff: if response is text/html → not JSON → throw
-      so layer 2 is tried.
-  Layer 2 — POST /api/intel/{source}  (Render Express backend)
-    • Authenticated via stored JWT Bearer token.
-    • If backend returns 503 (API key not configured), treat
-      as 'no_key' and show the 'Add Key' prompt.
-  Layer 3 — Graceful no-key display
-    • Shows 'API key needed' card with link to configure.
-  ─────────────────────────────────────────────────────────
-  URLhaus fix:
-    • POST to /proxy/urlhaus/host/ with form-encoded body.
-    • extractSubPath fixed in proxy handler to preserve path
-      for POST requests (see api/proxy/urlhaus.js).
+  FIX v8.0: API keys are hardcoded in the Vercel proxy functions.
+  No user input, no env vars, no backend fallback needed.
+  All calls go directly to /proxy/{source} which always has the key.
 ═══════════════════════════════════════════════════════ */
 
-/* ── Helpers ─────────────────────────────────────────────────────────── */
+/* ── Core fetch helper ─────────────────────────────────────────────────── */
 
 /**
- * _safeProxyFetch — fetches a /proxy/* path, forwarding the user's API key
- * header if provided.  Returns parsed JSON, or throws on:
- *   - text/html response     → proxy route not available (SPA fallback)
- *   - non-OK status          → throw so caller can try the backend fallback
- * On upstream 404 (IOC not found in the API) returns { __status404: true }.
- * Note: Vercel 404 for a missing route returns text/html → caught above.
+ * _proxyFetch — simple fetch to /proxy/* with error handling.
+ * Returns parsed JSON on success.
+ * Throws a descriptive Error on network failure, HTML response, or HTTP error.
+ * On upstream 404 (IOC not found) returns { __status404: true }.
  */
-async function _safeProxyFetch(path, extraHeaders = {}, opts = {}) {
-  const headers = { Accept: 'application/json', ...extraHeaders, ...(opts.headers || {}) };
+async function _proxyFetch(path, opts = {}) {
+  const headers = { Accept: 'application/json', ...(opts.headers || {}) };
   let r;
   try {
-    r = await fetch(path, {
-      ...opts,
-      headers,
-      signal: AbortSignal.timeout(20000),
-    });
-  } catch (fetchErr) {
-    // Network error, timeout, or DNS failure — treat as proxy unavailable
-    throw Object.assign(
-      new Error(`PROXY_UNAVAILABLE — ${fetchErr.message}`),
-      { isProxyUnavailable: true }
-    );
+    r = await fetch(path, { ...opts, headers, signal: AbortSignal.timeout(25000) });
+  } catch (e) {
+    throw new Error(`Network error: ${e.message}`);
   }
 
   const ct = r.headers.get('content-type') || '';
-
-  // HTML response → SPA fallback — proxy route not available (Vercel 404 page)
-  if (ct.includes('text/html')) {
-    throw Object.assign(
-      new Error('PROXY_UNAVAILABLE — server returned HTML instead of JSON'),
-      { isProxyUnavailable: true }
-    );
-  }
-
-  // 404 from the *upstream API* (IOC not found) — the proxy forwards the response
-  // with JSON content-type and 404 status. This is different from a routing 404.
+  if (ct.includes('text/html')) throw new Error('Proxy unavailable (returned HTML)');
   if (r.status === 404) return { __status404: true };
-
   if (!r.ok) {
-    // Try to get error body for better diagnostics
-    let body = '';
-    try { body = await r.text(); } catch(_) {}
-    throw Object.assign(
-      new Error(`HTTP ${r.status}${body ? ': ' + body.slice(0, 100) : ''}`),
-      { httpStatus: r.status }
-    );
+    let msg = `HTTP ${r.status}`;
+    try { const b = await r.json(); msg += ': ' + (b.error || b.message || JSON.stringify(b)).slice(0,120); } catch(_) {}
+    throw new Error(msg);
   }
-
   return r.json();
 }
 
-/**
- * _backendFetch — calls POST /api/intel/{endpoint} on the Render backend.
- * Requires valid JWT in localStorage.  On 503 (API key not configured on
- * server) throws with code 'NO_KEY' so the UI shows 'Add Key' prompt.
- */
-async function _backendFetch(endpoint, body) {
-  const base  = (window.THREATPILOT_API_URL || 'https://wadjet-eye-ai.onrender.com').replace(/\/$/, '');
-  const token = localStorage.getItem('wadjet_access_token')
-             || localStorage.getItem('tp_access_token')
-             || localStorage.getItem('supabase_access_token') || '';
-  let r;
-  try {
-    r = await fetch(`${base}/api/intel/${endpoint}`, {
-      method:  'POST',
-      headers: {
-        'Content-Type':  'application/json',
-        'Accept':        'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(18000),
-    });
-  } catch (fetchErr) {
-    throw new Error(`BACKEND_UNREACHABLE — ${fetchErr.message}`);
-  }
-  const ct = r.headers.get('content-type') || '';
-  if (ct.includes('text/html')) throw new Error('BACKEND_OFFLINE — not logged in or backend sleeping');
-  if (r.status === 401) throw Object.assign(new Error('BACKEND_401 — not authenticated'), { isAuthError: true });
-  if (r.status === 503) throw Object.assign(new Error('NO_KEY — API key not configured on server'), { isNoKey: true });
-  if (!r.ok) throw new Error(`Backend HTTP ${r.status}`);
-  return r.json();
-}
-
+/* ── VirusTotal ────────────────────────────────────────────────────────── */
 async function _vtCheck(value, iocType) {
-  const type    = iocType.type;
-  const vtKey   = LIOF.apiKeys.virustotal;
-  const vtUrl   = type==='ip'     ? `https://www.virustotal.com/gui/ip-address/${value}` :
-                  type==='domain' ? `https://www.virustotal.com/gui/domain/${value}` :
-                  type==='url'    ? `https://www.virustotal.com/gui/url/${btoa(value).replace(/=/g,'')}` :
-                                    `https://www.virustotal.com/gui/file/${value}`;
+  const type  = iocType.type;
+  const vtUrl = type==='ip'     ? `https://www.virustotal.com/gui/ip-address/${value}`
+              : type==='domain' ? `https://www.virustotal.com/gui/domain/${value}`
+              : type==='url'    ? `https://www.virustotal.com/gui/url/${btoa(value).replace(/=/g,'')}`
+              :                   `https://www.virustotal.com/gui/file/${value}`;
 
-  let endpoint = '';
-  if      (type === 'ip')                                                         endpoint = `/ip_addresses/${value}`;
-  else if (type === 'domain')                                                     endpoint = `/domains/${value}`;
-  else if (type === 'url') { const enc=btoa(value).replace(/=+$/,'').replace(/\+/g,'-').replace(/\//g,'_'); endpoint=`/urls/${enc}`; }
-  else if (['hash_md5','hash_sha1','hash_sha256','hash_sha512'].includes(type))   endpoint = `/files/${value}`;
-  else return { source:'virustotal', status:'unsupported', message:'IOC type not supported' };
+  let endpoint;
+  if      (type === 'ip')                                                          endpoint = `/ip_addresses/${value}`;
+  else if (type === 'domain')                                                      endpoint = `/domains/${value}`;
+  else if (type === 'url') {
+    const enc = btoa(value).replace(/=+$/, '').replace(/\+/g,'-').replace(/\//g,'_');
+    endpoint  = `/urls/${enc}`;
+  }
+  else if (['hash_md5','hash_sha1','hash_sha256','hash_sha512'].includes(type))    endpoint = `/files/${value}`;
+  else return { source:'virustotal', status:'unsupported', message:'IOC type not supported', url: vtUrl };
 
   try {
-    /* ── Layer 1: /proxy/vt (Vercel serverless, forwards X-Client-VT-Key) ── */
-    const headers = {};
-    if (vtKey) headers['X-Client-VT-Key'] = vtKey;
-
-    let d;
-    try {
-      const res = await _safeProxyFetch(`/proxy/vt${endpoint}`, headers);
-      if (res.__status404) return { source:'virustotal', status:'not_found', message:'Not found in VirusTotal', url: vtUrl };
-      if (res?.status === 'missing_api_key') return { source:'virustotal', status:'no_key', message:'VT API key not configured — add one via API Keys button', url: vtUrl };
-      d = res;
-    } catch (proxyErr) {
-      /* ── Layer 2: backend /api/intel/virustotal ── */
-      try {
-        const bd = await _backendFetch('virustotal', { ioc: value, type });
-        return _normaliseVTBackend(bd, value, type, vtUrl);
-      } catch (backendErr) {
-        if (backendErr.isNoKey) return { source:'virustotal', status:'no_key', message:'VT API key not configured — add one via API Keys button', url: vtUrl };
-        if (backendErr.isAuthError) return { source:'virustotal', status:'no_key', message:'Not logged in — open the app and sign in to use backend enrichment', url: vtUrl };
-        throw backendErr; // bubble to outer catch
-      }
-    }
+    const d = await _proxyFetch(`/proxy/vt${endpoint}`);
+    if (d.__status404) return { source:'virustotal', status:'not_found', message:'Not found in VirusTotal', url: vtUrl };
 
     const attr  = d?.data?.attributes || {};
     const stats = attr.last_analysis_stats || {};
-    const total = Object.values(stats).reduce((s,n)=>s+(n||0),0);
-    const malicious  = stats.malicious  || 0;
-    const suspicious = stats.suspicious || 0;
-    const verdict    = malicious > 5 ? 'MALICIOUS' : malicious > 0 || suspicious > 3 ? 'SUSPICIOUS' : 'CLEAN';
+    const total = Object.values(stats).reduce((s,n)=>s+(n||0), 0);
+    const mal   = stats.malicious  || 0;
+    const sus   = stats.suspicious || 0;
 
     return {
-      source:'virustotal', status:'success', verdict,
-      malicious, suspicious, harmless: stats.harmless||0, undetected: stats.undetected||0, total,
-      reputation: attr.reputation||0,
-      country:    attr.country||attr.country_code||'',
-      asn:        attr.asn||'', as_owner: attr.as_owner||'',
-      first_submission: attr.first_submission_date ? new Date(attr.first_submission_date*1000).toLocaleDateString() : '',
-      last_submission:  attr.last_analysis_date    ? new Date(attr.last_analysis_date*1000).toLocaleDateString()    : '',
+      source:'virustotal', status:'success',
+      verdict: mal>5 ? 'MALICIOUS' : mal>0||sus>3 ? 'SUSPICIOUS' : 'CLEAN',
+      malicious:mal, suspicious:sus,
+      harmless:  stats.harmless   || 0,
+      undetected:stats.undetected || 0,
+      total,
+      reputation:        attr.reputation    || 0,
+      country:           attr.country       || attr.country_code || '',
+      asn:               attr.asn           || '',
+      as_owner:          attr.as_owner      || '',
+      first_submission:  attr.first_submission_date ? new Date(attr.first_submission_date*1000).toLocaleDateString() : '',
+      last_analysis:     attr.last_analysis_date    ? new Date(attr.last_analysis_date*1000).toLocaleDateString()    : '',
       url: vtUrl,
     };
   } catch(err) {
@@ -284,79 +176,31 @@ async function _vtCheck(value, iocType) {
   }
 }
 
-function _normaliseVTBackend(bd, value, type, vtUrl) {
-  if (!bd) return { source:'virustotal', status:'error', message:'Empty backend response', url: vtUrl };
-  // Backend can return either the raw VT shape (data.attributes) or a scored shape
-  if (bd.data?.attributes) {
-    const attr  = bd.data.attributes;
-    const stats = attr.last_analysis_stats || {};
-    const total = Object.values(stats).reduce((s,n)=>s+(n||0),0);
-    const m = stats.malicious||0, s2 = stats.suspicious||0;
-    return {
-      source:'virustotal', status:'success',
-      verdict: m>5?'MALICIOUS':m>0||s2>3?'SUSPICIOUS':'CLEAN',
-      malicious:m, suspicious:s2, harmless:stats.harmless||0, total,
-      reputation:attr.reputation||0, country:attr.country||'', as_owner:attr.as_owner||'', url:vtUrl,
-    };
-  }
-  const rep = bd.reputation || bd.verdict || '';
-  return {
-    source:'virustotal', status:'success',
-    verdict: rep==='malicious'?'MALICIOUS': rep==='suspicious'?'SUSPICIOUS':'CLEAN',
-    malicious: bd.malicious_count||0, suspicious: bd.suspicious_count||0,
-    total: bd.total_engines||0, reputation: bd.reputation_score||0,
-    country: bd.country||'', as_owner: bd.as_owner||'', url: vtUrl,
-  };
-}
-
+/* ── AbuseIPDB ─────────────────────────────────────────────────────────── */
 async function _abuseIPDBCheck(value) {
-  const abuseKey = LIOF.apiKeys.abuseipdb;
   const abuseUrl = `https://www.abuseipdb.com/check/${value}`;
-
   try {
-    /* ── Layer 1: /proxy/abuseipdb ── */
-    const headers = {};
-    if (abuseKey) headers['X-Client-Abuse-Key'] = abuseKey;
-
-    let d;
-    try {
-      d = await _safeProxyFetch(
-        `/proxy/abuseipdb/check?ipAddress=${encodeURIComponent(value)}&maxAgeInDays=90&verbose`,
-        headers
-      );
-      if (d?.status === 'missing_api_key') return { source:'abuseipdb', status:'no_key', message:'AbuseIPDB key not configured — add one via API Keys button', url: abuseUrl };
-    } catch (proxyErr) {
-      /* ── Layer 2: backend /api/intel/abuseipdb ── */
-      try {
-        const bd = await _backendFetch('abuseipdb', { ip: value });
-        const sc = bd.abuse_score ?? bd.abuseConfidenceScore ?? 0;
-        return {
-          source:'abuseipdb', status:'success',
-          verdict: sc>75?'MALICIOUS':sc>25?'SUSPICIOUS':'CLEAN',
-          abuse_score:sc, total_reports:bd.total_reports||bd.totalReports||0,
-          distinct_users:bd.distinct_users||bd.numDistinctUsers||0,
-          country_code:bd.country_code||bd.countryCode||'', country_name:bd.country_name||bd.countryName||'',
-          isp:bd.isp||'', domain:bd.domain||'',
-          is_tor:bd.is_tor||bd.isTor||false, is_whitelisted:bd.is_whitelisted||bd.isWhitelisted||false,
-          url: abuseUrl,
-        };
-      } catch (backendErr) {
-        if (backendErr.isNoKey)   return { source:'abuseipdb', status:'no_key', message:'AbuseIPDB key not configured — add one via API Keys button', url: abuseUrl };
-        if (backendErr.isAuthError) return { source:'abuseipdb', status:'no_key', message:'Not logged in — sign in to use backend enrichment', url: abuseUrl };
-        throw backendErr;
-      }
-    }
+    const d = await _proxyFetch(
+      `/proxy/abuseipdb/check?ipAddress=${encodeURIComponent(value)}&maxAgeInDays=90&verbose`
+    );
+    if (d.__status404) return { source:'abuseipdb', status:'not_found', message:'IP not found', url: abuseUrl };
 
     const data  = d?.data || {};
     const score = data.abuseConfidenceScore || 0;
     return {
       source:'abuseipdb', status:'success',
-      verdict: score>75?'MALICIOUS':score>25?'SUSPICIOUS':'CLEAN',
-      abuse_score:score, total_reports:data.totalReports||0, distinct_users:data.numDistinctUsers||0,
-      country_code:data.countryCode||'', country_name:data.countryName||'',
-      isp:data.isp||'', domain:data.domain||'',
-      is_tor:data.isTor||false, is_whitelisted:data.isWhitelisted||false,
-      usage_type:data.usageType||'', last_reported:data.lastReportedAt||null,
+      verdict: score>75 ? 'MALICIOUS' : score>25 ? 'SUSPICIOUS' : 'CLEAN',
+      abuse_score:       score,
+      total_reports:     data.totalReports     || 0,
+      distinct_users:    data.numDistinctUsers || 0,
+      country_code:      data.countryCode      || '',
+      country_name:      data.countryName      || '',
+      isp:               data.isp              || '',
+      domain:            data.domain           || '',
+      is_tor:            data.isTor            || false,
+      is_whitelisted:    data.isWhitelisted     || false,
+      usage_type:        data.usageType        || '',
+      last_reported:     data.lastReportedAt   || null,
       url: abuseUrl,
     };
   } catch(err) {
@@ -364,98 +208,57 @@ async function _abuseIPDBCheck(value) {
   }
 }
 
+/* ── Shodan ────────────────────────────────────────────────────────────── */
 async function _shodanCheck(value) {
-  const shodanKey = LIOF.apiKeys.shodan;
   const shodanUrl = `https://www.shodan.io/host/${value}`;
-
   try {
-    /* ── Layer 1: /proxy/shodan ── */
-    const headers = {};
-    if (shodanKey) headers['X-Client-Shodan-Key'] = shodanKey;
-
-    let d;
-    try {
-      const res = await _safeProxyFetch(`/proxy/shodan/shodan/host/${value}`, headers);
-      if (res.__status404) return { source:'shodan', status:'not_found', message:'No Shodan data for this IP', url: shodanUrl };
-      if (res?.status === 'missing_api_key') return { source:'shodan', status:'no_key', message:'Shodan key not configured — add one via API Keys button', url: shodanUrl };
-      d = res;
-    } catch (proxyErr) {
-      /* ── Layer 2: backend /api/intel/shodan ── */
-      try {
-        const bd = await _backendFetch('shodan', { ip: value });
-        return {
-          source:'shodan', status:'success',
-          country:bd.country||bd.country_name||'', city:bd.city||'', org:bd.org||'', isp:bd.isp||'', os:bd.os||'',
-          ports:(bd.ports||[]).slice(0,12), vulns:(bd.vulns||bd.vulnerabilities||[]).slice(0,8),
-          hostnames:(bd.hostnames||[]).slice(0,5), tags:(bd.tags||[]),
-          asn:bd.asn||'', url: shodanUrl,
-        };
-      } catch (backendErr) {
-        if (backendErr.isNoKey)   return { source:'shodan', status:'no_key', message:'Shodan key not configured — add one via API Keys button', url: shodanUrl };
-        if (backendErr.isAuthError) return { source:'shodan', status:'no_key', message:'Not logged in — sign in to use backend enrichment', url: shodanUrl };
-        throw backendErr;
-      }
-    }
+    const d = await _proxyFetch(`/proxy/shodan/shodan/host/${value}`);
+    if (d.__status404) return { source:'shodan', status:'not_found', message:'No Shodan data for this IP', url: shodanUrl };
 
     return {
       source:'shodan', status:'success',
-      country:d.country_name||'', city:d.city||'', org:d.org||'', isp:d.isp||'', os:d.os||'',
-      ports:(d.ports||[]).slice(0,12), vulns:Object.keys(d.vulns||{}).slice(0,8),
-      hostnames:(d.hostnames||[]).slice(0,5), tags:(d.tags||[]), domains:(d.domains||[]).slice(0,5),
-      asn:d.asn||'', last_update:d.last_update||'', url: shodanUrl,
+      verdict: (d.vulns && Object.keys(d.vulns).length > 0) ? 'SUSPICIOUS' : 'CLEAN',
+      country:   d.country_name || '',
+      city:      d.city         || '',
+      org:       d.org          || '',
+      isp:       d.isp          || '',
+      os:        d.os           || '',
+      ports:     (d.ports       || []).slice(0, 12),
+      vulns:     Object.keys(d.vulns || {}).slice(0, 8),
+      hostnames: (d.hostnames   || []).slice(0, 5),
+      domains:   (d.domains     || []).slice(0, 5),
+      tags:      d.tags         || [],
+      asn:       d.asn          || '',
+      last_update: d.last_update || '',
+      url: shodanUrl,
     };
   } catch(err) {
     return { source:'shodan', status:'error', message: err.message, url: shodanUrl };
   }
 }
 
+/* ── AlienVault OTX ────────────────────────────────────────────────────── */
 async function _otxCheck(value, iocType) {
-  // OTX public endpoint — no key required, but optional for higher rate limits
-  const typeMap = { ip:'IPv4', domain:'domain', url:'URL', hash_md5:'file', hash_sha1:'file', hash_sha256:'file', hash_sha512:'file' };
+  const typeMap = { ip:'IPv4', domain:'domain', url:'url', hash_md5:'file', hash_sha1:'file', hash_sha256:'file', hash_sha512:'file' };
   const otxType = typeMap[iocType.type];
   if (!otxType) return { source:'otx', status:'unsupported', message:'IOC type not supported by OTX' };
 
-  const otxKey = LIOF.apiKeys.otx;
   const otxUrl = `https://otx.alienvault.com/indicator/${otxType}/${encodeURIComponent(value)}`;
-
   try {
-    /* ── Layer 1: /proxy/otx ── */
-    const headers = {};
-    if (otxKey) headers['X-Client-OTX-Key'] = otxKey;
-
-    let d;
-    try {
-      d = await _safeProxyFetch(`/proxy/otx/indicators/${otxType}/${encodeURIComponent(value)}/general`, headers);
-    } catch (proxyErr) {
-      /* ── Layer 2: backend /api/intel/otx ── */
-      try {
-        const bd = await _backendFetch('otx', { ioc: value, type: iocType.type });
-        const pulses = bd.pulses||[];
-        const pc = bd.pulse_count ?? pulses.length;
-        return {
-          source:'otx', status:'success',
-          verdict: pc>10?'MALICIOUS':pc>3?'SUSPICIOUS':pc>0?'SUSPICIOUS':'CLEAN',
-          pulse_count:pc, related:(bd.related||[]).slice(0,5), tags:(bd.tags||[]).slice(0,10),
-          malware_families:(bd.malware_families||[]).slice(0,5), threat_actors:(bd.threat_actors||[]).slice(0,5),
-          url: otxUrl,
-        };
-      } catch (backendErr) {
-        if (backendErr.isNoKey)   return { source:'otx', status:'no_key', message:'OTX key not configured — add one via API Keys button', url: otxUrl };
-        if (backendErr.isAuthError) return { source:'otx', status:'no_key', message:'Not logged in — sign in to use backend enrichment', url: otxUrl };
-        throw backendErr;
-      }
-    }
+    const d = await _proxyFetch(`/proxy/otx/indicators/${otxType}/${encodeURIComponent(value)}/general`);
+    if (d.__status404) return { source:'otx', status:'not_found', message:'Not found in OTX', url: otxUrl };
 
     const pulses = d?.pulse_info?.pulses || [];
     const pc     = d?.pulse_info?.count  || 0;
-    const verdict = pc>10?'MALICIOUS':pc>3?'SUSPICIOUS':pc>0?'SUSPICIOUS':'CLEAN';
 
     return {
-      source:'otx', status:'success', verdict, pulse_count:pc,
-      related:          pulses.slice(0,5).map(p=>p.name||''),
-      tags:             [...new Set(pulses.flatMap(p=>p.tags||[]))].slice(0,10),
-      malware_families: [...new Set(pulses.flatMap(p=>(p.malware_families||[]).map(m=>m.display_name||m)))].slice(0,5),
-      threat_actors:    [...new Set(pulses.flatMap(p=>(p.adversary?[p.adversary]:[])))].slice(0,5),
+      source:'otx', status:'success',
+      verdict: pc>10 ? 'MALICIOUS' : pc>3 ? 'SUSPICIOUS' : pc>0 ? 'SUSPICIOUS' : 'CLEAN',
+      pulse_count:       pc,
+      related:           pulses.slice(0,5).map(p=>p.name||''),
+      tags:              [...new Set(pulses.flatMap(p=>p.tags||[]))].slice(0,10),
+      malware_families:  [...new Set(pulses.flatMap(p=>(p.malware_families||[]).map(m=>m.display_name||m)))].slice(0,5),
+      threat_actors:     [...new Set(pulses.flatMap(p=>p.adversary ? [p.adversary] : []))].slice(0,5),
       url: otxUrl,
     };
   } catch(err) {
@@ -463,47 +266,40 @@ async function _otxCheck(value, iocType) {
   }
 }
 
-/* URLhaus — free, no key required.  Routed through /proxy/urlhaus/ to avoid CORS. */
+/* ── URLhaus (free, no key) ────────────────────────────────────────────── */
 async function _urlhausCheck(value, iocType) {
   const type = iocType.type;
   if (!['ip','domain','url'].includes(type)) return { source:'urlhaus', status:'unsupported' };
 
-  const uhUrl  = `https://urlhaus.abuse.ch/browse.php?search=${encodeURIComponent(value)}`;
-  const isUrl  = type === 'url';
-  const body   = isUrl ? { url: value } : { host: value };
-  // URLhaus has separate endpoints: /url/ for URLs, /host/ for IPs/domains
-  const path   = isUrl ? '/proxy/urlhaus/url/' : '/proxy/urlhaus/host/';
+  const uhUrl = `https://urlhaus.abuse.ch/browse.php?search=${encodeURIComponent(value)}`;
+  const isUrl = type === 'url';
+  const proxyPath = isUrl ? '/proxy/urlhaus/url/' : '/proxy/urlhaus/host/';
 
   try {
-    const r = await fetch(path, {
+    const r = await fetch(proxyPath, {
       method:  'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
-      body:    new URLSearchParams(body),
+      body:    new URLSearchParams(isUrl ? { url: value } : { host: value }),
+      signal:  AbortSignal.timeout(20000),
     });
-    const ct = r.headers.get('content-type') || '';
 
-    // Proxy not available (HTML fallback or non-OK) — degrade gracefully with manual link
-    if (ct.includes('text/html') || r.status === 404) {
-      return {
-        source:'urlhaus', status:'success', verdict:'UNKNOWN',
-        urls_count:0, active_urls:0, sample_urls:[], proxy_unavailable:true, url: uhUrl,
-      };
-    }
-    if (!r.ok) throw new Error(`URLhaus proxy HTTP ${r.status}`);
+    const ct = r.headers.get('content-type') || '';
+    if (ct.includes('text/html')) throw new Error('URLhaus proxy unavailable');
+    if (!r.ok) throw new Error(`URLhaus HTTP ${r.status}`);
 
     const d = await r.json();
     if (d.query_status === 'no_results' || d.query_status === 'is_crawler') {
       return { source:'urlhaus', status:'success', verdict:'CLEAN', urls_count:0, active_urls:0, sample_urls:[], url: uhUrl };
     }
 
-    const urls   = (d.urls||d.urls_list||[]).filter(u=>u.url_status!=='offline').slice(0,5);
-    const verdict = urls.length>0 ? 'MALICIOUS' : 'CLEAN';
+    const urls    = (d.urls || d.urls_list || []).filter(u => u.url_status !== 'offline').slice(0, 5);
+    const verdict = urls.length > 0 ? 'MALICIOUS' : 'CLEAN';
 
     return {
       source:'urlhaus', status:'success', verdict,
-      urls_count: d.urls?.length || d.urls_list?.length || 0,
+      urls_count:  d.urls?.length || d.urls_list?.length || 0,
       active_urls: urls.length,
-      sample_urls: urls.map(u=>({ url:u.url, status:u.url_status, threat:u.threat, tags:u.tags })),
+      sample_urls: urls.map(u => ({ url: u.url, status: u.url_status, threat: u.threat, tags: u.tags })),
       url: uhUrl,
     };
   } catch(err) {
@@ -579,16 +375,6 @@ async function _runLookup(value) {
   // Wait for all to complete
   await Promise.allSettled(tasks.map(t=>t.fn));
   LIOF.loading = false;
-}
-
-function _computeVerdict(results) {
-  const verdicts = Object.values(results)
-    .filter(r=>r.status==='success' && r.verdict)
-    .map(r=>r.verdict);
-  if (verdicts.some(v=>v==='MALICIOUS'))  return { v:'MALICIOUS', c:'var(--p19-red)',    i:'fa-skull-crossbones' };
-  if (verdicts.some(v=>v==='SUSPICIOUS')) return { v:'SUSPICIOUS', c:'var(--p19-yellow)', i:'fa-exclamation-triangle' };
-  if (verdicts.every(v=>v==='CLEAN'))     return { v:'CLEAN',      c:'var(--p19-green)',  i:'fa-check-circle' };
-  return { v:'UNKNOWN', c:'var(--p19-t3)', i:'fa-question-circle' };
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -687,20 +473,6 @@ function _updateSourceCard(sourceId, result) {
     urlhaus:    { name:'URLhaus',    color:'var(--p19-green)',  icon:'fa-link' },
   };
   const cfg = cfgMap[sourceId] || { name:sourceId, color:'var(--p19-t3)', icon:'fa-circle' };
-
-  if (result.status === 'no_key') {
-    card.innerHTML = `
-    <div class="p19-ioc-source-header">
-      ${_srcIcon(cfg)}
-      <span class="p19-ioc-source-name">${cfg.name}</span>
-      <span class="p19-badge p19-badge--gray" style="font-size:.64em;margin-left:auto">No Key</span>
-    </div>
-    <div style="font-size:.76em;color:var(--p19-t4);padding:4px 0">
-      <i class="fas fa-key" style="margin-right:4px;color:var(--p19-yellow)"></i>
-      API key not configured. <button onclick="window.renderLiveIOCLookup&&window._liofConfigKeys()" style="background:none;border:none;color:var(--p19-cyan);cursor:pointer;padding:0;font-size:1em;text-decoration:underline">Add key</button>
-    </div>`;
-    return;
-  }
 
   if (result.status === 'error') {
     card.innerHTML = `
@@ -850,9 +622,6 @@ window.renderLiveIOCLookup = function() {
         <span class="p19-badge p19-badge--online"><span class="p19-dot p19-dot--green"></span> LIVE</span>
       </div>
       <div class="p19-header__right">
-        <button class="p19-btn p19-btn--ghost p19-btn--sm" onclick="window._liofConfigKeys()">
-          <i class="fas fa-key"></i> <span>API Keys</span>
-        </button>
         <button class="p19-btn p19-btn--ghost p19-btn--sm" onclick="window._liofExport()" id="liof-export-btn" style="display:none">
           <i class="fas fa-download"></i> <span>Export</span>
         </button>
@@ -882,21 +651,14 @@ window.renderLiveIOCLookup = function() {
     </div>
   </div>
 
-  <!-- API Key Status Banner -->
-  <div id="liof-key-status" style="padding:8px 24px;background:rgba(234,179,8,.04);border-bottom:1px solid rgba(234,179,8,.15)">
+  <!-- Sources Status Banner — all keys embedded server-side -->
+  <div style="padding:8px 24px;background:rgba(16,185,129,.04);border-bottom:1px solid rgba(16,185,129,.15)">
     <div style="display:flex;align-items:center;gap:8px;font-size:.78em;flex-wrap:wrap">
-      <i class="fas fa-info-circle" style="color:var(--p19-yellow)"></i>
-      <span style="color:var(--p19-t3)">API Keys:</span>
-      ${['virustotal','abuseipdb','shodan','otx'].map(k => {
-        const configured = !!LIOF.apiKeys[k];
-        const labels = {virustotal:'VirusTotal',abuseipdb:'AbuseIPDB',shodan:'Shodan',otx:'OTX'};
-        return `<span class="p19-badge ${configured?'p19-badge--green':'p19-badge--gray'}" style="font-size:.7em">
-          <i class="fas ${configured?'fa-check':'fa-times'}" style="font-size:.7em"></i> ${labels[k]}
-        </span>`;
-      }).join('')}
-      <button class="p19-btn p19-btn--ghost p19-btn--sm" onclick="window._liofConfigKeys()" style="font-size:.74em;margin-left:auto">
-        <i class="fas fa-key"></i> Configure
-      </button>
+      <i class="fas fa-check-circle" style="color:var(--p19-green)"></i>
+      <span style="color:var(--p19-t3)">All sources active:</span>
+      ${['VirusTotal','AbuseIPDB','Shodan','AlienVault OTX','URLhaus'].map(n =>
+        `<span class="p19-badge p19-badge--green" style="font-size:.7em"><i class="fas fa-check" style="font-size:.7em"></i> ${n}</span>`
+      ).join('')}
     </div>
   </div>
 
@@ -1055,70 +817,10 @@ window._liofClearHistory = function() {
 };
 
 window._liofConfigKeys = function() {
-  const modal = document.createElement('div');
-  modal.className = 'p19-modal-backdrop';
-  modal.onclick = (e)=>{ if(e.target===modal)modal.remove(); };
-  modal.innerHTML = `
-  <div class="p19-modal">
-    <div class="p19-modal-head">
-      <div class="p19-modal-title"><i class="fas fa-key" style="margin-right:8px;color:var(--p19-cyan)"></i>Intel API Keys</div>
-      <button class="p19-modal-close" onclick="this.closest('.p19-modal-backdrop').remove()"><i class="fas fa-times"></i></button>
-    </div>
-    <div class="p19-modal-body">
-      <div class="p19-alert p19-alert--info" style="margin-bottom:16px">
-        <i class="fas fa-info-circle"></i>
-        <span>Keys stored in browser localStorage only. Free tiers available for all sources.</span>
-      </div>
-      <div class="p19-form-row">
-        <div class="p19-form-group">
-          <label class="p19-form-label">VirusTotal API Key</label>
-          <input type="password" class="p19-form-input" id="liof-vt" value="${LIOF.apiKeys.virustotal}" placeholder="VT API key">
-          <div class="p19-form-hint"><a href="https://www.virustotal.com/gui/my-apikey" target="_blank" style="color:var(--p19-cyan)">Get free key →</a></div>
-        </div>
-        <div class="p19-form-group">
-          <label class="p19-form-label">AbuseIPDB API Key</label>
-          <input type="password" class="p19-form-input" id="liof-abuseipdb" value="${LIOF.apiKeys.abuseipdb}" placeholder="AbuseIPDB key">
-          <div class="p19-form-hint"><a href="https://www.abuseipdb.com/account/api" target="_blank" style="color:var(--p19-cyan)">Get free key →</a></div>
-        </div>
-        <div class="p19-form-group">
-          <label class="p19-form-label">Shodan API Key</label>
-          <input type="password" class="p19-form-input" id="liof-shodan" value="${LIOF.apiKeys.shodan}" placeholder="Shodan API key">
-          <div class="p19-form-hint"><a href="https://account.shodan.io" target="_blank" style="color:var(--p19-cyan)">Get key →</a></div>
-        </div>
-        <div class="p19-form-group">
-          <label class="p19-form-label">AlienVault OTX Key</label>
-          <input type="password" class="p19-form-input" id="liof-otx" value="${LIOF.apiKeys.otx}" placeholder="OTX API key">
-          <div class="p19-form-hint"><a href="https://otx.alienvault.com/api" target="_blank" style="color:var(--p19-cyan)">Get free key →</a></div>
-        </div>
-      </div>
-      <div class="p19-alert p19-alert--success" style="margin-top:4px">
-        <i class="fas fa-check-circle"></i>
-        <span><strong>URLhaus</strong> is always active — free, no key required.</span>
-      </div>
-    </div>
-    <div class="p19-modal-foot">
-      <button class="p19-btn p19-btn--ghost p19-btn--sm" onclick="this.closest('.p19-modal-backdrop').remove()">Cancel</button>
-      <button class="p19-btn p19-btn--primary p19-btn--sm" onclick="window._liofSaveKeys(this)">
-        <i class="fas fa-save"></i> Save Keys
-      </button>
-    </div>
-  </div>`;
-  document.body.appendChild(modal);
+  // API keys are now hardcoded server-side — no configuration needed
+  _toast('All API keys are pre-configured and active', 'success');
 };
 
-window._liofSaveKeys = function(btn) {
-  const g = id => document.getElementById(id)?.value?.trim()||'';
-  LIOF.apiKeys.virustotal = g('liof-vt');
-  LIOF.apiKeys.abuseipdb  = g('liof-abuseipdb');
-  LIOF.apiKeys.shodan     = g('liof-shodan');
-  LIOF.apiKeys.otx        = g('liof-otx');
-  ['virustotal','abuseipdb','shodan','otx'].forEach(k=>{
-    if (LIOF.apiKeys[k]) localStorage.setItem(`wadjet_${k==='virustotal'?'vt':k}_key`, LIOF.apiKeys[k]);
-    else localStorage.removeItem(`wadjet_${k==='virustotal'?'vt':k}_key`);
-  });
-  btn.closest('.p19-modal-backdrop').remove();
-  _toast('API keys saved', 'success');
-  window.renderLiveIOCLookup();
-};
+window._liofSaveKeys = function() {};
 
 })(); // end IIFE
