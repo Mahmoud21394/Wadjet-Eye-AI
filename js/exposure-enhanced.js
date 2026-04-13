@@ -206,7 +206,7 @@ async function _expLoad() {
       ...(_EXP.filters.status   ? {status:   _EXP.filters.status}   : {}),
     });
 
-    const data = await _expFetch(`/cti/vulnerabilities?${qs}`);
+    const data = await _expFetch(`/vulnerabilities?${qs}`);
     const rows = data?.data || data || [];
     _EXP.total = data?.total || rows.length;
     _EXP.data  = rows.length ? rows : _EXP_FALLBACK;
@@ -532,7 +532,7 @@ window._expSyncFeeds = function() {
   if (typeof showToast === 'function')
     showToast('🔄 Syncing CISA KEV and NVD feeds…', 'info');
 
-  _expFetch('/cti/vulnerabilities/sync', {
+ _expFetch('/vulnerabilities/sync', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ source: 'all', days: 7 })
