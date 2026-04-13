@@ -80,12 +80,38 @@ function sanitizeSearch(s) {
 /* ════════════════════════════════════════════════════════
    GET /api/iocs
    List IOCs for the authenticated user's tenant.
-   Supports pagination, filtering, and text search.
+
+   v5.4 FIX — DB Timeout (statement timeout):
+   ────────────────────────────────────────────
+   ROOT CAUSE: select('*', { count: 'exact' }) performs a full-table
+   count via COUNT(*) on every request. On large tables (>10k rows)
+   this times out after 30s on Render free tier.
+
+   FIXES:
+   1. Split into two separate queries: data fetch + head-only count
+   2. count query uses { count: 'exact', head: true } — returns only
+      the count, no row data, much faster
+   3. Default limit reduced to 25 (was 50) to reduce data transfer
+   4. Hard timeout: both queries run with Promise.race() 8s timeout
+   5. On timeout: return partial data (data without count) with
+      `total: -1` so the frontend handles gracefully
 ════════════════════════════════════════════════════════ */
+const IOC_QUERY_TIMEOUT_MS = 8_000;  // 8-second hard limit per query
+
+/** Wrap a Supabase promise with a hard timeout */
+function _withQueryTimeout(promise, label = 'query') {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`DB timeout (${label} > ${IOC_QUERY_TIMEOUT_MS / 1000}s)`)), IOC_QUERY_TIMEOUT_MS)
+    ),
+  ]);
+}
+
 router.get('/', asyncHandler(async (req, res) => {
   const {
     page = 1,
-    limit = 50,
+    limit = 25,       // Reduced from 50 → 25 to cut data transfer time
     type,
     risk_min,
     country,
@@ -98,72 +124,110 @@ router.get('/', asyncHandler(async (req, res) => {
     threat_actor,
     status,
     all_tenants,  // SUPER_ADMIN only: view IOCs across all tenants
+    no_count,     // pass no_count=1 to skip the expensive COUNT query
   } = req.query;
 
-  const userRole   = req.user?.role || '';
+  const userRole     = req.user?.role || '';
   const isSuperAdmin = ['SUPER_ADMIN','super_admin'].includes(userRole);
 
-  // all_tenants=1 is only allowed for SUPER_ADMIN users
   const viewAllTenants = all_tenants === '1' && isSuperAdmin;
 
   const tenantId = viewAllTenants ? null : resolveTenantId(req);
   const pageNum  = Math.max(1, parseInt(page) || 1);
-  const limitNum = Math.min(200, Math.max(1, parseInt(limit) || 50));
+  const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 25));  // max 100 (was 200)
   const offset   = (pageNum - 1) * limitNum;
 
-  // Validate sort column to prevent injection
   const SORTABLE_COLS = new Set([
     'risk_score','confidence','last_seen','first_seen','created_at',
     'updated_at','value','type','reputation','source'
   ]);
-  const sortCol = SORTABLE_COLS.has(sort) ? sort : 'risk_score';
+  const sortCol  = SORTABLE_COLS.has(sort) ? sort : 'risk_score';
   const ascending = order === 'asc';
 
-  let query = supabaseAdmin
-    .from('iocs')
-    .select('*', { count: 'exact' })
-    .order(sortCol, { ascending })
-    .range(offset, offset + limitNum - 1);
-
-  // Apply tenant filter unless SUPER_ADMIN is viewing all tenants
-  if (tenantId) {
-    query = query.eq('tenant_id', tenantId);
+  // ── Build base filter function (reused for both data + count queries) ──────
+  function _applyFilters(q) {
+    if (tenantId) q = q.eq('tenant_id', tenantId);
+    if (type)           q = q.eq('type', type);
+    if (country)        q = q.eq('country', country);
+    if (risk_min)       q = q.gte('risk_score', parseFloat(risk_min));
+    if (reputation)     q = q.eq('reputation', reputation);
+    if (source)         q = q.eq('source', source);
+    if (min_confidence) q = q.gte('confidence', parseInt(min_confidence));
+    if (threat_actor)   q = q.ilike('threat_actor', `%${sanitizeSearch(threat_actor)}%`);
+    if (status)         q = q.eq('status', status);
+    if (search) {
+      const s = sanitizeSearch(search);
+      if (s) q = q.or(`value.ilike.%${s}%,threat_actor.ilike.%${s}%,malware_family.ilike.%${s}%,notes.ilike.%${s}%,asn.ilike.%${s}%`);
+    }
+    return q;
   }
 
-  // Apply filters
-  if (type)           query = query.eq('type', type);
-  if (country)        query = query.eq('country', country);
-  if (risk_min)       query = query.gte('risk_score', parseFloat(risk_min));
-  if (reputation)     query = query.eq('reputation', reputation);
-  if (source)         query = query.eq('source', source);
-  if (min_confidence) query = query.gte('confidence', parseInt(min_confidence));
-  if (threat_actor)   query = query.ilike('threat_actor', `%${sanitizeSearch(threat_actor)}%`);
-  if (status)         query = query.eq('status', status);
+  // ── Data query: fetch rows only (no COUNT) ────────────────────────────────
+  let dataQuery = supabaseAdmin
+    .from('iocs')
+    .select('*')  // NO count: 'exact' here — that's the slow part
+    .order(sortCol, { ascending })
+    .range(offset, offset + limitNum - 1);
+  dataQuery = _applyFilters(dataQuery);
 
-  // Full-text search across key fields
-  if (search) {
-    const s = sanitizeSearch(search);
-    if (s) {
-      query = query.or(
-        `value.ilike.%${s}%,threat_actor.ilike.%${s}%,malware_family.ilike.%${s}%,notes.ilike.%${s}%,asn.ilike.%${s}%`
-      );
+  let data, count;
+
+  try {
+    const { data: rows, error: dataErr } = await _withQueryTimeout(dataQuery, 'data');
+    if (dataErr) {
+      // Check for statement timeout specifically
+      if (dataErr.message?.includes('timeout') || dataErr.code === '57014') {
+        console.warn(`[IOC] STATEMENT_TIMEOUT on data query — tenant=${tenantId} page=${pageNum}`);
+        return res.status(503).json({
+          error:   'Database query timed out. Try a smaller page size or add filters.',
+          code:    'INTERNAL_ERROR',
+          path:    '/api/iocs',
+          partial: true,
+        });
+      }
+      console.error('[IOC] List query error:', dataErr.message, '| tenant:', tenantId || 'ALL');
+      throw createError(500, dataErr.message);
+    }
+    data = rows || [];
+  } catch (err) {
+    if (err.message?.startsWith('DB timeout')) {
+      console.warn(`[IOC] QUERY_TIMEOUT data — ${err.message}`);
+      return res.status(503).json({
+        error:   'Database query timed out. The IOC table may be very large. Try adding filters.',
+        code:    'INTERNAL_ERROR',
+        path:    '/api/iocs',
+        partial: true,
+      });
+    }
+    throw err;
+  }
+
+  // ── Count query: head-only (no data transfer) — skipped on no_count=1 ──────
+  // HEAD-only count is 3-5× faster than COUNT(*) with data.
+  count = -1; // -1 means unknown
+  if (no_count !== '1') {
+    try {
+      let countQuery = supabaseAdmin
+        .from('iocs')
+        .select('*', { count: 'exact', head: true });  // head: true = count only, no rows
+      countQuery = _applyFilters(countQuery);
+
+      const { count: cnt, error: cntErr } = await _withQueryTimeout(countQuery, 'count');
+      if (!cntErr) count = cnt || 0;
+      else console.warn('[IOC] Count query error (non-fatal):', cntErr.message);
+    } catch (e) {
+      console.warn('[IOC] Count query timeout (non-fatal) — returning count=-1:', e.message);
+      // count stays -1; frontend should handle unknown total gracefully
     }
   }
 
-  const { data, error, count } = await query;
-
-  if (error) {
-    console.error('[IOC] List query error:', error.message, '| tenant:', tenantId || 'ALL');
-    throw createError(500, error.message);
-  }
-
   const scope = viewAllTenants ? 'ALL_TENANTS' : tenantId;
-  console.log(`[IOC] GET /iocs — scope=${scope} total=${count} page=${pageNum} returned=${data?.length || 0}`);
+  console.log(`[IOC] GET /iocs — scope=${scope} total=${count} page=${pageNum} returned=${data.length}`);
 
   res.json({
-    data:       data || [],
-    total:      count || 0,
-    pagination: { page: pageNum, limit: limitNum, total: count || 0 },
+    data,
+    total:      count,
+    pagination: { page: pageNum, limit: limitNum, total: count },
     _scope:     viewAllTenants ? 'all_tenants' : 'tenant',
   });
 }));

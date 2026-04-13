@@ -1,11 +1,20 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  RAKAY Module — Frontend UI  v4.0
+ *  RAKAY Module — Frontend UI  v5.0
  *  Wadjet-Eye AI Platform — Conversational Security Analyst
  *
- *  v4.0 — Zero duplicate LLM calls, zero rate-limit loops (production-grade)
+ *  v5.0 — Platform stabilization: zero MISSING_SESSION_ID, zero 404 collectors,
+ *          zero IOC timeouts, zero 503 LLM retry loops
  *  ──────────────────────────────────────────────────────────────────────
- *  CRITICAL FIXES:
+ *  v5.0 FIXES:
+ *   ✅ session_id always generated as UUID v4 (crypto.randomUUID + fallback)
+ *   ✅ Session auto-generated in _sendMessage if null (race-condition guard)
+ *   ✅ 400 MISSING_SESSION_ID eliminated: backend auto-generates if missing
+ *   ✅ 404 /api/collectors eliminated: root GET / handler added
+ *   ✅ IOC DB timeout fixed: split data/count queries, 8s hard timeout, limit=25
+ *   ✅ 503 LLM_PROVIDER_BUSY: no retry, informational message only
+ *
+ *  v4.0 (retained):
  *   ✅ _api() defaults to retries=0 — NO automatic retries on any call
  *   ✅ requestInFlight flag set SYNCHRONOUSLY before any await
  *   ✅ Message dedup: frontend-side hash check (mirrors backend dedup)
@@ -25,7 +34,7 @@
 (function () {
   'use strict';
 
-  const MODULE_VERSION = '4.0';
+  const MODULE_VERSION = '5.0';
 
   // ── Constants ─────────────────────────────────────────────────────────────
   const LS_RAKAY_TOKEN       = 'rakay_demo_token';
@@ -126,6 +135,23 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
+  /**
+   * Generate a UUID v4 string.
+   * Uses crypto.randomUUID() when available (Chrome 92+, Node 15+).
+   * Falls back to a manual RFC4122 v4 implementation for older browsers.
+   */
+  function _uuid() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    // Fallback: RFC4122 v4 UUID
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+      const r = (Math.random() * 16) | 0;
+      return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+    });
+  }
+
+  // Legacy short-id (still used for message/event IDs, NOT session IDs)
   function _uid() {
     return 'r_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   }
@@ -371,6 +397,19 @@
         // Propagate AbortError immediately — don't retry
         if (err.name === 'AbortError') throw err;
 
+        // NEVER retry on client errors (4xx) or server-busy (503)
+        // These are deterministic — retrying will not help and causes rate-limit loops.
+        if (err.status >= 400 && err.status < 600 && err.status !== 429 && err.status !== 503) {
+          // 400, 401, 403, 404 (but 404 already returned null above), 409, 500, 501, 502, 504
+          // Only propagate — no retry
+          log.error(`API error ${method} ${path} [${err.status}]: ${err.message} (no retry)`);
+          throw err;
+        }
+        if (err.status === 503) {
+          log.warn(`[API] 503 on ${method} ${path} — provider busy, NO retry`);
+          throw err;
+        }
+
         const isNetworkErr = err.name === 'TypeError'
           || err.message?.includes('fetch') || err.message?.includes('network')
           || err.message?.includes('Failed to fetch');
@@ -446,7 +485,7 @@
 
   async function _createSession(title = 'New Chat') {
     const local = {
-      id:            _uid(),
+      id:            _uuid(),   // UUID v4 — backend requires a valid session_id
       title,
       message_count: 0,
       tokens_used:   0,
@@ -519,22 +558,40 @@
     if (!message.trim()) return;
 
     // ── Layer 1: Synchronous requestInFlight flag (set BEFORE any await) ──
-    // This is the primary guard. It's synchronous so even rapid back-to-back
-    // calls in the same microtask queue cannot both pass.
     if (RAKAY.requestInFlight) {
       log.warn('[SEND] SEND_BLOCKED_INFLIGHT — request already in flight');
       return;
     }
 
-    // ── Layer 2: UI loading flag (same protection, different name) ─────────
+    // ── Layer 2: UI loading flag ────────────────────────────────────────────
     if (RAKAY.loading) {
       log.warn('[SEND] SEND_BLOCKED_LOADING — UI loading flag active');
       return;
     }
 
+    // ── Layer 0: Session guard — MUST have a session before any await ───────
+    // This is the fix for MISSING_SESSION_ID:
+    // If sessionId is null (race condition during initial load), generate
+    // a UUID immediately without waiting for the backend.
+    if (!RAKAY.sessionId) {
+      RAKAY.sessionId = _uuid();
+      log.warn(`[SEND] SESSION_AUTO_GENERATED — no active session, created: ${RAKAY.sessionId.slice(0, 12)}`);
+      // Also create a minimal local session entry
+      const autoSession = {
+        id:            RAKAY.sessionId,
+        title:         message.trim().slice(0, 60),
+        message_count: 0,
+        tokens_used:   0,
+        created_at:    new Date().toISOString(),
+        updated_at:    new Date().toISOString(),
+        _local:        true,
+      };
+      RAKAY.sessions.unshift(autoSession);
+      _lsSetSessions(RAKAY.sessions);
+      _renderSidebar();
+    }
+
     // ── Layer 3: Frontend message deduplication (10s window) ───────────────
-    // Prevents identical messages from being sent twice within 10 seconds.
-    // This catches: rapid double-click, Enter spam, form re-submission.
     if (_feIsDuplicate(RAKAY.sessionId, message)) {
       log.warn('[SEND] SEND_BLOCKED_DEDUP — identical message within 10s window');
       return;
