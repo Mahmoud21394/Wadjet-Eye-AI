@@ -284,6 +284,11 @@ app.get('/api/health', async (req, res) => {
 // ════════════════════════════════════════════════════════════════
 app.use('/api/auth', authLimiter, authRoutes);
 
+// ── v5.4 RAKAY AI Analyst Module (self-contained auth — must be BEFORE global verifyToken) ──
+// RAKAY handles its own 3-tier auth: JWT | RAKAY service key | demo token
+// Do NOT move below app.use(verifyToken) — the global JWT guard blocks demo auth.
+app.use('/api/RAKAY', rakayRoutes);
+
 // ════════════════════════════════════════════════════════════════
 //  PROTECTED ROUTES — JWT required
 //  verifyToken attaches req.user + req.tenantId to every request
@@ -319,9 +324,6 @@ app.use('/api/cve',            cveIntelRoutes);
 app.use('/api/adversary-sim',  adversarySimRoutes);
 app.use('/api/threat-graph',   threatGraphRoutes);
 app.use('/api/whatif',         whatifRoutes);
-// ── v5.4 RAKAY AI Analyst Module ──────────────────────────────────────────
-app.use('/api/RAKAY',          rakayRoutes);
-
 // ════════════════════════════════════════════════════════════════
 //  404 HANDLER — catches all unmatched routes
 //  Must be placed AFTER all route registrations
