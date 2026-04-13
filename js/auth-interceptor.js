@@ -230,7 +230,8 @@ async function _doTokenRefresh() {
 
     UnifiedTokenStore.updateTokens({
       token:        newToken,
-      refreshToken: data.refreshToken || data.refresh_token,
+      // ONLY overwrite refresh token if backend actually sent a new one
+      refreshToken: data.refreshToken || data.refresh_token || UnifiedTokenStore.getRefresh(),
       expiresAt:    data.expiresAt    || data.expires_at,
       expiresIn:    data.expiresIn    || data.expires_in,
       user:         data.user,
