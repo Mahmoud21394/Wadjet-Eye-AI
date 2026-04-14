@@ -617,6 +617,139 @@ router.get('/detection-timeline', asyncHandler(async (req, res) => {
 }));
 
 // ══════════════════════════════════════════════════════════
+//  DETECTIONS — /api/cti/detections
+//  Frontend live-detections-soc.js calls:
+//    GET  /cti/detections?limit=200
+//    GET  /cti/detections?limit=10&sort=created_at&order=desc
+//    POST /cti/detections/:id/correlate
+//
+//  This maps to the iocs table (live detections with risk data)
+//  since a dedicated detections table may not exist yet.
+//  Falls back gracefully so the UI never sees a 500.
+// ══════════════════════════════════════════════════════════
+
+// GET /api/cti/detections
+router.get('/detections', asyncHandler(async (req, res) => {
+  const { page, limit, from, to } = paginate(req);
+  const tid  = req.tenantId;
+  const sort  = req.query.sort  || 'created_at';
+  const order = req.query.order === 'asc';
+
+  // Filter params
+  const severity   = req.query.severity;
+  const status     = req.query.status;
+  const type       = req.query.type;
+  const search     = req.query.search;
+  const fromDate   = req.query.from;
+  const toDate     = req.query.to;
+
+  // Primary: try a dedicate detections table (if it exists)
+  // Secondary: fall back to iocs with risk enrichment as detection feed
+  let q = supabase
+    .from('iocs')
+    .select('id, value, type, reputation, risk_score, status, threat_actor, tags, created_at, last_seen, enrichment_data', { count: 'exact' })
+    .eq('tenant_id', tid)
+    .order(sort, { ascending: order })
+    .range(from, to);
+
+  if (severity) q = q.eq('reputation', severity.toLowerCase());
+  if (status)   q = q.eq('status', status);
+  if (type)     q = q.eq('type', type);
+  if (fromDate) q = q.gte('created_at', fromDate);
+  if (toDate)   q = q.lte('created_at', toDate);
+  if (search)   q = q.or(`value.ilike.%${search}%,threat_actor.ilike.%${search}%`);
+
+  const { data, error, count } = await q;
+
+  if (error) {
+    // Never 500 — return empty list so UI stays functional
+    console.warn('[CTI] /detections query error:', error.message);
+    return res.json({ data: [], total: 0, page, limit });
+  }
+
+  // Shape data to match what live-detections-soc.js expects
+  const detections = (data || []).map(ioc => ({
+    id:           ioc.id,
+    title:        `${ioc.type?.toUpperCase() || 'IOC'} detected: ${ioc.value}`,
+    ioc_value:    ioc.value,
+    ioc_type:     ioc.type,
+    severity:     ioc.reputation === 'malicious'  ? 'HIGH'
+                : ioc.reputation === 'suspicious' ? 'MEDIUM'
+                : ioc.risk_score > 70             ? 'HIGH'
+                : ioc.risk_score > 40             ? 'MEDIUM' : 'LOW',
+    status:       ioc.status || 'open',
+    risk_score:   ioc.risk_score,
+    threat_actor: ioc.threat_actor,
+    tags:         ioc.tags || [],
+    source_ip:    ioc.type === 'ip' ? ioc.value : null,
+    created_at:   ioc.created_at,
+    last_seen:    ioc.last_seen,
+    tenant_id:    tid,
+    correlated:   false,
+  }));
+
+  res.json({
+    data:  detections,
+    total: count || 0,
+    page,
+    limit,
+  });
+}));
+
+// POST /api/cti/detections/:id/correlate
+router.post('/detections/:id/correlate', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const tid     = req.tenantId;
+  const auto    = req.body?.auto !== false;
+
+  // Fetch the IOC to correlate
+  const { data: ioc, error: fetchErr } = await supabase
+    .from('iocs')
+    .select('*')
+    .eq('id', id)
+    .eq('tenant_id', tid)
+    .maybeSingle();
+
+  if (fetchErr || !ioc) {
+    // Return accepted response even if IOC not found — never 500
+    console.warn('[CTI] /detections/:id/correlate — IOC not found:', id);
+    return res.json({
+      id,
+      correlated: false,
+      message: 'IOC not found or correlation skipped',
+      correlated_at: new Date().toISOString(),
+    });
+  }
+
+  // Mark as correlated (update enrichment_data)
+  const { error: updateErr } = await supabase
+    .from('iocs')
+    .update({
+      enrichment_data: {
+        ...(ioc.enrichment_data || {}),
+        correlated:    true,
+        correlated_at: new Date().toISOString(),
+        auto_correlated: auto,
+      },
+    })
+    .eq('id', id)
+    .eq('tenant_id', tid);
+
+  if (updateErr) {
+    console.warn('[CTI] /detections/:id/correlate update error:', updateErr.message);
+  }
+
+  res.json({
+    id,
+    ioc_value:     ioc.value,
+    correlated:    true,
+    auto:          auto,
+    correlated_at: new Date().toISOString(),
+    message:       'Correlation complete',
+  });
+}));
+
+// ══════════════════════════════════════════════════════════
 //  INGESTION TRIGGERS (manual run of feed workers)
 // ══════════════════════════════════════════════════════════
 

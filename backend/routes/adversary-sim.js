@@ -14,13 +14,14 @@
 const express  = require('express');
 const router   = express.Router();
 const { supabase }     = require('../config/supabase');
-const { verifyToken }  = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
+
+// NOTE: verifyToken is already applied globally in server.js before this router.
+// Do NOT add router.use(verifyToken) here — that would cause Supabase to be
+// called twice per request (double auth round-trip, wasted quota, slower response).
 
 const DEFAULT_TENANT = process.env.DEFAULT_TENANT_ID || '00000000-0000-0000-0000-000000000001';
 function tid(req) { return req.tenantId || req.user?.tenant_id || DEFAULT_TENANT; }
-
-router.use(verifyToken);
 
 /* ── GET /api/adversary-sim/scenarios ── */
 router.get('/scenarios', asyncHandler(async (req, res) => {
