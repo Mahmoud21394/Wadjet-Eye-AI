@@ -16,8 +16,10 @@
 const router = require('express').Router();
 const axios  = require('axios');
 const { supabase }    = require('../config/supabase');
-const { verifyToken } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
+
+// NOTE: verifyToken is already applied globally in server.js before /api/ai routes.
+// Do NOT add verifyToken per-route here — that causes double Supabase auth calls.
 
 /* ════════════════════════════════════════════════
    AI PROVIDER CONFIGURATION
@@ -242,7 +244,7 @@ async function callAI(messages, options = {}) {
 /* ════════════════════════════════════════════════
    GET /api/ai/status
 ═══════════════════════════════════════════════ */
-router.get('/status', verifyToken, asyncHandler(async (req, res) => {
+router.get('/status', asyncHandler(async (req, res) => {
   const status = {};
 
   for (const [key, provider] of Object.entries(AI_PROVIDERS)) {
@@ -271,7 +273,7 @@ router.get('/status', verifyToken, asyncHandler(async (req, res) => {
    POST /api/ai/analyze
    Analyze an IOC, alert, or threat indicator
 ═══════════════════════════════════════════════ */
-router.post('/analyze', verifyToken, asyncHandler(async (req, res) => {
+router.post('/analyze', asyncHandler(async (req, res) => {
   const { target, type = 'ioc', context = '' } = req.body;
 
   if (!target) {
@@ -329,7 +331,7 @@ router.post('/analyze', verifyToken, asyncHandler(async (req, res) => {
    POST /api/ai/chat
    Interactive SOC investigation session
 ═══════════════════════════════════════════════ */
-router.post('/chat', verifyToken, asyncHandler(async (req, res) => {
+router.post('/chat', asyncHandler(async (req, res) => {
   // Accept two payload formats:
   //   1. { message: "...", history: [...] }  — standard format
   //   2. { messages: [{role,content},...] }   — OpenAI-compatible format (sent by frontend orchestrator)
@@ -404,7 +406,7 @@ router.post('/chat', verifyToken, asyncHandler(async (req, res) => {
    POST /api/ai/summarize
    Summarize a batch of alerts or a threat report
 ═══════════════════════════════════════════════ */
-router.post('/summarize', verifyToken, asyncHandler(async (req, res) => {
+router.post('/summarize', asyncHandler(async (req, res) => {
   const { type = 'alerts', period_hours = 24 } = req.body;
   const tenantId = req.user.tenant_id;
 
