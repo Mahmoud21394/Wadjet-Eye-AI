@@ -643,7 +643,7 @@
         context,
         use_tools:  true,
       }, {
-        retries:     0,             // NEVER retry chat calls — causes rate limit loops
+        retries:     2,             // 2 retries: only for network errors (TypeError); 4xx/5xx errors skip retry
         abortSignal: abortCtrl.signal,
         timeout:     90_000,        // 90s timeout for LLM calls
       });
@@ -761,7 +761,8 @@
 
     // ── 503 LLM unavailable (missing API key) ─────────────────────────────
     if (err.code === 'LLM_UNAVAILABLE') {
-      _appendError('AI provider is unavailable. The server needs an API key. Check Settings → AI Configuration.');
+      const detail = err.body?.error || err.message || '';
+      _appendError(`AI provider unavailable: ${detail}. Check server env vars (OPENAI_API_KEY / CLAUDE_API_KEY).`);
       return;
     }
 
@@ -775,7 +776,7 @@
       return;
     }
 
-    _appendError(`RAKAY error: ${err.message || 'Unknown error'}`);
+    _appendError(`RAKAY error: ${err.body?.error || err.message || 'Unknown error'}`);
   }
 
   // ══════════════════════════════════════════════════════════════════════════
