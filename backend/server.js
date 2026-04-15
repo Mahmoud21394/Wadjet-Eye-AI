@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Production Backend Server v3.1.0
+ *  Wadjet-Eye AI — Production Backend Server v3.2.0
  *  Node.js + Express + Supabase + WebSockets
  *
  *  Frontend: https://wadjet-eye-ai.vercel.app
@@ -125,13 +125,24 @@ console.log('[CORS] Allowed origins:', allowedOrigins);
 // ── Socket.IO — configured BEFORE middleware ─────────────────────
 const io = new Server(httpServer, {
   cors: {
-    origin:      allowedOrigins,
-    methods:     ['GET', 'POST'],
+    origin:         allowedOrigins,
+    methods:        ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type', 'Authorization', 'X-Tenant-ID',
+      'X-Access-Token', 'X-RAKAY-KEY', 'X-Requested-With',
+      'Cache-Control', 'Pragma',
+    ],
     credentials: true,
   },
-  // Ping timeout/interval for Render's load balancer
+  // Allow both polling and websocket — Render's proxy may block raw WS upgrades
+  // Polling ensures the handshake completes even when WS is blocked
+  transports:   ['polling', 'websocket'],
+  allowUpgrades: true,
+  // Ping timeout/interval tuned for Render's 55s idle-close window
   pingTimeout:  60000,
   pingInterval: 25000,
+  // Render free-tier keeps connections alive; path explicitly set
+  path: '/socket.io/',
 });
 
 // Make io available inside route handlers via req.app.get('io')
@@ -145,11 +156,20 @@ app.set('io', io);
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc:  ["'self'"],
-      styleSrc:   ["'self'", "'unsafe-inline'"],
-      imgSrc:     ["'self'", "data:", "https:"],
-      connectSrc: ["'self'", ...allowedOrigins],
+      defaultSrc:  ["'self'"],
+      scriptSrc:   ["'self'"],
+      styleSrc:    ["'self'", "'unsafe-inline'"],
+      imgSrc:      ["'self'", "data:", "https:"],
+      // connectSrc must include the BACKEND URL itself so the
+      // browser's CSP doesn't block WebSocket / fetch to Render
+      connectSrc:  [
+        "'self'",
+        'https://wadjet-eye-ai.onrender.com',
+        'wss://wadjet-eye-ai.onrender.com',
+        ...allowedOrigins,
+      ],
+      frameSrc:    ["'none'"],
+      objectSrc:   ["'none'"],
     },
   },
   hsts: {
@@ -172,20 +192,40 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    // Reject — return null (NOT new Error) so Express returns 204 not 500
+    // Reject — log and return false so Express sends a proper CORS error
+    // (returning false causes the cors middleware to omit ACAO header → browser
+    //  shows a CORS block, but Express still returns 200/204 not 500)
     console.warn(`[CORS] Blocked origin: "${origin}" — not in ALLOWED_ORIGINS`);
     console.warn(`[CORS] Current whitelist: ${allowedOrigins.join(', ')}`);
     return callback(null, false);
   },
   credentials:    true,
   methods:        ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant-ID'],
-  exposedHeaders: ['X-RateLimit-Remaining'],
-  optionsSuccessStatus: 204,   // Some browsers (IE11) choke on 204 — use 200 if needed
+  // allowedHeaders must include every header the Vercel frontend sends:
+  //   Authorization  — Bearer JWT
+  //   X-Tenant-ID    — multi-tenant routing
+  //   X-Access-Token — legacy token field used in auth.js
+  //   X-RAKAY-KEY    — RAKAY service-key bypass
+  //   X-Requested-With — Axios / jQuery convention; some proxies require it
+  //   Cache-Control / Pragma — sent by fetch() with cache:'no-cache'
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Tenant-ID',
+    'X-Access-Token',
+    'X-RAKAY-KEY',
+    'X-Requested-With',
+    'Cache-Control',
+    'Pragma',
+  ],
+  exposedHeaders: ['X-RateLimit-Remaining', 'X-Request-ID'],
+  optionsSuccessStatus: 200,   // 200 avoids IE11 / some proxy issues with 204
 };
 
+// ── Global OPTIONS preflight must be registered BEFORE any route ────
+// This handles all preflight (OPTIONS) requests across every endpoint.
+app.options('*', cors(corsOptions));
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // Handle all preflight requests
 
 // ── Trust proxy for correct IP behind Render's load balancer ─────
 app.set('trust proxy', 1);
