@@ -122,10 +122,18 @@ class RAKAYEngine {
     const toolTrace   = [];  // execution trace of tool calls
     let   totalTokens = 0;
 
-    // ── 1. Validate session ──────────────────────────────────────────────────
+    // ── 1. Validate session — AUTO-CREATE if missing ─────────────────────────
+    // When Render restarts (free tier) the in-memory store is wiped. The frontend
+    // keeps its session UUID but the backend no longer has the record. Rather than
+    // returning 500 "Session not found", we transparently re-create the session so
+    // the user can continue chatting without any visible error.
     let session = await store.getSession({ sessionId, tenantId });
     if (!session) {
-      throw new Error(`Session not found: ${sessionId}`);
+      console.warn(`[RAKAYEngine] Session not found — auto-creating: ${sessionId.slice(0, 12)} tenant=${tenantId}`);
+      session = await store.createSession({ tenantId, userId, sessionId });
+      if (!session) {
+        throw new Error(`Session not found and could not be created: ${sessionId}`);
+      }
     }
 
     // ── 2. Persist user message ──────────────────────────────────────────────

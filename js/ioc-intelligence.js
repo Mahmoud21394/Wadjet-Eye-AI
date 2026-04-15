@@ -27,6 +27,7 @@ const IOCDB = {
   filters: { search: '', type: '', reputation: '', source: '', min_confidence: 0, sort: 'risk_score', order: 'desc' },
   data:    [],
   loading: false,
+  _loadStartTs: 0,  // timestamp when loading started (used by watchdog)
   enriching: new Set(),
   _rlsWarningShown: false,
   _allTenants:      false,   // SUPER_ADMIN toggle — view all tenants
@@ -476,10 +477,17 @@ async function iocdbRunDiagnostic() {
 async function iocdbLoadPage(page = 1) {
   if (IOCDB.loading) return;
   IOCDB.loading = true;
+  IOCDB._loadStartTs = Date.now(); // Track when loading started (for watchdog)
   IOCDB.page    = page;
 
   const inner = document.getElementById('iocdb-table-inner');
-  if (inner) inner.innerHTML = `<div style="padding:40px;text-align:center;color:#8b949e"><i class="fas fa-spinner fa-spin fa-2x" style="display:block;margin-bottom:12px"></i>Loading…</div>`;
+  if (inner) inner.innerHTML = `<div style="padding:40px;text-align:center;color:#8b949e">
+    <i class="fas fa-spinner fa-spin fa-2x" style="display:block;margin-bottom:12px"></i>
+    Loading IOC database…
+    <div style="margin-top:8px;font-size:.78em;color:#6b7280">
+      If this takes &gt;15s, the backend may be waking up from sleep (Render free tier).
+    </div>
+  </div>`;
 
   try {
     const f   = IOCDB.filters;
@@ -970,16 +978,39 @@ window.iocdbRunDiagnostic   = iocdbRunDiagnostic;
 })();
 
 // ── Safety: reset IOCDB.loading if it gets stuck for > 15s ──
+// Uses a timestamp-based approach instead of inspecting DOM text to avoid
+// false positives when the IOC page is not visible. The watchdog now:
+//   1. Only fires when IOCDB.loading has been true for > 12s (real stuck state)
+//   2. Only resets if the IOC page is NOT currently visible (background fetch stuck)
+//      OR the table still shows a loading spinner with no data
+//   3. Never fires if the page was just navigated to (debounce)
 setInterval(function _iocdbLoadingWatchdog() {
-  if (IOCDB.loading) {
-    const el = document.getElementById('iocdb-table-inner');
-    // Only reset if the table is showing "Loading…" with no data
-    if (el && el.textContent.includes('Loading') && IOCDB.data.length === 0) {
-      console.warn('[IOC-Intel] IOCDB.loading watchdog triggered — resetting stuck state');
-      IOCDB.loading = false;
+  if (!IOCDB.loading) return;
+
+  // Check if loading has been stuck for > 25 seconds
+  // Render.com free tier has up to 15-20s cold-start — give it more time.
+  const now = Date.now();
+  if (!IOCDB._loadStartTs) return; // No timestamp set — skip
+  const elapsed = now - IOCDB._loadStartTs;
+  if (elapsed < 25000) return; // Still within normal load time (was 12s — too aggressive for Render cold start)
+
+  const el = document.getElementById('iocdb-table-inner');
+  const iocPage = document.getElementById('page-ioc-database');
+  const isVisible = iocPage && iocPage.classList.contains('active');
+
+  // Only reset if table shows no data (stuck) — never reset an active load
+  const showingSpinner = el && el.textContent.includes('Loading') && IOCDB.data.length === 0;
+
+  if (showingSpinner || !isVisible) {
+    console.warn(`[IOC-Intel] IOCDB.loading watchdog triggered after ${elapsed}ms — resetting stuck state`);
+    IOCDB.loading = false;
+    IOCDB._loadStartTs = 0;
+    // If page is visible and showing spinner, retry load
+    if (isVisible && showingSpinner && el) {
+      el.innerHTML = '<div style="padding:32px;text-align:center;color:#8b949e"><i class="fas fa-exclamation-triangle" style="display:block;margin-bottom:8px;opacity:.5;font-size:1.5em"></i>Load timed out — <a href="javascript:void(0)" onclick="iocdbLoadPage(1)" style="color:#22d3ee">retry</a></div>';
     }
   }
-}, 15000);
+}, 5000); // Check every 5s but only act after 12s of being stuck
 
 // ── Re-render on auth:restored / auth:login events ──
 // This handles the case where the user lands on the IOC page before auth is ready

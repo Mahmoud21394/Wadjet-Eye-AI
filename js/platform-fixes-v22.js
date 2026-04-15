@@ -1638,11 +1638,14 @@
       });
     }
 
-    // ── Patch nav-item click to call _v22ShowPage (CSS-only fix) ─
+    // ── Patch nav-item AND nav-child clicks to call _v22ShowPage (CSS-only fix) ─
     // This fires BEFORE the main navigateTo handler so page display
     // is set synchronously, preventing a flash of the wrong page.
+    // FIX: also match .nav-child[data-page] — the sidebar uses nested child items
+    // that were NOT matched by the previous '.nav-item[data-page]' selector only,
+    // causing the previous tab to remain visible until the debounced navigateTo ran.
     document.addEventListener('click', function (e) {
-      const navItem = e.target.closest('.nav-item[data-page]');
+      const navItem = e.target.closest('.nav-item[data-page], .nav-child[data-page]');
       if (!navItem) return;
       const page = navItem.dataset.page;
       if (!page) return;

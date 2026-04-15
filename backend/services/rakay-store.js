@@ -86,11 +86,12 @@ async function _ensureTables() {
  * @param {string} opts.tenantId
  * @param {string} opts.userId
  * @param {string} [opts.title]
+ * @param {string} [opts.sessionId]  — optional: reuse an existing ID (e.g. auto-recreate after server restart)
  * @returns {Promise<SessionRecord>}
  */
-async function createSession({ tenantId, userId, title = 'New Chat' }) {
+async function createSession({ tenantId, userId, title = 'New Chat', sessionId }) {
   const session = {
-    id:         crypto.randomUUID(),
+    id:         sessionId || crypto.randomUUID(),
     tenant_id:  tenantId,
     user_id:    userId,
     title,
