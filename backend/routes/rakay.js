@@ -309,7 +309,8 @@ function _getDemoSecret() {
 // ── Per-request engine factory ────────────────────────────────────────────────
 function _getEngine(req, ctxApiKeys = {}) {
   const serverKey   = process.env.RAKAY_OPENAI_KEY    || process.env.OPENAI_API_KEY;
-  const serverAnth  = process.env.RAKAY_ANTHROPIC_KEY || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
+  const serverAnth  = process.env.RAKAY_ANTHROPIC_KEY || process.env.ANTHROPIC_API_KEY
+                      || process.env.CLAUDE_API_KEY   || process.env.RAKAY_API_KEY;
   const ctxOpenAI   = ctxApiKeys.openai_key;
   const ctxClaude   = ctxApiKeys.claude_key;
 
@@ -523,6 +524,7 @@ router.delete('/session/:id', generalLimiter, optionalAuth, requireRAKAYAuth, as
 // ══════════════════════════════════════════════════════════════════════════════
 
 router.post('/chat', chatLimiter, optionalAuth, requireRAKAYAuth, async (req, res) => {
+  console.log(`[RAKAY] Incoming request: POST /chat ip=${req.ip} body_keys=${Object.keys(req.body || {}).join(',')}`);
   const { tenantId, userId, userRole, tenantName } = _getUserCtx(req);
   const { session_id, message, context = {}, use_tools = true } = req.body || {};
   // AUTO-GENERATE session_id if missing — never throw 400 for missing session
@@ -585,27 +587,52 @@ router.post('/chat', chatLimiter, optionalAuth, requireRAKAYAuth, async (req, re
       req,
     });
 
-    console.log(`[RAKAY] CHAT_OK session=${shortSid} userId=${userId}`);
-    res.json(response);
+    console.log(`[RAKAY] CHAT_OK session=${shortSid} userId=${userId} latency=${response.latency_ms}ms`);
+    // ── Normalised response contract: { success: true, data: { reply, ... } } ──
+    res.json({
+      success: true,
+      data: {
+        reply:       response.content || '',
+        content:     response.content || '',
+        id:          response.id,
+        session_id:  response.session_id,
+        role:        'assistant',
+        tool_trace:  response.tool_trace  || [],
+        tokens_used: response.tokens_used || 0,
+        model:       response.model,
+        provider:    response.provider,
+        latency_ms:  response.latency_ms,
+        created_at:  response.created_at,
+      },
+    });
 
   } catch (err) {
-    console.error(`[RAKAY] CHAT_ERROR session=${shortSid} userId=${userId}:`, err.message);
+    console.error(`[RAKAY] RAKAY error: session=${shortSid} userId=${userId} — ${err.message}`,
+      err.stack?.split('\n').slice(0, 4).join(' | '));
 
     if (err.message?.includes('Session not found')) {
-      return res.status(404).json({ error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+      return res.status(404).json({ success: false, error: 'Session not found', code: 'SESSION_NOT_FOUND' });
     }
-    if (err.message?.includes('API key') || err.message?.includes('Unauthorized') || err.message?.includes('401')) {
+    if (err.message?.includes('API key') || err.message?.includes('Unauthorized')
+        || err.message?.includes('401') || err.message?.includes('invalid or unauthorized')) {
       return res.status(503).json({
-        error:   'AI provider key invalid or missing. Set RAKAY_OPENAI_KEY on the server.',
+        success: false,
+        error:   `AI provider key invalid or missing. Details: ${err.message}`,
         code:    'LLM_UNAVAILABLE',
-        details: process.env.NODE_ENV !== 'production' ? err.message : undefined,
+      });
+    }
+    if (err.message?.includes('rate limit') || err.message?.includes('429')) {
+      return res.status(503).json({
+        success: false,
+        error:   'AI provider rate-limited. Please retry in 30 seconds.',
+        code:    'LLM_RATE_LIMITED',
       });
     }
 
     res.status(500).json({
-      error:   'Chat request failed',
+      success: false,
+      error:   `Chat request failed: ${err.message}`,
       code:    'RAKAY_ERROR',
-      details: process.env.NODE_ENV !== 'production' ? err.message : undefined,
     });
   } finally {
     _releaseSession(effectiveSessionId);

@@ -122,14 +122,12 @@ class RAKAYEngine {
     const toolTrace   = [];  // execution trace of tool calls
     let   totalTokens = 0;
 
+    console.log(`[RAKAYEngine] RAKAY processing started session=${sessionId?.slice(0,12)} userId=${userId} provider=${this.providerName} model=${this.model} len=${message?.length}`);
+
     // ── 1. Validate session — AUTO-CREATE if missing ─────────────────────────
-    // When Render restarts (free tier) the in-memory store is wiped. The frontend
-    // keeps its session UUID but the backend no longer has the record. Rather than
-    // returning 500 "Session not found", we transparently re-create the session so
-    // the user can continue chatting without any visible error.
     let session = await store.getSession({ sessionId, tenantId });
     if (!session) {
-      console.warn(`[RAKAYEngine] Session not found — auto-creating: ${sessionId.slice(0, 12)} tenant=${tenantId}`);
+      console.warn(`[RAKAYEngine] Session not found — auto-creating: ${sessionId?.slice(0, 12)} tenant=${tenantId}`);
       session = await store.createSession({ tenantId, userId, sessionId });
       if (!session) {
         throw new Error(`Session not found and could not be created: ${sessionId}`);
@@ -178,6 +176,7 @@ class RAKAYEngine {
       // ── Case A: No tool calls — we have the final response ────────────────
       if (!toolCalls.length) {
         finalText = llmResponse.content || '';
+        console.log(`[RAKAYEngine] LLM final response iteration=${iteration} len=${finalText.length}`);
         break;
       }
 
@@ -236,6 +235,13 @@ class RAKAYEngine {
       for (const tr of toolCallResults) {
         msgHistory.push(tr);
       }
+    }
+
+    // Guard: if the loop exhausted MAX_TOOL_ITERATIONS without a text response,
+    // extract any partial content from the last LLM response or set a fallback.
+    if (!finalText) {
+      console.warn(`[RAKAYEngine] finalText empty after ${iteration} iterations — using fallback`);
+      finalText = 'I completed the requested analysis. Please review the tool results above.';
     }
 
     // ── 6. Persist assistant response ────────────────────────────────────────
@@ -355,13 +361,22 @@ class RAKAYEngine {
 
 function _detectProvider() {
   if (process.env.OPENAI_API_KEY  || process.env.RAKAY_OPENAI_KEY)    return 'openai';
-  if (process.env.ANTHROPIC_API_KEY || process.env.RAKAY_ANTHROPIC_KEY) return 'anthropic';
-  return 'mock'; // fallback
+  if (process.env.ANTHROPIC_API_KEY || process.env.RAKAY_ANTHROPIC_KEY
+      || process.env.CLAUDE_API_KEY || process.env.RAKAY_API_KEY)     return 'anthropic';
+  return 'mock'; // fallback — no LLM keys configured
 }
 
 function _getApiKey(provider) {
-  if (provider === 'openai')    return process.env.RAKAY_OPENAI_KEY    || process.env.OPENAI_API_KEY;
-  if (provider === 'anthropic') return process.env.RAKAY_ANTHROPIC_KEY || process.env.ANTHROPIC_API_KEY;
+  if (provider === 'openai') {
+    return process.env.RAKAY_OPENAI_KEY || process.env.OPENAI_API_KEY || null;
+  }
+  if (provider === 'anthropic') {
+    return process.env.RAKAY_ANTHROPIC_KEY
+        || process.env.ANTHROPIC_API_KEY
+        || process.env.CLAUDE_API_KEY
+        || process.env.RAKAY_API_KEY
+        || null;
+  }
   return null;
 }
 

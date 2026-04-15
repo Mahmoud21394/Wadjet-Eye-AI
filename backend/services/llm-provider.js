@@ -16,7 +16,7 @@ const https = require('https');
 const http  = require('http');
 
 // ── Constants ──────────────────────────────────────────────────────────────────
-const DEFAULT_TIMEOUT_MS   = 60_000;
+const DEFAULT_TIMEOUT_MS   = 90_000;  // raised: LLM calls can take 60-90s
 const MAX_RETRIES          = 2;
 const RETRY_DELAY_BASE_MS  = 1_000;
 
@@ -71,9 +71,12 @@ async function retryableRequest(fn, retries = MAX_RETRIES) {
 // ── OpenAI provider ────────────────────────────────────────────────────────────
 class OpenAIProvider {
   constructor(config) {
-    this.apiKey  = config.apiKey || process.env.OPENAI_API_KEY || '';
-    this.baseUrl = config.baseUrl || 'https://api.openai.com';
-    this.model   = config.model   || 'gpt-4o';
+    this.apiKey  = config.apiKey
+      || process.env.OPENAI_API_KEY
+      || process.env.RAKAY_OPENAI_KEY
+      || '';
+    this.baseUrl  = config.baseUrl || 'https://api.openai.com';
+    this.model    = config.model   || 'gpt-4o';
     this.proxyUrl = config.proxyUrl || null; // e.g. '/proxy/openai'
   }
 
@@ -109,18 +112,25 @@ class OpenAIProvider {
     };
 
     return retryableRequest(async () => {
-      const { status, body } = await httpRequest(url, { headers }, payload);
+      console.log(`[LLMProvider:openai] Sending request model=${this.model} msgs=${messages.length}`);
+      const { status, body } = await httpRequest(url, { headers, timeout: DEFAULT_TIMEOUT_MS }, payload);
+      console.log(`[LLMProvider:openai] Response status=${status}`);
 
       if (status === 429) throw new Error('OpenAI rate limit — please retry');
+      if (status === 401) {
+        let detail = '';
+        try { detail = JSON.parse(body)?.error?.message || ''; } catch {}
+        throw new Error(`OpenAI API key invalid or unauthorized (401): ${detail}`);
+      }
       if (status >= 400) {
         let detail = '';
-        try { detail = JSON.parse(body)?.error?.message || body.slice(0, 200); } catch {}
+        try { detail = JSON.parse(body)?.error?.message || body.slice(0, 300); } catch { detail = String(body).slice(0, 300); }
         throw new Error(`OpenAI HTTP ${status}: ${detail}`);
       }
 
       let parsed;
       try { parsed = JSON.parse(body); } catch {
-        throw new Error('OpenAI returned invalid JSON');
+        throw new Error(`OpenAI returned invalid JSON: ${String(body).slice(0, 200)}`);
       }
 
       return this._normalise(parsed);
@@ -160,9 +170,14 @@ class OpenAIProvider {
 // ── Anthropic Claude provider ──────────────────────────────────────────────────
 class AnthropicProvider {
   constructor(config) {
-    this.apiKey  = config.apiKey || process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY || '';
+    this.apiKey  = config.apiKey
+      || process.env.CLAUDE_API_KEY
+      || process.env.ANTHROPIC_API_KEY
+      || process.env.RAKAY_ANTHROPIC_KEY
+      || '';
     this.baseUrl = config.baseUrl || 'https://api.anthropic.com';
-    this.model   = config.model   || 'claude-3-5-sonnet-20241022';
+    // claude-3-5-haiku is fastest/cheapest; override with RAKAY_MODEL for sonnet
+    this.model   = config.model   || process.env.RAKAY_MODEL || 'claude-3-5-haiku-20241022';
   }
 
   get name() { return 'anthropic'; }
@@ -183,11 +198,16 @@ class AnthropicProvider {
     };
 
     if (tools.length > 0) {
-      payload.tools = tools.map(t => ({
-        name:         t.name,
-        description:  t.description,
-        input_schema: t.parameters,
-      }));
+      // TOOL_SCHEMAS uses OpenAI wrapper {type:'function', function:{name,description,parameters}}
+      // Anthropic needs flat {name, description, input_schema}
+      payload.tools = tools.map(t => {
+        const fn = (t.type === 'function' && t.function) ? t.function : t;
+        return {
+          name:         fn.name,
+          description:  fn.description || '',
+          input_schema: fn.parameters || { type: 'object', properties: {} },
+        };
+      });
     }
 
     const url = `${this.baseUrl}/v1/messages`;
@@ -198,18 +218,25 @@ class AnthropicProvider {
     };
 
     return retryableRequest(async () => {
-      const { status, body } = await httpRequest(url, { headers }, payload);
+      console.log(`[LLMProvider:anthropic] Sending request model=${this.model} msgs=${messages.length}`);
+      const { status, body } = await httpRequest(url, { headers, timeout: DEFAULT_TIMEOUT_MS }, payload);
+      console.log(`[LLMProvider:anthropic] Response status=${status}`);
 
       if (status === 429) throw new Error('Claude rate limit — please retry');
+      if (status === 401) {
+        let detail = '';
+        try { detail = JSON.parse(body)?.error?.message || ''; } catch {}
+        throw new Error(`Anthropic API key invalid or unauthorized (401): ${detail}`);
+      }
       if (status >= 400) {
         let detail = '';
-        try { detail = JSON.parse(body)?.error?.message || body.slice(0, 200); } catch {}
+        try { detail = JSON.parse(body)?.error?.message || body.slice(0, 300); } catch { detail = String(body).slice(0, 300); }
         throw new Error(`Anthropic HTTP ${status}: ${detail}`);
       }
 
       let parsed;
       try { parsed = JSON.parse(body); } catch {
-        throw new Error('Anthropic returned invalid JSON');
+        throw new Error(`Anthropic returned invalid JSON: ${String(body).slice(0, 200)}`);
       }
 
       return this._normalise(parsed);
