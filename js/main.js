@@ -236,6 +236,10 @@ async function doLogout() {
     clearInterval(window._dashboardRefreshTimer);
     window._dashboardRefreshTimer = null;
   }
+  // Clear notification timer
+  if (_notifTimer) { clearInterval(_notifTimer); _notifTimer = null; }
+  // Clear live update timer
+  if (_liveUpdateTimer) { clearInterval(_liveUpdateTimer); _liveUpdateTimer = null; }
 
   // Disconnect WebSocket
   if (typeof WS !== 'undefined' && WS.disconnect) WS.disconnect();
@@ -309,8 +313,8 @@ const PAGE_CONFIG = {
   'soc-operations':  { title:'SOC Operations',          breadcrumb:'SOC Operations / AI Automation & Investigation',
     onEnter: () => {
       const wrap = document.getElementById('socOperationsWrap');
-      const page = document.getElementById('page-soc-operations');
-      if (page) { page.style.display = 'flex'; }
+      // CSS #page-soc-operations.active { display:flex } handles layout.
+      // No need to manually set display style — navigateTo already adds .active class.
       if (wrap && typeof window.SOCOperations !== 'undefined') {
         // Only render once, then just switch tabs
         if (!wrap.dataset.rendered) {
@@ -420,9 +424,25 @@ function navigateTo(pageId, opts) {
   } catch (e) { console.warn('[Nav] onLeave error:', e.message); }
 
   // ── 2. DOM switch (immediate, no freeze) ──
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  // CRITICAL FIX: Some pages (e.g. soc-operations) use inline style="display:flex"
+  // or style="display:none" set by their onEnter/onLeave handlers.
+  // CSS class `.page { display:none }` cannot override inline styles.
+  // We MUST reset the inline display style on ALL pages before showing the target,
+  // otherwise the previous page remains visible even after removing `.active`.
+  document.querySelectorAll('.page').forEach(p => {
+    p.classList.remove('active');
+    // ALWAYS set inline display:none on non-active pages.
+    // This overrides any inline style (e.g. display:flex set by a previous onEnter)
+    // so the CSS `.page { display:none }` rule is reinforced and the previous tab
+    // never bleeds through when the user switches modules.
+    p.style.display = 'none';
+  });
   const targetEl = document.getElementById(`page-${pageId}`);
-  if (targetEl) targetEl.classList.add('active');
+  if (targetEl) {
+    // Remove any inline display so CSS .page.active { display:block } takes effect
+    targetEl.style.display = '';
+    targetEl.classList.add('active');
+  }
 
   // ── 3. Update nav highlight ──
   // Support both old .nav-item and new .nav-child elements
@@ -690,13 +710,16 @@ function closeSearchResults() {
    NOTIFICATIONS SYSTEM
    ════════════════════════════════════════════════ */
 let notificationsOpen = false;
+let _notifTimer = null; // stored so it can be cleared on logout
 
 function initNotifications() {
   renderNotificationList();
   updateNotifBadge();
 
-  // Auto-generate new notifications
-  setInterval(() => {
+  // Guard: only start the interval once — prevent duplicates on re-render
+  if (_notifTimer) return;
+  // Auto-generate new notifications every 20s
+  _notifTimer = setInterval(() => {
     if (Math.random() > 0.75) generateLiveNotification();
   }, 20000);
 }
@@ -879,9 +902,11 @@ function showToast(message, type = 'info') {
    Real KPI refresh is handled by live-pages.js AutoRefresh.
    This function is kept as a stub for backward compatibility.
    ════════════════════════════════════════════════ */
+let _liveUpdateTimer = null;
 function startLiveUpdates() {
+  if (_liveUpdateTimer) return; // guard: only start once
   // TPI bar (sidebar mini-widget) gets a gentle live animation
-  setInterval(() => {
+  _liveUpdateTimer = setInterval(() => {
     const detRate = document.getElementById('detRate');
     if (detRate) detRate.textContent = (3 + Math.random() * 3).toFixed(1) + ' events/sec';
   }, 3000);

@@ -196,11 +196,21 @@ function _paginator(total, current, onPage, domId) {
    § 1  COMMAND CENTER — Live KPIs + mini panels
 ───────────────────────────────────────────── */
 async function renderCommandCenterLive() {
-  await _loadKPIs();
-  _loadMiniFindings();
-  _loadMiniFeedStatus();
-  _loadMiniCampaigns();
-  if (typeof initAllCharts === 'function') initAllCharts();
+  // Guard against concurrent calls — e.g. initApp + initLivePages firing simultaneously
+  if (renderCommandCenterLive._running) {
+    console.info('[LivePages] renderCommandCenterLive already in progress — skipping duplicate call');
+    return;
+  }
+  renderCommandCenterLive._running = true;
+  try {
+    await _loadKPIs();
+    _loadMiniFindings();
+    _loadMiniFeedStatus();
+    _loadMiniCampaigns();
+    if (typeof initAllCharts === 'function') initAllCharts();
+  } finally {
+    renderCommandCenterLive._running = false;
+  }
 }
 
 async function _loadKPIs() {
@@ -3035,8 +3045,17 @@ function _initAutoRefresh() {
 async function initLivePages() {
   console.info('[LivePages] v5.0 (Wadjet-Eye AI) initialising…');
 
-  // Kick off initial KPI load + dynamic collector count
-  await renderCommandCenterLive();
+  // Guard: main.js already calls renderCommandCenter() which is overridden to
+  // renderCommandCenterLive(). Calling it again here would trigger a duplicate
+  // API request on startup. Only load the command center if it has not been
+  // rendered yet (i.e. the KPI elements are still empty placeholders).
+  const kpiEl = document.querySelector('[data-kpi="critical_alerts"], #kpi-critical, .kpi-critical');
+  const alreadyLoaded = kpiEl && kpiEl.textContent && kpiEl.textContent !== '—' && kpiEl.textContent !== '0';
+  if (!alreadyLoaded) {
+    await renderCommandCenterLive();
+  } else {
+    console.info('[LivePages] Command center already loaded — skipping duplicate render');
+  }
   _updateCollectorCount();
 
   // Start refresh loop

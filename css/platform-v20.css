@@ -88,6 +88,12 @@
   animation: p20-pageIn 0.35s cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
+/* Special-case: SOC Operations needs flex layout for its panel structure */
+#page-soc-operations.active {
+  display: flex;
+  flex-direction: column;
+}
+
 @keyframes p20-pageIn {
   from {
     opacity: 0;
