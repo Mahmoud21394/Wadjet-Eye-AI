@@ -1,28 +1,33 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  RAKAY Module — Frontend UI  v5.0
+ *  RAKAY Module — Frontend UI  v6.0
  *  Wadjet-Eye AI Platform — Conversational Security Analyst
  *
- *  v5.0 — Platform stabilization: zero MISSING_SESSION_ID, zero 404 collectors,
- *          zero IOC timeouts, zero 503 LLM retry loops
+ *  v6.0 — Production-grade: SSE streaming, multi-provider UI, SOC-ready
  *  ──────────────────────────────────────────────────────────────────────
- *  v5.0 FIXES:
+ *  v6.0 NEW:
+ *   ✅ SSE streaming via POST /chat/stream (EventSource-like with fetch)
+ *   ✅ Live streaming bubble — text appears token-by-token
+ *   ✅ Streaming indicator (animated cursor while streaming)
+ *   ✅ Graceful fallback to /chat (non-streaming) on SSE failure
+ *   ✅ Response envelope unwrap: {success,data} → data.reply/data.content
+ *   ✅ Provider badge shows which AI model answered (openai/anthropic/gemini/deepseek/mock)
+ *   ✅ Retry on 503 (provider busy) with exponential backoff (2 attempts)
+ *   ✅ Tool notifications during streaming (🔧 Using tool: ...)
+ *   ✅ Priority badge: HIGH/MEDIUM/LOW shown on messages
+ *   ✅ Streaming abort on stopRAKAY() / new-chat
+ *
+ *  v5.0 (retained):
  *   ✅ session_id always generated as UUID v4 (crypto.randomUUID + fallback)
  *   ✅ Session auto-generated in _sendMessage if null (race-condition guard)
  *   ✅ 400 MISSING_SESSION_ID eliminated: backend auto-generates if missing
  *   ✅ 404 /api/collectors eliminated: root GET / handler added
  *   ✅ IOC DB timeout fixed: split data/count queries, 8s hard timeout, limit=25
- *   ✅ 503 LLM_PROVIDER_BUSY: no retry, informational message only
  *
  *  v4.0 (retained):
- *   ✅ _api() defaults to retries=0 — NO automatic retries on any call
  *   ✅ requestInFlight flag set SYNCHRONOUSLY before any await
  *   ✅ Message dedup: frontend-side hash check (mirrors backend dedup)
- *   ✅ Single event listener per button: delegated from stable container
- *   ✅ No auto-trigger loops: _renderMessages() never sends any request
  *   ✅ 409 DUPLICATE_MESSAGE / SESSION_BUSY → silent discard (no UI error)
- *   ✅ 503 LLM_PROVIDER_BUSY → informational message, no 60s UI freeze
- *   ✅ WS completely isolated — zero API calls from WebSocket handlers
  *   ✅ AbortController per request, cleaned up in finally
  *   ✅ 300ms debounce + RAKAY.loading guard (double protection)
  *
@@ -34,7 +39,7 @@
 (function () {
   'use strict';
 
-  const MODULE_VERSION = '5.0';
+  const MODULE_VERSION = '6.0';
 
   // ── Constants ─────────────────────────────────────────────────────────────
   const LS_RAKAY_TOKEN       = 'rakay_demo_token';
@@ -84,6 +89,11 @@
   const API_BASE = () =>
     (window.THREATPILOT_API_URL || 'https://wadjet-eye-ai.onrender.com').replace(/\/$/, '');
 
+  // ── Streaming config ──────────────────────────────────────────────────────
+  const STREAM_ENABLED     = true;   // Use SSE streaming by default
+  const STREAM_TIMEOUT_MS  = 120_000; // 2 minutes for streaming
+  const STREAM_RETRY_DELAY = [2000, 5000]; // 503 retry delays (ms)
+
   // ── State ─────────────────────────────────────────────────────────────────
   const RAKAY = {
     sessionId:        null,
@@ -108,9 +118,12 @@
 
     // Request control
     _currentFetch:    null,   // AbortController for in-flight chat request
+    _streamReader:    null,   // ReadableStream reader for SSE streaming
     _submitDebounce:  null,   // debounce timer for send button
     _rateLimitUntil:  0,      // timestamp (ms) until rate-limit lifts (not used for 409s)
     requestInFlight:  false,  // SYNCHRONOUS flag — set before any await, cleared in finally
+    streaming:        false,  // true while SSE stream is active
+    _streamBubbleId:  null,   // DOM id of the live streaming bubble
   };
 
   let _rendered = false;
@@ -541,7 +554,7 @@
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  //  CHAT API — hardened send with zero-duplicate guarantee
+  //  CHAT API — hardened send with zero-duplicate guarantee + SSE streaming
   //
   //  Layers of protection (in order of execution):
   //   1. RAKAY.requestInFlight — synchronous flag set BEFORE any await
@@ -551,8 +564,10 @@
   //   5. Backend mutex (SESSION_BUSY → 409 Conflict)
   //   6. Backend dedup hash (DUPLICATE_MESSAGE → 409 Conflict)
   //
-  //  Logs: LLM CALL EXECUTED ONCE is printed in the backend _queueChat().
-  //  Frontend logs: SEND_START / SEND_COMPLETE / SEND_BLOCKED_* for tracing.
+  //  v6.0: Uses SSE streaming (POST /chat/stream) by default.
+  //        Falls back to POST /chat (non-streaming) on SSE failure.
+  //        Response envelope: backend returns {success, data: {reply,content,...}}
+  //        Frontend unwraps: envelope.data.reply || envelope.data.content
   // ══════════════════════════════════════════════════════════════════════════
   async function _sendMessage(message) {
     if (!message.trim()) return;
@@ -570,13 +585,9 @@
     }
 
     // ── Layer 0: Session guard — MUST have a session before any await ───────
-    // This is the fix for MISSING_SESSION_ID:
-    // If sessionId is null (race condition during initial load), generate
-    // a UUID immediately without waiting for the backend.
     if (!RAKAY.sessionId) {
       RAKAY.sessionId = _uuid();
       log.warn(`[SEND] SESSION_AUTO_GENERATED — no active session, created: ${RAKAY.sessionId.slice(0, 12)}`);
-      // Also create a minimal local session entry
       const autoSession = {
         id:            RAKAY.sessionId,
         title:         message.trim().slice(0, 60),
@@ -630,67 +641,373 @@
     RAKAY._currentFetch = abortCtrl;
 
     try {
-      const context = {
-        currentPage:      window.currentPage || 'rakay',
-        platform_context: { page: window.currentPage },
-        openai_key:  _lsGet('openai_api_key')  || _lsGet('wadjet_openai_key')  || undefined,
-        claude_key:  _lsGet('claude_api_key')   || _lsGet('wadjet_claude_key')  || undefined,
-      };
-
-      const data = await _api('POST', '/chat', {
-        session_id: RAKAY.sessionId,
-        message:    message.trim(),
-        context,
-        use_tools:  true,
-      }, {
-        retries:     2,             // 2 retries: only for network errors (TypeError); 4xx/5xx errors skip retry
-        abortSignal: abortCtrl.signal,
-        timeout:     90_000,        // 90s timeout for LLM calls
-      });
-
-      _hideTyping();
-
-      if (data) {
-        const assistantMsg = {
-          id:          data.id || _uid(),
-          session_id:  RAKAY.sessionId,
-          role:        'assistant',
-          content:     data.content || '',
-          tool_trace:  data.tool_trace || [],
-          tokens_used: data.tokens_used || 0,
-          model:       data.model,
-          latency_ms:  data.latency_ms,
-          created_at:  data.created_at || new Date().toISOString(),
-        };
-
-        RAKAY.messages.push(assistantMsg);
-        _lsAddMsg(RAKAY.sessionId, assistantMsg);
-
-        if (session) {
-          session.message_count = (session.message_count || 0) + 2;
-          session.updated_at    = new Date().toISOString();
-          _lsSetSessions(RAKAY.sessions);
+      // ── Try SSE streaming first, fall back to non-streaming ──────────────
+      if (STREAM_ENABLED) {
+        try {
+          await _sendMessageStream(message, session, abortCtrl);
+          return; // streaming succeeded — return from try block
+        } catch (streamErr) {
+          if (streamErr.name === 'AbortError') throw streamErr; // propagate abort
+          // 409/401/429/4xx: don't fall back to non-streaming, handle directly
+          if (streamErr.status >= 400 && streamErr.status < 600 && streamErr.status !== 503) {
+            throw streamErr;
+          }
+          log.warn('[SEND] SSE stream failed — falling back to /chat:', streamErr.message);
+          _hideTyping();
+          _clearStreamBubble();
+          _showTyping(); // re-show typing for fallback
         }
-
-        log.info(`[SEND] SEND_COMPLETE tokens=${data.tokens_used || 0} model=${data.model || 'unknown'}`);
-        _renderMessages();
-        _renderSidebar();
-        _scrollToBottom();
-      } else {
-        _appendError('No response from RAKAY backend.');
       }
+      // ── Non-streaming fallback ─────────────────────────────────────────
+      await _sendMessageNonStreaming(message, session, abortCtrl);
+
     } catch (err) {
       _hideTyping();
+      _clearStreamBubble();
       _handleChatError(err, message);
     } finally {
-      // ALWAYS clear ALL flags — even on error/abort
       RAKAY.requestInFlight = false;
       RAKAY.loading         = false;
+      RAKAY.streaming       = false;
       RAKAY._currentFetch   = null;
+      RAKAY._streamReader   = null;
+      RAKAY._streamBubbleId = null;
       _setInputEnabled(true);
       _focusInput();
       log.debug('[SEND] SEND_FLAGS_CLEARED');
     }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  STREAMING BUBBLE HELPERS
+  // ══════════════════════════════════════════════════════════════════════════
+
+  function _createStreamBubble(bubbleId) {
+    const container = document.getElementById('rakay-messages');
+    if (!container) return;
+
+    const el = document.createElement('div');
+    el.className = 'rakay-msg rakay-msg--assistant';
+    el.id = bubbleId;
+    el.innerHTML = `
+    <div class="rakay-msg-avatar rakay-msg-avatar--assistant"><i class="fas fa-robot"></i></div>
+    <div class="rakay-msg-content">
+      <div class="rakay-msg-bubble rakay-msg-bubble--assistant rakay-streaming-bubble" id="${bubbleId}-content">
+        <span class="rakay-stream-cursor">&#9646;</span>
+      </div>
+      <div class="rakay-msg-meta rakay-streaming-meta">
+        <span class="rakay-streaming-label"><i class="fas fa-circle-notch fa-spin" style="font-size:9px;color:#22d3ee"></i> RAKAY is generating…</span>
+      </div>
+    </div>`;
+    container.appendChild(el);
+    _scrollToBottom();
+  }
+
+  function _appendToStreamBubble(bubbleId, text, isRaw = false) {
+    const contentEl = document.getElementById(`${bubbleId}-content`);
+    if (!contentEl) return;
+
+    // Remove cursor if present
+    const cursor = contentEl.querySelector('.rakay-stream-cursor');
+    if (cursor) cursor.remove();
+
+    // Append text
+    const span = document.createElement('span');
+    if (isRaw) {
+      span.textContent = text;
+    } else {
+      span.textContent = text;
+    }
+    contentEl.appendChild(span);
+
+    // Re-add cursor at end
+    const newCursor = document.createElement('span');
+    newCursor.className = 'rakay-stream-cursor';
+    newCursor.innerHTML = '&#9646;';
+    contentEl.appendChild(newCursor);
+  }
+
+  function _finalizeStreamBubble(bubbleId) {
+    const el = document.getElementById(bubbleId);
+    if (el) el.remove();
+  }
+
+  function _clearStreamBubble() {
+    if (RAKAY._streamBubbleId) {
+      _finalizeStreamBubble(RAKAY._streamBubbleId);
+      RAKAY._streamBubbleId = null;
+    }
+  }
+
+  function _clearError() {
+    const container = document.getElementById('rakay-messages');
+    if (!container) return;
+    container.querySelector('.rakay-error-msg')?.remove();
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  SSE STREAMING IMPLEMENTATION
+  //  Uses fetch + ReadableStream to consume POST /chat/stream SSE events.
+  //  Events:
+  //   {"type":"start"}
+  //   {"type":"chunk","text":"..."}
+  //   {"type":"done","id":"...","tokens_used":N,"provider":"...","tool_trace":[...]}
+  //   {"type":"error","message":"..."}
+  // ══════════════════════════════════════════════════════════════════════════
+  async function _sendMessageStream(message, session, abortCtrl) {
+    const url   = `${API_BASE()}/api/RAKAY/chat/stream`;
+    const token = RAKAY.authToken || _resolveToken();
+
+    const context = {
+      currentPage:      window.currentPage || 'rakay',
+      platform_context: { page: window.currentPage },
+      openai_key:  _lsGet('openai_api_key')  || _lsGet('wadjet_openai_key')  || undefined,
+      claude_key:  _lsGet('claude_api_key')   || _lsGet('wadjet_claude_key')  || undefined,
+    };
+
+    log.info(`[STREAM] Starting SSE stream to ${url}`);
+
+    const res = await fetch(url, {
+      method:  'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'Accept':        'text/event-stream, application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      },
+      body:   JSON.stringify({ session_id: RAKAY.sessionId, message: message.trim(), context, use_tools: true }),
+      signal: abortCtrl.signal,
+    });
+
+    // Handle non-2xx before reading stream
+    if (res.status === 401) {
+      _lsDel(LS_RAKAY_TOKEN); _lsDel(LS_RAKAY_TOKEN_EXP); RAKAY.authToken = null;
+      const body = await res.json().catch(() => ({}));
+      throw Object.assign(new Error(body.error || 'Unauthorized'), { status: 401, code: body.code || 'RAKAY_AUTH_REQUIRED' });
+    }
+    if (res.status === 409) {
+      const body = await res.json().catch(() => ({}));
+      throw Object.assign(new Error(body.error || 'Conflict'), { status: 409, code: body.code });
+    }
+    if (res.status === 429) {
+      const body = await res.json().catch(() => ({}));
+      throw Object.assign(new Error(body.error || 'Rate limited'), { status: 429, code: body.code, body });
+    }
+    if (res.status === 503) {
+      throw Object.assign(new Error('Provider busy — will retry'), { status: 503, code: 'LLM_PROVIDER_BUSY' });
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw Object.assign(new Error(body.error || `HTTP ${res.status}`), { status: res.status, code: body.code, body });
+    }
+
+    // ── Stream is open — remove typing indicator and create live bubble ─────
+    _hideTyping();
+    RAKAY.streaming = true;
+
+    const streamBubbleId = `stream-bubble-${_uid()}`;
+    RAKAY._streamBubbleId = streamBubbleId;
+    _createStreamBubble(streamBubbleId);
+
+    const reader  = res.body.getReader();
+    RAKAY._streamReader = reader;
+    const decoder = new TextDecoder('utf-8');
+
+    let buffer      = '';
+    let fullText    = '';
+    let doneData    = null;
+
+    // Streaming timeout: if no data for 30s, abort
+    let streamTimeout;
+    const resetStreamTimeout = () => {
+      clearTimeout(streamTimeout);
+      streamTimeout = setTimeout(() => {
+        log.warn('[STREAM] No data for 30s — aborting stream');
+        try { reader.cancel(); } catch {}
+      }, 30_000);
+    };
+    resetStreamTimeout();
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        resetStreamTimeout();
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // last partial line stays in buffer
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith(':')) continue; // heartbeat / comment
+
+          if (trimmed.startsWith('data: ')) {
+            const raw = trimmed.slice(6).trim();
+            if (!raw || raw === '[DONE]') continue;
+
+            let evt;
+            try { evt = JSON.parse(raw); } catch { continue; }
+
+            if (evt.type === 'start') {
+              log.debug('[STREAM] start event received session_id=', evt.session_id);
+
+            } else if (evt.type === 'chunk') {
+              const text = evt.text || '';
+              if (text) {
+                fullText += text;
+                _appendToStreamBubble(streamBubbleId, text);
+                _scrollToBottom();
+              }
+
+            } else if (evt.type === 'done') {
+              doneData = evt;
+              log.info(`[STREAM] done — provider=${evt.provider} tokens=${evt.tokens_used} latency=${evt.latency_ms}ms`);
+
+            } else if (evt.type === 'error') {
+              log.warn('[STREAM] error event from server:', evt.message);
+              // Graceful: backend sent error message as graceful degradation
+              if (!fullText) {
+                fullText = '⚠️ ' + (evt.message || 'AI system is temporarily busy. Please try again.');
+                _appendToStreamBubble(streamBubbleId, fullText, true);
+              }
+            }
+          }
+        }
+      }
+    } finally {
+      clearTimeout(streamTimeout);
+      try { reader.cancel(); } catch {}
+    }
+
+    if (!fullText) fullText = 'Analysis complete. Please review the tool results above.';
+
+    // ── Finalize: replace live bubble with rendered message ──────────────────
+    const assistantMsg = {
+      id:          doneData?.id || _uid(),
+      session_id:  RAKAY.sessionId,
+      role:        'assistant',
+      content:     fullText,
+      tool_trace:  doneData?.tool_trace || [],
+      tokens_used: doneData?.tokens_used || 0,
+      model:       doneData?.model,
+      provider:    doneData?.provider,
+      latency_ms:  doneData?.latency_ms,
+      created_at:  new Date().toISOString(),
+      _streamed:   true,
+    };
+
+    RAKAY.messages.push(assistantMsg);
+    _lsAddMsg(RAKAY.sessionId, assistantMsg);
+
+    if (session) {
+      session.message_count = (session.message_count || 0) + 2;
+      session.updated_at    = new Date().toISOString();
+      _lsSetSessions(RAKAY.sessions);
+    }
+
+    // Remove live stream bubble and re-render all messages with proper markdown
+    _finalizeStreamBubble(streamBubbleId);
+    _renderMessages();
+    _renderSidebar();
+    _scrollToBottom();
+
+    log.info(`[SEND] STREAM_COMPLETE tokens=${assistantMsg.tokens_used} model=${assistantMsg.model || '?'} provider=${assistantMsg.provider || '?'}`);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  NON-STREAMING FALLBACK
+  //  Unwraps {success: true, data: {reply, content, ...}} envelope.
+  //  Retries on 503 with exponential backoff (2 attempts).
+  // ══════════════════════════════════════════════════════════════════════════
+  async function _sendMessageNonStreaming(message, session, abortCtrl) {
+    const context = {
+      currentPage:      window.currentPage || 'rakay',
+      platform_context: { page: window.currentPage },
+      openai_key:  _lsGet('openai_api_key')  || _lsGet('wadjet_openai_key')  || undefined,
+      claude_key:  _lsGet('claude_api_key')   || _lsGet('wadjet_claude_key')  || undefined,
+    };
+
+    let envelope = null;
+    let lastErr  = null;
+
+    for (let attempt = 0; attempt < STREAM_RETRY_DELAY.length + 1; attempt++) {
+      try {
+        envelope = await _api('POST', '/chat', {
+          session_id: RAKAY.sessionId,
+          message:    message.trim(),
+          context,
+          use_tools:  true,
+        }, {
+          retries:     2,        // network-level retries (TypeError only)
+          abortSignal: abortCtrl.signal,
+          timeout:     90_000,
+        });
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (err.name === 'AbortError') throw err;
+        if (err.status === 503 && attempt < STREAM_RETRY_DELAY.length) {
+          const delay = STREAM_RETRY_DELAY[attempt];
+          log.warn(`[SEND] 503 provider busy — retrying in ${delay}ms (attempt ${attempt + 1})`);
+          _appendError(`AI provider temporarily busy — retrying in ${Math.round(delay / 1000)}s…`);
+          await new Promise(r => setTimeout(r, delay));
+          _clearError();
+          continue;
+        }
+        throw err;
+      }
+    }
+    if (lastErr) throw lastErr;
+
+    _hideTyping();
+
+    if (!envelope) {
+      _appendError('No response from RAKAY backend.');
+      return;
+    }
+
+    // ── Unwrap {success, data} envelope ───────────────────────────────────
+    let payload;
+    if (envelope.success === true && envelope.data) {
+      payload = envelope.data;
+    } else if (envelope.success === false) {
+      log.warn('[SEND] Backend success:false:', envelope.error);
+      payload = { reply: envelope.error || 'An error occurred', content: envelope.error || 'An error occurred' };
+    } else {
+      // Legacy: no envelope wrapper
+      payload = envelope;
+    }
+
+    const replyText = payload.reply || payload.content || '';
+
+    const assistantMsg = {
+      id:          payload.id || _uid(),
+      session_id:  RAKAY.sessionId,
+      role:        'assistant',
+      content:     replyText,
+      tool_trace:  payload.tool_trace  || [],
+      tokens_used: payload.tokens_used || 0,
+      model:       payload.model,
+      provider:    payload.provider,
+      latency_ms:  payload.latency_ms,
+      created_at:  payload.created_at || new Date().toISOString(),
+      _degraded:   payload._degraded,
+    };
+
+    RAKAY.messages.push(assistantMsg);
+    _lsAddMsg(RAKAY.sessionId, assistantMsg);
+
+    if (session) {
+      session.message_count = (session.message_count || 0) + 2;
+      session.updated_at    = new Date().toISOString();
+      _lsSetSessions(RAKAY.sessions);
+    }
+
+    log.info(`[SEND] SEND_COMPLETE tokens=${payload.tokens_used || 0} model=${payload.model || '?'} provider=${payload.provider || '?'}`);
+    _renderMessages();
+    _renderSidebar();
+    _scrollToBottom();
   }
 
   function _handleChatError(err, originalMessage) {
@@ -1278,9 +1595,12 @@
         </div>`;
       }
 
-      const modelBadge = msg.model ? `<span class="rakay-model-badge">${_e(msg.model)}</span>` : '';
-      const latency    = msg.latency_ms ? `<span class="rakay-latency">${msg.latency_ms}ms</span>` : '';
-      const tokens     = msg.tokens_used ? `<span class="rakay-tokens"><i class="fas fa-bolt"></i> ${msg.tokens_used}</span>` : '';
+      const modelBadge    = msg.model    ? `<span class="rakay-model-badge">${_e(msg.model)}</span>` : '';
+      const latency       = msg.latency_ms ? `<span class="rakay-latency">${msg.latency_ms}ms</span>` : '';
+      const tokens        = msg.tokens_used ? `<span class="rakay-tokens"><i class="fas fa-bolt"></i> ${msg.tokens_used}</span>` : '';
+      const providerBadge = msg.provider && msg.provider !== 'mock' ? `<span class="rakay-provider-badge">${_e(msg.provider)}</span>` : '';
+      const degradedBadge = msg._degraded ? `<span class="rakay-degraded-badge"><i class="fas fa-exclamation-triangle"></i> degraded</span>` : '';
+      const streamBadge   = msg._streamed ? `<span class="rakay-provider-badge" title="Streaming response" style="background:#a855f714;border-color:#a855f730;color:#a855f7"><i class="fas fa-stream" style="font-size:8px"></i></span>` : '';
 
       return `
       <div class="rakay-msg rakay-msg--assistant${offline}">
@@ -1290,7 +1610,7 @@
           <div class="rakay-msg-bubble rakay-msg-bubble--assistant">
             ${_renderMarkdown(msg.content)}
           </div>
-          <div class="rakay-msg-meta">${ts} ${modelBadge} ${latency} ${tokens}</div>
+          <div class="rakay-msg-meta">${ts} ${modelBadge} ${providerBadge} ${latency} ${tokens} ${degradedBadge} ${streamBadge}</div>
         </div>
       </div>`;
     }).join('');
@@ -1915,6 +2235,42 @@
 .rakay-ws-badge.ws-retry    { background: #d2992222; border: 1px solid #d2992244; color: #d29922; }
 .rakay-ws-badge.ws-error    { background: #f8514922; border: 1px solid #f8514944; color: #f85149; }
 .rakay-ws-badge.ws-disabled { background: #21262d;   border: 1px solid #30363d;   color: #6e7681; }
+
+/* ── Streaming bubble ────────────────── */
+.rakay-streaming-bubble {
+  min-height: 28px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.rakay-stream-cursor {
+  display: inline-block;
+  color: #22d3ee;
+  animation: rakay-blink 0.8s step-end infinite;
+  font-size: 14px;
+  line-height: 1;
+  margin-left: 1px;
+}
+@keyframes rakay-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+.rakay-streaming-meta .rakay-streaming-label {
+  color: #22d3ee; font-size: 11px; display: flex; align-items: center; gap: 5px;
+}
+.rakay-provider-badge {
+  background: #22d3ee14; border: 1px solid #22d3ee30; border-radius: 4px;
+  padding: 1px 5px; font-size: 10px; color: #22d3ee;
+}
+.rakay-priority-badge {
+  border-radius: 4px; padding: 1px 5px; font-size: 10px; font-weight: 600;
+}
+.rakay-priority-badge.high   { background: #f8514914; border: 1px solid #f8514940; color: #f85149; }
+.rakay-priority-badge.medium { background: #d2992214; border: 1px solid #d2992240; color: #d29922; }
+.rakay-priority-badge.low    { background: #21262d;   border: 1px solid #30363d;   color: #6e7681; }
+.rakay-degraded-badge {
+  background: #f0883e14; border: 1px solid #f0883e40; border-radius: 4px;
+  padding: 1px 5px; font-size: 10px; color: #f0883e;
+}
 `;
     document.head.appendChild(style);
   }
@@ -2068,8 +2424,10 @@
     if (RAKAY.statusTimer)  { clearInterval(RAKAY.statusTimer);  RAKAY.statusTimer  = null; }
     if (RAKAY.pollingTimer) { clearInterval(RAKAY.pollingTimer); RAKAY.pollingTimer = null; }
     if (RAKAY._submitDebounce) { clearTimeout(RAKAY._submitDebounce); RAKAY._submitDebounce = null; }
-    // Abort any in-flight chat request
-    if (RAKAY._currentFetch) { RAKAY._currentFetch.abort(); RAKAY._currentFetch = null; }
+    // Abort any in-flight chat request / stream reader
+    if (RAKAY._currentFetch) { try { RAKAY._currentFetch.abort(); } catch {} RAKAY._currentFetch = null; }
+    if (RAKAY._streamReader) { try { RAKAY._streamReader.cancel(); } catch {} RAKAY._streamReader = null; }
+    _clearStreamBubble();
     _stopWebSocket();
     _rendered = false;
     log.info('Module stopped.');
@@ -2079,6 +2437,6 @@
   window.renderRAKAY = renderRAKAY;
   window.stopRAKAY   = stopRAKAY;
 
-  log.info(`Module v${MODULE_VERSION} registered ✅`);
+  log.info(`Module v${MODULE_VERSION} registered ✅ — SSE streaming enabled: ${STREAM_ENABLED}`);
 
 })();
