@@ -354,6 +354,214 @@ const CVE_DB = {
     references: ['https://nvd.nist.gov/vuln/detail/CVE-2025-21418'],
     detection_hint: 'afd.sys exploit typically targets user-mode processes. Monitor for privilege changes without UAC elevation.'
   },
+
+  // ── Fortinet / Palo Alto VPN ──────────────────────────────────────────────
+  'CVE-2024-21762': {
+    id: 'CVE-2024-21762',
+    description: 'Fortinet FortiOS SSL-VPN out-of-bounds write RCE. Unauthenticated remote code execution via crafted HTTP request. Exploited by China-nexus espionage actors.',
+    severity: 'critical', cvss_score: 9.6,
+    published_date: '2024-02-08', exploited: true,
+    vendor: 'Fortinet', product: 'FortiOS 7.4 < 7.4.3, 7.2 < 7.2.7, 7.0 < 7.0.14, 6.4 < 6.4.15',
+    tags: ['rce','vpn','fortinet','exploited-itw','china-nexus','zero-day'],
+    mitigation: 'Upgrade FortiOS immediately. Disable SSL-VPN if not required. Check for compromise indicators.',
+    mitre_techniques: ['T1190','T1133','T1059'],
+    references: ['https://nvd.nist.gov/vuln/detail/CVE-2024-21762'],
+    detection_hint: 'FortiOS logs: look for "/remote/login" requests with anomalous payloads. Check for new admin accounts or modified firewall rules.'
+  },
+  'CVE-2024-3400': {
+    id: 'CVE-2024-3400',
+    description: 'PAN-OS GlobalProtect OS command injection zero-day. Unauthenticated RCE exploited by UNC4899 (North Korea nexus) for espionage. CVSS 10.0 — maximum severity.',
+    severity: 'critical', cvss_score: 10.0,
+    published_date: '2024-04-12', exploited: true,
+    vendor: 'Palo Alto Networks', product: 'PAN-OS 10.2 < 10.2.9-h1, 11.0 < 11.0.4-h1, 11.1 < 11.1.2-h3',
+    tags: ['rce','palo-alto','globalprotect','zero-day','exploited-itw','nation-state'],
+    mitigation: 'Apply PAN hotfixes immediately. Enable Threat Prevention signatures. Review GlobalProtect session logs.',
+    mitre_techniques: ['T1190','T1059','T1133'],
+    references: ['https://nvd.nist.gov/vuln/detail/CVE-2024-3400'],
+    detection_hint: 'gpsvc.log: look for commands after session cookie creation. New files in /tmp or /var/log/pan/sslvpn with unexpected names.'
+  },
+
+  // ── SharePoint / Windows ──────────────────────────────────────────────────
+  'CVE-2023-29357': {
+    id: 'CVE-2023-29357',
+    description: 'Microsoft SharePoint Server privilege escalation via spoofed JWT auth tokens. Allows unauthenticated attacker to gain administrator access by bypassing auth.',
+    severity: 'critical', cvss_score: 9.8,
+    published_date: '2023-06-13', exploited: true,
+    vendor: 'Microsoft', product: 'SharePoint Server 2019',
+    tags: ['auth-bypass','sharepoint','jwt','exploited-itw','privilege-escalation'],
+    mitigation: 'Apply June 2023 Patch Tuesday. Enable AMSI for SharePoint. Monitor audit logs for unusual admin actions.',
+    mitre_techniques: ['T1190','T1078','T1548'],
+    references: ['https://nvd.nist.gov/vuln/detail/CVE-2023-29357'],
+    detection_hint: 'SharePoint ULS logs: look for authentication events with bearer tokens lacking valid signatures.'
+  },
+  'CVE-2024-30051': {
+    id: 'CVE-2024-30051',
+    description: 'Windows DWM Core Library privilege escalation. Heap-based buffer overflow grants SYSTEM privileges. Used by QakBot distribution actors post-LockBit disruption.',
+    severity: 'high', cvss_score: 7.8,
+    published_date: '2024-05-14', exploited: true,
+    vendor: 'Microsoft', product: 'Windows 10/11, Server 2022',
+    tags: ['privesc','windows','dwm','exploited-itw','qakbot'],
+    mitigation: 'Apply May 2024 Patch Tuesday.',
+    mitre_techniques: ['T1055','T1068'],
+    references: ['https://nvd.nist.gov/vuln/detail/CVE-2024-30051'],
+    detection_hint: 'dwm.exe spawning child processes or accessing LSASS indicates exploitation.'
+  },
+
+  // ── Cisco / Network Devices ───────────────────────────────────────────────
+  'CVE-2023-20269': {
+    id: 'CVE-2023-20269',
+    description: 'Cisco ASA/FTD VPN brute-force vulnerability. Allows unauthenticated attacker to conduct brute-force attacks against remote access VPN. Exploited by Akira ransomware.',
+    severity: 'high', cvss_score: 5.0,
+    published_date: '2023-09-06', exploited: true,
+    vendor: 'Cisco', product: 'ASA Software, FTD Software',
+    tags: ['brute-force','vpn','cisco','akira','ransomware','exploited-itw'],
+    mitigation: 'Enable MFA for VPN. Implement lockout policies. Apply patch when available.',
+    mitre_techniques: ['T1110','T1133','T1190'],
+    references: ['https://nvd.nist.gov/vuln/detail/CVE-2023-20269'],
+    detection_hint: 'VPN logs: High volume of failed authentication attempts from single external IP. Look for ASA syslog messages 113015/113014.'
+  },
+  'CVE-2024-20359': {
+    id: 'CVE-2024-20359',
+    description: 'Cisco ASA persistence mechanism — ArcaneDoor zero-day. Allows authenticated attacker to plant persistent backdoor. Exploited by nation-state actor targeting government networks.',
+    severity: 'high', cvss_score: 6.0,
+    published_date: '2024-04-24', exploited: true,
+    vendor: 'Cisco', product: 'ASA Software, FTD Software',
+    tags: ['persistence','backdoor','cisco','arcanedoor','nation-state','exploited-itw'],
+    mitigation: 'Apply Cisco security advisory update. Reset credentials. Audit for Line Dancer implant indicators.',
+    mitre_techniques: ['T1505.003','T1133','T1082'],
+    references: ['https://nvd.nist.gov/vuln/detail/CVE-2024-20359'],
+    detection_hint: 'Unusual ASA process list entries. Log4j evidence: "Line Dancer" shellcode in memory, "Line Runner" persistence files.'
+  },
+
+  // ── Linux / Container ─────────────────────────────────────────────────────
+  'CVE-2024-1086': {
+    id: 'CVE-2024-1086',
+    description: 'Linux kernel nf_tables use-after-free local privilege escalation. Allows local user to gain root/SYSTEM privileges via Netfilter table manipulation. Public exploit available.',
+    severity: 'high', cvss_score: 7.8,
+    published_date: '2024-01-31', exploited: true,
+    vendor: 'Linux', product: 'Linux Kernel 5.14 - 6.6',
+    tags: ['privesc','linux','kernel','nftables','use-after-free','public-exploit'],
+    mitigation: 'Update Linux kernel. Disable nf_tables module if not needed: echo "install nf_tables /bin/true" >> /etc/modprobe.d/disable-nftables.conf',
+    mitre_techniques: ['T1068','T1055'],
+    references: ['https://nvd.nist.gov/vuln/detail/CVE-2024-1086'],
+    detection_hint: 'Kernel panic or dmesg errors around nf_tables. Unexpected root processes from non-root parent processes.'
+  },
+  'CVE-2024-21626': {
+    id: 'CVE-2024-21626',
+    description: 'runc container escape (Leaky Vessels). Allows container workload to escape to host OS via file descriptor leak in runc, affecting Docker, Kubernetes, and containerd.',
+    severity: 'high', cvss_score: 8.6,
+    published_date: '2024-01-31', exploited: false,
+    vendor: 'Open Containers', product: 'runc < 1.1.12',
+    tags: ['container-escape','docker','kubernetes','runc','leaky-vessels'],
+    mitigation: 'Update runc to 1.1.12+. Update Docker/containerd. Audit container security policies.',
+    mitre_techniques: ['T1611','T1068'],
+    references: ['https://nvd.nist.gov/vuln/detail/CVE-2024-21626'],
+    detection_hint: 'Unexpected host filesystem access from containers. Container processes with elevated privileges beyond defined security context.'
+  },
+
+  // ── Apache / Web Servers ──────────────────────────────────────────────────
+  'CVE-2021-41773': {
+    id: 'CVE-2021-41773',
+    description: 'Apache HTTP Server path traversal and RCE via mod_cgi. Allows unauthenticated directory traversal and code execution on servers with mod_cgi enabled. Exploited within 24h of disclosure.',
+    severity: 'critical', cvss_score: 9.8,
+    published_date: '2021-10-05', exploited: true,
+    vendor: 'Apache', product: 'Apache HTTP Server 2.4.49',
+    tags: ['rce','path-traversal','apache','exploited-itw','zero-day'],
+    mitigation: 'Upgrade to Apache 2.4.51+. Disable mod_cgi. Use "Require all denied" for filesystem access.',
+    mitre_techniques: ['T1190','T1059'],
+    references: ['https://nvd.nist.gov/vuln/detail/CVE-2021-41773'],
+    detection_hint: 'Access logs: GET requests with /.%2e/ or /%2e%2e/ patterns. Look for /cgi-bin/echo requests.'
+  },
+  'CVE-2023-44487': {
+    id: 'CVE-2023-44487',
+    description: 'HTTP/2 Rapid Reset Attack — protocol-level DoS. Attacker opens and immediately cancels HTTP/2 streams at massive scale, overwhelming servers. CVSS 7.5 but caused major outages.',
+    severity: 'high', cvss_score: 7.5,
+    published_date: '2023-10-10', exploited: true,
+    vendor: 'Multiple', product: 'Any HTTP/2 server (nginx, Apache, IIS, Node.js, Go)',
+    tags: ['dos','http2','rapid-reset','exploited-itw','infrastructure'],
+    mitigation: 'Patch affected HTTP/2 implementations. Apply server-specific mitigations (nginx: limit_conn, Apache: H2MaxSessionStreams). Use DDoS protection.',
+    mitre_techniques: ['T1498','T1499'],
+    references: ['https://nvd.nist.gov/vuln/detail/CVE-2023-44487'],
+    detection_hint: 'Spike in RST_STREAM frames in HTTP/2 traffic. High CPU on web servers with low response rate.'
+  },
+
+  // ── VMware / Virtualization ───────────────────────────────────────────────
+  'CVE-2021-22005': {
+    id: 'CVE-2021-22005',
+    description: 'VMware vCenter Server file upload RCE. Arbitrary file upload in analytics service allows unauthenticated RCE on vCenter. Critical for cloud/virtualization environments.',
+    severity: 'critical', cvss_score: 9.8,
+    published_date: '2021-09-22', exploited: true,
+    vendor: 'VMware', product: 'vCenter Server 6.7, 7.0',
+    tags: ['rce','vmware','vcenter','file-upload','exploited-itw'],
+    mitigation: 'Apply VMSA-2021-0020 patch immediately. Restrict network access to vCenter. Monitor for unauthorized file uploads.',
+    mitre_techniques: ['T1190','T1059'],
+    references: ['https://nvd.nist.gov/vuln/detail/CVE-2021-22005'],
+    detection_hint: 'vCenter logs: POST requests to /analytics/telemetry path. New JSP/shell files in vCenter web directories.'
+  },
+  'CVE-2023-20867': {
+    id: 'CVE-2023-20867',
+    description: 'VMware Tools auth bypass — UNC3886 zero-day. Allows compromised ESXi host to execute commands on VMs without authentication. Used by Chinese APT for cross-VM pivoting.',
+    severity: 'low', cvss_score: 3.9,
+    published_date: '2023-06-13', exploited: true,
+    vendor: 'VMware', product: 'VMware Tools < 12.3.0',
+    tags: ['auth-bypass','vmware','esxi','unc3886','china-nexus','lateral-movement'],
+    mitigation: 'Update VMware Tools. Monitor VM authentication events from ESXi host.',
+    mitre_techniques: ['T1021','T1078','T1550'],
+    references: ['https://nvd.nist.gov/vuln/detail/CVE-2023-20867'],
+    detection_hint: 'VMware Tools logs: VIX API commands executed without guest auth. Unexpected Guest Operations activity.'
+  },
+
+  // ── Supply Chain / NPM/PyPI ───────────────────────────────────────────────
+  'CVE-2022-22965': {
+    id: 'CVE-2022-22965',
+    description: 'Spring4Shell — Spring Framework RCE via data binding with ClassLoader. Allows unauthenticated RCE on Java Spring MVC applications running on Tomcat with JDK 9+.',
+    severity: 'critical', cvss_score: 9.8,
+    published_date: '2022-03-30', exploited: true,
+    vendor: 'VMware', product: 'Spring Framework < 5.3.18, < 5.2.20',
+    tags: ['rce','spring','java','spring4shell','exploited-itw'],
+    mitigation: 'Upgrade Spring Framework. Apply DataBinder denylist patch. Filter ClassLoader attributes in models.',
+    mitre_techniques: ['T1190','T1059','T1203'],
+    references: ['https://nvd.nist.gov/vuln/detail/CVE-2022-22965'],
+    detection_hint: 'WAF: requests with class.module.classLoader in POST body. Tomcat webshell files (e.g., tomcatwar.jsp) in webroot.'
+  },
+  'CVE-2021-44832': {
+    id: 'CVE-2021-44832',
+    description: 'Log4j2 remote code execution via attacker-controlled JDBC URL in configuration. Lower severity as requires write access to Log4j config, but still patchable issue.',
+    severity: 'medium', cvss_score: 6.6,
+    published_date: '2021-12-28', exploited: false,
+    vendor: 'Apache', product: 'Log4j2 2.0-beta7 to 2.17.0',
+    tags: ['rce','log4j','java','jdbc','config-injection'],
+    mitigation: 'Upgrade to Log4j 2.17.1+.',
+    mitre_techniques: ['T1190','T1059'],
+    references: ['https://nvd.nist.gov/vuln/detail/CVE-2021-44832'],
+    detection_hint: 'Log4j config files modified to include JDBC appenders pointing to external hosts.'
+  },
+
+  // ── OpenSSL / Crypto ─────────────────────────────────────────────────────
+  'CVE-2022-3602': {
+    id: 'CVE-2022-3602',
+    description: 'OpenSSL 3.x X.509 certificate verification buffer overflow (SpookySSL). Triggers during X.509 cert chain verification, can cause RCE in vulnerable configurations.',
+    severity: 'high', cvss_score: 7.5,
+    published_date: '2022-11-01', exploited: false,
+    vendor: 'OpenSSL', product: 'OpenSSL 3.0.0 - 3.0.6',
+    tags: ['buffer-overflow','openssl','tls','spookyssl'],
+    mitigation: 'Upgrade to OpenSSL 3.0.7+. Check downstream packages that bundle OpenSSL 3.x.',
+    mitre_techniques: ['T1190','T1573'],
+    references: ['https://nvd.nist.gov/vuln/detail/CVE-2022-3602'],
+    detection_hint: 'Application crashes during TLS handshake with crafted certificates. Monitor OpenSSL error logs for punycode-related failures.'
+  },
+  'CVE-2014-0160': {
+    id: 'CVE-2014-0160',
+    description: 'Heartbleed — OpenSSL TLS heartbeat buffer over-read. Allows attackers to read up to 64KB of server memory, potentially exposing private keys, session tokens, and plaintext data.',
+    severity: 'high', cvss_score: 7.5,
+    published_date: '2014-04-07', exploited: true,
+    vendor: 'OpenSSL', product: 'OpenSSL 1.0.1 - 1.0.1f',
+    tags: ['info-disclosure','openssl','tls','heartbleed','exploited-itw'],
+    mitigation: 'Upgrade OpenSSL. Revoke and reissue all SSL certificates. Rotate session tokens and passwords.',
+    mitre_techniques: ['T1040','T1552','T1573'],
+    references: ['https://nvd.nist.gov/vuln/detail/CVE-2014-0160'],
+    detection_hint: 'IDS/IPS: malformed HeartbeatRequest packets larger than payload. Network: look for repetitive TLS heartbeat packets.'
+  },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -494,6 +702,116 @@ const MITRE_DB = {
     detection: 'Monitor vssadmin, wmic, bcdedit commands. Event ID 4688. Correlate with ransomware indicators.',
     mitigation: 'Protected backups. Controlled access to recovery tools. Monitor backup integrity.',
     url: 'https://attack.mitre.org/techniques/T1490/'
+  },
+
+  // ── Additional MITRE Techniques ────────────────────────────────────────────
+  'T1110': {
+    id: 'T1110', name: 'Brute Force',
+    tactic: 'Credential Access', severity: 'high',
+    description: 'Adversaries may use brute force techniques to gain access to accounts when passwords are unknown or when password hashes are obtained. Subtechniques include Password Spraying and Credential Stuffing.',
+    platforms: ['Windows','Azure AD','Office 365','SaaS','IaaS','Linux','macOS','Containers'],
+    detection: 'Monitor authentication events for high failure rates. Event ID 4625 (Windows). Azure AD sign-in logs. Check for account lockouts across multiple accounts simultaneously.',
+    mitigation: 'Account lockout policies. MFA/2FA enforcement. Conditional access policies. Network access controls restricting login from unexpected locations.',
+    url: 'https://attack.mitre.org/techniques/T1110/'
+  },
+  'T1133': {
+    id: 'T1133', name: 'External Remote Services',
+    tactic: 'Initial Access', severity: 'high',
+    description: 'Adversaries may leverage external-facing remote services such as VPNs, Citrix, RDP, and SSH to gain initial access to a network. Compromised credentials or exploited vulnerabilities are used.',
+    platforms: ['Windows','Linux','Containers','macOS'],
+    detection: 'Monitor authentication logs for remote services. Baseline and alert on anomalous logins (unusual geo, time, device). Correlate with threat intel feeds for known malicious IPs.',
+    mitigation: 'MFA for all remote access. Network-level access control. Patch management for VPN/gateway devices. Geo-blocking for unexpected regions.',
+    url: 'https://attack.mitre.org/techniques/T1133/'
+  },
+  'T1566': {
+    id: 'T1566', name: 'Phishing',
+    tactic: 'Initial Access', severity: 'high',
+    description: 'Adversaries may send phishing messages to gain access to victim systems. Spearphishing uses tailored lures targeting specific individuals; mass phishing uses generic lures at scale.',
+    platforms: ['Linux','macOS','Windows','SaaS','Office 365','Google Workspace'],
+    detection: 'Email gateway scanning for malicious attachments/links. DNS/proxy monitoring for newly registered domains. EDR process creation after email client opens. DMARC/DKIM/SPF enforcement.',
+    mitigation: 'Email filtering and sandboxing. User security awareness training. DMARC enforcement. Disable Office macros from internet-sourced files. Attack Surface Reduction rules.',
+    url: 'https://attack.mitre.org/techniques/T1566/'
+  },
+  'T1204': {
+    id: 'T1204', name: 'User Execution',
+    tactic: 'Execution', severity: 'high',
+    description: 'Adversaries may rely upon specific actions by a user in order to gain execution. Malicious File (T1204.002) and Malicious Link (T1204.001) are the most common delivery methods.',
+    platforms: ['Linux','Windows','macOS'],
+    detection: 'Monitor for process creation from email clients, web browsers, office applications. EDR behavioral alerts for suspicious child processes. Script execution from user profile directories.',
+    mitigation: 'User training and phishing simulation exercises. Script block logging. AppLocker/WDAC to restrict script execution. Email attachment sandboxing.',
+    url: 'https://attack.mitre.org/techniques/T1204/'
+  },
+  'T1071': {
+    id: 'T1071', name: 'Application Layer Protocol (C2)',
+    tactic: 'Command and Control', severity: 'high',
+    description: 'Adversaries may communicate using OSI application layer protocols to avoid detection/network filtering. HTTPS (T1071.001), DNS (T1071.004), and SMTP are common channels for C2 traffic.',
+    platforms: ['Linux','macOS','Windows','Network'],
+    detection: 'DNS: high-volume subdomain queries, long domain names, entropy analysis. HTTPS: JA3 fingerprinting, certificate anomalies, beaconing patterns. Proxy logs: unusual user agents, periodic connections.',
+    mitigation: 'Web proxy with SSL inspection. DNS filtering (Cisco Umbrella, Cloudflare Gateway). Network traffic baseline and anomaly detection. Firewall egress filtering.',
+    url: 'https://attack.mitre.org/techniques/T1071/'
+  },
+  'T1041': {
+    id: 'T1041', name: 'Exfiltration Over C2 Channel',
+    tactic: 'Exfiltration', severity: 'high',
+    description: 'Adversaries may steal data by exfiltrating it over an existing C2 communications channel. Data is often staged and compressed before exfiltration to minimize detection.',
+    platforms: ['Linux','macOS','Windows'],
+    detection: 'Monitor for large data transfers over established C2 channels. Network: unusually large HTTPS payloads, DNS TXT record anomalies. DLP alerts on sensitive file access followed by outbound transfer.',
+    mitigation: 'Network segmentation. Data loss prevention (DLP). Egress filtering. Cloud Access Security Broker (CASB). Monitor for archive utility usage (7zip, WinRAR) before network connections.',
+    url: 'https://attack.mitre.org/techniques/T1041/'
+  },
+  'T1562': {
+    id: 'T1562', name: 'Impair Defenses',
+    tactic: 'Defense Evasion', severity: 'high',
+    description: 'Adversaries may maliciously modify components of a victim environment in order to hinder or disable defensive mechanisms. Includes disabling AV, EDR, firewall, logging, and security services.',
+    platforms: ['Windows','macOS','Linux','Containers','IaaS'],
+    detection: 'Monitor for security service modifications. Event ID 7045 (new service), 4719 (audit policy changed), 4689 (process terminated). EDR: policy modification events. SIEM: sudden drop in event volume from endpoint.',
+    mitigation: 'Tamper protection in AV/EDR. Privileged access management. Monitoring security tool health. Immutable logging (WORM storage). Security baseline compliance checks.',
+    url: 'https://attack.mitre.org/techniques/T1562/'
+  },
+  'T1036': {
+    id: 'T1036', name: 'Masquerading',
+    tactic: 'Defense Evasion', severity: 'medium',
+    description: 'Adversaries may attempt to manipulate features of their artifacts to make them appear legitimate or benign. Masquerading can include renaming executables to match system processes, using similar file names (typosquatting), or placing malware in trusted locations.',
+    platforms: ['Linux','macOS','Windows','Containers'],
+    detection: 'Verify process parent-child relationships. Check executable hash against known-good values. Monitor for processes in unusual directories (system32 impersonation from %APPDATA%). File path anomalies.',
+    mitigation: 'Code signing verification. Application control. Anti-virus/EDR with behavioral analysis. Process monitoring with parent-child validation.',
+    url: 'https://attack.mitre.org/techniques/T1036/'
+  },
+  'T1068': {
+    id: 'T1068', name: 'Exploitation for Privilege Escalation',
+    tactic: 'Privilege Escalation', severity: 'high',
+    description: 'Adversaries may exploit software vulnerabilities in an attempt to elevate privileges. Exploitation of a software vulnerability occurs when an adversary takes advantage of a programming error in a program or service.',
+    platforms: ['Linux','macOS','Windows'],
+    detection: 'Monitor process creation events following unusual activity. Privilege monitoring: watch for standard user processes gaining high integrity/SYSTEM privileges. CVE-specific IDS signatures.',
+    mitigation: 'Patch management prioritizing LPE CVEs. Exploit protection (EMET/Windows Defender Exploit Guard). Vulnerable driver blocklist (WDAC). Limit running unknown software.',
+    url: 'https://attack.mitre.org/techniques/T1068/'
+  },
+  'T1505': {
+    id: 'T1505', name: 'Server Software Component',
+    tactic: 'Persistence', severity: 'high',
+    description: 'Adversaries may abuse legitimate extensible development features of servers to establish persistent access to systems. Web shells (T1505.003) are a primary technique — malicious scripts placed on web servers providing backdoor access.',
+    platforms: ['Windows','Linux','macOS','Network'],
+    detection: 'Monitor for new file creation in web server directories. Web logs: requests to newly created server-side scripts. EDR: web server processes spawning shells (cmd.exe, bash, powershell).',
+    mitigation: 'File integrity monitoring on web directories. Disable web server write permissions where not needed. Regular audits of web server directories. WAF rules to block webshell patterns.',
+    url: 'https://attack.mitre.org/techniques/T1505/'
+  },
+  'T1140': {
+    id: 'T1140', name: 'Deobfuscate/Decode Files or Information',
+    tactic: 'Defense Evasion', severity: 'medium',
+    description: 'Adversaries may use obfuscated files or information to hide artifacts of an intrusion. Reverse the process to understand adversary actions. Base64, XOR, gzip compression, custom encryption are common methods.',
+    platforms: ['Windows','Linux','macOS'],
+    detection: 'Monitor for deobfuscation tool use (certutil -decode, base64, gunzip). PowerShell: IEX with FromBase64String. Process command-line arguments containing suspicious encoded strings.',
+    mitigation: 'AMSI integration for script engines. Script block logging (Event 4104). Network traffic analysis for encoded payloads. EDR behavioral detection of deobfuscation patterns.',
+    url: 'https://attack.mitre.org/techniques/T1140/'
+  },
+  'T1070': {
+    id: 'T1070', name: 'Indicator Removal',
+    tactic: 'Defense Evasion', severity: 'medium',
+    description: 'Adversaries may delete or alter generated artifacts on a system, including logs or captured files. Clearing event logs (T1070.001), deleting files (T1070.004), and timestomping (T1070.006) are key sub-techniques.',
+    platforms: ['Linux','macOS','Windows','Google Workspace','Office 365'],
+    detection: 'Event ID 1102 (audit log cleared). Monitor for wevtutil/ClearEvent API usage. File deletion events for log files. File metadata modification inconsistencies (timestomping).',
+    mitigation: 'Centralized logging (SIEM). Log forwarding to remote/immutable storage. Enable Windows Event Forwarding. Audit policy for log clear events.',
+    url: 'https://attack.mitre.org/techniques/T1070/'
   },
 };
 

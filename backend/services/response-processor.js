@@ -1,19 +1,9 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  RAKAY — Response Post-Processor Pipeline  v1.0
- *
- *  Implements Principal AI UX Engineer requirements:
- *   ✅ Universal response template (Overview, Why It Matters, Detection
- *       Guidance, Mitigation, Analyst Tip)
- *   ✅ Tool output sanitisation (hide duplicate logs, show ≤1 indicator)
- *   ✅ Post-processor pipeline: clean → deduplicate → enrich → format
- *   ✅ MITRE technique ID enrichment (plain-language + SOC context)
- *   ✅ Consistent formatting across all modules (CVE, MITRE, IOC, Sigma)
- *   ✅ Response quality rules: readable <10s, actionable, no redundancy
- *   ✅ Error standardisation: no stack traces, no raw JSON in output
+ *  RAKAY — Response Post-Processor Pipeline  v2.0
  *
  *  Pipeline stages:
- *   1. clean         — strip debug logs, raw JSON, duplicate tool banners
+ *   1. clean         — strip debug logs, raw JSON, ALL tool banners
  *   2. deduplicate   — remove repeated paragraphs / sections
  *   3. enrich        — expand MITRE IDs, CVE short-forms, provider context
  *   4. format        — ensure section headers, bullets, code blocks present
@@ -22,10 +12,11 @@
  */
 'use strict';
 
-const MITREEnricher = require('./mitre-enricher');
+let MITREEnricher;
+try { MITREEnricher = require('./mitre-enricher'); } catch(e) { MITREEnricher = null; }
 
 // ── Constants ──────────────────────────────────────────────────────────────────
-const MAX_RESPONSE_CHARS = 12_000; // Hard cap to keep responses scannable
+const MAX_RESPONSE_CHARS = 12_000;
 const SECTION_HEADERS = [
   '## Overview',
   '## Why It Matters',
@@ -34,48 +25,83 @@ const SECTION_HEADERS = [
   '## Analyst Tip',
 ];
 
-// ── Regex patterns for cleaning ────────────────────────────────────────────────
-const RE_RAW_JSON_BLOCK  = /```json\n?\{[\s\S]{500,}\}\n?```/g;  // large raw JSON dumps
-const RE_DEBUG_LOG_LINE  = /^\[(?:RAKAY|RAKAYEngine|Engine|RakayTools|Provider|CB:|PQ|MultiProvider|Tool|Ollama|OpenAI|Anthropic|Gemini|DeepSeek)\].+$/gm;
-// Matches both "Using tool: xxx" and "Using intelligence sources..." patterns (2+ consecutive)
-const RE_DUPLICATE_TOOL_BANNER = /(?:🔧 \*Using (?:tool|intelligence)[^*]*\*\s*){2,}/g;
-const RE_TOOL_BANNER_SINGLE = /🔧 \*Using (?:tool|intelligence)[^*]*\*\s*/g;
-const RE_STACK_TRACE     = /\s+at \w+.*\(.*:\d+:\d+\)\n?/g;
-const RE_API_KEY_LEAK    = /sk-[a-zA-Z0-9\-_]{20,}/g;
+// ── Regex patterns ─────────────────────────────────────────────────────────────
+// ANY size raw JSON blocks
+const RE_RAW_JSON_BLOCK_LARGE = /```json\n?\{[\s\S]{300,}\}\n?```/g;
+// Raw JSON outside code blocks (objects > 200 chars with typical JSON structure)
+const RE_RAW_JSON_INLINE  = /\{\s*"[^"]+"\s*:\s*[\s\S]{200,}?\}/g;
+// Internal debug log lines from multiple sources
+const RE_DEBUG_LOG_LINE   = /^\[(?:RAKAY|RAKAYEngine|Engine|RakayTools|Provider|CB:|CB |PQ|MultiProvider|Tool|Ollama|OpenAI|Anthropic|Gemini|DeepSeek|LLM|Stream|Queue|Mutex|Session)\].+$/gm;
+// ALL tool banner variants — remove completely from user-visible output
+const RE_TOOL_BANNER_ALL  = /🔧\s*\*?Using (?:tool|intelligence|tools)[^*\n]*\*?\s*\n?/g;
+const RE_TOOL_COLON       = /🔧\s*Using tool:\s*[^\n]+\n?/g;
+// Stack traces
+const RE_STACK_TRACE      = /\s+at \w+.*\(.*:\d+:\d+\)\n?/g;
+// API key leaks
+const RE_API_KEY_LEAK     = /sk-[a-zA-Z0-9\-_]{20,}/g;
+// Demo mode messages — replace with built-in message
+const RE_DEMO_MODE        = /(?:demo mode|mock mode|limited mode|fallback mode|offline mode|degraded mode)/gi;
+// Limited capability note (added by old processor)
+const RE_LIMITED_CAP_NOTE = />\s*⚠️\s*\*\*Note:\*\*.*limited-capability mode.*\n?/g;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  STAGE 1 — CLEAN
-//  Remove debug noise: raw JSON dumps, stack traces, API key leaks,
-//  duplicate tool banners, internal logging lines.
+//  Remove ALL debug noise: raw JSON, stack traces, API keys, ALL tool banners.
 // ─────────────────────────────────────────────────────────────────────────────
 function _clean(text) {
   if (!text || typeof text !== 'string') return text || '';
 
   let out = text;
 
-  // 1a. Mask API keys (security)
+  // 1a. Mask API keys (security — must be first)
   out = out.replace(RE_API_KEY_LEAK, 'sk-***');
 
-  // 1b. Remove stack-trace lines (never user-visible)
+  // 1b. Remove stack-trace lines
   out = out.replace(RE_STACK_TRACE, '');
 
-  // 1c. Remove internal log lines (lines starting with [Engine], [CB:] etc.)
+  // 1c. Remove internal debug log lines
   out = out.replace(RE_DEBUG_LOG_LINE, '');
 
-  // 1d. Collapse duplicate tool-use banners into a single indicator
-  out = out.replace(RE_DUPLICATE_TOOL_BANNER, '🔧 *Using intelligence sources…*\n\n');
+  // 1d. Remove ALL tool-use banners completely (Task 5 — no tool spam)
+  out = out.replace(RE_TOOL_BANNER_ALL, '');
+  out = out.replace(RE_TOOL_COLON, '');
 
-  // 1e. Shorten overly verbose single tool banners
-  out = out.replace(RE_TOOL_BANNER_SINGLE, '🔧 *Using intelligence sources…*\n\n');
+  // 1e. Remove large raw JSON code blocks
+  out = out.replace(RE_RAW_JSON_BLOCK_LARGE, '');
 
-  // 1f. Remove excessively large raw JSON code blocks (>500 chars)
-  //     Replace with a concise summary note
-  out = out.replace(RE_RAW_JSON_BLOCK, '_[Raw data available — processed and summarised above]_\n');
+  // 1f. Remove inline raw JSON objects that are too large
+  // (but ONLY outside code blocks — don't touch yaml/kql/spl inside ```)
+  out = _stripInlineJSON(out);
 
-  // 1g. Trim excessive blank lines (>2 consecutive)
+  // 1g. Replace "demo mode" / "limited mode" references
+  out = out.replace(RE_DEMO_MODE, 'built-in threat intelligence');
+
+  // 1h. Remove old "limited-capability mode" footnotes
+  out = out.replace(RE_LIMITED_CAP_NOTE, '');
+
+  // 1i. Trim excessive blank lines (>2 consecutive)
   out = out.replace(/\n{4,}/g, '\n\n\n');
 
   return out.trim();
+}
+
+/**
+ * Strip large raw JSON objects that appear OUTSIDE of fenced code blocks.
+ * Preserves Sigma/KQL/SPL content inside ``` blocks.
+ */
+function _stripInlineJSON(text) {
+  const parts = text.split(/(```[\s\S]*?```)/g);
+  return parts.map((part, i) => {
+    // Even indices = outside code blocks
+    if (i % 2 === 0) {
+      return part.replace(/\{[\s\S]{300,}?\}/g, match => {
+        // Only strip if it looks like JSON (has "key": pattern)
+        if (/"[^"]+"\s*:/.test(match)) return '';
+        return match;
+      });
+    }
+    return part; // Leave code blocks untouched
+  }).join('');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -113,19 +139,26 @@ function _enrich(text, context = {}) {
 
   let out = text;
 
-  // 3a. Expand MITRE technique IDs (T1059, T1059.001, etc.)
-  out = MITREEnricher.enrichText(out);
+  // 3a. Expand MITRE technique IDs (T1059, T1059.001, etc.) — safe fallback if enricher unavailable
+  if (MITREEnricher && typeof MITREEnricher.enrichText === 'function') {
+    try { out = MITREEnricher.enrichText(out); } catch(e) { /* skip enrichment */ }
+  }
 
   // 3b. Add CVE severity context if CVE IDs are mentioned without severity
-  // Pattern: CVE-YYYY-NNNNN not followed by severity info within 200 chars
-  out = out.replace(/\b(CVE-\d{4}-\d{4,})\b(?![^.]*(?:critical|high|medium|low|cvss|severity))/gi, (match, cveId) => {
-    const ctx = MITREEnricher.getCVEContext(cveId);
-    return ctx ? `${match} _(${ctx})_` : match;
-  });
+  if (MITREEnricher && typeof MITREEnricher.getCVEContext === 'function') {
+    out = out.replace(/\b(CVE-\d{4}-\d{4,})\b(?![^.]*(?:critical|high|medium|low|cvss|severity))/gi, (match, cveId) => {
+      try {
+        const ctx = MITREEnricher.getCVEContext(cveId);
+        return ctx ? `${match} _(${ctx})_` : match;
+      } catch(e) { return match; }
+    });
+  }
 
-  // 3c. Normalise provider/model labels in degraded mode notes
-  if (context.degraded) {
-    out += '\n\n> ⚠️ **Note:** This response was generated in limited-capability mode. Full AI analysis is available when connectivity is restored.';
+  // 3c. Degraded mode: show ⚠️ indicator but DO NOT add "limited-capability" text
+  //     The fallback functions already prepend "⚠️ Using built-in threat intelligence"
+  //     so we only add a minimal note if the response doesn't already have one
+  if (context.degraded && !out.includes('⚠️')) {
+    out = `⚠️ Using built-in threat intelligence\n\n${out}`;
   }
 
   return out;

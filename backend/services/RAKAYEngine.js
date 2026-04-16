@@ -825,21 +825,21 @@ function _hybridFallback(message) {
   const s = message.toLowerCase();
 
   try {
-    // ── CVE query ──────────────────────────────────────────────────────────
+    // ── CVE lookup by ID ───────────────────────────────────────────────────
     const cveMatch = message.match(/CVE-\d{4}-\d+/i);
     if (cveMatch && _intelDB) {
       const cveId = cveMatch[0].toUpperCase();
       const formatted = _intelDB.formatCVEForSOC(cveId);
-      if (!formatted.startsWith('No local data')) {
+      if (formatted && !formatted.startsWith('No local data')) {
         return `⚠️ Using built-in threat intelligence\n\n${formatted}`;
       }
     }
 
-    // ── MITRE lookup ───────────────────────────────────────────────────────
+    // ── MITRE technique lookup ─────────────────────────────────────────────
     const mitreMatch = message.match(/T\d{4}(?:\.\d{3})?/i);
-    if (mitreMatch && _intelDB) {
+    if (mitreMatch) {
       const techId = mitreMatch[0].toUpperCase();
-      // Detection rules
+      // Try DetectionEngine first (has Sigma/KQL/SPL)
       if (_detectionEngine) {
         const info = _detectionEngine.getTechniqueInfo(techId);
         if (info) {
@@ -847,57 +847,121 @@ function _hybridFallback(message) {
           return `⚠️ Using built-in threat intelligence\n\n${formatted}`;
         }
       }
-      // MITRE DB lookup
-      const formatted = _intelDB.formatMITREForSOC(techId);
-      if (!formatted.startsWith('No local data')) {
-        return `⚠️ Using built-in threat intelligence\n\n${formatted}`;
+      // Fallback to IntelDB MITRE store
+      if (_intelDB) {
+        const formatted = _intelDB.formatMITREForSOC(techId);
+        if (formatted && !formatted.startsWith('No local data')) {
+          return `⚠️ Using built-in threat intelligence\n\n${formatted}`;
+        }
       }
     }
 
+    // ── Latest CVEs / vulnerabilities ──────────────────────────────────────
+    if (_intelDB && (
+      s.includes('latest') || s.includes('recent cve') || s.includes('critical cve') ||
+      s.includes('exploited') || s.includes('recent vuln') || s.includes('new cve') ||
+      s.includes('vulnerability') || (s.includes('cve') && !cveMatch)
+    )) {
+      const cves = _intelDB.getLatestCritical(10);
+      const lines = cves.map(c =>
+        `| **${c.id}** | ${c.vendor || 'N/A'} | ${c.product || ''} | CVSS ${c.cvss_score} | ${c.exploited ? '🔴 **Exploited ITW**' : '🟡 No ITW'} | ${c.published_date} |`
+      );
+      return `⚠️ Using built-in threat intelligence
+
+## Overview
+**${cves.length} Latest Critical & High CVEs** from built-in intelligence database (CVSS ≥9.0, includes exploited-in-wild).
+
+## Why It Matters
+Exploited-in-the-wild CVEs represent active threats. Patch these immediately — attackers are already using them. CISA KEV tracks all actively exploited CVEs.
+
+## Detection Guidance
+
+| CVE ID | Vendor | Product | CVSS | Status | Published |
+|--------|--------|---------|------|--------|-----------|
+${lines.join('\n')}
+
+## Mitigation
+1. **Immediately patch** all exploited-in-wild CVEs (🔴)
+2. **Prioritise** CVSS ≥ 9.0 on internet-facing systems
+3. Subscribe to [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) for real-time alerts
+4. Enable vendor security advisories for all affected products
+
+## Analyst Tip
+Remediation priority order: (1) Exploited ITW + internet-facing, (2) CVSS 10.0 internal, (3) CVSS 9.0+. Query NVD for full technical details: https://nvd.nist.gov/vuln/search`;
+    }
+
+    // ── PowerShell / scripting attacks ─────────────────────────────────────
+    if (_detectionEngine && (
+      s.includes('powershell') || s.includes('ps1') || s.includes('encoded command') ||
+      s.includes('scriptblock') || s.includes('invoke-expression')
+    )) {
+      return `⚠️ Using built-in threat intelligence\n\n${_detectionEngine.formatSOCResponse('T1059.001')}`;
+    }
+
     // ── Sigma generation ───────────────────────────────────────────────────
-    if (_detectionEngine && (s.includes('sigma') || s.includes('detection rule') || s.includes('generate rule'))) {
-      // Try to extract technique from message
+    if (_detectionEngine && (
+      s.includes('sigma') || s.includes('detection rule') || s.includes('generate rule') ||
+      s.includes('yara') || s.includes('detection query')
+    )) {
       const techId = (message.match(/T\d{4}(?:\.\d{3})?/i) || [])[0];
       const technique = techId ? techId.toUpperCase() : 'T1059.001';
       const sigma = _detectionEngine.generateSigma(technique);
       const kql   = _detectionEngine.generateKQL(technique);
-      if (sigma && !sigma.found === false) {
+      const spl   = _detectionEngine.generateSPL(technique);
+      if (sigma && sigma.found === true) {
         return `⚠️ Using built-in threat intelligence
 
 ## Overview
-Detection rules generated locally for **${sigma.name}** (${sigma.technique}).
+Detection rules generated for **${sigma.name}** (${sigma.technique}) — ${sigma.tactic} tactic, severity **${sigma.severity.toUpperCase()}**.
+
+## Why It Matters
+${sigma.name} is a commonly abused technique. Detecting it early in the kill chain prevents escalation.
 
 ## Detection Guidance
 
-### Sigma Rule
+### Sigma Rule (Universal — works with any SIEM via sigma-cli)
 \`\`\`yaml
 ${sigma.content}
 \`\`\`
 
-### KQL — Microsoft Sentinel
+### KQL — Microsoft Sentinel / Defender XDR
 \`\`\`kql
 ${kql.content}
 \`\`\`
+
+### SPL — Splunk
+\`\`\`spl
+${spl.content}
+\`\`\`
+
+## Mitigation
+${_getMitigation(technique)}
 
 ## Analyst Tip
 ${sigma.metadata.analystNote}`;
       }
     }
 
-    // ── KQL generation ─────────────────────────────────────────────────────
-    if (_detectionEngine && (s.includes('kql') || s.includes('sentinel') || s.includes('defender query'))) {
+    // ── KQL / Sentinel ─────────────────────────────────────────────────────
+    if (_detectionEngine && (
+      s.includes('kql') || s.includes('sentinel') || s.includes('defender') ||
+      s.includes('microsoft') || s.includes('azure monitor')
+    )) {
       const techId = (message.match(/T\d{4}(?:\.\d{3})?/i) || [])[0];
       const technique = techId ? techId.toUpperCase() : 'T1059.001';
       const kql = _detectionEngine.generateKQL(technique);
-      if (kql && !kql.found === false) {
+      if (kql && kql.found === true) {
         return `⚠️ Using built-in threat intelligence
 
 ## Overview
-KQL query generated locally for **${kql.name}** (${kql.technique}) — ${kql.siem}.
+KQL detection query for **${kql.name}** (${kql.technique}) in ${kql.siem}.
+
+## Why It Matters
+Microsoft Sentinel and Defender XDR are key detection platforms. This query surfaces suspicious activity matching the ${kql.name} technique.
 
 ## Detection Guidance
 
-### KQL Query
+### KQL Query — Microsoft Sentinel / Defender XDR
 \`\`\`kql
 ${kql.content}
 \`\`\`
@@ -907,74 +971,153 @@ ${kql.metadata.analystNote}`;
       }
     }
 
-    // ── Ransomware / simulate ──────────────────────────────────────────────
-    if (s.includes('ransom') || s.includes('simulate') || s.includes('attack chain') || s.includes('incident')) {
-      if (_simulator) {
-        const scenario = s.includes('apt') ? 'apt espionage' :
-                        s.includes('phish') ? 'phishing' :
-                        s.includes('supply') ? 'supply chain' : 'ransomware';
-        const result = _simulator.simulate(scenario);
-        return `⚠️ Using built-in threat intelligence\n\n${_simulator.formatForSOC(result)}`;
-      }
-    }
-
-    // ── Latest CVEs ────────────────────────────────────────────────────────
-    if (_intelDB && (s.includes('latest') || s.includes('critical cve') || s.includes('exploited') || s.includes('recent vuln'))) {
-      const cves = _intelDB.getLatestCritical(8);
-      const lines = cves.map(c =>
-        `| ${c.id} | ${c.vendor} | CVSS ${c.cvss_score} | ${c.exploited ? '🔴 Exploited' : '🟡 No ITW'} | ${c.published_date} |`
-      );
-      return `⚠️ Using built-in threat intelligence
+    // ── SPL / Splunk ────────────────────────────────────────────────────────
+    if (_detectionEngine && (s.includes('spl') || s.includes('splunk'))) {
+      const techId = (message.match(/T\d{4}(?:\.\d{3})?/i) || [])[0];
+      const technique = techId ? techId.toUpperCase() : 'T1059.001';
+      const spl = _detectionEngine.generateSPL(technique);
+      if (spl && spl.found === true) {
+        return `⚠️ Using built-in threat intelligence
 
 ## Overview
-**Latest Critical CVEs** from local intelligence database.
-
-## Why It Matters
-These critical vulnerabilities require immediate attention. Exploited-in-the-wild CVEs have the highest risk priority.
+SPL detection query for **${spl.name}** (${spl.technique}) in ${spl.siem}.
 
 ## Detection Guidance
 
-| CVE ID | Vendor | CVSS | Status | Published |
-|--------|--------|------|--------|-----------|
-${lines.join('\n')}
-
-## Mitigation
-Apply vendor patches immediately for exploited CVEs. Monitor [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) for timeline.
+### SPL Query — Splunk
+\`\`\`spl
+${spl.content}
+\`\`\`
 
 ## Analyst Tip
-Sort remediation by: (1) Exploited-in-wild, (2) CVSS ≥9.0, (3) Public-facing systems first.`;
-    }
-
-    // ── PowerShell specific ────────────────────────────────────────────────
-    if (_detectionEngine && (s.includes('powershell') || s.includes('ps1') || s.includes('encoded'))) {
-      const all = _detectionEngine.generateAll('T1059.001');
-      if (all.sigma) {
-        return `⚠️ Using built-in threat intelligence
-
-${_detectionEngine.formatSOCResponse('T1059.001')}`;
+${spl.metadata.analystNote}`;
       }
     }
 
-    // ── Generic MITRE/threat search ────────────────────────────────────────
+    // ── Ransomware / simulation ────────────────────────────────────────────
+    if (s.includes('ransom') || s.includes('simulate') || s.includes('attack chain') ||
+        s.includes('incident') || s.includes('wiper') || s.includes('double extortion')) {
+      if (_simulator) {
+        const scenario = s.includes('apt') ? 'apt espionage' :
+                        s.includes('phish') ? 'phishing' :
+                        s.includes('supply') ? 'supply chain' :
+                        s.includes('lateral') ? 'lateral-movement' : 'ransomware';
+        const result = _simulator.simulate(scenario);
+        return `⚠️ Using built-in threat intelligence\n\n${_simulator.formatForSOC(result)}`;
+      }
+      // Fallback without simulator
+      return `⚠️ Using built-in threat intelligence
+
+## Overview
+**Ransomware Attack Chain** — Typical 12-phase enterprise ransomware scenario.
+
+## Why It Matters
+Modern ransomware operators use double/triple extortion. Average dwell time is 9 days before detonation, giving defenders a detection window.
+
+## Detection Guidance
+Key detection points:
+- **Initial Access**: Monitor for spearphishing (T1566), exposed RDP (T1190), VPN brute-force
+- **Execution**: PowerShell encoded commands (T1059.001), WMI (T1047)
+- **Persistence**: Scheduled tasks (T1053.005), registry run keys (T1547.001)
+- **Lateral Movement**: Pass-the-hash (T1550.002), PsExec (T1021.002)
+- **Exfiltration**: Unusual outbound traffic volumes, Rclone/MEGAsync presence
+- **Impact**: Shadow copy deletion (vssadmin delete shadows), rapid file encryption
+
+## Mitigation
+1. Immutable backups (3-2-1 rule, offline copy)
+2. MFA on all remote access
+3. Disable RDP where not needed; use jump hosts
+4. Credential Guard + LAPS deployment
+5. Network segmentation — prevent lateral movement
+
+## Analyst Tip
+Deploy honeypot files in shared drives. Rapid encryption of >100 files/min is a near-certain ransomware indicator.`;
+    }
+
+    // ── Credential dumping ─────────────────────────────────────────────────
+    if (_detectionEngine && (
+      s.includes('credential') || s.includes('lsass') || s.includes('mimikatz') ||
+      s.includes('dump') || s.includes('hash') || s.includes('ntlm')
+    )) {
+      return `⚠️ Using built-in threat intelligence\n\n${_detectionEngine.formatSOCResponse('T1003.001')}`;
+    }
+
+    // ── Lateral movement ───────────────────────────────────────────────────
+    if (_detectionEngine && (
+      s.includes('lateral') || s.includes('rdp') || s.includes('smb') ||
+      s.includes('wmi') || s.includes('psexec') || s.includes('pass-the-hash')
+    )) {
+      const tech = s.includes('rdp') ? 'T1021.001' : s.includes('smb') ? 'T1021.002' : 'T1021.001';
+      const info = _detectionEngine.getTechniqueInfo(tech);
+      if (info) return `⚠️ Using built-in threat intelligence\n\n${_detectionEngine.formatSOCResponse(tech)}`;
+    }
+
+    // ── Generic keyword search ─────────────────────────────────────────────
     if (_intelDB) {
-      const kw = s.replace(/[^a-z0-9 ]/g, '').split(' ').filter(w => w.length > 4).join(' ');
+      const stopwords = new Set(['what','how','the','and','for','with','that','this','from','have','been','will','are','can','show','give','tell','about','explain','describe']);
+      const kw = s.replace(/[^a-z0-9 ]/g, '')
+                  .split(/\s+/)
+                  .filter(w => w.length > 3 && !stopwords.has(w))
+                  .slice(0, 5)
+                  .join(' ');
       if (kw) {
-        const techs = _intelDB.searchMITRE({ keyword: kw, limit: 3 });
-        const cves  = _intelDB.searchCVEs({ keyword: kw, limit: 3 });
+        const techs = _intelDB.searchMITRE({ keyword: kw, limit: 5 });
+        const cves  = _intelDB.searchCVEs({ keyword: kw, limit: 5 });
         if (techs.length || cves.length) {
-          const lines = [];
+          const sections = [];
+
           if (techs.length) {
-            lines.push('## Overview\n**Related MITRE Techniques**:');
-            techs.forEach(t => lines.push(`- **${t.id}** — ${t.name} (${t.tactic})`));
+            sections.push('## Overview\n**Related MITRE ATT&CK Techniques**:');
+            techs.forEach(t => sections.push(`- **${t.id}** — ${t.name} *(${t.tactic})* — ${t.severity || 'medium'} severity`));
           }
+
           if (cves.length) {
-            lines.push('\n**Related CVEs**:');
-            cves.forEach(c => lines.push(`- **${c.id}** — CVSS ${c.cvss_score} ${c.exploited?'🔴 Exploited ITW':''}`));
+            if (!sections.length) sections.push('## Overview');
+            sections.push('\n**Related CVEs**:');
+            cves.forEach(c => sections.push(
+              `- **${c.id}** — CVSS ${c.cvss_score} ${c.exploited ? '🔴 **Exploited ITW**' : ''} — ${c.vendor} ${c.product || ''}`
+            ));
           }
-          lines.push('\n## Analyst Tip\nUse ATT&CK Navigator for coverage analysis. Query NVD for full CVE details.');
-          return `⚠️ Using built-in threat intelligence\n\n${lines.join('\n')}`;
+
+          // Add detection for first matched technique
+          if (techs.length && _detectionEngine) {
+            const firstTech = techs[0].id;
+            const info = _detectionEngine.getTechniqueInfo(firstTech);
+            if (info) {
+              sections.push(`\n## Detection Guidance\nFull detection rules available for **${firstTech}** (${techs[0].name}):`);
+              sections.push(`*Ask RAKAY: "Generate Sigma rule for ${firstTech}" for complete Sigma/KQL/SPL rules*`);
+            }
+          }
+
+          sections.push('\n## Analyst Tip\nUse MITRE ATT&CK Navigator to visualise coverage. Cross-reference CVEs with MITRE techniques for complete attack surface mapping.');
+          return `⚠️ Using built-in threat intelligence\n\n${sections.join('\n')}`;
         }
       }
+    }
+
+    // ── Final catch-all ────────────────────────────────────────────────────
+    if (_intelDB) {
+      const cves = _intelDB.getLatestCritical(5);
+      return `⚠️ Using built-in threat intelligence
+
+## Overview
+RAKAY built-in intelligence is active. Here are the most critical current threats:
+
+## Detection Guidance
+
+**Top Critical CVEs (Exploited in Wild):**
+${cves.filter(c => c.exploited).slice(0, 5).map(c =>
+  `- **${c.id}** (CVSS ${c.cvss_score}) — ${c.vendor}: ${c.description.substring(0, 100)}…`
+).join('\n')}
+
+**Key Detection Techniques:**
+- T1059.001 — PowerShell Execution (ask for Sigma/KQL/SPL rules)
+- T1003.001 — LSASS Credential Dumping
+- T1486 — Data Encrypted for Impact (Ransomware)
+- T1190 — Exploit Public-Facing Application
+
+## Analyst Tip
+Try asking: "Generate Sigma rule for PowerShell", "Explain CVE-2021-44228", or "Simulate ransomware attack"`;
     }
 
   } catch (fallbackErr) {
@@ -982,6 +1125,19 @@ ${_detectionEngine.formatSOCResponse('T1059.001')}`;
   }
 
   return null; // No local match found — caller will handle
+}
+
+// ── Helper: mitigations lookup (fallback) ─────────────────────────────────────
+function _getMitigation(techId) {
+  const mitigations = {
+    'T1059.001': 'Disable PowerShell for standard users via AppLocker/WDAC. Enable ScriptBlock logging (Event 4104). Use Constrained Language Mode. Deploy AMSI-integrated AV.',
+    'T1003.001': 'Enable Credential Guard. Restrict LSASS access via Protected Process Light. Remove debug privileges from non-admin accounts. Deploy LAPS.',
+    'T1486':     'Implement immutable offline backups (3-2-1). Restrict write permissions. Deploy behavioural AV. Test recovery procedures quarterly.',
+    'T1190':     'Apply patches within 72h for critical CVEs. Enable WAF rules. Segment internet-facing systems. Monitor for anomalous inbound connections.',
+    'T1021.001': 'Disable direct RDP to workstations. Require MFA for RDP. Monitor for sequential RDP connections. Limit who can initiate RDP sessions.',
+    'T1021.002': 'Restrict SMBv1. Block lateral SMB with host firewall. Monitor file-share access patterns. Use network segmentation.',
+  };
+  return mitigations[techId] || 'Apply principle of least privilege. Enable comprehensive logging. Deploy EDR with behavioural analysis. Patch promptly.';
 }
 
 // ── Singleton engine instance ─────────────────────────────────────────────────
