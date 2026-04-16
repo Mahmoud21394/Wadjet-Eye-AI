@@ -367,6 +367,9 @@ app.use('/api/cve',            cveIntelRoutes);
 app.use('/api/adversary-sim',  adversarySimRoutes);
 app.use('/api/threat-graph',   threatGraphRoutes);
 app.use('/api/whatif',         whatifRoutes);
+// ── v7.0 New Routes ───────────────────────────────────────────────
+const rbacRoutes = require('./routes/rbac');
+app.use('/api/rbac',           rbacRoutes);
 // ════════════════════════════════════════════════════════════════
 //  404 HANDLER — catches all unmatched routes
 //  Must be placed AFTER all route registrations
