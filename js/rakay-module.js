@@ -1743,9 +1743,15 @@
     return `
     <div class="rakay-welcome ${statusClass}">
       ${statusBanner}
-      <div class="rakay-welcome-logo"><i class="fas fa-robot"></i></div>
-      <h2 class="rakay-welcome-title">RAKAY — AI Security Analyst</h2>
-      <p class="rakay-welcome-sub">Powered by Wadjet-Eye AI Platform</p>
+      <div class="rakay-welcome-logo"><i class="fas fa-shield-alt"></i></div>
+      <h2 class="rakay-welcome-title">RAKAY — SOC Analyst Assistant</h2>
+      <p class="rakay-welcome-sub">AI-powered · Detection Engineering · Threat Intelligence · Incident Response</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:4px">
+        <button style="background:#22d3ee14;border:1px solid #22d3ee40;color:#22d3ee;border-radius:8px;padding:6px 14px;cursor:pointer;font-size:12px" onclick="window._socSwitchTab('intel')"><i class="fas fa-database"></i> Threat Intel</button>
+        <button style="background:#a855f714;border:1px solid #a855f740;color:#a855f7;border-radius:8px;padding:6px 14px;cursor:pointer;font-size:12px" onclick="window._socSwitchTab('detect')"><i class="fas fa-shield-alt"></i> Detection Rules</button>
+        <button style="background:#f0883e14;border:1px solid #f0883e40;color:#f0883e;border-radius:8px;padding:6px 14px;cursor:pointer;font-size:12px" onclick="window._socSwitchTab('simulate')"><i class="fas fa-flask"></i> Simulate Attack</button>
+        <button style="background:#d2992214;border:1px solid #d2992240;color:#d29922;border-radius:8px;padding:6px 14px;cursor:pointer;font-size:12px" onclick="window._socSwitchTab('alerts')"><i class="fas fa-bell"></i> Alerts</button>
+      </div>
       <div class="rakay-welcome-prompts">
         <button class="rakay-prompt-chip" onclick="window._rakayQuickPrompt(this)">
           <i class="fas fa-file-code"></i> Generate Sigma rule for PowerShell encoded commands
@@ -1764,6 +1770,12 @@
         </button>
         <button class="rakay-prompt-chip" onclick="window._rakayQuickPrompt(this)">
           <i class="fas fa-bug"></i> What is CVE-2021-44228 and how do I detect Log4Shell?
+        </button>
+        <button class="rakay-prompt-chip" onclick="window._rakayQuickPrompt(this)">
+          <i class="fas fa-lock"></i> Simulate a ransomware attack and give me the response playbook
+        </button>
+        <button class="rakay-prompt-chip" onclick="window._rakayQuickPrompt(this)">
+          <i class="fas fa-database"></i> Generate SPL and KQL for LSASS credential dumping T1003.001
         </button>
       </div>
     </div>`;
@@ -2377,9 +2389,622 @@
   background: #f0883e14; border: 1px solid #f0883e40; border-radius: 4px;
   padding: 1px 5px; font-size: 10px; color: #f0883e;
 }
+
+/* ══════════════════════════════════════
+   SOC DASHBOARD — Tab Navigation & Panels
+══════════════════════════════════════ */
+.rakay-soc-tabs {
+  display: flex; align-items: center; gap: 2px;
+  padding: 8px 16px 0;
+  background: var(--bg-secondary, #161b22);
+  border-bottom: 1px solid var(--border, #30363d);
+  flex-shrink: 0; overflow-x: auto;
+}
+.rakay-soc-tabs::-webkit-scrollbar { height: 3px; }
+.rakay-soc-tabs::-webkit-scrollbar-thumb { background: #30363d; }
+.rakay-soc-tab {
+  padding: 8px 16px; border: none; border-radius: 6px 6px 0 0;
+  background: none; color: #8b949e; cursor: pointer;
+  font-size: 13px; font-weight: 500; white-space: nowrap;
+  transition: all .15s; display: flex; align-items: center; gap: 7px;
+  border-bottom: 2px solid transparent;
+}
+.rakay-soc-tab:hover { color: #c9d1d9; background: #21262d; }
+.rakay-soc-tab.active { color: #22d3ee; border-bottom-color: #22d3ee; background: #22d3ee0a; }
+.rakay-soc-tab i { font-size: 12px; }
+
+.rakay-soc-panel {
+  flex: 1; min-height: 0;
+}
+.rakay-soc-panel[data-panel="chat"] {
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.soc-panel-scroll {
+  overflow-y: auto; flex-direction: column;
+}
+.soc-panel-scroll::-webkit-scrollbar { width: 5px; }
+.soc-panel-scroll::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+.soc-panel-inner {
+  padding: 20px; display: flex; flex-direction: column; gap: 20px; min-height: min-content;
+}
+.soc-panel-section {
+  background: var(--bg-secondary, #161b22);
+  border: 1px solid var(--border, #30363d);
+  border-radius: 12px; padding: 16px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.soc-section-header {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 14px; font-weight: 600; color: #c9d1d9;
+}
+.soc-section-header > span { flex: 1; display: flex; align-items: center; gap: 8px; }
+.soc-panel-desc { font-size: 13px; color: #8b949e; margin: 0; }
+.soc-refresh-btn {
+  background: none; border: 1px solid #30363d; color: #8b949e;
+  border-radius: 5px; padding: 4px 8px; cursor: pointer; font-size: 11px;
+  transition: all .12s; margin-left: auto;
+}
+.soc-refresh-btn:hover { background: #21262d; color: #c9d1d9; }
+
+/* ── Badges & Labels ──────────────── */
+.soc-badge {
+  font-size: 10px; font-weight: 700; padding: 2px 7px;
+  border-radius: 10px; letter-spacing: .03em;
+}
+.soc-badge--red    { background: #f8514914; border: 1px solid #f8514940; color: #f85149; }
+.soc-badge--orange { background: #f0883e14; border: 1px solid #f0883e40; color: #f0883e; }
+.soc-badge--yellow { background: #d2992214; border: 1px solid #d2992240; color: #d29922; }
+.soc-badge--blue   { background: #22d3ee14; border: 1px solid #22d3ee40; color: #22d3ee; }
+.soc-badge--grey   { background: #21262d;   border: 1px solid #30363d;   color: #6e7681; }
+.soc-cvss {
+  font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+}
+.soc-cvss--critical { background: #f8514922; color: #f85149; }
+.soc-cvss--high     { background: #f0883e22; color: #f0883e; }
+.soc-cvss--med      { background: #d2992222; color: #d29922; }
+.soc-tag {
+  background: #21262d; border: 1px solid #30363d;
+  border-radius: 4px; padding: 1px 6px; font-size: 10px; color: #8b949e;
+  margin-right: 3px;
+}
+.soc-mono { font-family: 'Fira Code', Consolas, monospace; font-size: 12px; color: #22d3ee; }
+.soc-mono--small { font-size: 10px; }
+
+/* ── Table ────────────────────────── */
+.soc-table-wrap { overflow-x: auto; }
+.soc-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.soc-table th {
+  background: #21262d; color: #8b949e; font-size: 11px; font-weight: 600;
+  padding: 8px 12px; border-bottom: 1px solid #30363d; text-align: left;
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.soc-table td { padding: 9px 12px; border-bottom: 1px solid #21262d; color: #c9d1d9; vertical-align: top; }
+.soc-table tr:last-child td { border-bottom: none; }
+.soc-table tr:hover td { background: #21262d; }
+.soc-td-desc { max-width: 260px; color: #8b949e; font-size: 12px; }
+.soc-empty { text-align: center; color: #6e7681; padding: 20px; }
+
+/* ── Action Button ────────────────── */
+.soc-action-btn {
+  background: #22d3ee14; border: 1px solid #22d3ee40; color: #22d3ee;
+  border-radius: 6px; padding: 5px 12px; cursor: pointer; font-size: 12px;
+  transition: all .12s; display: inline-flex; align-items: center; gap: 6px;
+}
+.soc-action-btn:hover { background: #22d3ee22; border-color: #22d3ee66; }
+
+/* ── Detection Cards ──────────────── */
+.soc-detect-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px;
+}
+.soc-detect-card {
+  background: #0d1117; border: 1px solid #30363d; border-radius: 10px;
+  padding: 14px; display: flex; flex-direction: column; gap: 8px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.soc-detect-card:hover { border-color: #22d3ee40; box-shadow: 0 0 12px #22d3ee10; }
+.soc-detect-card-header { display: flex; align-items: center; justify-content: space-between; }
+.soc-detect-card-name { font-size: 13px; font-weight: 600; color: #c9d1d9; }
+.soc-detect-card-tactic { font-size: 11px; color: #8b949e; text-transform: capitalize; }
+.soc-detect-card-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.soc-detect-btn {
+  background: #21262d; border: 1px solid #30363d; color: #8b949e;
+  border-radius: 5px; padding: 4px 8px; cursor: pointer; font-size: 11px;
+  transition: all .12s; display: flex; align-items: center; gap: 4px;
+}
+.soc-detect-btn:hover { background: #22d3ee14; border-color: #22d3ee40; color: #22d3ee; }
+
+/* ── Rule output ──────────────────── */
+.soc-rule-body { flex: 1; }
+
+/* ── Simulation ───────────────────── */
+.soc-sim-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 14px;
+}
+.soc-sim-card {
+  background: #0d1117; border: 1px solid #30363d; border-radius: 12px;
+  padding: 20px 16px; text-align: center; cursor: pointer;
+  transition: all .15s; display: flex; flex-direction: column; align-items: center; gap: 10px;
+}
+.soc-sim-card:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+.soc-sim-icon {
+  width: 52px; height: 52px; border-radius: 14px; border: 1px solid;
+  display: flex; align-items: center; justify-content: center; font-size: 22px;
+}
+.soc-sim-label { font-size: 13px; font-weight: 600; color: #c9d1d9; }
+.soc-sim-sub   { font-size: 11px; color: #6e7681; }
+.soc-sim-body, .soc-sim-result { display: flex; flex-direction: column; gap: 14px; }
+.soc-sim-section-title {
+  font-size: 13px; font-weight: 600; color: #c9d1d9;
+  display: flex; align-items: center; gap: 8px; margin: 0;
+}
+.soc-timeline { display: flex; flex-direction: column; gap: 0; }
+.soc-timeline-item {
+  display: flex; gap: 14px; padding-bottom: 14px;
+  border-left: 2px solid #30363d; margin-left: 8px; padding-left: 20px;
+  position: relative;
+}
+.soc-timeline-item:last-child { border-left-color: transparent; }
+.soc-timeline-dot {
+  width: 12px; height: 12px; border-radius: 50%;
+  position: absolute; left: -7px; top: 2px; flex-shrink: 0;
+}
+.soc-timeline-content { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.soc-timeline-title { font-size: 13px; font-weight: 600; color: #c9d1d9; }
+.soc-timeline-desc  { font-size: 12px; color: #8b949e; }
+.soc-list { padding-left: 1.2em; margin: 0; color: #8b949e; font-size: 13px; display: flex; flex-direction: column; gap: 5px; }
+.soc-list li { list-style: none; display: flex; align-items: flex-start; gap: 8px; }
+.soc-list--numbered li { list-style: decimal; }
+.soc-ioc-list { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ── Stats grid ───────────────────── */
+.soc-stats-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px;
+}
+.soc-stat-card {
+  background: #0d1117; border: 1px solid #30363d; border-radius: 10px;
+  padding: 16px 14px; text-align: center;
+}
+.soc-stat-value { font-size: 28px; font-weight: 700; line-height: 1; }
+.soc-stat-label { font-size: 11px; color: #6e7681; margin-top: 6px; }
+
+/* ── Insights ─────────────────────── */
+.soc-insights-list { display: flex; flex-direction: column; gap: 10px; }
+.soc-insight-item {
+  padding: 12px 14px; border-radius: 10px; border: 1px solid;
+  display: flex; gap: 12px; align-items: flex-start;
+}
+.soc-insight-item > i { font-size: 18px; flex-shrink: 0; margin-top: 2px; }
+.soc-insight-item > div { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.soc-insight-title { font-size: 13px; font-weight: 600; color: #c9d1d9; }
+.soc-insight-desc  { font-size: 12px; color: #8b949e; }
+.soc-insight--red    { background: #f8514910; border-color: #f8514930; }
+.soc-insight--red > i { color: #f85149; }
+.soc-insight--orange { background: #f0883e10; border-color: #f0883e30; }
+.soc-insight--orange > i { color: #f0883e; }
+.soc-insight--yellow { background: #d2992210; border-color: #d2992230; }
+.soc-insight--yellow > i { color: #d29922; }
+.soc-insight--blue   { background: #22d3ee10; border-color: #22d3ee30; }
+.soc-insight--blue > i { color: #22d3ee; }
+
+/* ── Fallback message ─────────────── */
+.soc-loading {
+  display: flex; align-items: center; gap: 10px;
+  color: #8b949e; font-size: 13px; padding: 30px 20px;
+}
+.soc-fallback-msg {
+  background: #f0883e0a; border: 1px solid #f0883e30; border-radius: 10px;
+  padding: 16px; font-size: 13px; color: #c9d1d9; line-height: 1.7;
+}
 `;
     document.head.appendChild(style);
   }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  SOC DASHBOARD PANELS
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // Active SOC tab state
+  let _socActiveTab = 'chat';
+
+  function _socSwitchTab(tab) {
+    _socActiveTab = tab;
+    // Update tab buttons
+    document.querySelectorAll('.rakay-soc-tab').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.tab === tab);
+    });
+    // Show/hide panels
+    document.querySelectorAll('.rakay-soc-panel').forEach(panel => {
+      panel.style.display = panel.dataset.panel === tab ? 'flex' : 'none';
+    });
+    // Sidebar: only visible on chat tab
+    const sidebar = document.getElementById('rakay-sidebar');
+    if (sidebar) sidebar.style.display = tab === 'chat' ? 'flex' : 'none';
+    // Lazy-load panel data
+    if (tab === 'intel')    _socLoadThreatIntel();
+    if (tab === 'detect')   _socLoadDetectionPanel();
+    if (tab === 'simulate') _socLoadSimulationPanel();
+    if (tab === 'alerts')   _socLoadAlertsPanel();
+  }
+
+  // ── Threat Intel Panel ──────────────────────────────────────────────────
+  async function _socLoadThreatIntel() {
+    const el = document.getElementById('soc-intel-content');
+    if (!el || el.dataset.loaded === '1') return;
+    el.innerHTML = '<div class="soc-loading"><i class="fas fa-circle-notch fa-spin"></i> Loading threat intelligence…</div>';
+    try {
+      const token = _resolveToken();
+      const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+      // Load critical CVEs and exploited CVEs in parallel
+      const [cveRes, exploitedRes] = await Promise.all([
+        fetch(`${API_BASE()}/api/soc/cves/critical`, { headers }),
+        fetch(`${API_BASE()}/api/soc/cves/exploited`, { headers }),
+      ]);
+      const cveData      = cveRes.ok      ? await cveRes.json()      : { data: [] };
+      const exploitedData= exploitedRes.ok? await exploitedRes.json(): { data: [] };
+      const cves         = cveData.data      || cveData.cves      || [];
+      const exploited    = exploitedData.data|| exploitedData.cves || [];
+      el.dataset.loaded  = '1';
+      el.innerHTML = `
+        <div class="soc-panel-section">
+          <div class="soc-section-header">
+            <i class="fas fa-exclamation-triangle" style="color:#f85149"></i>
+            <span>Critical CVEs <span class="soc-badge soc-badge--red">${cves.length}</span></span>
+            <button class="soc-refresh-btn" onclick="delete document.getElementById('soc-intel-content').dataset.loaded;window._socLoadThreatIntel()"><i class="fas fa-sync-alt"></i></button>
+          </div>
+          <div class="soc-table-wrap">
+            <table class="soc-table">
+              <thead><tr><th>CVE ID</th><th>Description</th><th>CVSS</th><th>Exploited</th><th>Action</th></tr></thead>
+              <tbody>${cves.length ? cves.map(c => `
+                <tr>
+                  <td><code class="soc-mono">${_e(c.id||c.cve_id||'')}</code></td>
+                  <td class="soc-td-desc">${_e((c.description||'').substring(0,80))}…</td>
+                  <td><span class="soc-cvss soc-cvss--${Number(c.cvss_score||c.cvss||0)>=9?'critical':Number(c.cvss_score||c.cvss||0)>=7?'high':'med'}">${c.cvss_score||c.cvss||'N/A'}</span></td>
+                  <td>${c.exploited||c.exploited_in_wild?'<span class="soc-badge soc-badge--red">YES</span>':'<span class="soc-badge soc-badge--grey">No</span>'}</td>
+                  <td><button class="soc-action-btn" onclick="window._rakayQuickAsk('What is ${_e(c.id||c.cve_id||'')} and how do I detect it?')"><i class="fas fa-robot"></i> Ask RAKAY</button></td>
+                </tr>`).join('') : '<tr><td colspan="5" class="soc-empty">No critical CVEs loaded</td></tr>'}</tbody>
+            </table>
+          </div>
+        </div>
+        <div class="soc-panel-section">
+          <div class="soc-section-header">
+            <i class="fas fa-fire" style="color:#f0883e"></i>
+            <span>Exploited in the Wild <span class="soc-badge soc-badge--orange">${exploited.length}</span></span>
+          </div>
+          <div class="soc-table-wrap">
+            <table class="soc-table">
+              <thead><tr><th>CVE ID</th><th>Description</th><th>CVSS</th><th>Tags</th></tr></thead>
+              <tbody>${exploited.length ? exploited.map(c => `
+                <tr>
+                  <td><code class="soc-mono">${_e(c.id||c.cve_id||'')}</code></td>
+                  <td class="soc-td-desc">${_e((c.description||'').substring(0,90))}…</td>
+                  <td><span class="soc-cvss soc-cvss--critical">${c.cvss_score||c.cvss||'N/A'}</span></td>
+                  <td>${(c.tags||[]).slice(0,3).map(t=>`<span class="soc-tag">${_e(t)}</span>`).join('')||'—'}</td>
+                </tr>`).join('') : '<tr><td colspan="4" class="soc-empty">No exploited CVEs loaded</td></tr>'}</tbody>
+            </table>
+          </div>
+        </div>`;
+    } catch (err) {
+      el.innerHTML = `<div class="soc-fallback-msg"><i class="fas fa-shield-alt"></i> ⚠️ Using built-in threat intelligence<br><small>${_e(err.message)}</small><br><br>
+        <b>Top Critical CVEs (Built-in):</b><br>
+        CVE-2021-44228 (Log4Shell) · CVSS 10.0 · RCE in Log4j · Actively exploited<br>
+        CVE-2023-34362 (MOVEit) · CVSS 9.8 · SQL injection · Actively exploited<br>
+        CVE-2021-26855 (ProxyLogon) · CVSS 9.8 · Exchange RCE · Actively exploited<br>
+        CVE-2022-30190 (Follina) · CVSS 7.8 · MSDT RCE · Actively exploited
+      </div>`;
+    }
+  }
+
+  // ── Detection Panel ─────────────────────────────────────────────────────
+  async function _socLoadDetectionPanel() {
+    const el = document.getElementById('soc-detect-content');
+    if (!el || el.dataset.loaded === '1') return;
+    el.innerHTML = '<div class="soc-loading"><i class="fas fa-circle-notch fa-spin"></i> Loading detection engine…</div>';
+    try {
+      const token = _resolveToken();
+      const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+      const res = await fetch(`${API_BASE()}/api/soc/detect/list`, { headers });
+      const data = res.ok ? await res.json() : { data: [] };
+      const techniques = data.data || data.techniques || [];
+      el.dataset.loaded = '1';
+      el.innerHTML = `
+        <div class="soc-panel-section">
+          <div class="soc-section-header">
+            <i class="fas fa-shield-alt" style="color:#22d3ee"></i>
+            <span>Detection Engine — ${techniques.length} MITRE Techniques</span>
+          </div>
+          <div class="soc-detect-grid">
+            ${techniques.map(t => `
+            <div class="soc-detect-card" data-id="${_e(t.id||t.technique_id||'')}">
+              <div class="soc-detect-card-header">
+                <code class="soc-mono soc-mono--small">${_e(t.id||t.technique_id||'')}</code>
+                <span class="soc-badge soc-badge--${t.severity==='critical'?'red':t.severity==='high'?'orange':'blue'}">${_e(t.severity||'medium')}</span>
+              </div>
+              <div class="soc-detect-card-name">${_e(t.name||t.technique||'')}</div>
+              <div class="soc-detect-card-tactic">${_e(t.tactic||'')}</div>
+              <div class="soc-detect-card-actions">
+                <button class="soc-detect-btn" onclick="window._socGenerateRule('${_e(t.id||t.technique_id||'')}','sigma')"><i class="fab fa-linux"></i> Sigma</button>
+                <button class="soc-detect-btn" onclick="window._socGenerateRule('${_e(t.id||t.technique_id||'')}','kql')"><i class="fas fa-database"></i> KQL</button>
+                <button class="soc-detect-btn" onclick="window._socGenerateRule('${_e(t.id||t.technique_id||'')}','spl')"><i class="fas fa-search"></i> SPL</button>
+              </div>
+            </div>`).join('')}
+          </div>
+        </div>
+        <div class="soc-panel-section" id="soc-rule-output" style="display:none">
+          <div class="soc-section-header">
+            <i class="fas fa-code" style="color:#a855f7"></i>
+            <span id="soc-rule-title">Detection Rule</span>
+            <button class="soc-refresh-btn" onclick="document.getElementById('soc-rule-output').style.display='none'"><i class="fas fa-times"></i></button>
+          </div>
+          <div id="soc-rule-body" class="soc-rule-body"></div>
+        </div>`;
+    } catch (err) {
+      el.innerHTML = `<div class="soc-fallback-msg"><i class="fas fa-shield-alt"></i> ⚠️ Using built-in detection templates<br>
+        <button class="soc-action-btn" style="margin-top:12px" onclick="window._rakayQuickAsk('Generate Sigma rule for PowerShell encoded command T1059.001')">
+          <i class="fas fa-robot"></i> Generate via RAKAY Chat
+        </button>
+      </div>`;
+    }
+  }
+
+  window._socGenerateRule = async function(techId, format) {
+    const outputEl = document.getElementById('soc-rule-output');
+    const bodyEl   = document.getElementById('soc-rule-body');
+    const titleEl  = document.getElementById('soc-rule-title');
+    if (!outputEl || !bodyEl) return;
+    outputEl.style.display = 'flex';
+    bodyEl.innerHTML = '<div class="soc-loading"><i class="fas fa-circle-notch fa-spin"></i> Generating rule…</div>';
+    titleEl.textContent = `${format.toUpperCase()} Rule — ${techId}`;
+    try {
+      const token = _resolveToken();
+      const headers = { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) };
+      const res = await fetch(`${API_BASE()}/api/soc/detect/${encodeURIComponent(techId)}/${format}`, { headers });
+      const data = res.ok ? await res.json() : null;
+      if (data && data.data) {
+        const rule = data.data;
+        bodyEl.innerHTML = `
+          <div class="rakay-code-wrap">
+            <span class="rakay-code-lang">${format}</span>
+            <button class="rakay-copy-btn" onclick="navigator.clipboard.writeText(this.nextElementSibling.textContent);this.textContent='Copied!'"><i class="fas fa-copy"></i></button>
+            <pre><code>${_e(typeof rule === 'string' ? rule : JSON.stringify(rule, null, 2))}</code></pre>
+          </div>`;
+      } else {
+        throw new Error('No rule data returned');
+      }
+    } catch (err) {
+      bodyEl.innerHTML = `<div class="soc-fallback-msg">⚠️ Using built-in template — ask RAKAY for full rule:<br>
+        <button class="soc-action-btn" style="margin-top:8px" onclick="window._rakayQuickAsk('Generate ${format.toUpperCase()} detection rule for ${techId}');window._socSwitchTab('chat')">
+          <i class="fas fa-robot"></i> Ask RAKAY
+        </button></div>`;
+    }
+    outputEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  };
+
+  // ── Simulation Panel ─────────────────────────────────────────────────────
+  async function _socLoadSimulationPanel() {
+    const el = document.getElementById('soc-sim-content');
+    if (!el || el.dataset.loaded === '1') return;
+    el.innerHTML = '<div class="soc-loading"><i class="fas fa-circle-notch fa-spin"></i> Loading simulation engine…</div>';
+    el.dataset.loaded = '1';
+    el.innerHTML = `
+      <div class="soc-panel-section">
+        <div class="soc-section-header">
+          <i class="fas fa-flask" style="color:#a855f7"></i>
+          <span>Incident Simulation Engine</span>
+        </div>
+        <p class="soc-panel-desc">Simulate realistic attack scenarios and get full attack chains, detection opportunities, and response playbooks.</p>
+        <div class="soc-sim-grid">
+          ${[
+            { scenario: 'ransomware',       icon: 'fa-lock',          color: '#f85149', label: 'Ransomware Attack' },
+            { scenario: 'phishing',         icon: 'fa-fish',          color: '#f0883e', label: 'Phishing Campaign' },
+            { scenario: 'supply-chain',     icon: 'fa-link',          color: '#d29922', label: 'Supply Chain Attack' },
+            { scenario: 'lateral-movement', icon: 'fa-project-diagram',color: '#22d3ee', label: 'Lateral Movement' },
+          ].map(s => `
+          <div class="soc-sim-card" onclick="window._socRunSimulation('${s.scenario}')">
+            <div class="soc-sim-icon" style="color:${s.color};border-color:${s.color}40;background:${s.color}14">
+              <i class="fas ${s.icon}"></i>
+            </div>
+            <div class="soc-sim-label">${s.label}</div>
+            <div class="soc-sim-sub">Click to simulate</div>
+          </div>`).join('')}
+        </div>
+      </div>
+      <div class="soc-panel-section" id="soc-sim-output" style="display:none">
+        <div class="soc-section-header">
+          <i class="fas fa-play-circle" style="color:#a855f7"></i>
+          <span id="soc-sim-title">Simulation Results</span>
+          <button class="soc-refresh-btn" onclick="document.getElementById('soc-sim-output').style.display='none'"><i class="fas fa-times"></i></button>
+        </div>
+        <div id="soc-sim-body" class="soc-sim-body"></div>
+      </div>`;
+  }
+
+  window._socRunSimulation = async function(scenario) {
+    const outputEl = document.getElementById('soc-sim-output');
+    const bodyEl   = document.getElementById('soc-sim-body');
+    const titleEl  = document.getElementById('soc-sim-title');
+    if (!outputEl || !bodyEl) return;
+    outputEl.style.display = 'flex';
+    bodyEl.innerHTML = '<div class="soc-loading"><i class="fas fa-circle-notch fa-spin"></i> Simulating attack scenario…</div>';
+    titleEl.textContent = `Simulation: ${scenario.replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}`;
+    try {
+      const token = _resolveToken();
+      const headers = { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) };
+      const res = await fetch(`${API_BASE()}/api/soc/simulate`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ scenario })
+      });
+      const data = res.ok ? await res.json() : null;
+      const sim = data?.data || data?.simulation || null;
+      if (sim) {
+        const phases = sim.attackChain || sim.attack_chain || [];
+        const detections = sim.detectionOpportunities || sim.detection_opportunities || [];
+        const response = sim.responseSteps || sim.response_steps || [];
+        const iocs = sim.iocs || [];
+        bodyEl.innerHTML = `
+          <div class="soc-sim-result">
+            <h3 class="soc-sim-section-title"><i class="fas fa-route"></i> Attack Chain (${phases.length} phases)</h3>
+            <div class="soc-timeline">
+              ${phases.map((p,i) => `
+              <div class="soc-timeline-item">
+                <div class="soc-timeline-dot" style="background:${['#f85149','#f0883e','#d29922','#22d3ee','#a855f7'][i%5]}"></div>
+                <div class="soc-timeline-content">
+                  <div class="soc-timeline-title">${_e(p.phase||p.name||`Phase ${i+1}`)}</div>
+                  <div class="soc-timeline-desc">${_e(p.description||p.action||'')}</div>
+                  ${p.technique?`<code class="soc-mono soc-mono--small">${_e(p.technique)}</code>`:''}
+                </div>
+              </div>`).join('')}
+            </div>
+            ${detections.length ? `
+            <h3 class="soc-sim-section-title"><i class="fas fa-eye"></i> Detection Opportunities</h3>
+            <ul class="soc-list">
+              ${detections.map(d => `<li><i class="fas fa-search" style="color:#22d3ee"></i> ${_e(d.description||d)}</li>`).join('')}
+            </ul>` : ''}
+            ${response.length ? `
+            <h3 class="soc-sim-section-title"><i class="fas fa-first-aid"></i> Response Playbook</h3>
+            <ol class="soc-list soc-list--numbered">
+              ${response.map(r => `<li>${_e(r.action||r.step||r)}</li>`).join('')}
+            </ol>` : ''}
+            ${iocs.length ? `
+            <h3 class="soc-sim-section-title"><i class="fas fa-fingerprint"></i> IOC Indicators</h3>
+            <div class="soc-ioc-list">
+              ${iocs.slice(0,10).map(i => `<code class="soc-mono soc-mono--small">${_e(i.value||i)}</code>`).join('')}
+            </div>` : ''}
+            <div style="margin-top:16px">
+              <button class="soc-action-btn" onclick="window._rakayQuickAsk('Simulate ${_e(scenario)} attack and give me the full incident response playbook');window._socSwitchTab('chat')">
+                <i class="fas fa-robot"></i> Deep-dive with RAKAY
+              </button>
+            </div>
+          </div>`;
+      } else {
+        throw new Error('No simulation data');
+      }
+    } catch (err) {
+      bodyEl.innerHTML = `<div class="soc-fallback-msg">⚠️ Using built-in simulation — ask RAKAY:<br>
+        <button class="soc-action-btn" style="margin-top:8px" onclick="window._rakayQuickAsk('Simulate ${_e(scenario)} attack scenario with full attack chain and response playbook');window._socSwitchTab('chat')">
+          <i class="fas fa-robot"></i> Ask RAKAY
+        </button></div>`;
+    }
+    outputEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  };
+
+  // ── Alerts Panel ─────────────────────────────────────────────────────────
+  async function _socLoadAlertsPanel() {
+    const el = document.getElementById('soc-alerts-content');
+    if (!el || el.dataset.loaded === '1') return;
+    el.innerHTML = '<div class="soc-loading"><i class="fas fa-circle-notch fa-spin"></i> Loading analyst insights…</div>';
+    try {
+      const token = _resolveToken();
+      const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+      const res = await fetch(`${API_BASE()}/api/soc/dashboard`, { headers });
+      const data = res.ok ? await res.json() : null;
+      const dash = data?.data || data?.dashboard || null;
+      el.dataset.loaded = '1';
+      if (dash) {
+        const stats = dash.stats || {};
+        const recentActivity = dash.recentActivity || dash.recent_activity || [];
+        el.innerHTML = `
+          <div class="soc-panel-section">
+            <div class="soc-section-header">
+              <i class="fas fa-tachometer-alt" style="color:#22d3ee"></i>
+              <span>SOC Platform Status</span>
+              <button class="soc-refresh-btn" onclick="delete document.getElementById('soc-alerts-content').dataset.loaded;window._socLoadAlertsPanel()"><i class="fas fa-sync-alt"></i></button>
+            </div>
+            <div class="soc-stats-grid">
+              <div class="soc-stat-card">
+                <div class="soc-stat-value" style="color:#f85149">${stats.totalCVEs||stats.total_cves||'20+'}</div>
+                <div class="soc-stat-label">Critical CVEs</div>
+              </div>
+              <div class="soc-stat-card">
+                <div class="soc-stat-value" style="color:#f0883e">${stats.exploitedCVEs||stats.exploited_cves||'8+'}</div>
+                <div class="soc-stat-label">Exploited in Wild</div>
+              </div>
+              <div class="soc-stat-card">
+                <div class="soc-stat-value" style="color:#22d3ee">${stats.totalTechniques||stats.total_techniques||'18'}</div>
+                <div class="soc-stat-label">Detection Rules</div>
+              </div>
+              <div class="soc-stat-card">
+                <div class="soc-stat-value" style="color:#a855f7">${stats.simulationScenarios||stats.simulation_scenarios||'4'}</div>
+                <div class="soc-stat-label">Attack Simulations</div>
+              </div>
+            </div>
+          </div>
+          <div class="soc-panel-section">
+            <div class="soc-section-header">
+              <i class="fas fa-lightbulb" style="color:#d29922"></i>
+              <span>Analyst Insights & Quick Actions</span>
+            </div>
+            <div class="soc-insights-list">
+              <div class="soc-insight-item soc-insight--red">
+                <i class="fas fa-exclamation-circle"></i>
+                <div>
+                  <div class="soc-insight-title">Log4Shell still actively exploited</div>
+                  <div class="soc-insight-desc">CVE-2021-44228 CVSS 10.0 — Patch immediately, enable WAF rules</div>
+                  <button class="soc-action-btn" onclick="window._rakayQuickAsk('How do I detect and respond to Log4Shell CVE-2021-44228?');window._socSwitchTab('chat')"><i class="fas fa-robot"></i> Ask RAKAY</button>
+                </div>
+              </div>
+              <div class="soc-insight-item soc-insight--orange">
+                <i class="fas fa-fire"></i>
+                <div>
+                  <div class="soc-insight-title">PowerShell LOLBin abuse rising</div>
+                  <div class="soc-insight-desc">T1059.001 — Enable ScriptBlock logging, monitor encoded commands</div>
+                  <button class="soc-action-btn" onclick="window._rakayQuickAsk('Generate Sigma rule for PowerShell encoded command T1059.001');window._socSwitchTab('chat')"><i class="fas fa-robot"></i> Generate Rule</button>
+                </div>
+              </div>
+              <div class="soc-insight-item soc-insight--yellow">
+                <i class="fas fa-user-secret"></i>
+                <div>
+                  <div class="soc-insight-title">Ransomware lateral movement via SMB</div>
+                  <div class="soc-insight-desc">T1021.002 — Monitor lateral SMB connections, isolate infected hosts</div>
+                  <button class="soc-action-btn" onclick="window._socSwitchTab('simulate');window._socRunSimulation('ransomware')"><i class="fas fa-flask"></i> Simulate</button>
+                </div>
+              </div>
+              <div class="soc-insight-item soc-insight--blue">
+                <i class="fas fa-database"></i>
+                <div>
+                  <div class="soc-insight-title">LSASS credential dumping detected</div>
+                  <div class="soc-insight-desc">T1003.001 — Enable Credential Guard, monitor LSASS access events</div>
+                  <button class="soc-action-btn" onclick="window._rakayQuickAsk('Generate detection rules for LSASS credential dumping T1003.001');window._socSwitchTab('chat')"><i class="fas fa-robot"></i> Ask RAKAY</button>
+                </div>
+              </div>
+            </div>
+          </div>`;
+      } else {
+        throw new Error('No dashboard data');
+      }
+    } catch (err) {
+      el.dataset.loaded = '1';
+      el.innerHTML = `
+        <div class="soc-panel-section">
+          <div class="soc-section-header"><i class="fas fa-lightbulb" style="color:#d29922"></i> <span>Analyst Insights</span></div>
+          <div class="soc-insights-list">
+            <div class="soc-insight-item soc-insight--red"><i class="fas fa-exclamation-circle"></i><div>
+              <div class="soc-insight-title">Log4Shell (CVE-2021-44228) — CVSS 10.0 — Actively Exploited</div>
+              <button class="soc-action-btn" onclick="window._rakayQuickAsk('How do I detect Log4Shell?');window._socSwitchTab('chat')"><i class="fas fa-robot"></i> Ask RAKAY</button>
+            </div></div>
+            <div class="soc-insight-item soc-insight--orange"><i class="fas fa-fire"></i><div>
+              <div class="soc-insight-title">MOVEit Transfer SQL Injection (CVE-2023-34362) — CVSS 9.8</div>
+              <button class="soc-action-btn" onclick="window._rakayQuickAsk('Explain CVE-2023-34362 MOVEit vulnerability');window._socSwitchTab('chat')"><i class="fas fa-robot"></i> Ask RAKAY</button>
+            </div></div>
+            <div class="soc-insight-item soc-insight--blue"><i class="fas fa-shield-alt"></i><div>
+              <div class="soc-insight-title">T1059.001 PowerShell abuse — Detection rules available</div>
+              <button class="soc-action-btn" onclick="window._socSwitchTab('detect')"><i class="fas fa-shield-alt"></i> View Rules</button>
+            </div></div>
+          </div>
+        </div>`;
+    }
+  }
+
+  // ── Quick-ask helper (switch to chat and send message) ────────────────────
+  window._rakayQuickAsk = async function(text) {
+    _socSwitchTab('chat');
+    await new Promise(r => setTimeout(r, 80));
+    const inp = document.getElementById('rakay-input');
+    if (inp) { inp.value = text; inp.dispatchEvent(new Event('input')); }
+    window._rakaySubmit && window._rakaySubmit();
+  };
+
+  // Expose tab switcher globally
+  window._socSwitchTab = _socSwitchTab;
 
   // ══════════════════════════════════════════════════════════════════════════
   //  PAGE HTML
@@ -2388,7 +3013,7 @@
     return `
 <div class="rakay-root" id="rakay-root">
 
-  <!-- Sidebar -->
+  <!-- Sidebar (chat-only) -->
   <aside class="rakay-sidebar" id="rakay-sidebar">
     <div class="rakay-sidebar-header">
       <div class="rakay-sidebar-logo"><i class="fas fa-robot"></i></div>
@@ -2397,31 +3022,24 @@
         <i class="fas fa-plus"></i>
       </button>
     </div>
-
     <div class="rakay-session-search-wrap">
-      <input
-        type="text"
-        id="rakay-session-search"
-        class="rakay-session-search"
-        placeholder="Search sessions…"
-        oninput="window._rakaySearchSessions(this.value)"
-      >
+      <input type="text" id="rakay-session-search" class="rakay-session-search"
+        placeholder="Search sessions…" oninput="window._rakaySearchSessions(this.value)">
     </div>
-
     <div class="rakay-session-list" id="rakay-session-list">
       <div class="rakay-session-empty">Loading sessions…</div>
     </div>
   </aside>
 
-  <!-- Main chat area -->
+  <!-- Main area -->
   <main class="rakay-main">
 
-    <!-- Header -->
+    <!-- Top header bar -->
     <div class="rakay-header">
-      <div class="rakay-header-icon"><i class="fas fa-robot"></i></div>
+      <div class="rakay-header-icon"><i class="fas fa-shield-alt"></i></div>
       <div class="rakay-header-info">
-        <div class="rakay-header-title" id="rakay-current-title">RAKAY — AI Security Analyst</div>
-        <div class="rakay-header-sub">Conversational threat intelligence · Detection engineering</div>
+        <div class="rakay-header-title" id="rakay-current-title">RAKAY SOC Analyst Assistant</div>
+        <div class="rakay-header-sub">Detection Engineering · Threat Intel · Incident Simulation · AI Chat</div>
       </div>
       <div class="rakay-status-area">
         <span class="rakay-ws-badge" id="rakay-ws-badge" style="display:none">LIVE</span>
@@ -2430,31 +3048,82 @@
       </div>
     </div>
 
-    <!-- Messages -->
-    <div id="rakay-messages">
-      ${_renderWelcome()}
+    <!-- SOC Tab navigation -->
+    <div class="rakay-soc-tabs">
+      <button class="rakay-soc-tab active" data-tab="chat"     onclick="window._socSwitchTab('chat')">
+        <i class="fas fa-robot"></i> AI Chat
+      </button>
+      <button class="rakay-soc-tab" data-tab="intel"    onclick="window._socSwitchTab('intel')">
+        <i class="fas fa-database"></i> Threat Intel
+      </button>
+      <button class="rakay-soc-tab" data-tab="detect"   onclick="window._socSwitchTab('detect')">
+        <i class="fas fa-shield-alt"></i> Detection
+      </button>
+      <button class="rakay-soc-tab" data-tab="simulate" onclick="window._socSwitchTab('simulate')">
+        <i class="fas fa-flask"></i> Simulation
+      </button>
+      <button class="rakay-soc-tab" data-tab="alerts"   onclick="window._socSwitchTab('alerts')">
+        <i class="fas fa-bell"></i> Alerts &amp; Insights
+      </button>
     </div>
 
-    <!-- Input -->
-    <div class="rakay-input-area">
-      <div class="rakay-input-wrap">
-        <textarea
-          id="rakay-input"
-          placeholder="Ask RAKAY anything — Sigma rules, IOC enrichment, CVEs, MITRE ATT&CK…"
-          rows="1"
-          oninput="(function(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,200)+'px';})(this)"
-          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();window._rakaySubmit();}"
-        ></textarea>
-        <button id="rakay-send" onclick="window._rakaySubmit()" title="Send (Enter)">
-          <i class="fas fa-paper-plane"></i>
-        </button>
+    <!-- ── PANEL: AI Chat ── -->
+    <div class="rakay-soc-panel" data-panel="chat" style="display:flex;flex-direction:column;flex:1;overflow:hidden">
+
+      <!-- Messages -->
+      <div id="rakay-messages">
+        ${_renderWelcome()}
       </div>
-      <div class="rakay-input-hint">
-        <i class="fas fa-keyboard"></i>
-        Press <kbd style="background:#161b22;border:1px solid #30363d;padding:1px 5px;border-radius:3px;font-size:10px">Enter</kbd>
-        to send ·
-        <kbd style="background:#161b22;border:1px solid #30363d;padding:1px 5px;border-radius:3px;font-size:10px">Shift+Enter</kbd>
-        for new line
+
+      <!-- Input -->
+      <div class="rakay-input-area">
+        <div class="rakay-input-wrap">
+          <textarea
+            id="rakay-input"
+            placeholder="Ask RAKAY anything — Sigma rules, IOC enrichment, CVEs, MITRE ATT&CK, incident response…"
+            rows="1"
+            oninput="(function(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,200)+'px';})(this)"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();window._rakaySubmit();}"
+          ></textarea>
+          <button id="rakay-send" onclick="window._rakaySubmit()" title="Send (Enter)">
+            <i class="fas fa-paper-plane"></i>
+          </button>
+        </div>
+        <div class="rakay-input-hint">
+          <i class="fas fa-keyboard"></i>
+          Press <kbd style="background:#161b22;border:1px solid #30363d;padding:1px 5px;border-radius:3px;font-size:10px">Enter</kbd>
+          to send ·
+          <kbd style="background:#161b22;border:1px solid #30363d;padding:1px 5px;border-radius:3px;font-size:10px">Shift+Enter</kbd>
+          for new line
+        </div>
+      </div>
+    </div>
+
+    <!-- ── PANEL: Threat Intel ── -->
+    <div class="rakay-soc-panel soc-panel-scroll" data-panel="intel" style="display:none">
+      <div class="soc-panel-inner" id="soc-intel-content">
+        <div class="soc-loading"><i class="fas fa-circle-notch fa-spin"></i> Loading…</div>
+      </div>
+    </div>
+
+    <!-- ── PANEL: Detection ── -->
+    <div class="rakay-soc-panel soc-panel-scroll" data-panel="detect" style="display:none">
+      <div class="soc-panel-inner" id="soc-detect-content">
+        <div class="soc-loading"><i class="fas fa-circle-notch fa-spin"></i> Loading…</div>
+      </div>
+    </div>
+
+    <!-- ── PANEL: Simulation ── -->
+    <div class="rakay-soc-panel soc-panel-scroll" data-panel="simulate" style="display:none">
+      <div class="soc-panel-inner" id="soc-sim-content">
+        <div class="soc-loading"><i class="fas fa-circle-notch fa-spin"></i> Loading…</div>
+      </div>
+    </div>
+
+    <!-- ── PANEL: Alerts & Insights ── -->
+    <div class="rakay-soc-panel soc-panel-scroll" data-panel="alerts" style="display:none">
+      <div class="soc-panel-inner" id="soc-alerts-content">
+        <div class="soc-loading"><i class="fas fa-circle-notch fa-spin"></i> Loading…</div>
       </div>
     </div>
 
