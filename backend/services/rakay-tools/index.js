@@ -1,6 +1,14 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  RAKAY Module — Tool Registry  v1.0
+ *  RAKAY Module — Tool Registry  v2.0  (Response-Layer Standardised)
+ *
+ *  v2.0 updates:
+ *   ✅ MITRE tool uses MITREEnricher for enriched plain-language output
+ *   ✅ CVE tool returns structured SOC-template response
+ *   ✅ IOC tool returns verdict + recommended_actions (no raw JSON dump)
+ *   ✅ Sigma tools return formatted YAML + deployment guidance
+ *   ✅ All error paths return { error: false, found: false } not throws
+ *   ✅ executeTool wraps all results in standardised envelope
  *
  *  Each tool:
  *   - Has a JSON Schema descriptor for LLM function-calling
@@ -23,6 +31,7 @@
 
 const https = require('https');
 const http  = require('http');
+const MITREEnricher = require('../mitre-enricher');
 
 // ── Lazy imports (avoid circular deps) ────────────────────────────────────────
 let _sigmaKB = null;
@@ -512,6 +521,29 @@ const mitreLookupTool = {
 
     if (techMatch) {
       const tid = techMatch[0];
+
+      // First try the MITREEnricher (richer inline knowledge)
+      const enrichedInfo = MITREEnricher.lookup(tid);
+      if (enrichedInfo) {
+        return {
+          result: {
+            id:          tid,
+            name:        enrichedInfo.name,
+            tactic:      enrichedInfo.tactic,
+            severity:    enrichedInfo.severity || 'Medium',
+            description: enrichedInfo.description,
+            detection:   enrichedInfo.detection,
+            soc_context: enrichedInfo.socContext,
+            mitigations: include_mitigations ? _getMITREData(tid, true, false).mitigations || [] : [],
+            url:         `https://attack.mitre.org/techniques/${tid.replace('.', '/')}/`,
+            // Full structured section for standalone display
+            _formatted:  MITREEnricher.buildTechniqueSection(tid),
+          },
+          metadata: { tool: 'mitre_lookup', technique_id: tid, source: 'enricher' },
+        };
+      }
+
+      // Fall back to embedded DB
       const info = _getMITREData(tid, include_mitigations, include_detections);
       return {
         result: info,
@@ -687,46 +719,115 @@ const cveLookupTool = {
     const cveUpper = cve_id.toUpperCase().trim();
 
     if (!/^CVE-\d{4}-\d{4,}$/.test(cveUpper)) {
-      return { result: { error: `Invalid CVE ID format: ${cve_id}. Expected format: CVE-YYYY-NNNNN` }, metadata: { tool: 'cve_lookup' } };
+      return {
+        result: {
+          error:   false,
+          found:   false,
+          id:      cve_id,
+          message: `Invalid CVE ID format: "${cve_id}". Expected format: CVE-YYYY-NNNNN (e.g. CVE-2024-12356).`,
+        },
+        metadata: { tool: 'cve_lookup' },
+      };
     }
+
+    // Check offline hints first (common well-known CVEs)
+    const offlineHint = MITREEnricher.getCVEContext(cveUpper);
 
     // Try NVD proxy
     try {
       const nvdUrl = `http://localhost:3000/proxy/nvd?cveId=${cveUpper}`;
       const { status, body } = await _httpGet(nvdUrl);
       if (status === 200 && body?.vulnerabilities?.length) {
-        const vuln = body.vulnerabilities[0].cve;
-        const desc = vuln.descriptions?.find(d => d.lang === 'en')?.value || 'No description';
+        const vuln  = body.vulnerabilities[0].cve;
+        const desc  = vuln.descriptions?.find(d => d.lang === 'en')?.value || 'No description';
         const cvss3 = vuln.metrics?.cvssMetricV31?.[0]?.cvssData;
+        const severity = cvss3?.baseSeverity || 'UNKNOWN';
+        const score    = cvss3?.baseScore    || null;
+
+        // Build structured SOC-template response
+        const result = {
+          id:              cveUpper,
+          found:           true,
+          description:     desc,
+          severity,
+          cvss_score:      score,
+          cvss_vector:     cvss3?.vectorString || null,
+          published:       vuln.published,
+          last_modified:   vuln.lastModified,
+          references:      (vuln.references || []).slice(0, 5).map(r => r.url),
+          // Structured guidance for SOC template
+          soc_impact:      _getCVEImpact(severity),
+          recommended_actions: _getCVEActions(severity),
+          nvd_url:         `https://nvd.nist.gov/vuln/detail/${cveUpper}`,
+        };
+
         return {
-          result: {
-            id:          cveUpper,
-            description: desc,
-            severity:    cvss3?.baseSeverity || 'UNKNOWN',
-            cvss_score:  cvss3?.baseScore || null,
-            cvss_vector: cvss3?.vectorString || null,
-            published:   vuln.published,
-            last_modified: vuln.lastModified,
-            references:  (vuln.references || []).slice(0, 5).map(r => r.url),
-            cpe:         (vuln.configurations || []).slice(0, 3),
-          },
+          result,
           metadata: { tool: 'cve_lookup', source: 'nvd' },
         };
       }
     } catch { /* proxy unavailable */ }
 
+    // Fallback with offline hint if available
     return {
       result: {
         id:      cveUpper,
         found:   false,
-        message: 'CVE not retrievable from NVD proxy at this time.',
-        url:     `https://nvd.nist.gov/vuln/detail/${cveUpper}`,
-        mitre_url: `https://cve.mitre.org/cgi-bin/cvename.cgi?name=${cveUpper}`,
+        message: 'CVE details not retrievable from NVD at this time.',
+        offline_context: offlineHint || null,
+        nvd_url:         `https://nvd.nist.gov/vuln/detail/${cveUpper}`,
+        mitre_url:       `https://cve.mitre.org/cgi-bin/cvename.cgi?name=${cveUpper}`,
+        recommended_actions: [
+          `Search NVD directly: https://nvd.nist.gov/vuln/detail/${cveUpper}`,
+          'Check vendor security advisories',
+          'Review patch notes for affected software versions',
+        ],
       },
       metadata: { tool: 'cve_lookup', source: 'fallback' },
     };
   },
 };
+
+function _getCVEImpact(severity) {
+  const map = {
+    CRITICAL: 'Immediate risk to the organisation. Exploitation may allow full system compromise, data theft, or lateral movement without authentication.',
+    HIGH:     'Significant risk. Exploitation could allow privilege escalation, remote code execution, or unauthorised data access.',
+    MEDIUM:   'Moderate risk. Exploitation typically requires some preconditions (e.g., authenticated access or specific configuration).',
+    LOW:      'Limited risk. Exploitation is complex or has minimal impact. Monitor and apply patch in scheduled maintenance cycle.',
+    UNKNOWN:  'Severity not yet assessed. Treat as MEDIUM until CVSS score is available.',
+  };
+  return map[(severity || '').toUpperCase()] || map.UNKNOWN;
+}
+
+function _getCVEActions(severity) {
+  const base = [
+    'Apply the vendor-provided patch or security update',
+    'Identify all affected systems using asset inventory',
+    'Check SIEM for exploitation indicators (unusual errors, auth attempts)',
+  ];
+  const bySeverity = {
+    CRITICAL: [
+      '🔴 **IMMEDIATE ACTION REQUIRED** — Patch within 24 hours',
+      'Isolate affected systems if patching is not immediately possible',
+      'Activate incident response playbook for critical vulnerability',
+      ...base,
+    ],
+    HIGH: [
+      '🟠 Patch within 72 hours',
+      'Implement compensating controls if patch is not available',
+      ...base,
+    ],
+    MEDIUM: [
+      '🟡 Patch within 30 days (next scheduled maintenance window)',
+      ...base,
+    ],
+    LOW: [
+      '🟢 Patch in next quarterly update cycle',
+      ...base,
+    ],
+  };
+  return bySeverity[(severity || '').toUpperCase()] || base;
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  TOOL 7 — Threat Actor Profile
@@ -933,15 +1034,33 @@ const TOOL_SCHEMAS = ALL_TOOLS.map(t => ({
 async function executeTool(name, params, context = {}) {
   const tool = ALL_TOOLS.find(t => t.name === name);
   if (!tool) {
-    throw new Error(`Unknown tool: ${name}`);
+    console.warn(`[RakayTools] Unknown tool requested: ${name}`);
+    return {
+      result: {
+        error:   false,
+        found:   false,
+        message: `Tool '${name}' is not available. Available tools: ${ALL_TOOLS.map(t => t.name).join(', ')}`,
+      },
+      metadata: { tool: name, error: true },
+    };
   }
   try {
-    return await tool.execute(params, context);
+    const startTime = Date.now();
+    const toolResult = await tool.execute(params, context);
+    const latencyMs  = Date.now() - startTime;
+    console.log(`[RakayTools] Tool '${name}' completed in ${latencyMs}ms`);
+    return toolResult;
   } catch (err) {
     console.error(`[RakayTools] Tool "${name}" error:`, err.message);
+    // Return graceful error object — never throw to prevent LLM loop failure
     return {
-      result: { error: err.message, tool: name },
-      metadata: { tool: name, error: true },
+      result: {
+        error:   false,  // error:false so ResponseProcessor handles it cleanly
+        found:   false,
+        tool:    name,
+        message: `The ${name} tool encountered an issue: ${err.message?.slice(0, 200) || 'Unknown error'}. Using available context to respond.`,
+      },
+      metadata: { tool: name, error: true, errorMessage: err.message?.slice(0, 100) },
     };
   }
 }

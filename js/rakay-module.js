@@ -902,6 +902,9 @@
 
     if (!fullText) fullText = 'Analysis complete. Please review the tool results above.';
 
+    // Sanitise streamed content before storing/rendering (remove debug logs, duplicate tool banners)
+    fullText = _sanitiseResponseContent(fullText);
+
     // ── Finalize: replace live bubble with rendered message ──────────────────
     const assistantMsg = {
       id:          doneData?.id || _uid(),
@@ -1596,6 +1599,74 @@
   }
 
   // ══════════════════════════════════════════════════════════════════════════
+  //  RESPONSE CONTENT SANITISER
+  //  Cleans LLM/tool output before rendering to the UI:
+  //   - Removes raw JSON blobs / debug lines
+  //   - Collapses multiple tool-use indicators into one
+  //   - Strips internal log prefixes ([Engine], [CB:], etc.)
+  // ══════════════════════════════════════════════════════════════════════════
+  function _sanitiseResponseContent(text) {
+    if (!text || typeof text !== 'string') return text || '';
+    let out = text;
+
+    // Remove internal log lines (lines starting with [Engine], [RAKAYEngine], etc.)
+    out = out.replace(/^\[(?:RAKAY|Engine|Provider|CB:|PQ|MultiProvider|Tool|Ollama|OpenAI|Anthropic|Gemini|DeepSeek)\].+$/gm, '');
+
+    // Collapse 2+ duplicate tool-use indicator lines into one
+    out = out.replace(/(?:🔧 \*Using (?:tool|intelligence sources)[^*]*\*\s*){2,}/g, '🔧 *Using intelligence sources…*\n\n');
+
+    // Never show raw JSON to users — replace large JSON dumps with note
+    out = out.replace(/```json\n?\{[\s\S]{500,}\}\n?```/g, '_[Intelligence data processed]_');
+
+    // Collapse 3+ blank lines
+    out = out.replace(/\n{4,}/g, '\n\n\n');
+
+    return out.trim();
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  PRIORITY BADGE HELPER
+  //  Returns HTML badge for HIGH/MEDIUM/LOW priority based on message content
+  // ══════════════════════════════════════════════════════════════════════════
+  function _getPriorityBadge(content) {
+    if (!content) return '';
+    const lower = (content || '').toLowerCase();
+    const HIGH_KW   = ['alert', 'incident', 'breach', 'compromised', 'ransomware', 'critical', 'urgent', 'emergency', 'active attack', 'lateral movement', 'exfiltration', 'c2', 'zero day', '0day'];
+    const MEDIUM_KW = ['cve', 'vulnerability', 'ioc', 'enrich', 'malware', 'apt', 'threat actor', 'sigma', 'kql', 'splunk', 'mitre', 'detection'];
+
+    if (HIGH_KW.some(kw => lower.includes(kw))) {
+      return '<span class="rakay-priority-badge rakay-priority-high"><i class="fas fa-exclamation-triangle"></i> HIGH</span>';
+    }
+    if (MEDIUM_KW.some(kw => lower.includes(kw))) {
+      return '<span class="rakay-priority-badge rakay-priority-medium"><i class="fas fa-shield-alt"></i> MEDIUM</span>';
+    }
+    return '';
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  PROVIDER BADGE HELPER
+  //  Returns coloured provider badge with appropriate icon
+  // ══════════════════════════════════════════════════════════════════════════
+  function _getProviderBadge(provider, degraded) {
+    if (degraded) {
+      return '<span class="rakay-degraded-badge"><i class="fas fa-exclamation-triangle"></i> limited mode</span>';
+    }
+    if (!provider || provider === 'unknown') return '';
+
+    const PROVIDER_CONFIG = {
+      openai:    { label: 'OpenAI',    color: '#10a37f', icon: 'fa-robot' },
+      ollama:    { label: 'Ollama',    color: '#6366f1', icon: 'fa-server' },
+      anthropic: { label: 'Anthropic', color: '#d97706', icon: 'fa-brain' },
+      gemini:    { label: 'Gemini',    color: '#4285f4', icon: 'fa-gem' },
+      deepseek:  { label: 'DeepSeek',  color: '#8b5cf6', icon: 'fa-search' },
+      mock:      { label: 'Demo',      color: '#6b7280', icon: 'fa-flask' },
+    };
+
+    const cfg = PROVIDER_CONFIG[provider.toLowerCase()] || { label: provider, color: '#6b7280', icon: 'fa-cog' };
+    return `<span class="rakay-provider-badge" style="background:${cfg.color}18;border-color:${cfg.color}40;color:${cfg.color}" title="Answered by ${cfg.label}"><i class="fas ${cfg.icon}" style="font-size:8px"></i> ${_e(cfg.label)}</span>`;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
   //  RENDER FUNCTIONS
   // ══════════════════════════════════════════════════════════════════════════
   function _renderMessages() {
@@ -1610,26 +1681,32 @@
     const items = RAKAY.messages.map(msg => {
       const isUser  = msg.role === 'user';
       const ts      = _time(msg.created_at);
-      const trace   = msg.tool_trace ? _renderToolTrace(msg.tool_trace) : '';
+      // Only show tool trace if it has meaningful (non-empty) entries
+      const validTrace = (msg.tool_trace || []).filter(t => t.tool && !t.error);
+      const trace   = validTrace.length ? _renderToolTrace(validTrace) : '';
       const offline = msg._offline ? ' rakay-msg--offline' : '';
 
       if (isUser) {
+        const priorityBadge = _getPriorityBadge(msg.content);
         return `
         <div class="rakay-msg rakay-msg--user${offline}">
           <div class="rakay-msg-content">
             <div class="rakay-msg-bubble rakay-msg-bubble--user">${_e(msg.content)}</div>
-            <div class="rakay-msg-meta">${ts}</div>
+            <div class="rakay-msg-meta">${ts} ${priorityBadge}</div>
           </div>
           <div class="rakay-msg-avatar rakay-msg-avatar--user"><i class="fas fa-user"></i></div>
         </div>`;
       }
 
-      const modelBadge    = msg.model    ? `<span class="rakay-model-badge">${_e(msg.model)}</span>` : '';
-      const latency       = msg.latency_ms ? `<span class="rakay-latency">${msg.latency_ms}ms</span>` : '';
-      const tokens        = msg.tokens_used ? `<span class="rakay-tokens"><i class="fas fa-bolt"></i> ${msg.tokens_used}</span>` : '';
-      const providerBadge = msg.provider && msg.provider !== 'mock' ? `<span class="rakay-provider-badge">${_e(msg.provider)}</span>` : '';
-      const degradedBadge = msg._degraded ? `<span class="rakay-degraded-badge"><i class="fas fa-exclamation-triangle"></i> degraded</span>` : '';
-      const streamBadge   = msg._streamed ? `<span class="rakay-provider-badge" title="Streaming response" style="background:#a855f714;border-color:#a855f730;color:#a855f7"><i class="fas fa-stream" style="font-size:8px"></i></span>` : '';
+      // Sanitise content before rendering
+      const cleanContent = _sanitiseResponseContent(msg.content);
+
+      const modelBadge    = msg.model && msg.model !== 'degraded' ? `<span class="rakay-model-badge" title="Model: ${_e(msg.model)}">${_e(msg.model.split('/').pop())}</span>` : '';
+      const latency       = msg.latency_ms ? `<span class="rakay-latency" title="Response latency">${msg.latency_ms < 1000 ? msg.latency_ms + 'ms' : (msg.latency_ms/1000).toFixed(1) + 's'}</span>` : '';
+      const tokens        = msg.tokens_used ? `<span class="rakay-tokens" title="Tokens used"><i class="fas fa-bolt"></i> ${msg.tokens_used}</span>` : '';
+      const providerBadge = _getProviderBadge(msg.provider, msg._degraded);
+      const streamBadge   = msg._streamed ? `<span class="rakay-provider-badge" title="Streamed response" style="background:#a855f714;border-color:#a855f730;color:#a855f7"><i class="fas fa-stream" style="font-size:8px"></i></span>` : '';
+      const toolsBadge    = validTrace.length ? `<span class="rakay-provider-badge" title="${validTrace.length} tool(s) used" style="background:#22d3ee14;border-color:#22d3ee40;color:#22d3ee"><i class="fas fa-wrench" style="font-size:8px"></i> ${validTrace.length} tool${validTrace.length > 1 ? 's' : ''}</span>` : '';
 
       return `
       <div class="rakay-msg rakay-msg--assistant${offline}">
@@ -1637,9 +1714,9 @@
         <div class="rakay-msg-content">
           ${trace}
           <div class="rakay-msg-bubble rakay-msg-bubble--assistant">
-            ${_renderMarkdown(msg.content)}
+            ${_renderMarkdown(cleanContent)}
           </div>
-          <div class="rakay-msg-meta">${ts} ${modelBadge} ${providerBadge} ${latency} ${tokens} ${degradedBadge} ${streamBadge}</div>
+          <div class="rakay-msg-meta">${ts} ${providerBadge} ${modelBadge} ${latency} ${tokens} ${toolsBadge} ${streamBadge}</div>
         </div>
       </div>`;
     }).join('');
@@ -1674,19 +1751,19 @@
           <i class="fas fa-file-code"></i> Generate Sigma rule for PowerShell encoded commands
         </button>
         <button class="rakay-prompt-chip" onclick="window._rakayQuickPrompt(this)">
-          <i class="fas fa-sitemap"></i> Explain MITRE ATT&CK T1059.001
+          <i class="fas fa-sitemap"></i> Explain MITRE ATT&amp;CK T1059.001 with detection guidance
         </button>
         <button class="rakay-prompt-chip" onclick="window._rakayQuickPrompt(this)">
-          <i class="fas fa-terminal"></i> Create KQL query for ransomware detection
+          <i class="fas fa-terminal"></i> Create KQL query for ransomware detection in Sentinel
         </button>
         <button class="rakay-prompt-chip" onclick="window._rakayQuickPrompt(this)">
-          <i class="fas fa-user-secret"></i> Profile the APT29 threat group
+          <i class="fas fa-user-secret"></i> Profile the APT29 threat group with recent TTPs
         </button>
         <button class="rakay-prompt-chip" onclick="window._rakayQuickPrompt(this)">
-          <i class="fas fa-shield-alt"></i> Enrich IP 185.220.101.34
+          <i class="fas fa-shield-alt"></i> Enrich IP 185.220.101.34 for threat intelligence
         </button>
         <button class="rakay-prompt-chip" onclick="window._rakayQuickPrompt(this)">
-          <i class="fas fa-bug"></i> What is CVE-2024-12356?
+          <i class="fas fa-bug"></i> What is CVE-2021-44228 and how do I detect Log4Shell?
         </button>
       </div>
     </div>`;
