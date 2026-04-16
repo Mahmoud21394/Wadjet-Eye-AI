@@ -521,6 +521,47 @@ const API = {
     get(id)               { return GET(`/detections/${id}`); },
     timeline(params)      { return GET('/cti/timeline', params); },
   },
+
+  /* ── Cyber News (v6.0) ── */
+  news: {
+    list(params)           { return GET('/news', params); },
+    get(id)                { return GET(`/news/${id}`); },
+    categories()           { return GET('/news/categories'); },
+    feeds()                { return GET('/news/feeds'); },
+    stats()                { return GET('/news/stats'); },
+    ingest(feedIds)        { return POST('/news/ingest', feedIds ? { feedIds } : {}); },
+  },
+
+  /* ── CVE Intelligence (v3.0) ── */
+  cve: {
+    list(params)           { return GET('/cve', params); },
+    get(cveId)             { return GET(`/cve/${cveId}`); },
+    search(q, params)      { return GET('/cve/search', { q, ...params }); },
+    stats()                { return GET('/cve/stats/summary'); },
+    bulkCheck(cveIds)      { return POST('/cve/bulk-check', { cveIds }); },
+  },
+
+  /* ── RBAC Administration (v3.0) ── */
+  rbac: {
+    roles()                { return GET('/rbac/roles'); },
+    getRole(id)            { return GET(`/rbac/roles/${id}`); },
+    createRole(data)       { return POST('/rbac/roles', data); },
+    updateRole(id, data)   { return PUT(`/rbac/roles/${id}`, data); },
+    deleteRole(id)         { return DELETE(`/rbac/roles/${id}`); },
+    permissions()          { return GET('/rbac/permissions'); },
+    assign(data)           { return POST('/rbac/assign', data); },
+    users(params)          { return GET('/rbac/users', params); },
+    auditLog(params)       { return GET('/rbac/audit-log', params); },
+    stats()                { return GET('/rbac/stats'); },
+    check(data)            { return POST('/rbac/check', data); },
+  },
+
+  /* ── SOC Investigation Reports (v2.0) ── */
+  investigation: {
+    generate(data)         { return POST('/reports/investigation', data); },
+    get(incidentId)        { return GET(`/reports/investigation/${incidentId}`); },
+    list(params)           { return GET('/reports/investigations', params); },
+  },
 };
 
 /* ════════════════════════════════════════════

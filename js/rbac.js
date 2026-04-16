@@ -574,3 +574,303 @@ function editRole(roleId) {
   showToast(`Editing role: ${role.name}`,'info');
   openCreateRoleModal();
 }
+
+/* ══════════════════════════════════════════════════════════
+   RBAC API CONNECTOR v3.0
+   Connects all RBAC functions to the real backend API.
+   Falls back gracefully to RBAC_STORE when offline.
+   ══════════════════════════════════════════════════════════ */
+
+/* ─── API helpers ─────────────────────────────────────────── */
+function _rbacApiBase() {
+  return (typeof CONFIG !== 'undefined' && CONFIG.BACKEND_URL)
+    ? CONFIG.BACKEND_URL
+    : 'https://wadjet-eye-ai.onrender.com';
+}
+
+function _rbacHeaders() {
+  const token = (typeof TokenStore !== 'undefined') ? TokenStore.get() : null;
+  const h = { 'Content-Type': 'application/json' };
+  if (token) h['Authorization'] = `Bearer ${token}`;
+  return h;
+}
+
+async function _rbacFetch(method, path, body) {
+  try {
+    const opts = {
+      method,
+      headers: _rbacHeaders(),
+      credentials: 'include',
+    };
+    if (body) opts.body = JSON.stringify(body);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    opts.signal = controller.signal;
+
+    const resp = await fetch(`${_rbacApiBase()}/api/rbac${path}`, opts);
+    clearTimeout(timer);
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${resp.status}`);
+    }
+    return await resp.json();
+  } catch (err) {
+    console.warn('[RBAC API]', method, path, '→', err.message);
+    throw err;
+  }
+}
+
+/* ─── Load roles from API, merge into RBAC_STORE ─────────── */
+async function loadRBACRolesFromAPI() {
+  try {
+    const data = await _rbacFetch('GET', '/roles');
+    if (data && data.roles && data.roles.length) {
+      // Merge API roles into store (keeping display-only fields)
+      RBAC_STORE.roles = data.roles.map(r => ({
+        id:          r.id || r.slug,
+        name:        r.name,
+        slug:        r.slug,
+        color:       r.color || '#3b82f6',
+        desc:        r.description || r.desc || '',
+        description: r.description || r.desc || '',
+        permissions: r.permissions || [],
+        modules:     r.modules || [],
+        isSystem:    r.isSystem || r.is_system || false,
+        level:       r.level || 5,
+      }));
+      console.info('[RBAC] Loaded', RBAC_STORE.roles.length, 'roles from API');
+    }
+  } catch (_) {
+    console.info('[RBAC] Using local role store (API unavailable)');
+  }
+}
+
+/* ─── Load users from API, merge into ARGUS_DATA.users ─────── */
+async function loadRBACUsersFromAPI() {
+  try {
+    const data = await _rbacFetch('GET', '/users');
+    if (data && data.users && data.users.length) {
+      window.ARGUS_DATA = window.ARGUS_DATA || {};
+      ARGUS_DATA.users = data.users.map(u => ({
+        id:         u.id,
+        name:       u.full_name || u.name || u.email,
+        email:      u.email,
+        role:       u.role || 'Viewer',
+        tenant:     u.tenant_id || u.tenant || 'Default',
+        avatar:     (u.full_name || u.email || 'U').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(),
+        mfa:        u.mfa_enabled || false,
+        status:     u.status || (u.is_active ? 'active' : 'inactive'),
+        last_login: u.last_login_at ? new Date(u.last_login_at).toLocaleString() : 'Never',
+      }));
+      console.info('[RBAC] Loaded', ARGUS_DATA.users.length, 'users from API');
+    }
+  } catch (_) {
+    console.info('[RBAC] Using local user data (API unavailable)');
+  }
+}
+
+/* ─── Load audit log from API ─────────────────────────────── */
+async function loadRBACAuditLogFromAPI() {
+  try {
+    const data = await _rbacFetch('GET', '/audit-log');
+    if (data && data.logs && data.logs.length) {
+      RBAC_STORE.audit_log = data.logs.map(l => ({
+        id:       l.id,
+        user:     l.user_name || l.user_email || 'System',
+        action:   (l.action || '').replace('RBAC_', ''),
+        resource: l.resource || '',
+        detail:   l.details ? JSON.stringify(l.details) : '',
+        time:     l.created_at ? _rbacTimeAgo(new Date(l.created_at)) : 'unknown',
+        ip:       l.ip || '0.0.0.0',
+        severity: l.severity || 'info',
+      }));
+      console.info('[RBAC] Loaded', RBAC_STORE.audit_log.length, 'audit events from API');
+    }
+  } catch (_) {}
+}
+
+/* ─── API-connected createCustomRole ─────────────────────── */
+async function createCustomRole() {
+  const name = document.getElementById('cr_name')?.value.trim();
+  if (!name) { showToast('Role name is required', 'error'); return; }
+
+  const perms = [...document.querySelectorAll('.cr_perm:checked')].map(c => c.value);
+  const desc  = document.getElementById('cr_desc')?.value || '';
+  const color = document.querySelector('#createRoleOverlay [style*="outline"]')?.style.background || '#3b82f6';
+
+  const payload = {
+    name,
+    slug:        name.toLowerCase().replace(/\s+/g, '_'),
+    description: desc,
+    permissions: perms,
+    modules:     ['dashboard', 'alerts', 'reports'],
+    color,
+    level:       5,
+  };
+
+  try {
+    const data = await _rbacFetch('POST', '/roles', payload);
+    const newRole = data.role || payload;
+    RBAC_STORE.roles.push({
+      id:          newRole.id || `custom-${Date.now()}`,
+      name:        newRole.name,
+      slug:        newRole.slug,
+      color:       newRole.color || '#3b82f6',
+      desc:        newRole.description || desc,
+      permissions: newRole.permissions || perms,
+      modules:     newRole.modules || [],
+      isSystem:    false,
+    });
+    document.getElementById('createRoleOverlay')?.remove();
+    showToast(`✅ Role "${name}" created in database`, 'success');
+    renderRBACAdmin();
+  } catch (err) {
+    // Offline fallback
+    const newRole = {
+      id:    'R' + String(RBAC_STORE.roles.length + 1).padStart(3, '0'),
+      name,
+      slug:  name.toLowerCase().replace(/\s+/g, '_'),
+      color: '#3b82f6',
+      desc,
+      permissions: perms,
+      modules: ['command-center', 'findings'],
+    };
+    RBAC_STORE.roles.push(newRole);
+    document.getElementById('createRoleOverlay')?.remove();
+    showToast(`Role "${name}" created (local — sync when online)`, 'warning');
+    renderRBACAdmin();
+  }
+}
+
+/* ─── API-connected saveRBACEditUser ─────────────────────── */
+async function saveRBACEditUser(userId) {
+  const u = ARGUS_DATA.users.find(x => x.id === userId);
+  if (!u) return;
+
+  const name   = document.getElementById('reu_name')?.value.trim();
+  const email  = document.getElementById('reu_email')?.value.trim();
+  const role   = document.getElementById('reu_role')?.value;
+  const tenant = document.getElementById('reu_tenant')?.value;
+  const mfa    = document.getElementById('reu_mfa')?.classList.contains('on');
+
+  if (!name || !email) { showToast('Name and email are required', 'error'); return; }
+
+  try {
+    // Assign new role via API
+    await _rbacFetch('POST', '/assign', {
+      userId,
+      roleId: RBAC_STORE.roles.find(r => r.name === role)?.id || role,
+    });
+    showToast(`✅ ${name}'s role updated to ${role}`, 'success');
+  } catch (_) {
+    // offline fallback
+  }
+
+  Object.assign(u, { name, email, role, tenant, mfa,
+    avatar: name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+  });
+
+  RBAC_STORE.audit_log.unshift({
+    id:       'AL' + Date.now(),
+    user:     (typeof CURRENT_USER !== 'undefined' && CURRENT_USER?.name) || 'Admin',
+    action:   'Role Change',
+    resource: userId,
+    detail:   `Updated ${name} — role: ${role}`,
+    time:     'Just now',
+    ip:       'localhost',
+    severity: 'warning',
+  });
+
+  document.getElementById('rbacEditOverlay')?.remove();
+  renderRBACAdmin();
+}
+
+/* ─── API-connected RBAC stats ────────────────────────────── */
+async function loadRBACStats() {
+  try {
+    const data = await _rbacFetch('GET', '/stats');
+    return data;
+  } catch (_) {
+    return {
+      totalRoles:   RBAC_STORE.roles.length,
+      totalUsers:   ARGUS_DATA?.users?.length || 0,
+      systemRoles:  RBAC_STORE.roles.filter(r => r.isSystem).length,
+      customRoles:  RBAC_STORE.roles.filter(r => !r.isSystem).length,
+    };
+  }
+}
+
+/* ─── Permission matrix check ─────────────────────────────── */
+async function rbacCheckPermission(permission, module) {
+  try {
+    const data = await _rbacFetch('POST', '/check', {
+      userId:     (typeof CURRENT_USER !== 'undefined') ? CURRENT_USER?.id : null,
+      permission,
+      module,
+    });
+    return data.allowed === true;
+  } catch (_) {
+    // Fallback: check locally from CURRENT_USER role
+    const roleSlug = (typeof CURRENT_USER !== 'undefined') ? CURRENT_USER?.role?.toLowerCase() : 'viewer';
+    if (roleSlug?.includes('admin') || roleSlug?.includes('super')) return true;
+    const role = RBAC_STORE.roles.find(r => r.slug === roleSlug || r.name.toLowerCase() === roleSlug);
+    return role?.permissions.includes(permission) || role?.permissions.includes('*') || false;
+  }
+}
+
+/* ─── Toggle user status via API ──────────────────────────── */
+async function toggleUserStatus(userId) {
+  const u = ARGUS_DATA.users.find(x => x.id === userId);
+  if (!u) return;
+
+  const newStatus = u.status === 'active' ? 'inactive' : 'active';
+
+  try {
+    await _rbacFetch('PUT', `/users/${userId}/status`, { status: newStatus });
+  } catch (_) {}
+
+  u.status = newStatus;
+  showToast(`User ${u.name} ${newStatus === 'active' ? 'activated' : 'deactivated'}`, 'success');
+}
+
+/* ─── Enhanced renderRBACAdmin — loads from API first ──────── */
+const _originalRenderRBACAdmin = typeof renderRBACAdmin === 'function' ? renderRBACAdmin : null;
+
+async function renderRBACAdminWithAPI() {
+  const container = document.getElementById('rbacAdminWrap');
+  if (!container) return;
+
+  // Show skeleton loader
+  container.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;padding:60px;gap:12px;">
+      <i class="fas fa-shield-alt fa-spin" style="font-size:22px;color:var(--accent-cyan);"></i>
+      <span style="color:var(--text-muted);font-size:13px;">Loading RBAC data from backend…</span>
+    </div>`;
+
+  // Load from API in parallel
+  await Promise.allSettled([
+    loadRBACRolesFromAPI(),
+    loadRBACUsersFromAPI(),
+    loadRBACAuditLogFromAPI(),
+  ]);
+
+  // Now render with live data
+  if (_originalRenderRBACAdmin) {
+    _originalRenderRBACAdmin();
+  }
+}
+
+/* Override the global renderRBACAdmin */
+window.renderRBACAdmin = renderRBACAdminWithAPI;
+
+/* ─── Helpers ──────────────────────────────────────────────── */
+function _rbacTimeAgo(date) {
+  if (!(date instanceof Date) || isNaN(date)) return 'unknown';
+  const s = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (s < 60)   return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400)return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
