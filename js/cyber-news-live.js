@@ -41,15 +41,18 @@
   };
 
   /* ─── In-module state ────────────────────────────────────────────── */
-  let _articles       = [];       // full list from API
-  let _filtered       = [];       // after filters
-  let _activeCategory = 'all';
+  let _articles       = [];       // full list from API — one array for ALL categories
+  let _filtered       = [];       // after applying current category + severity + search filters
+  let _activeCategory = 'all';   // currently selected category tab
   let _activeSeverity = '';
   let _searchQuery    = '';
   let _loading        = false;
   let _lastFetch      = null;
   let _feedStats      = { feeds: [], totalArticles: 0, lastUpdated: null };
   let _autoRefreshTimer = null;
+  // Pagination — no hard limit; "show more" expands by PAGE_SIZE
+  const PAGE_SIZE     = 20;
+  let _visibleCount   = PAGE_SIZE;  // resets when category/filter changes
 
   /* ─── Fallback curated articles (shown when API is unreachable) ─── */
   const FALLBACK_ARTICLES = [
@@ -168,7 +171,11 @@
   /* ════════════════════════════════════════════════════════════════════
      FILTER & SEARCH
   ═════════════════════════════════════════════════════════════════════ */
-  function _applyFilters() {
+  function _applyFilters(resetPage = true) {
+    // ROOT-CAUSE FIX: _articles is the single master array. Filter it by
+    // active category + severity + search. Each call produces an independent
+    // _filtered slice — there is NO shared state between categories.
+    // Category switching replaces _filtered entirely (not append/merge).
     _filtered = _articles.filter(a => {
       const matchCat = _activeCategory === 'all' || a.category === _activeCategory;
       const matchSev = !_activeSeverity || a.severity === _activeSeverity;
@@ -180,6 +187,8 @@
         (a.tags   || []).some(t => t.toLowerCase().includes(_searchQuery));
       return matchCat && matchSev && matchQ;
     });
+    // Reset visible count when filters change (so switching tabs starts at page 1)
+    if (resetPage) _visibleCount = PAGE_SIZE;
   }
 
   function _setupFilterHandlers() {
@@ -189,7 +198,7 @@
         document.querySelectorAll('.cn-tab').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         _activeCategory = btn.dataset.cat || 'all';
-        _applyFilters();
+        _applyFilters(true);   // reset to page 1 on tab switch
         _renderGrid();
       });
     });
@@ -199,7 +208,7 @@
     if (sevSel) {
       sevSel.addEventListener('change', () => {
         _activeSeverity = sevSel.value;
-        _applyFilters();
+        _applyFilters(true);
         _renderGrid();
       });
     }
@@ -212,7 +221,7 @@
         clearTimeout(debounce);
         debounce = setTimeout(() => {
           _searchQuery = searchInp.value.toLowerCase().trim();
-          _applyFilters();
+          _applyFilters(true);
           _renderGrid();
         }, 200);
       });
@@ -351,7 +360,8 @@
       sub.textContent = `${_articles.length} articles from ${_feedStats.feedCount || 12} sources · ${ago}`;
     }
 
-    // Update tab badges
+    // Update tab badges — count per category from the FULL _articles array
+    // (not from _filtered, which is already category-filtered)
     Object.keys(CAT_META).forEach(catId => {
       const badge = document.getElementById(`cn-badge-${catId}`);
       if (!badge) return;
@@ -373,8 +383,44 @@
       return;
     }
 
-    grid.innerHTML = _filtered.map(a => _renderCard(a)).join('');
+    // ROOT-CAUSE FIX: pagination — never hard-cap to 12.
+    // Show _visibleCount articles; "Load More" / "View All" expands.
+    const visible  = _filtered.slice(0, _visibleCount);
+    const hasMore  = _filtered.length > _visibleCount;
+    const remaining = _filtered.length - _visibleCount;
+
+    grid.innerHTML = visible.map(a => _renderCard(a)).join('') +
+      (hasMore ? `
+        <div class="cn-load-more-row" style="grid-column:1/-1;display:flex;align-items:center;justify-content:center;gap:12px;padding:16px 0;">
+          <button class="cn-btn cn-btn-secondary" id="cn-load-more-btn"
+            onclick="window._cyberNewsLoadMore()"
+            style="padding:9px 22px;font-size:12px;">
+            <i class="fas fa-chevron-down"></i> Load ${Math.min(PAGE_SIZE, remaining)} more
+            <span style="color:var(--text-muted);margin-left:6px;">(${remaining} remaining)</span>
+          </button>
+          <button class="cn-btn cn-btn-secondary" id="cn-view-all-btn"
+            onclick="window._cyberNewsViewAll()"
+            style="padding:9px 22px;font-size:12px;">
+            <i class="fas fa-list"></i> View all ${_filtered.length}
+          </button>
+        </div>` : '');
   }
+
+  // Exposed globally for inline onclick handlers
+  window._cyberNewsLoadMore = function() {
+    _visibleCount = Math.min(_visibleCount + PAGE_SIZE, _filtered.length + PAGE_SIZE);
+    _renderGrid();
+    // Smooth scroll to newly added cards
+    setTimeout(() => {
+      const btn = document.getElementById('cn-load-more-btn');
+      if (btn) btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 50);
+  };
+
+  window._cyberNewsViewAll = function() {
+    _visibleCount = _filtered.length + 1; // show everything
+    _renderGrid();
+  };
 
   function _renderCard(a) {
     const sev   = SEV_META[a.severity] || SEV_META.medium;

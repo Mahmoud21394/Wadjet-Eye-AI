@@ -363,24 +363,28 @@ APT29 (Cozy Bear), APT28 (Fancy Bear), Lazarus Group, LockBit, Scattered Spider.
 ### Next Steps
 Configure an AI API key for comprehensive threat actor profiling and campaign correlation.`;
   } else {
-    content = `## Threat Intelligence Analysis
+    content = `## Threat Intelligence Analysis — Local Mode
 
-**⚠️ Using Built-in Intelligence (Configure AI Provider for Full Analysis)**
+**ℹ️ Built-in Intelligence Active**
 
-Query received: "${message.slice(0, 100)}"
+Query: "${message.slice(0, 100)}"
 
 ### Platform Capabilities (Local Mode)
-- 37 CVEs tracked (including Log4Shell, ProxyShell, EternalBlue)
-- 26 MITRE ATT&CK techniques with detection rules
-- Threat actor profiles: APT28, APT29, Lazarus, LockBit, Scattered Spider
-- Sigma, KQL, and SPL detection rules
+- **CVE Intelligence** — 37 CVEs tracked (Log4Shell, ProxyShell, EternalBlue, Spring4Shell, etc.)
+- **MITRE ATT&CK** — 26 techniques with Sigma/KQL/SPL detection rules
+- **Threat Actor Profiles** — APT28, APT29, Lazarus Group, LockBit, Scattered Spider, Volt Typhoon
+- **Incident Response** — Ransomware, supply chain, phishing, insider-threat playbooks
 
-### To Enable Full AI Analysis
-Set one of these environment variables:
-- \`OPENAI_API_KEY\` — OpenAI GPT-4o (recommended)
-- \`CLAUDE_API_KEY\` — Anthropic Claude 3.5
-- \`GEMINI_API_KEY\` — Google Gemini 2.0
-- \`DEEPSEEK_API_KEY\` — DeepSeek Chat`;
+### Suggested Queries for Better Results
+- "What is CVE-2021-44228?" — Log4Shell CVSS, detection, remediation
+- "Profile APT29" — Russian SVR threat actor TTPs, tooling, recent campaigns
+- "Explain T1059.001" — PowerShell execution technique with detection rules
+- "Simulate ransomware attack" — Incident response walkthrough with MITRE mapping
+- "Generate Sigma rule for credential dumping" — Detection engineering output
+
+### Provider Status
+External AI providers (OpenAI/Claude/Gemini/DeepSeek) are checked at \`GET /api/ai/status\`.
+If API keys are configured but not working, check the provider circuit breaker state.`;
   }
 
   return { content, provider: 'mock', model: 'built-in', tokens: 0, degraded: true };
@@ -615,6 +619,46 @@ router.post('/health-check', asyncHandler(async (req, res) => {
   }));
 
   res.json({ results, checkedAt: new Date().toISOString() });
+}));
+
+/* ── GET /api/ai/env-check ── ROOT-CAUSE FIX: runtime key validation endpoint
+   Helps diagnose why RAKAY is in local mode when user believes keys are set.
+   Returns which env vars are present WITHOUT revealing the actual values.     */
+router.get('/env-check', asyncHandler(async (req, res) => {
+  const keyVars = [
+    'OPENAI_API_KEY', 'CLAUDE_API_KEY', 'ANTHROPIC_API_KEY',
+    'GEMINI_API_KEY', 'DEEPSEEK_API_KEY', 'OLLAMA_ENDPOINT',
+    'RAKAY_OPENAI_KEY', 'RAKAY_ANTHROPIC_KEY', 'RAKAY_API_KEY',
+  ];
+
+  const status = {};
+  for (const k of keyVars) {
+    const val = process.env[k];
+    status[k] = {
+      set:    !!val,
+      prefix: val ? val.slice(0, 6) + '...' : null,
+      length: val ? val.length : 0,
+    };
+  }
+
+  const anyRealProvider = Object.values(PROVIDERS).some(
+    p => p.key || (p.id === 'ollama' && process.env.OLLAMA_ENDPOINT)
+  );
+
+  console.log('[AI-Router] /env-check called — anyRealProvider:', anyRealProvider);
+
+  res.json({
+    anyRealProvider,
+    degradedMode: !anyRealProvider,
+    message: anyRealProvider
+      ? 'AI provider keys detected — real AI responses enabled'
+      : 'No AI provider keys found — using built-in local intelligence (fully functional)',
+    envStatus: status,
+    hint: !anyRealProvider
+      ? 'To add a provider: set OPENAI_API_KEY / CLAUDE_API_KEY / GEMINI_API_KEY / DEEPSEEK_API_KEY in your Render Dashboard environment variables, then redeploy.'
+      : null,
+    timestamp: new Date().toISOString(),
+  });
 }));
 
 /* ── POST /api/ai/analyze ── */
