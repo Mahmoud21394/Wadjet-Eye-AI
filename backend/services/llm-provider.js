@@ -1003,47 +1003,54 @@ class MockProvider extends BaseProvider {
   }
 
   async chat(messages, tools = [], opts = {}) {
-    const userMsg  = [...messages].reverse().find(m => m.role === 'user')?.content || '';
-    const lower    = userMsg.toLowerCase();
-    const toolCalls = [];
-    if (tools?.length) {
-      if (lower.match(/cve-[\d-]+/i))
-        toolCalls.push({ id: 'mock_1', name: 'cve_lookup', arguments: { cve_id: userMsg.match(/CVE-[\d-]+/i)?.[0] || 'CVE-2024-12356' } });
-      else if (lower.includes('sigma'))
-        toolCalls.push({ id: 'mock_1', name: 'sigma_search', arguments: { query: userMsg.slice(0, 100) } });
-      else if (lower.includes('kql') || lower.includes('sentinel') || lower.includes('splunk'))
-        toolCalls.push({ id: 'mock_1', name: 'kql_generate', arguments: { description: userMsg.slice(0, 200), siem: lower.includes('splunk') ? 'splunk' : 'sentinel' } });
-      else if (lower.match(/t\d{4}/i) || lower.includes('mitre'))
-        toolCalls.push({ id: 'mock_1', name: 'mitre_lookup', arguments: { query: userMsg.match(/T\d{4}(?:\.\d{3})?/i)?.[0] || 'T1059' } });
-    }
-    if (toolCalls.length) return { content: '', toolCalls, finishReason: 'tool_calls', usage: { totalTokens: 50 }, model: this.model };
+    // NOTE: MockProvider intentionally does NOT make tool calls.
+    // Tool-calling with mock LLM produces garbage output (raw JSON {found:false}).
+    // Real tool execution is handled by the hybridFallback path in RAKAYEngine
+    // (which is triggered before even reaching MockProvider when no real LLM is set).
+    // MockProvider is only a last-resort safety net.
+    const userMsg = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+    const lower   = userMsg.toLowerCase();
     const content = _mockResponse(lower);
     this.health.record(true, 50);
     return {
       content, toolCalls: [], finishReason: 'stop',
       usage: { promptTokens: 80, completionTokens: Math.ceil(content.length / 4), totalTokens: 80 + Math.ceil(content.length / 4) },
-      model: this.model,
+      model: this.model, _degraded: true,
     };
   }
 
   async chatStream(messages, tools, opts, onChunk) {
     const result = await this.chat(messages, tools, opts);
     if (result.content && onChunk) {
-      const words = result.content.split(' ');
-      for (const word of words) { onChunk({ type: 'text', text: word + ' ' }); await _sleep(15); }
+      const words = result.content.split(/(?<=\s)/);
+      for (const word of words) { onChunk({ type: 'text', text: word }); await _sleep(10); }
     }
     return result;
   }
 }
 
 function _mockResponse(lower) {
-  if (lower.match(/cve-[\d-]+/))
-    return `**CVE Analysis (Demo Mode)**\n\nI found references to this CVE. In full AI mode I would:\n- Query the NVD database via the \`cve_lookup\` tool\n- Show CVSS scores, affected versions, patch status\n- Provide remediation guidance\n\n*To enable real CVE lookups, ensure \`OPENAI_API_KEY\` or \`CLAUDE_API_KEY\` is set.*`;
-  if (lower.includes('sigma'))
-    return `**Sigma Detection Rule (Demo Mode)**\n\n\`\`\`yaml\ntitle: Suspicious PowerShell Execution\nstatus: experimental\nlogsource:\n  category: process_creation\n  product: windows\ndetection:\n  selection:\n    CommandLine|contains:\n      - '-enc'\n      - '-encodedcommand'\n      - '-bypass'\n  condition: selection\nlevel: high\n\`\`\`\n\n*Demo mode — configure AI provider keys for context-aware rule generation.*`;
-  if (lower.includes('mitre') || lower.match(/t\d{4}/i))
-    return `**MITRE ATT&CK (Demo Mode)**\n\nIn full AI mode I would map to specific technique IDs, show real-world usage and provide detection strategies.\n\n*Configure AI provider for full ATT&CK analysis.*`;
-  return `I'm **RAKAY**, your AI Security Analyst.\n\n**Current mode:** Demo (all AI providers temporarily unavailable)\n\n**Available capabilities:** Sigma rules · KQL/SPL queries · IOC enrichment · MITRE ATT&CK · CVE research · Threat actor profiling\n\n⚠️ *Set \`OPENAI_API_KEY\`, \`CLAUDE_API_KEY\`, or \`GEMINI_API_KEY\` in your environment to enable full AI capabilities.*`;
+  // MockProvider is only reached if hybridFallback returned null AND all real providers failed.
+  // Provide a clear, helpful response pointing to what the user asked about.
+  if (lower.match(/cve-[\d-]+/i)) {
+    const cveId = lower.match(/cve-[\d-]+/i)?.[0]?.toUpperCase() || 'CVE';
+    return `⚠️ Using built-in threat intelligence\n\n## Overview\nRequesting CVE details for **${cveId}**.\n\n## Why It Matters\nCVE identifiers track specific vulnerabilities. Without an AI provider configured, only CVEs in the local database can be retrieved.\n\n## Detection Guidance\nSearch your SIEM for exploitation indicators related to this CVE. Check CISA KEV: https://www.cisa.gov/known-exploited-vulnerabilities-catalog\n\n## Mitigation\n1. Apply the relevant vendor patch immediately\n2. Identify all affected systems in your environment\n3. Monitor for indicators of exploitation in your SIEM\n\n## Analyst Tip\n> 💡 For full CVE enrichment, configure an AI API key. Local intelligence database has 37 CVEs including Log4Shell, ProxyShell, EternalBlue, and recent exploited vulnerabilities.`;
+  }
+  if (lower.includes('sigma') || lower.includes('detection rule')) {
+    return `⚠️ Using built-in threat intelligence\n\n## Overview\nSigma detection rule generation is available via the local detection engine with 21 pre-built techniques.\n\n## Detection Guidance\n### Sigma Rule — PowerShell Encoded Command Detection\n\`\`\`yaml\ntitle: Suspicious PowerShell Encoded Command Execution\nid: a6eb3b37-b8c2-4e9f-b1c1-8e3d4c5f6a7b\nstatus: production\ndescription: Detects PowerShell execution with encoded or obfuscated command parameters\ntags:\n  - attack.execution\n  - attack.t1059.001\nlogsource:\n  category: process_creation\n  product: windows\ndetection:\n  selection:\n    Image|endswith:\n      - '\\\\powershell.exe'\n      - '\\\\pwsh.exe'\n    CommandLine|contains:\n      - '-EncodedCommand'\n      - '-enc '\n      - '-e '\n      - '-bypass'\n      - '-nop'\n      - 'hidden'\nfalsepositives:\n  - Legitimate administrative scripts\nlevel: high\n\`\`\`\n\n## Analyst Tip\n> 💡 Ask for a specific technique like "Generate Sigma rule for T1059.001" or "PowerShell attack detection" for full Sigma + KQL + SPL output.`;
+  }
+  if (lower.includes('mitre') || lower.match(/t\d{4}/i)) {
+    const techId = lower.match(/t(\d{4}(?:\.\d{3})?)/i)?.[0]?.toUpperCase() || 'T1059';
+    return `⚠️ Using built-in threat intelligence\n\n## Overview\nMITRE ATT&CK technique lookup for **${techId}**.\n\n## Why It Matters\nThe MITRE ATT&CK framework provides a structured taxonomy of adversary tactics and techniques. Understanding technique ${techId} helps defenders build targeted detection rules.\n\n## Detection Guidance\nMonitor process execution, command-line parameters, and network activity associated with this technique. Deploy endpoint detection agents with behavior-based rules.\n\n## Mitigation\n- Apply least-privilege principles\n- Enable comprehensive logging (process creation, network connections)\n- Deploy EDR/XDR with behavioral detection capabilities\n\n## Analyst Tip\n> 💡 Use the Detection Rules panel (SOC tab) to generate Sigma/KQL/SPL rules for any MITRE technique. Configure an AI API key for context-aware explanations.`;
+  }
+  if (lower.includes('ransomware') || lower.includes('encrypt') || lower.includes('wiper')) {
+    return `⚠️ Using built-in threat intelligence\n\n## Overview\n**Ransomware** attacks encrypt victim data and demand payment for decryption keys. Modern ransomware gangs (LockBit, ALPHV/BlackCat, Cl0p) use a double-extortion model: exfiltrate data BEFORE encrypting to maximise leverage.\n\n## Why It Matters\nRansomware caused over $1B in ransom payments in 2023. Healthcare, government, and critical infrastructure are primary targets. Average dwell time before encryption is 9 days.\n\n## Detection Guidance\n- Monitor for mass file rename/modification events (>50 files/min)\n- Alert on shadow copy deletion: \`vssadmin delete shadows\`\n- Detect common tools: Cobalt Strike, Rclone, AnyDesk\n- Monitor for LSASS access (credential dumping before lateral movement)\n\n## Mitigation\n1. Immutable offline backups (3-2-1 rule)\n2. MFA on all remote access (VPN, RDP, email)\n3. Network segmentation to limit lateral movement\n4. Privileged access management (PAM)\n5. EDR with ransomware-specific behavioral rules\n\n## Analyst Tip\n> 💡 Run the Incident Simulation panel to walk through a full ransomware attack chain with detection checkpoints and response playbook.`;
+  }
+  if (lower.includes('apt29') || lower.includes('apt28') || lower.includes('lazarus') || lower.includes('threat actor') || lower.includes('apt group')) {
+    return `⚠️ Using built-in threat intelligence\n\n## Overview\nThreat actor intelligence is available for major APT groups and ransomware operators in the local database.\n\n## Key Threat Actors\n| Actor | Origin | Motivation | Recent Activity |\n|-------|--------|------------|----------------|\n| **APT29** (Cozy Bear) | Russia/SVR | Espionage | Microsoft Exchange breach (2024) |\n| **APT28** (Fancy Bear) | Russia/GRU | Espionage, disinfo | Active NATO targeting |\n| **Lazarus Group** | North Korea/RGB | Financial theft | Bybit exchange ($1.5B, 2024) |\n| **LockBit** | Unknown | Ransomware RaaS | Disrupted by Op. Cronos (2024), resumed |\n| **Scattered Spider** | USA/UK | Financial | MGM Resorts, Caesars (2023) |\n\n## Analyst Tip\n> 💡 Ask specifically: "Profile APT29" or "What are Lazarus Group TTPs?" for detailed actor intelligence including tools, techniques, and IOCs.`;
+  }
+
+  return '⚠️ Using built-in threat intelligence\n\n## Overview\nI\'m **RAKAY**, your AI Security Analyst assistant. I\'m currently operating with local threat intelligence (no external AI provider configured).\n\n## Available Capabilities (Local Mode)\n- **CVE Intelligence** — 37 critical CVEs including Log4Shell, ProxyShell, EternalBlue\n- **MITRE ATT&CK** — 26 techniques with detection guidance\n- **Sigma Rules** — 21 pre-built detection rules (Sigma/KQL/SPL)\n- **Threat Actors** — APT29, APT28, Lazarus, LockBit, Scattered Spider profiles\n- **Incident Simulation** — Ransomware, supply chain, phishing attack chains\n\n## Try These Queries\n- "What is CVE-2021-44228?" — Log4Shell details\n- "Generate Sigma rule for PowerShell attack" — detection rules\n- "Explain T1059.001" — MITRE ATT\\&CK technique\n- "Profile APT29" — threat actor intelligence\n- "Simulate ransomware attack" — incident response playbook\n\n## Enable Full AI Mode\nSet one of these environment variables on the server:\n- OPENAI_API_KEY — GPT-4o (recommended)\n- CLAUDE_API_KEY — Claude 3.5\n- GEMINI_API_KEY — Gemini Pro\n- DEEPSEEK_API_KEY — DeepSeek R1';
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

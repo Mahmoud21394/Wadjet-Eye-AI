@@ -43,6 +43,10 @@ const RE_API_KEY_LEAK     = /sk-[a-zA-Z0-9\-_]{20,}/g;
 const RE_DEMO_MODE        = /(?:demo mode|mock mode|limited mode|fallback mode|offline mode|degraded mode)/gi;
 // Limited capability note (added by old processor)
 const RE_LIMITED_CAP_NOTE = />\s*⚠️\s*\*\*Note:\*\*.*limited-capability mode.*\n?/g;
+// Tool result raw JSON patterns (found:false, error:false from tool calls)
+const RE_TOOL_JSON_RESULT = /\{\s*"(?:error|found|tool)"\s*:\s*(?:false|true|null)[^}]{0,500}\}/g;
+// Lines that are just JSON-like tool result dumps
+const RE_TOOL_RESULT_LINE = /^The (?:\w+) tool (?:encountered|returned|found)[^\n]*\n?/gm;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  STAGE 1 — CLEAN
@@ -66,8 +70,12 @@ function _clean(text) {
   out = out.replace(RE_TOOL_BANNER_ALL, '');
   out = out.replace(RE_TOOL_COLON, '');
 
-  // 1e. Remove large raw JSON code blocks
-  out = out.replace(RE_RAW_JSON_BLOCK_LARGE, '');
+  // 1d2. Remove raw tool result JSON objects ({found: false, error: false, tool: "..."})
+  out = out.replace(RE_TOOL_JSON_RESULT, '');
+  out = out.replace(RE_TOOL_RESULT_LINE, '');
+
+  // 1e. Replace large raw JSON code blocks with truncation marker
+  out = out.replace(RE_RAW_JSON_BLOCK_LARGE, '_[json truncated]_');
 
   // 1f. Remove inline raw JSON objects that are too large
   // (but ONLY outside code blocks — don't touch yaml/kql/spl inside ```)
@@ -154,11 +162,17 @@ function _enrich(text, context = {}) {
     });
   }
 
-  // 3c. Degraded mode: show ⚠️ indicator but DO NOT add "limited-capability" text
+  // 3c. Degraded mode: show ⚠️ indicator and add limited-capability note
   //     The fallback functions already prepend "⚠️ Using built-in threat intelligence"
   //     so we only add a minimal note if the response doesn't already have one
-  if (context.degraded && !out.includes('⚠️')) {
-    out = `⚠️ Using built-in threat intelligence\n\n${out}`;
+  if (context.degraded) {
+    if (!out.includes('⚠️')) {
+      out = `⚠️ Using built-in threat intelligence\n\n${out}`;
+    }
+    // Add limited-capability mode note if not already present
+    if (!out.includes('limited-capability mode')) {
+      out += `\n\n> ℹ️ **Note:** RAKAY is running in limited-capability mode — using built-in threat intelligence without a live AI provider. Set OPENAI_API_KEY, CLAUDE_API_KEY, or GEMINI_API_KEY to enable full AI capabilities.`;
+    }
   }
 
   return out;
@@ -327,35 +341,66 @@ function sanitizeToolOutput(toolTrace) {
 
 /**
  * Merge multiple tool results into a single coherent response.
- * Used when the LLM calls ≥2 tools and we need to present unified output.
+ * Produces a structured 5-section SOC response from tool output.
  *
  * @param {object[]} toolTrace - Array of tool call records
  * @param {string}   llmText   - LLM-generated text that references the tools
- * @returns {string} Merged response
+ * @returns {string} Merged response in 5-section format
  */
 function mergeToolResults(toolTrace, llmText) {
   if (!toolTrace || !toolTrace.length) return process(llmText);
 
-  const { indicator, summary } = sanitizeToolOutput(toolTrace);
+  // Filter out empty/error tool results (found:false, no meaningful content)
+  const validTrace = toolTrace.filter(t => {
+    if (!t.result) return false;
+    if (typeof t.result === 'object') {
+      // Skip results that are just {found: false, error: false, ...}
+      if (t.result.found === false && t.result.error === false) return false;
+      // Skip empty results
+      const keys = Object.keys(t.result);
+      if (keys.length === 0) return false;
+    }
+    if (typeof t.result === 'string' && t.result.trim().length < 10) return false;
+    return true;
+  });
 
-  // If LLM text already references the tool results substantively, use it directly
-  if (llmText && llmText.length > 100) {
-    // Prepend a clean indicator but keep LLM synthesis as the main body
-    const header = indicator ? `${indicator}\n\n` : '';
-    return process(header + llmText, { toolNames: toolTrace.map(t => t.tool) });
+  // If LLM text already contains rich structured content (>=2 ## headers), keep it
+  if (llmText && llmText.length > 200) {
+    const headerCount = (llmText.match(/^##\s+/gm) || []).length;
+    if (headerCount >= 2) {
+      return process(llmText, { toolNames: toolTrace.map(t => t.tool) });
+    }
   }
 
-  // LLM text is empty/minimal — build response from tool output directly
+  // If LLM text is substantive but not structured, use it with minimal cleanup
+  if (llmText && llmText.length > 100) {
+    return process(llmText, { toolNames: toolTrace.map(t => t.tool) });
+  }
+
+  // Build structured 5-section response from tool results
+  if (validTrace.length === 0) {
+    // All tools returned empty/not-found — provide a helpful message
+    return process(llmText || '⚠️ Using built-in threat intelligence\n\nNo matching intelligence found in the local database for your query. Try a more specific CVE ID, MITRE technique (e.g., T1059.001), or threat scenario.', {});
+  }
+
   const sections = [];
-  for (const t of toolTrace) {
+
+  // Build the overview from the primary tool result
+  const primaryTool = validTrace[0];
+  const primaryFormatted = _formatToolResultAsSection(primaryTool.tool, primaryTool.result);
+  if (primaryFormatted) {
+    sections.push(primaryFormatted);
+  }
+
+  // Add additional tool results
+  for (const t of validTrace.slice(1)) {
     const label = _toolLabel(t.tool);
     const formatted = _formatToolResultAsSection(t.tool, t.result);
-    if (formatted) sections.push(`### ${label}\n\n${formatted}`);
+    if (formatted) sections.push(`---\n\n### Additional: ${label}\n\n${formatted}`);
   }
 
-  const body = sections.join('\n\n---\n\n');
-  const combined = indicator + '\n\n' + body;
-  return process(combined, { toolNames: toolTrace.map(t => t.tool) });
+  const body = sections.join('\n\n');
+  return process(body, { toolNames: toolTrace.map(t => t.tool) });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -528,24 +573,39 @@ function _summariseToolResult(toolName, result) {
 
 function _formatToolResultAsSection(toolName, result) {
   if (!result) return '';
-  if (typeof result === 'string') return result.slice(0, 2000);
+
+  // If the result already has pre-formatted content (from _formatted field), use it
+  if (result._formatted && typeof result._formatted === 'string') {
+    return result._formatted.slice(0, 4000);
+  }
+
+  if (typeof result === 'string') return result.slice(0, 3000);
+
+  // Skip empty/not-found results
+  if (result.found === false || result.error === true) {
+    if (result.message) return `> ${result.message}`;
+    return '';
+  }
 
   switch (toolName) {
     case 'sigma_search':
     case 'sigma_generate':
       return _formatSigmaResult(result);
     case 'cve_lookup':
-      return _formatCVEResult(result);
+      return _formatCVEResult5Section(result);
     case 'mitre_lookup':
-      return _formatMITREResult(result);
+      return _formatMITREResult5Section(result);
     case 'ioc_enrich':
       return _formatIOCResult(result);
     case 'kql_generate':
-      return _formatKQLResult(result);
+      return _formatKQLResult5Section(result);
     case 'threat_actor_profile':
-      return _formatThreatActorResult(result);
+      return _formatThreatActorResult5Section(result);
     default:
-      return JSON.stringify(result, null, 2).slice(0, 1000);
+      // For unknown tools, try to create basic readable output
+      const str = JSON.stringify(result, null, 2);
+      if (str.length < 200) return str;
+      return '> Intelligence data retrieved. See analyst response for details.';
   }
 }
 
@@ -648,6 +708,201 @@ function _formatThreatActorResult(result) {
     });
   }
   return lines.join('\n');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  5-SECTION FORMAT FUNCTIONS
+//  Produce structured SOC-analyst responses in the universal template:
+//  Overview → Why It Matters → Detection Guidance → Mitigation → Analyst Tip
+// ─────────────────────────────────────────────────────────────────────────────
+
+function _formatCVEResult5Section(result) {
+  if (!result) return '';
+  const id       = result.id || result.cve_id || 'Unknown CVE';
+  const severity = (result.severity || result.baseSeverity || 'UNKNOWN').toUpperCase();
+  const cvss     = result.cvss_score || result.cvssScore || result.baseScore || '';
+  const desc     = result.description || '';
+  const vendor   = result.vendor || '';
+  const product  = result.product || '';
+  const exploited = result.exploited;
+  const refs     = result.references || result.nvd_url ? [result.nvd_url || `https://nvd.nist.gov/vuln/detail/${id}`] : [];
+  const mitigation = result.mitigation || '';
+  const detection_hint = result.detection_hint || '';
+  const published = result.published_date || result.published || '';
+
+  const severityEmoji = { CRITICAL: '🔴', HIGH: '🟠', MEDIUM: '🟡', LOW: '🟢' }[severity] || '⚪';
+  const exploitedBadge = exploited ? ' **🔴 EXPLOITED IN THE WILD**' : '';
+
+  const parts = [];
+
+  // Overview
+  parts.push(`## Overview\n\n**${id}** — ${severityEmoji} **${severity}** (CVSS ${cvss})${exploitedBadge}\n\n${desc ? desc.slice(0, 500) : 'No description available.'}`);
+  if (vendor || product) parts[0] += `\n\n**Affected:** ${[vendor, product].filter(Boolean).join(' ')}${published ? ` · Published: ${published}` : ''}`;
+
+  // Why It Matters
+  const whyMap = {
+    CRITICAL: `This is a **critical severity** vulnerability. Exploitation can lead to full system compromise, unauthenticated remote code execution, or large-scale data breaches. ${exploited ? 'This CVE is actively exploited in the wild — immediate action required.' : 'Prioritise patching immediately.'}`,
+    HIGH:     `This **high severity** vulnerability represents significant risk. Exploitation may allow privilege escalation, remote code execution, or unauthorised data access. ${exploited ? 'Active exploitation has been observed.' : 'Patch within 72 hours.'}`,
+    MEDIUM:   'This **medium severity** vulnerability requires conditions to exploit (e.g., authenticated access). Monitor and patch within 30 days.',
+    LOW:      'This **low severity** vulnerability has limited direct impact. Include in next scheduled maintenance cycle.',
+  };
+  parts.push(`## Why It Matters\n\n${whyMap[severity] || 'Review this vulnerability and apply available patches.'}`);
+
+  // Detection Guidance
+  let detection = detection_hint
+    ? `Monitor your environment for exploitation indicators:\n\n- ${detection_hint}\n- Check SIEM for unusual activity related to ${product || 'affected systems'}\n- Review IDS/WAF logs for attack signatures`
+    : `Search your SIEM and security tools for exploitation indicators:\n- Unusual authentication failures or privilege escalation events\n- Unexpected process creation from affected services\n- Network connections to/from suspicious IPs after exploitation window`;
+  if (exploited) {
+    detection += `\n\n> **Check CISA KEV:** This CVE is in the CISA Known Exploited Vulnerabilities catalog — active exploitation is confirmed: https://www.cisa.gov/known-exploited-vulnerabilities-catalog`;
+  }
+  parts.push(`## Detection Guidance\n\n${detection}`);
+
+  // Mitigation
+  const mit = mitigation || `1. Apply the vendor-provided security patch immediately\n2. Identify all affected ${product || 'systems'} in your asset inventory\n3. Monitor for exploitation indicators in SIEM\n4. Apply compensating controls if patching is not immediately possible`;
+  const urgencyPrefix = severity === 'CRITICAL' ? '🔴 **IMMEDIATE ACTION REQUIRED** — ' : severity === 'HIGH' ? '🟠 **Patch within 72 hours** — ' : '';
+  parts.push(`## Mitigation\n\n${urgencyPrefix}${mit}`);
+
+  // Analyst Tip
+  const refLink = refs.length ? refs[0] : `https://nvd.nist.gov/vuln/detail/${id}`;
+  parts.push(`## Analyst Tip\n\n> 💡 **Reference:** [NVD — ${id}](${refLink})\n> \n> Use the CVSS vector to understand the attack surface: access vector, complexity, privileges required, and user interaction. For exploited CVEs, cross-reference with threat actor TTPs — many APT groups weaponise these within days of public disclosure.`);
+
+  return parts.join('\n\n');
+}
+
+function _formatMITREResult5Section(result) {
+  if (!result) return '';
+
+  // Use _formatted if available (from MITREEnricher)
+  if (result._formatted) return result._formatted;
+
+  const id       = result.id || '';
+  const name     = result.name || id;
+  const tactics  = Array.isArray(result.tactic) ? result.tactic : [result.tactic || 'Unknown'].filter(Boolean);
+  const severity = result.severity || 'HIGH';
+  const desc     = result.description || '';
+  const detection = result.detection || '';
+  const mits     = result.mitigations || [];
+  const soc      = result.soc_context || '';
+  const url      = result.url || (id ? `https://attack.mitre.org/techniques/${id.replace('.', '/')}/` : '');
+
+  const tacticDisplay = tactics.map(t => t.charAt(0).toUpperCase() + t.slice(1)).join(', ');
+  const severityEmoji = { CRITICAL: '🔴', HIGH: '🟠', MEDIUM: '🟡', LOW: '🟢' }[severity.toUpperCase()] || '🟠';
+
+  const parts = [];
+
+  // Overview
+  parts.push(`## Overview\n\n**MITRE ATT&CK** — **${id ? `[${id}](${url})` : name}** — ${name}\n\n**Tactic:** ${tacticDisplay} · **Severity:** ${severityEmoji} ${severity.toUpperCase()}\n\n${desc.slice(0, 600)}`);
+
+  // Why It Matters
+  const whyText = soc || `**${name}** is a ${severity.toLowerCase()}-severity technique used by adversaries during the **${tacticDisplay}** phase of an attack. Detection at this stage prevents further compromise and limits the blast radius of an intrusion. This technique appears in numerous real-world incidents by APT groups and ransomware operators.`;
+  parts.push(`## Why It Matters\n\n${whyText}`);
+
+  // Detection Guidance
+  const detText = detection || 'Monitor process execution, command-line parameters, script execution events, and network activity associated with this technique. Correlate with parent process relationships.';
+  parts.push(`## Detection Guidance\n\n${detText}`);
+
+  // Mitigation
+  if (mits.length) {
+    const mitList = mits.slice(0, 5).map(m => `- ${typeof m === 'string' ? m : (m.name || JSON.stringify(m))}`).join('\n');
+    parts.push(`## Mitigation\n\n${mitList}`);
+  } else {
+    parts.push(`## Mitigation\n\n- Apply least-privilege principles\n- Enable comprehensive logging and monitoring\n- Deploy EDR with behavioral detection for this technique\n- Patch affected systems and disable unnecessary features`);
+  }
+
+  // Analyst Tip
+  const tip = url
+    ? `> 💡 Open the **ATT&CK Navigator** to visualise your coverage against this technique: ${url}\n> \n> Cross-reference with your EDR/SIEM to identify which hosts and users triggered related alerts in the past 30 days.`
+    : `> 💡 Use your SIEM to search for indicators related to this technique. Build a detection hypothesis and test it against known-good baseline activity to tune false positives.`;
+  parts.push(`## Analyst Tip\n\n${tip}`);
+
+  return parts.join('\n\n');
+}
+
+function _formatKQLResult5Section(result) {
+  if (!result) return '';
+  if (typeof result === 'string') return result;
+
+  const query       = result.query || result.kql || result.content || '';
+  const siem        = result.siem || 'kql';
+  const scenario    = result.scenario || '';
+  const description = result.description || '';
+  const technique   = result.technique || '';
+  const notes       = result.notes || '';
+
+  const siemLabel = {
+    kql: 'Microsoft Sentinel / Defender XDR (KQL)',
+    splunk_spl: 'Splunk (SPL)',
+    elastic_lucene: 'Elastic SIEM (Lucene)',
+    qradar_aql: 'QRadar (AQL)',
+  }[siem] || siem;
+
+  const codeBlock = siem === 'splunk_spl' ? 'splunk' : siem === 'elastic_lucene' ? 'elasticsearch' : 'kql';
+
+  if (!query) return description || 'No query content generated.';
+
+  const parts = [];
+
+  parts.push(`## Overview\n\n**Detection Query** for: ${scenario || description || 'Security Event Detection'}${technique && technique !== 'N/A' ? ` · Technique: \`${technique}\`` : ''}\n\n**Target SIEM:** ${siemLabel}`);
+
+  parts.push(`## Why It Matters\n\n${description || `This query detects ${scenario || 'suspicious security events'} in your SIEM environment. Deploy it as a scheduled alert rule to surface threats in real time.`}`);
+
+  parts.push(`## Detection Guidance\n\n### ${siemLabel}\n\n\`\`\`${codeBlock}\n${query}\n\`\`\``);
+
+  parts.push(`## Mitigation\n\n1. Deploy this query as a **scheduled analytics rule** (run every 5-15 minutes)\n2. Set alert threshold appropriate for your environment\n3. Route alerts to your SOC ticketing system\n4. Tune false positives by adding exclusions for known-good processes/IPs`);
+
+  const analystNote = notes || 'Test this query against historical data before enabling as a live alert. Adjust time windows and thresholds based on your environment baseline.';
+  parts.push(`## Analyst Tip\n\n> 💡 ${analystNote}${technique && technique !== 'N/A' ? `\n> \n> Full ATT&CK technique details: https://attack.mitre.org/techniques/${technique.replace('.', '/')}/` : ''}`);
+
+  return parts.join('\n\n');
+}
+
+function _formatThreatActorResult5Section(result) {
+  if (!result) return '';
+  if (result.found === false) return result.message || 'Threat actor not found in local database.';
+
+  const name     = result.name || '';
+  const aliases  = result.aliases || [];
+  const origin   = result.origin || result.country || '';
+  const sponsor  = result.sponsor || '';
+  const motivation = Array.isArray(result.motivation) ? result.motivation.join(', ') : (result.motivation || '');
+  const targets  = Array.isArray(result.targets) ? result.targets : [];
+  const ttps     = Array.isArray(result.ttps) ? result.ttps : [];
+  const tools_list = Array.isArray(result.tools) ? result.tools : [];
+  const campaigns = Array.isArray(result.notable_campaigns) ? result.notable_campaigns : [];
+  const desc     = result.description || '';
+
+  const parts = [];
+
+  // Overview
+  let overview = `## Overview\n\n**${name}**`;
+  if (aliases.length) overview += ` _(${aliases.slice(0, 3).join(', ')})_`;
+  overview += `\n\n**Origin:** ${origin}${sponsor ? ` · **Sponsor:** ${sponsor}` : ''} · **Motivation:** ${motivation}`;
+  if (desc) overview += `\n\n${desc.slice(0, 500)}`;
+  parts.push(overview);
+
+  // Why It Matters
+  const whyText = `**${name}** represents a ${motivation.toLowerCase().includes('espionage') ? 'nation-state espionage' : motivation.toLowerCase().includes('financial') ? 'financially-motivated' : 'sophisticated'} threat. Primary targets include: ${targets.slice(0, 4).join(', ')}${campaigns.length ? `. **Recent campaigns:** ${campaigns.slice(0, 3).join(', ')}` : ''}.`;
+  parts.push(`## Why It Matters\n\n${whyText}`);
+
+  // Detection Guidance
+  const detLines = [];
+  if (ttps.length) {
+    detLines.push('**Key MITRE ATT&CK Techniques:**');
+    ttps.slice(0, 6).forEach(t => detLines.push(`- \`${t}\` — [ATT&CK Reference](https://attack.mitre.org/techniques/${t.replace('.', '/')})`));
+  }
+  if (tools_list.length) {
+    detLines.push(`\n**Known Tools:** ${tools_list.slice(0, 5).join(', ')}`);
+  }
+  detLines.push('\n**Detection Approach:**\n- Monitor for TTPs listed above in your SIEM\n- Create threat actor-specific threat hunting hypotheses\n- Subscribe to threat intel feeds tracking this group');
+  parts.push(`## Detection Guidance\n\n${detLines.join('\n')}`);
+
+  // Mitigation
+  parts.push(`## Mitigation\n\n- Apply MFA across all remote access and identity providers\n- Monitor privileged account usage for anomalies\n- Enable email security with sandboxing (primary initial access vector)\n- Network segmentation to limit lateral movement post-compromise\n- Implement privileged access workstations (PAWs) for admin tasks`);
+
+  // Analyst Tip
+  parts.push(`## Analyst Tip\n\n> 💡 Review MITRE's threat actor page for ${name}: https://attack.mitre.org/groups/\n> \n> Cross-reference your recent alerts against the TTPs listed above. Enrich suspicious IPs/domains against known ${name} infrastructure using threat intel feeds.`);
+
+  return parts.join('\n\n');
 }
 
 function _getDefaultErrorMessage(code) {

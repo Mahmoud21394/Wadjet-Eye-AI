@@ -1451,48 +1451,60 @@
   function _renderMarkdown(text) {
     if (!text) return '';
 
-    // Use marked.js if loaded
-    if (typeof window.marked !== 'undefined') {
-      try { return window.marked.parse(text, { breaks: true, gfm: true }); } catch {}
+    // Extract and handle the ⚠️ built-in intel warning line specially
+    let warningBadge = '';
+    let mainText = text;
+    if (text.startsWith('⚠️ Using built-in threat intelligence')) {
+      warningBadge = '<div class="rakay-intel-badge"><i class="fas fa-shield-alt"></i> Using built-in threat intelligence</div>';
+      mainText = text.replace(/^⚠️ Using built-in threat intelligence\s*\n+/, '');
     }
 
-    let html = _e(text);
+    // Use marked.js if loaded
+    if (typeof window.marked !== 'undefined') {
+      try {
+        const rendered = window.marked.parse(mainText, { breaks: true, gfm: true });
+        return warningBadge + rendered;
+      } catch {}
+    }
 
-    // Fenced code blocks
+    let html = _e(mainText);
+
+    // Fenced code blocks (handle BEFORE other replacements)
     html = html.replace(/```(\w+)?\n([\s\S]*?)```/g, (_, lang, code) => {
       const langClass = lang ? ` class="language-${_e(lang)}"` : '';
-      const langLabel = lang ? `<span class="rakay-code-lang">${_e(lang)}</span>` : '';
-      const copyBtn   = `<button class="rakay-copy-btn" onclick="window._rakayCopyCode(this)" title="Copy"><i class="fas fa-copy"></i></button>`;
+      const langLabel = lang ? `<span class="rakay-code-lang">${_e(lang.toUpperCase())}</span>` : '';
+      const copyBtn   = `<button class="rakay-copy-btn" onclick="window._rakayCopyCode(this)" title="Copy code"><i class="fas fa-copy"></i></button>`;
       return `<div class="rakay-code-wrap">${langLabel}${copyBtn}<pre><code${langClass}>${code.trim()}</code></pre></div>`;
     });
 
     // Inline code
     html = html.replace(/`([^`\n]+)`/g, '<code class="rakay-inline-code">$1</code>');
 
-    // Headers
-    html = html.replace(/^### (.+)$/gm, '<h3 class="rakay-h3">$1</h3>');
-    html = html.replace(/^## (.+)$/gm,  '<h2 class="rakay-h2">$1</h2>');
-    html = html.replace(/^# (.+)$/gm,   '<h1 class="rakay-h1">$1</h1>');
+    // Headers (in order: h3 before h2 before h1)
+    html = html.replace(/^#### (.+)$/gm, '<h4 class="rakay-h4">$1</h4>');
+    html = html.replace(/^### (.+)$/gm,  '<h3 class="rakay-h3">$1</h3>');
+    html = html.replace(/^## (.+)$/gm,   '<h2 class="rakay-h2">$1</h2>');
+    html = html.replace(/^# (.+)$/gm,    '<h1 class="rakay-h1">$1</h1>');
 
-    // Bold + italic
+    // Bold + italic (careful order: *** before ** before *)
     html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
     html = html.replace(/\*\*(.+?)\*\*/g,     '<strong>$1</strong>');
-    html = html.replace(/\*(.+?)\*/g,         '<em>$1</em>');
-    html = html.replace(/_(.+?)_/g,           '<em>$1</em>');
+    html = html.replace(/\*([^*\n]+)\*/g,     '<em>$1</em>');
+    html = html.replace(/_([^_\n]+)_/g,       '<em>$1</em>');
 
     // Tables
-    html = html.replace(/(?:^|\n)((?:\|[^\n]+\|\n)+)/g, (_, table) => {
+    html = html.replace(/(?:^|\n)((?:\|[^\n]+\|\n?){2,})/g, (_, table) => {
       const rows = table.trim().split('\n').filter(r => r.trim());
       if (rows.length < 2) return _;
       if (!rows[1].match(/^\|[-| :]+\|$/)) return _;
       const headers = rows[0].split('|').slice(1, -1).map(h => `<th>${h.trim()}</th>`).join('');
       const body    = rows.slice(2).map(r => `<tr>${r.split('|').slice(1, -1).map(c => `<td>${c.trim()}</td>`).join('')}</tr>`).join('');
-      return `<div class="rakay-table-wrap"><table class="rakay-table"><thead><tr>${headers}</tr></thead><tbody>${body}</tbody></table></div>`;
+      return `\n<div class="rakay-table-wrap"><table class="rakay-table"><thead><tr>${headers}</tr></thead><tbody>${body}</tbody></table></div>\n`;
     });
 
-    // Unordered list
-    html = html.replace(/((?:^- .+\n?)+)/gm, match => {
-      const items = match.trim().split('\n').map(l => `<li>${l.replace(/^- /, '')}</li>`).join('');
+    // Unordered list (including nested)
+    html = html.replace(/((?:^[-*] .+\n?)+)/gm, match => {
+      const items = match.trim().split('\n').map(l => `<li>${l.replace(/^[-*] /, '')}</li>`).join('');
       return `<ul class="rakay-ul">${items}</ul>`;
     });
 
@@ -1502,8 +1514,8 @@
       return `<ol class="rakay-ol">${items}</ol>`;
     });
 
-    // Blockquote
-    html = html.replace(/^&gt; (.+)$/gm, '<blockquote class="rakay-blockquote">$1</blockquote>');
+    // Blockquote (handle > and &gt; both)
+    html = html.replace(/^(?:&gt;|>) (.+)$/gm, '<blockquote class="rakay-blockquote">$1</blockquote>');
 
     // Horizontal rule
     html = html.replace(/^---+$/gm, '<hr class="rakay-hr">');
@@ -1513,16 +1525,16 @@
       '<a href="$2" target="_blank" rel="noopener noreferrer" class="rakay-link">$1 <i class="fas fa-external-link-alt" style="font-size:9px"></i></a>');
 
     // Paragraphs
-    html = html.replace(/\n\n/g, '</p><p>');
+    html = html.replace(/\n\n+/g, '</p><p>');
     html = `<p>${html}</p>`;
     html = html.replace(/<p>\s*<\/p>/g, '');
     html = html.replace(/\n/g, '<br>');
 
     // Clean up redundant p around block elements
-    html = html.replace(/<p>(<(?:h[123]|ul|ol|div|pre|table|blockquote|hr)[^>]*>)/g, '$1');
-    html = html.replace(/<\/(?:h[123]|ul|ol|div|pre|table|blockquote)><\/p>/g, m => m.replace('</p>', ''));
+    html = html.replace(/<p>(<(?:h[1234]|ul|ol|div|pre|table|blockquote|hr)[^>]*>)/g, '$1');
+    html = html.replace(/<\/(?:h[1234]|ul|ol|div|pre|table|blockquote)>(?:<\/p>)?/g, m => m.replace('</p>', ''));
 
-    return html;
+    return warningBadge + html;
   }
 
   // ── Global copy helper ────────────────────────────────────────────────────
@@ -1612,18 +1624,28 @@
     // Remove ALL internal debug log lines
     out = out.replace(/^\[(?:RAKAY|RAKAYEngine|Engine|Provider|CB:|CB |PQ|MultiProvider|Tool|Ollama|OpenAI|Anthropic|Gemini|DeepSeek|LLM|Stream|Queue|Session)\].+$/gm, '');
 
-    // Remove ALL tool-use indicator lines completely (Task 5 — no tool spam)
+    // Remove ALL tool-use indicator lines completely (no tool spam)
     out = out.replace(/🔧\s*\*?Using (?:tool|intelligence|tools)[^*\n]*\*?\s*\n?/g, '');
     out = out.replace(/🔧\s*Using tool:\s*[^\n]+\n?/g, '');
 
-    // Remove large raw JSON dumps (outside code blocks)
+    // Remove raw JSON tool result objects OUTSIDE code blocks
+    // Pattern: {"error": false, "found": false, "tool": "..."} — these are leaked tool results
     const codeBlocks = [];
     out = out.replace(/(```[\s\S]*?```)/g, (m) => { codeBlocks.push(m); return `\x00CB${codeBlocks.length-1}\x00`; });
-    out = out.replace(/```json\n?\{[\s\S]{300,}\}\n?```/g, '');
-    out = out.replace(/\{[\s\S]{400,}?\}/g, match => {
+
+    // Remove large raw JSON dumps
+    out = out.replace(/```json\n?\{[\s\S]{200,}\}\n?```/g, '');
+
+    // Remove tool result JSON patterns ({found: false/true, error: false/true, ...})
+    out = out.replace(/\{\s*"(?:error|found|tool)"\s*:[^}]{0,600}\}/g, '');
+
+    // Remove remaining large JSON blobs
+    out = out.replace(/\{[^{}]{400,}\}/g, match => {
       if (/"[^"]+"\s*:/.test(match)) return '';
       return match;
     });
+
+    // Restore code blocks
     out = out.replace(/\x00CB(\d+)\x00/g, (_, i) => codeBlocks[i]);
 
     // Replace "demo mode" / "limited mode" text
@@ -1631,6 +1653,9 @@
 
     // Remove old limited-capability footnotes
     out = out.replace(/>\s*⚠️\s*\*\*Note:\*\*.*limited-capability mode.*\n?/g, '');
+
+    // Remove lines that are just "The kql_generate tool encountered..."
+    out = out.replace(/^The \w+ tool (?:encountered|returned|found)[^\n]*\n?/gm, '');
 
     // Collapse 3+ blank lines
     out = out.replace(/\n{4,}/g, '\n\n\n');
@@ -2405,6 +2430,41 @@
   background: #f0883e14; border: 1px solid #f0883e40; border-radius: 4px;
   padding: 1px 5px; font-size: 10px; color: #f0883e;
 }
+.rakay-intel-badge {
+  background: linear-gradient(135deg, #22d3ee14, #a855f714);
+  border: 1px solid #22d3ee30; border-radius: 6px;
+  padding: 6px 12px; margin-bottom: 12px;
+  font-size: 11px; color: #22d3ee; font-weight: 500;
+  display: flex; align-items: center; gap: 6px;
+}
+.rakay-intel-badge i { font-size: 12px; }
+.rakay-h2 {
+  color: #e6edf3; font-size: 15px; font-weight: 700;
+  margin: 16px 0 8px; border-bottom: 1px solid #21262d; padding-bottom: 4px;
+}
+.rakay-h3 { color: #22d3ee; font-size: 13px; font-weight: 600; margin: 12px 0 6px; }
+.rakay-h4 { color: #8b949e; font-size: 12px; font-weight: 600; margin: 8px 0 4px; }
+.rakay-table-wrap { overflow-x: auto; margin: 8px 0; }
+.rakay-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.rakay-table th { background: #21262d; color: #e6edf3; padding: 6px 12px; text-align: left; font-weight: 600; border: 1px solid #30363d; }
+.rakay-table td { padding: 5px 12px; border: 1px solid #21262d; color: #c9d1d9; }
+.rakay-table tr:hover td { background: #161b22; }
+.rakay-blockquote {
+  border-left: 3px solid #22d3ee; margin: 8px 0; padding: 6px 12px;
+  background: #22d3ee08; color: #8b949e; font-style: italic; border-radius: 0 4px 4px 0;
+}
+.rakay-hr { border: none; border-top: 1px solid #21262d; margin: 12px 0; }
+.rakay-ul, .rakay-ol { margin: 6px 0 6px 16px; padding: 0; }
+.rakay-ul li, .rakay-ol li { margin: 3px 0; color: #c9d1d9; font-size: 13px; }
+.rakay-code-wrap { position: relative; margin: 8px 0; border-radius: 6px; overflow: hidden; border: 1px solid #30363d; background: #0d1117; }
+.rakay-code-lang { position: absolute; top: 6px; left: 8px; font-size: 10px; color: #8b949e; font-family: monospace; text-transform: uppercase; }
+.rakay-copy-btn { position: absolute; top: 4px; right: 8px; background: none; border: 1px solid #30363d; border-radius: 4px; color: #8b949e; cursor: pointer; padding: 2px 6px; font-size: 11px; }
+.rakay-copy-btn:hover { color: #e6edf3; border-color: #58a6ff; }
+.rakay-code-wrap pre { margin: 0; padding: 28px 12px 12px; overflow-x: auto; font-size: 12px; line-height: 1.5; }
+.rakay-code-wrap code { font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace; color: #e6edf3; }
+.rakay-inline-code { background: #21262d; border: 1px solid #30363d; border-radius: 3px; padding: 1px 5px; font-size: 11px; font-family: monospace; color: #22d3ee; }
+.rakay-link { color: #58a6ff; text-decoration: none; }
+.rakay-link:hover { text-decoration: underline; }
 
 /* ══════════════════════════════════════
    SOC DASHBOARD — Tab Navigation & Panels
