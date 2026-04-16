@@ -1609,14 +1609,28 @@
     if (!text || typeof text !== 'string') return text || '';
     let out = text;
 
-    // Remove internal log lines (lines starting with [Engine], [RAKAYEngine], etc.)
-    out = out.replace(/^\[(?:RAKAY|Engine|Provider|CB:|PQ|MultiProvider|Tool|Ollama|OpenAI|Anthropic|Gemini|DeepSeek)\].+$/gm, '');
+    // Remove ALL internal debug log lines
+    out = out.replace(/^\[(?:RAKAY|RAKAYEngine|Engine|Provider|CB:|CB |PQ|MultiProvider|Tool|Ollama|OpenAI|Anthropic|Gemini|DeepSeek|LLM|Stream|Queue|Session)\].+$/gm, '');
 
-    // Collapse 2+ duplicate tool-use indicator lines into one
-    out = out.replace(/(?:🔧 \*Using (?:tool|intelligence sources)[^*]*\*\s*){2,}/g, '🔧 *Using intelligence sources…*\n\n');
+    // Remove ALL tool-use indicator lines completely (Task 5 — no tool spam)
+    out = out.replace(/🔧\s*\*?Using (?:tool|intelligence|tools)[^*\n]*\*?\s*\n?/g, '');
+    out = out.replace(/🔧\s*Using tool:\s*[^\n]+\n?/g, '');
 
-    // Never show raw JSON to users — replace large JSON dumps with note
-    out = out.replace(/```json\n?\{[\s\S]{500,}\}\n?```/g, '_[Intelligence data processed]_');
+    // Remove large raw JSON dumps (outside code blocks)
+    const codeBlocks = [];
+    out = out.replace(/(```[\s\S]*?```)/g, (m) => { codeBlocks.push(m); return `\x00CB${codeBlocks.length-1}\x00`; });
+    out = out.replace(/```json\n?\{[\s\S]{300,}\}\n?```/g, '');
+    out = out.replace(/\{[\s\S]{400,}?\}/g, match => {
+      if (/"[^"]+"\s*:/.test(match)) return '';
+      return match;
+    });
+    out = out.replace(/\x00CB(\d+)\x00/g, (_, i) => codeBlocks[i]);
+
+    // Replace "demo mode" / "limited mode" text
+    out = out.replace(/(?:demo mode|mock mode|limited(?:-capability)? mode|fallback mode|offline mode)/gi, 'built-in threat intelligence');
+
+    // Remove old limited-capability footnotes
+    out = out.replace(/>\s*⚠️\s*\*\*Note:\*\*.*limited-capability mode.*\n?/g, '');
 
     // Collapse 3+ blank lines
     out = out.replace(/\n{4,}/g, '\n\n\n');
@@ -1649,17 +1663,19 @@
   // ══════════════════════════════════════════════════════════════════════════
   function _getProviderBadge(provider, degraded) {
     if (degraded) {
-      return '<span class="rakay-degraded-badge"><i class="fas fa-exclamation-triangle"></i> limited mode</span>';
+      return '<span class="rakay-degraded-badge" title="Using built-in threat intelligence"><i class="fas fa-shield-alt"></i> built-in intel</span>';
     }
     if (!provider || provider === 'unknown') return '';
 
     const PROVIDER_CONFIG = {
-      openai:    { label: 'OpenAI',    color: '#10a37f', icon: 'fa-robot' },
-      ollama:    { label: 'Ollama',    color: '#6366f1', icon: 'fa-server' },
-      anthropic: { label: 'Anthropic', color: '#d97706', icon: 'fa-brain' },
-      gemini:    { label: 'Gemini',    color: '#4285f4', icon: 'fa-gem' },
-      deepseek:  { label: 'DeepSeek',  color: '#8b5cf6', icon: 'fa-search' },
-      mock:      { label: 'Demo',      color: '#6b7280', icon: 'fa-flask' },
+      openai:         { label: 'OpenAI',    color: '#10a37f', icon: 'fa-robot' },
+      ollama:         { label: 'Ollama',    color: '#6366f1', icon: 'fa-server' },
+      anthropic:      { label: 'Anthropic', color: '#d97706', icon: 'fa-brain' },
+      gemini:         { label: 'Gemini',    color: '#4285f4', icon: 'fa-gem' },
+      deepseek:       { label: 'DeepSeek',  color: '#8b5cf6', icon: 'fa-search' },
+      mock:           { label: 'Local',     color: '#22d3ee', icon: 'fa-database' },
+      'hybrid-fallback': { label: 'Local Intel', color: '#22d3ee', icon: 'fa-database' },
+      'local-intel':  { label: 'Local Intel', color: '#22d3ee', icon: 'fa-shield-alt' },
     };
 
     const cfg = PROVIDER_CONFIG[provider.toLowerCase()] || { label: provider, color: '#6b7280', icon: 'fa-cog' };

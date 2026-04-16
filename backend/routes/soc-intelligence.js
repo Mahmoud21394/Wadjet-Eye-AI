@@ -104,25 +104,41 @@ router.get('/health', socLimiter, safe(async (req, res) => {
 }));
 
 router.get('/dashboard', socLimiter, safe(async (req, res) => {
-  const data = {};
+  const dashboard = {};
   if (intelDB) {
-    data.critical_cves = intelDB.getLatestCritical(8).map(c => ({
+    const rawCritical  = intelDB.getLatestCritical(8);
+    const rawExploited = intelDB.getExploitedCVEs(5);
+    const dbStats      = intelDB.getStats();
+    dashboard.stats = {
+      totalCVEs:          dbStats.cve.total,
+      exploitedCVEs:      dbStats.cve.exploited,
+      criticalCVEs:       dbStats.cve.critical,
+      totalTechniques:    dbStats.mitre.total,
+      simulationScenarios: 4,
+    };
+    dashboard.critical_cves = rawCritical.map(c => ({
       id: c.id, vendor: c.vendor, product: c.product,
       cvss: c.cvss_score, severity: c.severity,
       exploited: c.exploited, published: c.published_date,
+      description: (c.description || '').substring(0, 120),
     }));
-    data.exploited_cves = intelDB.getExploitedCVEs(5).map(c => ({
+    dashboard.exploited_cves = rawExploited.map(c => ({
       id: c.id, cvss: c.cvss_score, vendor: c.vendor, published: c.published_date,
+      description: (c.description || '').substring(0, 80),
     }));
-    data.stats = intelDB.getStats();
+    dashboard.recentActivity = rawCritical.slice(0, 5).map(c => ({
+      type: 'cve', id: c.id, cvss: c.cvss_score, exploited: c.exploited,
+      summary: `${c.id} — ${c.vendor} — CVSS ${c.cvss_score}${c.exploited ? ' 🔴 Exploited' : ''}`,
+    }));
   }
   if (correlator) {
-    data.high_risk_map = correlator.getHighRiskMap();
+    dashboard.high_risk_map = correlator.getHighRiskMap();
   }
   if (detectionEngine) {
-    data.supported_techniques = detectionEngine.listSupportedTechniques().slice(0, 20);
+    dashboard.supported_techniques = detectionEngine.listSupportedTechniques().slice(0, 20);
   }
-  res.json({ success: true, ...data });
+  // Return data nested under 'dashboard' AND also as 'data' for frontend flexibility
+  res.json({ success: true, dashboard, data: dashboard });
 }));
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -289,7 +305,8 @@ router.post('/simulate', socLimiter, requireEngine(simulator, 'Incident Simulato
     return res.json({ success: true, scenario: result.scenario, markdown });
   }
 
-  res.json({ success: true, ...result });
+  // Wrap under 'simulation' and 'data' for frontend flexibility
+  res.json({ success: true, simulation: result, data: result, ...result });
 }));
 
 // ═════════════════════════════════════════════════════════════════════════════

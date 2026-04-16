@@ -853,6 +853,7 @@ class DetectionEngine {
     const yaml = SigmaBuilder.build(entry);
     return {
       format: 'sigma',
+      found: true,
       technique: entry.id,
       name: entry.name,
       tactic: entry.tactic,
@@ -872,6 +873,7 @@ class DetectionEngine {
     if (!entry) return this._notFound('KQL', technique);
     return {
       format: 'kql',
+      found: true,
       technique: entry.id,
       name: entry.name,
       tactic: entry.tactic,
@@ -891,6 +893,7 @@ class DetectionEngine {
     if (!entry) return this._notFound('SPL', technique);
     return {
       format: 'spl',
+      found: true,
       technique: entry.id,
       name: entry.name,
       tactic: entry.tactic,
@@ -910,6 +913,7 @@ class DetectionEngine {
     if (!entry) return this._notFound('Elastic EQL', technique);
     return {
       format: 'elastic',
+      found: true,
       technique: entry.id,
       name: entry.name,
       tactic: entry.tactic,
@@ -934,6 +938,7 @@ class DetectionEngine {
       };
     }
     return {
+      found: true,
       technique: entry.id,
       name: entry.name,
       tactic: entry.tactic,
@@ -998,7 +1003,7 @@ class DetectionEngine {
   // ── SOC-formatted response ────────────────────────────────────────────────
   formatSOCResponse(technique) {
     const all = this.generateAll(technique);
-    if (!all.found && all.found === false) return all.message;
+    if (all.found === false) return all.message;
 
     return `## Overview
 **Technique**: ${all.technique} — ${all.name}
