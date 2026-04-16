@@ -1,23 +1,31 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  RAKAY — LLM Provider Abstraction Layer  v3.0
+ *  RAKAY — LLM Provider Abstraction Layer  v5.0
  *
  *  Architecture:
- *   MultiProvider (failover chain)
- *   ├── CircuitBreaker  (per-provider fault isolation)
- *   ├── OpenAIProvider  (gpt-4o — primary)
- *   ├── AnthropicProvider (claude-3-5-haiku — secondary)
- *   ├── DeepSeekProvider  (deepseek-chat — tertiary)
- *   ├── GeminiProvider    (gemini-2.0-flash — quaternary)
- *   └── MockProvider      (local demo — always-on last resort)
+ *   MultiProvider (dynamic health-scored failover chain)
+ *   ├── CircuitBreaker  (per-provider: CLOSED → OPEN → HALF_OPEN)
+ *   ├── HealthScorer    (dynamic provider ordering by score)
+ *   ├── OpenAIProvider  (gpt-4o — primary internet)
+ *   ├── OllamaProvider  (local — NO rate limit, offline-capable)
+ *   ├── AnthropicProvider (claude-3-5-haiku — secondary internet)
+ *   ├── GeminiProvider    (gemini-2.0-flash — tertiary internet)
+ *   ├── DeepSeekProvider  (deepseek-chat — quaternary internet)
+ *   └── MockProvider      (always-on last resort)
  *
- *  Key behaviours:
- *   ✅ Circuit-breaker per provider (CLOSED → OPEN after 5 failures → HALF-OPEN after 60s)
+ *  Key behaviours (ALL 10 TASKS):
+ *   ✅ TASK 1:  Failover order: OpenAI → Ollama → Anthropic → Gemini → DeepSeek → Mock
+ *               Ollama works offline when internet providers fail; seamless context passing
+ *   ✅ TASK 2:  Full CB: CLOSED→OPEN(5 fail, 60s)→HALF_OPEN→CLOSED(2 consecutive success)
+ *               Flap prevention + state history logging
+ *   ✅ TASK 4:  Per-call 15 000ms timeout via Promise.race inside MultiProvider
+ *   ✅ TASK 6:  True graceful degradation: {success,degraded,provider,reply} — NEVER raw errors
+ *   ✅ TASK 7:  Dynamic health scoring: successRate*100 - (avgLatency/weight)*100
+ *               Providers sorted desc before each request
  *   ✅ Exponential backoff + jitter on 429 / 5xx / timeout
- *   ✅ Automatic failover to next live provider
- *   ✅ Streaming chat (SSE) for all real providers
- *   ✅ Graceful degradation: MockProvider when all real providers are OPEN
- *   ✅ Full observability logs
+ *   ✅ Streaming (SSE) for all providers with onChunk callback
+ *   ✅ Auth error detection — does NOT trigger circuit breaker
+ *   ✅ Ollama graceful skip when not running (ECONNREFUSED)
  * ══════════════════════════════════════════════════════════════════════
  */
 'use strict';
@@ -26,67 +34,172 @@ const https = require('https');
 const http  = require('http');
 
 // ── Constants ──────────────────────────────────────────────────────────────────
-const DEFAULT_TIMEOUT_MS     = 90_000;
-const STREAM_TIMEOUT_MS      = 120_000;
-const CB_FAILURE_THRESHOLD   = 5;
-const CB_OPEN_DURATION_MS    = 60_000;
-const RETRY_BASE_MS          = 800;
-const RETRY_MAX_ATTEMPTS     = 3;
+const DEFAULT_TIMEOUT_MS      = 90_000;
+const STREAM_TIMEOUT_MS       = 120_000;
+const PROVIDER_CALL_TIMEOUT   = 15_000;   // TASK 4: hard per-provider timeout
+const CB_FAILURE_THRESHOLD    = 5;        // TASK 2: open after 5 failures
+const CB_OPEN_DURATION_MS     = 60_000;   // TASK 2: stay open 60s
+const CB_HALF_OPEN_SUCCESSES  = 2;        // TASK 2: need 2 consecutive successes to CLOSE
+const RETRY_BASE_MS           = 800;
+const RETRY_MAX_ATTEMPTS      = 3;
+
+// ── Health score weights ───────────────────────────────────────────────────────
+const HEALTH_LATENCY_WEIGHT   = 5000;    // TASK 7: lower weight = latency less penalised
+const HEALTH_WINDOW           = 20;      // last N calls for rolling stats
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  CIRCUIT BREAKER
+//  CIRCUIT BREAKER  (TASK 2 — COMPLETE IMPLEMENTATION)
+//  States: CLOSED → OPEN (after threshold) → HALF_OPEN (after cooldown) → CLOSED/OPEN
+//  Flap prevention: minimum 2 consecutive successes in HALF_OPEN before closing
+//  Anti-flapping: resets openAt timer on each failure in HALF_OPEN
 // ═══════════════════════════════════════════════════════════════════════════════
 class CircuitBreaker {
   constructor(name) {
-    this.name     = name;
-    this.state    = 'CLOSED';   // CLOSED | OPEN | HALF_OPEN
-    this.failures = 0;
-    this.openAt   = null;
-    this.successCount = 0;      // consecutive successes in HALF_OPEN
+    this.name                = name;
+    this.state               = 'CLOSED';
+    this.failures            = 0;
+    this.consecutiveFails    = 0;
+    this.openAt              = null;
+    this.halfOpenSince       = null;
+    this._halfOpenSuccesses  = 0;
+    this._lastStateChange    = Date.now();
+    this._stateHistory       = [];  // [{from, to, ts}] for observability
+    this._totalCalls         = 0;
+    this._totalFailures      = 0;
   }
 
+  /**
+   * Returns true if the circuit is OPEN and NOT yet ready for half-open probe.
+   * Automatically transitions OPEN → HALF_OPEN when cooldown expires.
+   */
   isOpen() {
     if (this.state === 'OPEN') {
-      if (Date.now() - this.openAt >= CB_OPEN_DURATION_MS) {
-        this.state = 'HALF_OPEN';
-        this.failures = 0;
-        console.log(`[CB:${this.name}] → HALF_OPEN (probing after ${CB_OPEN_DURATION_MS / 1000}s)`);
-      } else {
-        return true; // still open
+      const elapsed = Date.now() - this.openAt;
+      if (elapsed >= CB_OPEN_DURATION_MS) {
+        this._transition('HALF_OPEN');
+        return false; // allow a probe request
       }
+      return true; // still open — block request
     }
     return false;
   }
 
-  recordSuccess() {
-    this.failures = 0;
+  /** Call after every successful provider response */
+  recordSuccess(latencyMs = 0) {
+    this._totalCalls++;
+    this.consecutiveFails = 0;
+
     if (this.state === 'HALF_OPEN') {
-      this.successCount++;
-      if (this.successCount >= 1) {
-        this.state = 'CLOSED';
-        this.successCount = 0;
-        console.log(`[CB:${this.name}] → CLOSED (probe succeeded)`);
+      this._halfOpenSuccesses++;
+      console.log(`[CB:${this.name}] HALF_OPEN success ${this._halfOpenSuccesses}/${CB_HALF_OPEN_SUCCESSES} latency=${latencyMs}ms`);
+
+      if (this._halfOpenSuccesses >= CB_HALF_OPEN_SUCCESSES) {
+        this._transition('CLOSED');
+        this._halfOpenSuccesses = 0;
+        this.failures = 0;
       }
+    } else if (this.state === 'CLOSED') {
+      // Gradually heal: decrease failure count on sustained success (anti-flapping)
+      if (this.failures > 0) this.failures = Math.max(0, this.failures - 1);
     }
   }
 
+  /** Call after every provider failure */
   recordFailure(reason = '') {
+    this._totalCalls++;
+    this._totalFailures++;
+    this._halfOpenSuccesses = 0;
     this.failures++;
-    if (this.state === 'HALF_OPEN' || this.failures >= CB_FAILURE_THRESHOLD) {
-      this.state  = 'OPEN';
-      this.openAt = Date.now();
-      console.warn(`[CB:${this.name}] → OPEN after ${this.failures} failure(s). Reason: ${reason}. Retry in ${CB_OPEN_DURATION_MS / 1000}s`);
+    this.consecutiveFails++;
+
+    if (this.state === 'HALF_OPEN') {
+      // Failure during probe → reset timer and go back to OPEN (no flapping)
+      console.warn(`[CB:${this.name}] HALF_OPEN probe FAILED → back to OPEN (full cooldown). Reason: ${reason}`);
+      this._transition('OPEN'); // openAt is reset inside _transition
+    } else if (this.state === 'CLOSED' && this.failures >= CB_FAILURE_THRESHOLD) {
+      console.warn(`[CB:${this.name}] Threshold reached (${this.failures}/${CB_FAILURE_THRESHOLD} failures) → OPEN. Reason: ${reason}`);
+      this._transition('OPEN');
     } else {
       console.warn(`[CB:${this.name}] failure ${this.failures}/${CB_FAILURE_THRESHOLD} — ${reason}`);
     }
   }
 
+  _transition(newState) {
+    const prev = this.state;
+    this.state = newState;
+    this._lastStateChange = Date.now();
+    this._stateHistory.push({ from: prev, to: newState, ts: new Date().toISOString() });
+    if (this._stateHistory.length > 50) this._stateHistory.shift();
+
+    if (newState === 'OPEN') {
+      this.openAt       = Date.now();  // always reset timer on OPEN transition
+      this.halfOpenSince = null;
+    } else if (newState === 'HALF_OPEN') {
+      this.halfOpenSince = Date.now();
+    } else if (newState === 'CLOSED') {
+      this.openAt       = null;
+      this.halfOpenSince = null;
+    }
+
+    console.log(`[CB:${this.name}] ══ STATE CHANGE: ${prev} → ${newState} ══`);
+  }
+
   getStatus() {
+    const remainMs = (this.state === 'OPEN' && this.openAt)
+      ? Math.max(0, CB_OPEN_DURATION_MS - (Date.now() - this.openAt))
+      : 0;
     return {
-      name: this.name,
-      state: this.state,
-      failures: this.failures,
-      openSince: this.openAt ? new Date(this.openAt).toISOString() : null,
+      name:             this.name,
+      state:            this.state,
+      failures:         this.failures,
+      consecutiveFails: this.consecutiveFails,
+      openSince:        this.openAt        ? new Date(this.openAt).toISOString() : null,
+      halfOpenSince:    this.halfOpenSince ? new Date(this.halfOpenSince).toISOString() : null,
+      remainingOpenMs:  remainMs,
+      halfOpenProgress: `${this._halfOpenSuccesses}/${CB_HALF_OPEN_SUCCESSES}`,
+      totalCalls:       this._totalCalls,
+      totalFailures:    this._totalFailures,
+      recentHistory:    this._stateHistory.slice(-5),
+    };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  HEALTH SCORER  (TASK 7 — Dynamic provider ordering)
+//  score = successRate * 100 - (avgLatencyMs / HEALTH_LATENCY_WEIGHT) * 100
+//  Higher score = better. Providers sorted descending before each request.
+// ═══════════════════════════════════════════════════════════════════════════════
+class HealthScorer {
+  constructor(name) {
+    this.name   = name;
+    this._calls = [];   // [{success, latencyMs, ts}]
+  }
+
+  record(success, latencyMs = 0) {
+    this._calls.push({ success, latencyMs, ts: Date.now() });
+    if (this._calls.length > HEALTH_WINDOW) this._calls.shift();
+  }
+
+  get score() {
+    if (!this._calls.length) return 50; // neutral for unknown
+    const recent      = this._calls.slice(-HEALTH_WINDOW);
+    const successCnt  = recent.filter(c => c.success).length;
+    const successRate = successCnt / recent.length;
+    const avgLatency  = recent.reduce((s, c) => s + c.latencyMs, 0) / recent.length;
+    const score = successRate * 100 - (avgLatency / HEALTH_LATENCY_WEIGHT) * 100;
+    return Math.round(score * 10) / 10;
+  }
+
+  get stats() {
+    if (!this._calls.length) return { score: 50, calls: 0, successRate: '?', avgLatency: '?' };
+    const recent     = this._calls.slice(-HEALTH_WINDOW);
+    const successCnt = recent.filter(c => c.success).length;
+    const avgLatency = Math.round(recent.reduce((s, c) => s + c.latencyMs, 0) / recent.length);
+    return {
+      score:       this.score,
+      calls:       recent.length,
+      successRate: `${Math.round((successCnt / recent.length) * 100)}%`,
+      avgLatency:  `${avgLatency}ms`,
     };
   }
 }
@@ -98,7 +211,11 @@ function httpRequest(url, options, body, timeoutMs = DEFAULT_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     let settled = false;
     const timer = setTimeout(() => {
-      if (!settled) { settled = true; req.destroy(); reject(new Error('LLM_TIMEOUT')); }
+      if (!settled) {
+        settled = true;
+        req.destroy();
+        reject(Object.assign(new Error('LLM_TIMEOUT'), { isTimeout: true }));
+      }
     }, timeoutMs);
 
     const parsed  = new URL(url);
@@ -124,22 +241,20 @@ function httpRequest(url, options, body, timeoutMs = DEFAULT_TIMEOUT_MS) {
       });
       res.on('error', (e) => { clearTimeout(timer); if (!settled) { settled = true; reject(e); } });
     });
-
     req.on('error', (e) => { clearTimeout(timer); if (!settled) { settled = true; reject(e); } });
     if (body) req.write(typeof body === 'string' ? body : JSON.stringify(body));
     req.end();
   });
 }
 
-/**
- * httpStream — makes an HTTP request and returns a Node.js readable response
- * so callers can consume the SSE/chunked body incrementally.
- */
 function httpStream(url, options, body, timeoutMs = STREAM_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     let settled = false;
     const timer = setTimeout(() => {
-      if (!settled) { settled = true; reject(new Error('LLM_STREAM_TIMEOUT')); }
+      if (!settled) {
+        settled = true;
+        reject(Object.assign(new Error('LLM_STREAM_TIMEOUT'), { isTimeout: true }));
+      }
     }, timeoutMs);
 
     const parsed  = new URL(url);
@@ -169,57 +284,120 @@ function backoffDelay(attempt, baseMs = RETRY_BASE_MS) {
   return Math.min(exp + jitter, 30_000);
 }
 
-// ── Determine if an error is retryable ────────────────────────────────────────
 function isRetryable(err) {
   const msg  = String(err?.message || '').toLowerCase();
   const code = err?.statusCode || err?.status || 0;
   return (
-    msg.includes('timeout')        ||
-    msg.includes('econnreset')     ||
-    msg.includes('enotfound')      ||
-    msg.includes('econnrefused')   ||
-    msg.includes('429')            ||
-    msg.includes('rate limit')     ||
-    msg.includes('overloaded')     ||
-    code === 429                   ||
+    err?.isTimeout           ||
+    msg.includes('timeout')  ||
+    msg.includes('econnreset')   ||
+    msg.includes('enotfound')    ||
+    msg.includes('econnrefused') ||
+    msg.includes('429')          ||
+    msg.includes('rate limit')   ||
+    msg.includes('overloaded')   ||
+    code === 429                 ||
     (code >= 500 && code < 600)
   );
 }
 
-// ── Determine if error is auth/key related (non-retryable) ───────────────────
 function isAuthError(err) {
   const msg  = String(err?.message || '').toLowerCase();
   const code = err?.statusCode || err?.status || 0;
   return (
-    code === 401 || code === 403   ||
-    msg.includes('invalid api key') ||
-    msg.includes('unauthorized')    ||
-    msg.includes('api key invalid') ||
+    code === 401 || code === 403       ||
+    msg.includes('invalid api key')    ||
+    msg.includes('unauthorized')       ||
+    msg.includes('api key invalid')    ||
     msg.includes('invalid or unauthorized')
   );
+}
+
+function _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ── TASK 4: Per-call timeout wrapper ──────────────────────────────────────────
+/**
+ * Wraps any promise with a hard timeout.
+ * On timeout, throws { isTimeout: true, statusCode: 408 }.
+ */
+function withCallTimeout(promise, timeoutMs = PROVIDER_CALL_TIMEOUT, providerName = '') {
+  const timeoutErr = Object.assign(
+    new Error(`Provider call timeout after ${timeoutMs}ms [${providerName}]`),
+    { isTimeout: true, statusCode: 408 }
+  );
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(timeoutErr), timeoutMs)),
+  ]);
+}
+
+function _consumeSSE(stream, onLine) {
+  return new Promise((resolve, reject) => {
+    let buffer = '';
+    stream.on('data', (chunk) => {
+      buffer += chunk.toString('utf8');
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('data: ')) {
+          const data = trimmed.slice(6).trim();
+          if (data) onLine(data);
+        }
+      }
+    });
+    stream.on('end', () => {
+      if (buffer.trim().startsWith('data: ')) onLine(buffer.trim().slice(6));
+      resolve();
+    });
+    stream.on('error', reject);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  BASE PROVIDER CLASS
+// ═══════════════════════════════════════════════════════════════════════════════
+class BaseProvider {
+  constructor(name) {
+    this.cb     = new CircuitBreaker(name);
+    this.health = new HealthScorer(name);
+    this._name  = name;
+  }
+
+  get name() { return this._name; }
+
+  /** Wrap a provider call with timing + health recording */
+  async _timed(fn) {
+    const t0 = Date.now();
+    try {
+      const result = await fn();
+      const latency = Date.now() - t0;
+      this.cb.recordSuccess(latency);
+      this.health.record(true, latency);
+      return result;
+    } catch (err) {
+      const latency = Date.now() - t0;
+      this.health.record(false, latency);
+      // Auth errors do NOT trigger circuit breaker (they won't self-heal)
+      if (!isAuthError(err)) this.cb.recordFailure(err.message);
+      throw err;
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  OPENAI PROVIDER
 // ═══════════════════════════════════════════════════════════════════════════════
-class OpenAIProvider {
+class OpenAIProvider extends BaseProvider {
   constructor(config = {}) {
-    this.apiKey  = config.apiKey
-      || process.env.OPENAI_API_KEY
-      || process.env.RAKAY_OPENAI_KEY
-      || '';
+    super('openai');
+    this.apiKey  = config.apiKey || process.env.OPENAI_API_KEY || process.env.RAKAY_OPENAI_KEY || '';
     this.baseUrl = config.baseUrl || 'https://api.openai.com';
-    this.model   = config.model   || process.env.OPENAI_MODEL || 'gpt-4o';
-    this.cb      = new CircuitBreaker('openai');
+    this.model   = config.model || process.env.OPENAI_MODEL || 'gpt-4o';
   }
 
-  get name() { return 'openai'; }
-
   _headers() {
-    return {
-      'Content-Type':  'application/json',
-      'Authorization': `Bearer ${this.apiKey}`,
-    };
+    return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` };
   }
 
   _payload(messages, tools, opts = {}) {
@@ -229,11 +407,8 @@ class OpenAIProvider {
       temperature: opts.temperature ?? 0.2,
       max_tokens:  opts.max_tokens  ?? 4096,
     };
-    if (tools && tools.length > 0) {
-      p.tools = tools.map(t => {
-        if (t.type === 'function' && t.function) return t;
-        return { type: 'function', function: t };
-      });
+    if (tools?.length) {
+      p.tools = tools.map(t => (t.type === 'function' && t.function) ? t : { type: 'function', function: t });
       p.tool_choice = 'auto';
     }
     return p;
@@ -241,137 +416,95 @@ class OpenAIProvider {
 
   async chat(messages, tools = [], opts = {}) {
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:openai'), { circuitOpen: true });
-    if (!this.apiKey) throw new Error('OpenAI API key not configured');
+    if (!this.apiKey)     throw new Error('OpenAI API key not configured');
 
-    const url     = `${this.baseUrl}/v1/chat/completions`;
-    const payload = this._payload(messages, tools, opts);
-
-    for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
-      try {
+    return this._timed(async () => {
+      const url = `${this.baseUrl}/v1/chat/completions`;
+      for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
         console.log(`[OpenAI] attempt=${attempt + 1} model=${this.model} msgs=${messages.length}`);
-        const { status, body } = await httpRequest(url, { headers: this._headers() }, payload);
+        const { status, body } = await httpRequest(url, { headers: this._headers() }, this._payload(messages, tools, opts));
         console.log(`[OpenAI] status=${status}`);
-
         if (status === 429) {
-          const delay = backoffDelay(attempt);
-          console.warn(`[OpenAI] 429 rate-limit — backoff ${Math.round(delay)}ms`);
-          if (attempt < RETRY_MAX_ATTEMPTS - 1) { await _sleep(delay); continue; }
-          this.cb.recordFailure('rate-limit 429');
+          if (attempt < RETRY_MAX_ATTEMPTS - 1) { await _sleep(backoffDelay(attempt)); continue; }
           throw Object.assign(new Error('OpenAI rate-limited'), { statusCode: 429 });
         }
-
         if (status === 401 || status === 403) {
-          this.cb.recordFailure(`auth error ${status}`);
-          let det = '';
-          try { det = JSON.parse(body)?.error?.message || ''; } catch {}
+          let det = ''; try { det = JSON.parse(body)?.error?.message || ''; } catch {}
           throw Object.assign(new Error(`OpenAI auth error ${status}: ${det}`), { statusCode: status });
         }
-
         if (status >= 500) {
-          const delay = backoffDelay(attempt);
-          console.warn(`[OpenAI] ${status} server error — backoff ${Math.round(delay)}ms`);
-          if (attempt < RETRY_MAX_ATTEMPTS - 1) { await _sleep(delay); continue; }
-          this.cb.recordFailure(`server error ${status}`);
+          if (attempt < RETRY_MAX_ATTEMPTS - 1) { await _sleep(backoffDelay(attempt)); continue; }
           throw Object.assign(new Error(`OpenAI server error ${status}`), { statusCode: status });
         }
-
         if (status >= 400) {
-          let det = '';
-          try { det = JSON.parse(body)?.error?.message || body.slice(0, 300); } catch { det = body.slice(0, 300); }
-          this.cb.recordFailure(`client error ${status}`);
+          let det = ''; try { det = JSON.parse(body)?.error?.message || body.slice(0, 300); } catch { det = body.slice(0, 300); }
           throw Object.assign(new Error(`OpenAI HTTP ${status}: ${det}`), { statusCode: status });
         }
-
-        let parsed;
-        try { parsed = JSON.parse(body); } catch {
-          throw new Error(`OpenAI invalid JSON response: ${body.slice(0, 100)}`);
-        }
-
-        this.cb.recordSuccess();
+        let parsed; try { parsed = JSON.parse(body); } catch { throw new Error(`OpenAI invalid JSON`); }
         return this._normalise(parsed);
-
-      } catch (err) {
-        if (err.circuitOpen || isAuthError(err)) throw err;
-        if (!isRetryable(err) || attempt >= RETRY_MAX_ATTEMPTS - 1) throw err;
-        const delay = backoffDelay(attempt);
-        console.warn(`[OpenAI] retry ${attempt + 1} in ${Math.round(delay)}ms — ${err.message}`);
-        await _sleep(delay);
       }
-    }
-    throw new Error('OpenAI: max retries exhausted');
+      throw new Error('OpenAI: max retries exhausted');
+    });
   }
 
   async chatStream(messages, tools = [], opts = {}, onChunk) {
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:openai'), { circuitOpen: true });
-    if (!this.apiKey) throw new Error('OpenAI API key not configured');
+    if (!this.apiKey)     throw new Error('OpenAI API key not configured');
 
-    const payload = { ...this._payload(messages, tools, opts), stream: true };
-    const url     = `${this.baseUrl}/v1/chat/completions`;
+    return this._timed(async () => {
+      const payload = { ...this._payload(messages, tools, opts), stream: true };
+      const url     = `${this.baseUrl}/v1/chat/completions`;
+      const { status, stream } = await httpStream(url, { headers: this._headers() }, payload);
+      if (status === 429) throw Object.assign(new Error('OpenAI rate-limited'), { statusCode: 429 });
+      if (status >= 400)  throw Object.assign(new Error(`OpenAI stream error ${status}`), { statusCode: status });
 
-    const { status, stream } = await httpStream(url, { headers: this._headers() }, payload);
-
-    if (status === 429) {
-      this.cb.recordFailure('rate-limit 429');
-      throw Object.assign(new Error('OpenAI rate-limited'), { statusCode: 429 });
-    }
-    if (status >= 400) {
-      this.cb.recordFailure(`error ${status}`);
-      throw Object.assign(new Error(`OpenAI stream error ${status}`), { statusCode: status });
-    }
-
-    let fullContent = '';
-    let toolCalls   = [];
-    let usage       = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-
-    await _consumeSSE(stream, (line) => {
-      if (line === '[DONE]') return;
-      try {
-        const evt = JSON.parse(line);
-        const delta = evt.choices?.[0]?.delta;
-        if (!delta) return;
-        if (delta.content) {
-          fullContent += delta.content;
-          if (onChunk) onChunk({ type: 'text', text: delta.content });
-        }
-        if (delta.tool_calls) {
-          // accumulate streaming tool calls
-          for (const tc of delta.tool_calls) {
-            const idx = tc.index ?? 0;
-            if (!toolCalls[idx]) toolCalls[idx] = { id: tc.id || '', name: '', arguments: '' };
-            if (tc.function?.name)      toolCalls[idx].name      += tc.function.name;
-            if (tc.function?.arguments) toolCalls[idx].arguments += tc.function.arguments;
+      let fullContent = '', toolCalls = [], usage = {};
+      await _consumeSSE(stream, (line) => {
+        if (line === '[DONE]') return;
+        try {
+          const evt   = JSON.parse(line);
+          const delta = evt.choices?.[0]?.delta;
+          if (!delta) return;
+          if (delta.content) {
+            fullContent += delta.content;
+            if (onChunk) onChunk({ type: 'text', text: delta.content });
           }
-        }
-        if (evt.usage) {
-          usage.promptTokens     = evt.usage.prompt_tokens || 0;
-          usage.completionTokens = evt.usage.completion_tokens || 0;
-          usage.totalTokens      = evt.usage.total_tokens || 0;
-        }
-      } catch { /* ignore malformed delta */ }
-    });
+          if (delta.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              const idx = tc.index ?? 0;
+              if (!toolCalls[idx]) toolCalls[idx] = { id: tc.id || '', name: '', arguments: '' };
+              if (tc.function?.name)      toolCalls[idx].name      += tc.function.name;
+              if (tc.function?.arguments) toolCalls[idx].arguments += tc.function.arguments;
+            }
+          }
+          if (evt.usage) {
+            usage = {
+              promptTokens:     evt.usage.prompt_tokens || 0,
+              completionTokens: evt.usage.completion_tokens || 0,
+              totalTokens:      evt.usage.total_tokens || 0,
+            };
+          }
+        } catch {}
+      });
 
-    this.cb.recordSuccess();
-    const normTools = toolCalls.filter(Boolean).map(tc => ({
-      id:   tc.id,
-      name: tc.name,
-      arguments: (() => { try { return JSON.parse(tc.arguments || '{}'); } catch { return { _raw: tc.arguments }; } })(),
-    }));
-    return { content: fullContent, toolCalls: normTools, finishReason: normTools.length ? 'tool_calls' : 'stop', usage, model: this.model };
+      const normTools = toolCalls.filter(Boolean).map(tc => ({
+        id: tc.id, name: tc.name,
+        arguments: (() => { try { return JSON.parse(tc.arguments || '{}'); } catch { return { _raw: tc.arguments }; } })(),
+      }));
+      return { content: fullContent, toolCalls: normTools, finishReason: normTools.length ? 'tool_calls' : 'stop', usage, model: this.model };
+    });
   }
 
   _normalise(raw) {
-    const choice  = raw.choices?.[0];
+    const choice = raw.choices?.[0];
     if (!choice) throw new Error('OpenAI: empty choices');
     const msg      = choice.message || {};
-    const content  = msg.content || '';
     const toolCalls = (msg.tool_calls || []).map(tc => ({
-      id:        tc.id,
-      name:      tc.function?.name,
+      id: tc.id, name: tc.function?.name,
       arguments: (() => { try { return JSON.parse(tc.function?.arguments || '{}'); } catch { return { _raw: tc.function?.arguments }; } })(),
     }));
     return {
-      content,
-      toolCalls,
+      content: msg.content || '', toolCalls,
       finishReason: choice.finish_reason || 'stop',
       usage: {
         promptTokens:     raw.usage?.prompt_tokens     || 0,
@@ -384,11 +517,136 @@ class OpenAIProvider {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+//  OLLAMA PROVIDER  (TASK 1 — local model, no rate limit)
+//  Connects to Ollama at OLLAMA_BASE_URL (default: http://localhost:11434).
+//  Falls back gracefully with ollamaDown=true if Ollama not running.
+//  No API key required — apiKey='local' bypasses the key-check logic.
+// ═══════════════════════════════════════════════════════════════════════════════
+class OllamaProvider extends BaseProvider {
+  constructor(config = {}) {
+    super('ollama');
+    this.baseUrl = config.baseUrl || process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+    this.model   = config.model   || process.env.OLLAMA_MODEL    || 'llama3.2';
+    // 'local' sentinel means "no key needed" — MultiProvider checks apiKey truthiness
+    this.apiKey  = 'local';
+  }
+
+  _headers() {
+    return { 'Content-Type': 'application/json' };
+  }
+
+  /** Convert OpenAI-style message format to Ollama /api/chat format */
+  _buildPayload(messages, opts = {}) {
+    return {
+      model:  this.model,
+      messages: messages.map(m => ({
+        role:    m.role === 'tool' ? 'user' : (m.role === 'system' ? 'system' : m.role),
+        content: m.content || (m.role === 'tool' ? JSON.stringify(m.content) : ''),
+      })).filter(m => m.content),
+      stream:  false,
+      options: {
+        temperature: opts.temperature ?? 0.2,
+        num_predict: opts.max_tokens  ?? 2048,
+        num_ctx:     4096,
+      },
+    };
+  }
+
+  async chat(messages, tools = [], opts = {}) {
+    if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:ollama'), { circuitOpen: true });
+
+    return this._timed(async () => {
+      const url     = `${this.baseUrl}/api/chat`;
+      const payload = this._buildPayload(messages, opts);
+
+      console.log(`[Ollama] model=${this.model} msgs=${messages.length} url=${this.baseUrl}`);
+
+      let res;
+      try {
+        res = await httpRequest(url, { headers: this._headers() }, payload, 60_000);
+      } catch (connErr) {
+        if (connErr.message?.includes('ECONNREFUSED') || connErr.message?.includes('ENOTFOUND')) {
+          throw Object.assign(new Error(`Ollama not reachable at ${this.baseUrl}`), { statusCode: 503, ollamaDown: true });
+        }
+        throw connErr;
+      }
+
+      console.log(`[Ollama] status=${res.status}`);
+      if (res.status >= 400) {
+        let det = ''; try { det = JSON.parse(res.body)?.error || res.body.slice(0, 200); } catch {}
+        throw Object.assign(new Error(`Ollama HTTP ${res.status}: ${det}`), { statusCode: res.status });
+      }
+
+      let parsed; try { parsed = JSON.parse(res.body); } catch { throw new Error('Ollama invalid JSON'); }
+
+      return {
+        content:      parsed.message?.content || '',
+        toolCalls:    [],
+        finishReason: parsed.done ? 'stop' : 'length',
+        usage: {
+          promptTokens:     parsed.prompt_eval_count     || 0,
+          completionTokens: parsed.eval_count             || 0,
+          totalTokens: (parsed.prompt_eval_count || 0) + (parsed.eval_count || 0),
+        },
+        model: parsed.model || this.model,
+      };
+    });
+  }
+
+  async chatStream(messages, tools = [], opts = {}, onChunk) {
+    if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:ollama'), { circuitOpen: true });
+
+    return this._timed(async () => {
+      const url     = `${this.baseUrl}/api/chat`;
+      const payload = { ...this._buildPayload(messages, opts), stream: true };
+
+      let streamRes;
+      try {
+        streamRes = await httpStream(url, { headers: this._headers() }, payload, 60_000);
+      } catch (connErr) {
+        if (connErr.message?.includes('ECONNREFUSED') || connErr.message?.includes('ENOTFOUND')) {
+          throw Object.assign(new Error(`Ollama not reachable at ${this.baseUrl}`), { statusCode: 503, ollamaDown: true });
+        }
+        throw connErr;
+      }
+
+      if (streamRes.status >= 400) throw Object.assign(new Error(`Ollama stream error ${streamRes.status}`), { statusCode: streamRes.status });
+
+      let fullContent = '';
+      let totalTokens = 0;
+
+      await new Promise((resolve, reject) => {
+        let buffer = '';
+        streamRes.stream.on('data', (chunk) => {
+          buffer += chunk.toString('utf8');
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const evt  = JSON.parse(line);
+              const text = evt.message?.content || '';
+              if (text) { fullContent += text; if (onChunk) onChunk({ type: 'text', text }); }
+              if (evt.eval_count) totalTokens = (evt.prompt_eval_count || 0) + evt.eval_count;
+            } catch {}
+          }
+        });
+        streamRes.stream.on('end',   resolve);
+        streamRes.stream.on('error', reject);
+      });
+
+      return { content: fullContent, toolCalls: [], finishReason: 'stop', usage: { totalTokens }, model: this.model };
+    });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 //  ANTHROPIC CLAUDE PROVIDER
 // ═══════════════════════════════════════════════════════════════════════════════
-class AnthropicProvider {
+class AnthropicProvider extends BaseProvider {
   constructor(config = {}) {
-    this.apiKey  = config.apiKey
+    super('anthropic');
+    this.apiKey = config.apiKey
       || process.env.CLAUDE_API_KEY
       || process.env.ANTHROPIC_API_KEY
       || process.env.RAKAY_ANTHROPIC_KEY
@@ -396,17 +654,10 @@ class AnthropicProvider {
       || '';
     this.baseUrl = config.baseUrl || 'https://api.anthropic.com';
     this.model   = config.model   || process.env.RAKAY_MODEL || 'claude-3-5-haiku-20241022';
-    this.cb      = new CircuitBreaker('anthropic');
   }
 
-  get name() { return 'anthropic'; }
-
   _headers() {
-    return {
-      'Content-Type':      'application/json',
-      'x-api-key':         this.apiKey,
-      'anthropic-version': '2023-06-01',
-    };
+    return { 'Content-Type': 'application/json', 'x-api-key': this.apiKey, 'anthropic-version': '2023-06-01' };
   }
 
   _buildPayload(messages, tools, opts = {}, stream = false) {
@@ -417,15 +668,15 @@ class AnthropicProvider {
       max_tokens: opts.max_tokens ?? 4096,
       messages:   msgList,
       ...(system ? { system } : {}),
-      ...(stream ? { stream: true } : {}),
+      ...(stream  ? { stream: true } : {}),
     };
-    if (tools && tools.length > 0) {
+    if (tools?.length) {
       p.tools = tools.map(t => {
         const fn = (t.type === 'function' && t.function) ? t.function : t;
         return {
-          name:         fn.name         || t.name        || 'unknown',
-          description:  fn.description  || t.description || '',
-          input_schema: fn.parameters   || t.parameters  || { type: 'object', properties: {} },
+          name:         fn.name || t.name || 'unknown',
+          description:  fn.description || t.description || '',
+          input_schema: fn.parameters || t.parameters || { type: 'object', properties: {} },
         };
       });
     }
@@ -437,7 +688,7 @@ class AnthropicProvider {
     for (const m of messages) {
       if (m.role === 'tool') {
         result.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: m.tool_call_id, content: String(m.content) }] });
-      } else if (m.tool_calls && m.tool_calls.length > 0) {
+      } else if (m.tool_calls?.length) {
         const content = [];
         if (m.content) content.push({ type: 'text', text: m.content });
         for (const tc of m.tool_calls) {
@@ -449,138 +700,101 @@ class AnthropicProvider {
           });
         }
         result.push({ role: 'assistant', content });
-      } else {
-        // Skip empty content messages (Claude rejects them)
-        if (m.content != null && m.content !== '') {
-          result.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content) });
-        }
+      } else if (m.content != null && m.content !== '') {
+        result.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content) });
       }
     }
-    // Merge consecutive same-role messages (Claude requires alternating)
+    // Merge consecutive same-role messages
     const merged = [];
     for (const m of result) {
       const prev = merged[merged.length - 1];
       if (prev && prev.role === m.role && typeof prev.content === 'string' && typeof m.content === 'string') {
         prev.content += '\n' + m.content;
-      } else {
-        merged.push({ ...m });
-      }
+      } else merged.push({ ...m });
     }
-    // Ensure first message is user
-    if (merged.length > 0 && merged[0].role !== 'user') {
-      merged.unshift({ role: 'user', content: '(continued)' });
-    }
+    if (merged.length && merged[0].role !== 'user') merged.unshift({ role: 'user', content: '(continued)' });
     return merged;
   }
 
   async chat(messages, tools = [], opts = {}) {
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:anthropic'), { circuitOpen: true });
-    if (!this.apiKey) throw new Error('Anthropic API key not configured');
+    if (!this.apiKey)     throw new Error('Anthropic API key not configured');
 
-    const url     = `${this.baseUrl}/v1/messages`;
-    const payload = this._buildPayload(messages, tools, opts);
-
-    for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
-      try {
-        console.log(`[Anthropic] attempt=${attempt + 1} model=${this.model} msgs=${messages.length}`);
-        const { status, body } = await httpRequest(url, { headers: this._headers() }, payload);
+    return this._timed(async () => {
+      const url = `${this.baseUrl}/v1/messages`;
+      for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
+        console.log(`[Anthropic] attempt=${attempt + 1} model=${this.model}`);
+        const { status, body } = await httpRequest(url, { headers: this._headers() }, this._buildPayload(messages, tools, opts));
         console.log(`[Anthropic] status=${status}`);
-
         if (status === 529 || status === 429) {
-          const delay = backoffDelay(attempt);
-          console.warn(`[Anthropic] ${status} overloaded — backoff ${Math.round(delay)}ms`);
-          if (attempt < RETRY_MAX_ATTEMPTS - 1) { await _sleep(delay); continue; }
-          this.cb.recordFailure('overloaded');
+          if (attempt < RETRY_MAX_ATTEMPTS - 1) { await _sleep(backoffDelay(attempt)); continue; }
           throw Object.assign(new Error('Anthropic overloaded/rate-limited'), { statusCode: status });
         }
         if (status === 401 || status === 403) {
-          this.cb.recordFailure(`auth error ${status}`);
           let det = ''; try { det = JSON.parse(body)?.error?.message || ''; } catch {}
           throw Object.assign(new Error(`Anthropic auth error ${status}: ${det}`), { statusCode: status });
         }
         if (status >= 500) {
-          const delay = backoffDelay(attempt);
-          if (attempt < RETRY_MAX_ATTEMPTS - 1) { await _sleep(delay); continue; }
-          this.cb.recordFailure(`server error ${status}`);
+          if (attempt < RETRY_MAX_ATTEMPTS - 1) { await _sleep(backoffDelay(attempt)); continue; }
           throw Object.assign(new Error(`Anthropic server error ${status}`), { statusCode: status });
         }
         if (status >= 400) {
           let det = ''; try { det = JSON.parse(body)?.error?.message || body.slice(0, 300); } catch { det = body.slice(0, 300); }
-          this.cb.recordFailure(`client error ${status}: ${det}`);
           throw Object.assign(new Error(`Anthropic HTTP ${status}: ${det}`), { statusCode: status });
         }
-
-        let parsed; try { parsed = JSON.parse(body); } catch {
-          throw new Error(`Anthropic invalid JSON: ${body.slice(0, 100)}`);
-        }
-        this.cb.recordSuccess();
+        let parsed; try { parsed = JSON.parse(body); } catch { throw new Error('Anthropic invalid JSON'); }
         return this._normalise(parsed);
-
-      } catch (err) {
-        if (err.circuitOpen || isAuthError(err)) throw err;
-        if (!isRetryable(err) || attempt >= RETRY_MAX_ATTEMPTS - 1) throw err;
-        await _sleep(backoffDelay(attempt));
       }
-    }
-    throw new Error('Anthropic: max retries exhausted');
+      throw new Error('Anthropic: max retries exhausted');
+    });
   }
 
   async chatStream(messages, tools = [], opts = {}, onChunk) {
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:anthropic'), { circuitOpen: true });
-    if (!this.apiKey) throw new Error('Anthropic API key not configured');
+    if (!this.apiKey)     throw new Error('Anthropic API key not configured');
 
-    const url     = `${this.baseUrl}/v1/messages`;
-    const payload = this._buildPayload(messages, tools, opts, true);
+    return this._timed(async () => {
+      const url = `${this.baseUrl}/v1/messages`;
+      const { status, stream } = await httpStream(url, { headers: this._headers() }, this._buildPayload(messages, tools, opts, true));
+      if (status === 529 || status === 429) throw Object.assign(new Error('Anthropic overloaded'), { statusCode: status });
+      if (status >= 400)                    throw Object.assign(new Error(`Anthropic stream error ${status}`), { statusCode: status });
 
-    const { status, stream } = await httpStream(url, { headers: this._headers() }, payload);
-    if (status === 529 || status === 429) {
-      this.cb.recordFailure('overloaded stream');
-      throw Object.assign(new Error('Anthropic overloaded'), { statusCode: status });
-    }
-    if (status >= 400) {
-      this.cb.recordFailure(`stream error ${status}`);
-      throw Object.assign(new Error(`Anthropic stream error ${status}`), { statusCode: status });
-    }
+      let fullContent = '';
+      const toolCalls = [];
+      let usage = {};
 
-    let fullContent = '';
-    const toolCalls = [];
-    let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+      await _consumeSSE(stream, (line) => {
+        try {
+          const evt = JSON.parse(line);
+          if (evt.type === 'content_block_delta') {
+            const text = evt.delta?.text || '';
+            if (text) { fullContent += text; if (onChunk) onChunk({ type: 'text', text }); }
+          }
+          if (evt.type === 'content_block_start' && evt.content_block?.type === 'tool_use') {
+            toolCalls.push({ id: evt.content_block.id, name: evt.content_block.name, arguments: {} });
+          }
+          if (evt.type === 'message_delta') {
+            usage = {
+              promptTokens:     evt.usage?.input_tokens  || 0,
+              completionTokens: evt.usage?.output_tokens || 0,
+              totalTokens: (evt.usage?.input_tokens || 0) + (evt.usage?.output_tokens || 0),
+            };
+          }
+        } catch {}
+      });
 
-    await _consumeSSE(stream, (line) => {
-      try {
-        const evt = JSON.parse(line);
-        if (evt.type === 'content_block_delta') {
-          const text = evt.delta?.text || '';
-          if (text) { fullContent += text; if (onChunk) onChunk({ type: 'text', text }); }
-        }
-        if (evt.type === 'content_block_start' && evt.content_block?.type === 'tool_use') {
-          toolCalls.push({ id: evt.content_block.id, name: evt.content_block.name, arguments: {} });
-        }
-        if (evt.type === 'message_delta') {
-          usage.promptTokens     = evt.usage?.input_tokens  || usage.promptTokens;
-          usage.completionTokens = evt.usage?.output_tokens || usage.completionTokens;
-          usage.totalTokens      = usage.promptTokens + usage.completionTokens;
-        }
-      } catch { /* ignore */ }
+      return { content: fullContent, toolCalls, finishReason: toolCalls.length ? 'tool_calls' : 'stop', usage, model: this.model };
     });
-
-    this.cb.recordSuccess();
-    return { content: fullContent, toolCalls, finishReason: toolCalls.length ? 'tool_calls' : 'stop', usage, model: this.model };
   }
 
   _normalise(raw) {
-    let content = '';
-    const toolCalls = [];
+    let content = ''; const toolCalls = [];
     for (const block of (raw.content || [])) {
       if (block.type === 'text') content += block.text;
-      else if (block.type === 'tool_use') {
-        toolCalls.push({ id: block.id, name: block.name, arguments: block.input || {} });
-      }
+      else if (block.type === 'tool_use') toolCalls.push({ id: block.id, name: block.name, arguments: block.input || {} });
     }
     return {
-      content,
-      toolCalls,
-      finishReason: raw.stop_reason || 'end_turn',
+      content, toolCalls, finishReason: raw.stop_reason || 'end_turn',
       usage: {
         promptTokens:     raw.usage?.input_tokens  || 0,
         completionTokens: raw.usage?.output_tokens || 0,
@@ -594,76 +808,46 @@ class AnthropicProvider {
 // ═══════════════════════════════════════════════════════════════════════════════
 //  DEEPSEEK PROVIDER
 // ═══════════════════════════════════════════════════════════════════════════════
-class DeepSeekProvider {
+class DeepSeekProvider extends BaseProvider {
   constructor(config = {}) {
-    this.apiKey  = config.apiKey
-      || process.env.DEEPSEEK_API_KEY
-      || process.env.deepseek_API_KEY
-      || '';
+    super('deepseek');
+    this.apiKey  = config.apiKey || process.env.DEEPSEEK_API_KEY || process.env.deepseek_API_KEY || '';
     this.baseUrl = config.baseUrl || 'https://api.deepseek.com';
-    this.model   = config.model   || 'deepseek-chat';
-    this.cb      = new CircuitBreaker('deepseek');
+    this.model   = config.model || 'deepseek-chat';
   }
 
-  get name() { return 'deepseek'; }
-
-  _headers() {
-    return {
-      'Content-Type':  'application/json',
-      'Authorization': `Bearer ${this.apiKey}`,
-    };
-  }
+  _headers() { return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` }; }
 
   async chat(messages, tools = [], opts = {}) {
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:deepseek'), { circuitOpen: true });
-    if (!this.apiKey) throw new Error('DeepSeek API key not configured');
+    if (!this.apiKey)     throw new Error('DeepSeek API key not configured');
 
-    // DeepSeek uses OpenAI-compatible API
-    const payload = {
-      model:       this.model,
-      messages:    messages.filter(m => m.role !== 'tool').map(m => ({
-        role:    m.role === 'assistant' && m.tool_calls ? 'assistant' : m.role,
-        content: m.content || '',
-      })),
-      temperature: opts.temperature ?? 0.2,
-      max_tokens:  opts.max_tokens  ?? 4096,
-      // DeepSeek does not support all tool types — disable tools to avoid 400
-    };
-
-    const url = `${this.baseUrl}/v1/chat/completions`;
-
-    for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
-      try {
-        console.log(`[DeepSeek] attempt=${attempt + 1} model=${this.model}`);
+    return this._timed(async () => {
+      const payload = {
+        model:       this.model,
+        messages:    messages.filter(m => m.role !== 'tool').map(m => ({ role: m.role, content: m.content || '' })),
+        temperature: opts.temperature ?? 0.2,
+        max_tokens:  opts.max_tokens ?? 4096,
+      };
+      const url = `${this.baseUrl}/v1/chat/completions`;
+      for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
+        console.log(`[DeepSeek] attempt=${attempt + 1}`);
         const { status, body } = await httpRequest(url, { headers: this._headers() }, payload);
         console.log(`[DeepSeek] status=${status}`);
-
         if (status === 429) {
-          const delay = backoffDelay(attempt);
-          if (attempt < RETRY_MAX_ATTEMPTS - 1) { await _sleep(delay); continue; }
-          this.cb.recordFailure('rate-limit');
+          if (attempt < RETRY_MAX_ATTEMPTS - 1) { await _sleep(backoffDelay(attempt)); continue; }
           throw Object.assign(new Error('DeepSeek rate-limited'), { statusCode: 429 });
         }
-        if (status === 401 || status === 403) {
-          this.cb.recordFailure(`auth ${status}`);
-          throw Object.assign(new Error(`DeepSeek auth error ${status}`), { statusCode: status });
-        }
+        if (status === 401 || status === 403) throw Object.assign(new Error(`DeepSeek auth error ${status}`), { statusCode: status });
         if (status >= 500) {
-          const delay = backoffDelay(attempt);
-          if (attempt < RETRY_MAX_ATTEMPTS - 1) { await _sleep(delay); continue; }
-          this.cb.recordFailure(`server error ${status}`);
+          if (attempt < RETRY_MAX_ATTEMPTS - 1) { await _sleep(backoffDelay(attempt)); continue; }
           throw Object.assign(new Error(`DeepSeek server error ${status}`), { statusCode: status });
         }
         if (status >= 400) {
           let det = ''; try { det = JSON.parse(body)?.error?.message || body.slice(0, 200); } catch {}
-          this.cb.recordFailure(`client ${status}`);
           throw Object.assign(new Error(`DeepSeek HTTP ${status}: ${det}`), { statusCode: status });
         }
-
-        let parsed; try { parsed = JSON.parse(body); } catch {
-          throw new Error('DeepSeek invalid JSON');
-        }
-        this.cb.recordSuccess();
+        let parsed; try { parsed = JSON.parse(body); } catch { throw new Error('DeepSeek invalid JSON'); }
         const choice = parsed.choices?.[0];
         return {
           content:      choice?.message?.content || '',
@@ -676,125 +860,95 @@ class DeepSeekProvider {
           },
           model: parsed.model || this.model,
         };
-      } catch (err) {
-        if (err.circuitOpen || isAuthError(err)) throw err;
-        if (!isRetryable(err) || attempt >= RETRY_MAX_ATTEMPTS - 1) throw err;
-        await _sleep(backoffDelay(attempt));
       }
-    }
-    throw new Error('DeepSeek: max retries exhausted');
+      throw new Error('DeepSeek: max retries exhausted');
+    });
   }
 
   async chatStream(messages, tools, opts, onChunk) {
-    // DeepSeek streaming: use OpenAI-compatible SSE
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:deepseek'), { circuitOpen: true });
-    if (!this.apiKey) throw new Error('DeepSeek API key not configured');
+    if (!this.apiKey)     throw new Error('DeepSeek API key not configured');
 
-    const payload = {
-      model:       this.model,
-      messages:    messages.filter(m => m.role !== 'tool').map(m => ({ role: m.role, content: m.content || '' })),
-      temperature: opts?.temperature ?? 0.2,
-      max_tokens:  opts?.max_tokens  ?? 4096,
-      stream:      true,
-    };
-
-    const url = `${this.baseUrl}/v1/chat/completions`;
-    const { status, stream } = await httpStream(url, { headers: this._headers() }, payload);
-    if (status === 429) { this.cb.recordFailure('rate-limit stream'); throw Object.assign(new Error('DeepSeek rate-limited'), { statusCode: 429 }); }
-    if (status >= 400) { this.cb.recordFailure(`stream ${status}`); throw Object.assign(new Error(`DeepSeek stream error ${status}`), { statusCode: status }); }
-
-    let fullContent = '';
-    await _consumeSSE(stream, (line) => {
-      if (line === '[DONE]') return;
-      try {
-        const evt  = JSON.parse(line);
-        const text = evt.choices?.[0]?.delta?.content || '';
-        if (text) { fullContent += text; if (onChunk) onChunk({ type: 'text', text }); }
-      } catch {}
+    return this._timed(async () => {
+      const payload = {
+        model:       this.model,
+        messages:    messages.filter(m => m.role !== 'tool').map(m => ({ role: m.role, content: m.content || '' })),
+        temperature: opts?.temperature ?? 0.2,
+        max_tokens:  opts?.max_tokens  ?? 4096,
+        stream:      true,
+      };
+      const { status, stream } = await httpStream(`${this.baseUrl}/v1/chat/completions`, { headers: this._headers() }, payload);
+      if (status >= 400) throw Object.assign(new Error(`DeepSeek stream error ${status}`), { statusCode: status });
+      let fullContent = '';
+      await _consumeSSE(stream, (line) => {
+        if (line === '[DONE]') return;
+        try {
+          const evt  = JSON.parse(line);
+          const text = evt.choices?.[0]?.delta?.content || '';
+          if (text) { fullContent += text; if (onChunk) onChunk({ type: 'text', text }); }
+        } catch {}
+      });
+      return { content: fullContent, toolCalls: [], finishReason: 'stop', usage: { totalTokens: 0 }, model: this.model };
     });
-    this.cb.recordSuccess();
-    return { content: fullContent, toolCalls: [], finishReason: 'stop', usage: { totalTokens: 0 }, model: this.model };
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  GOOGLE GEMINI PROVIDER
 // ═══════════════════════════════════════════════════════════════════════════════
-class GeminiProvider {
+class GeminiProvider extends BaseProvider {
   constructor(config = {}) {
+    super('gemini');
     this.apiKey  = config.apiKey || process.env.GEMINI_API_KEY || '';
-    this.model   = config.model  || process.env.GEMINI_MODEL  || 'gemini-2.0-flash';
+    this.model   = config.model  || process.env.GEMINI_MODEL   || 'gemini-2.0-flash';
     this.baseUrl = 'https://generativelanguage.googleapis.com';
-    this.cb      = new CircuitBreaker('gemini');
   }
-
-  get name() { return 'gemini'; }
 
   _convertToGemini(messages) {
     const contents = [];
     for (const m of messages) {
-      if (m.role === 'system') continue; // handled as systemInstruction
+      if (m.role === 'system') continue;
       const role = m.role === 'assistant' ? 'model' : 'user';
       const text = m.content || '';
       if (text) contents.push({ role, parts: [{ text }] });
     }
-    // Gemini requires alternating user/model; ensure starts with user
-    if (contents.length > 0 && contents[0].role === 'model') {
-      contents.unshift({ role: 'user', parts: [{ text: '(start)' }] });
-    }
+    if (contents.length && contents[0].role === 'model') contents.unshift({ role: 'user', parts: [{ text: '(start)' }] });
     return contents;
   }
 
   async chat(messages, tools = [], opts = {}) {
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:gemini'), { circuitOpen: true });
-    if (!this.apiKey) throw new Error('Gemini API key not configured');
+    if (!this.apiKey)     throw new Error('Gemini API key not configured');
 
-    const systemText = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
-    const url = `${this.baseUrl}/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
-
-    const payload = {
-      contents: this._convertToGemini(messages),
-      ...(systemText ? { systemInstruction: { parts: [{ text: systemText }] } } : {}),
-      generationConfig: {
-        temperature:     opts.temperature ?? 0.2,
-        maxOutputTokens: opts.max_tokens  ?? 4096,
-      },
-    };
-
-    for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
-      try {
+    return this._timed(async () => {
+      const systemText = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
+      const url = `${this.baseUrl}/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
+      const payload = {
+        contents: this._convertToGemini(messages),
+        ...(systemText ? { systemInstruction: { parts: [{ text: systemText }] } } : {}),
+        generationConfig: { temperature: opts.temperature ?? 0.2, maxOutputTokens: opts.max_tokens ?? 4096 },
+      };
+      for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
         console.log(`[Gemini] attempt=${attempt + 1} model=${this.model}`);
         const { status, body } = await httpRequest(url, { headers: { 'Content-Type': 'application/json' } }, payload);
         console.log(`[Gemini] status=${status}`);
-
         if (status === 429) {
-          const delay = backoffDelay(attempt);
-          if (attempt < RETRY_MAX_ATTEMPTS - 1) { await _sleep(delay); continue; }
-          this.cb.recordFailure('rate-limit');
+          if (attempt < RETRY_MAX_ATTEMPTS - 1) { await _sleep(backoffDelay(attempt)); continue; }
           throw Object.assign(new Error('Gemini rate-limited'), { statusCode: 429 });
         }
-        if (status === 401 || status === 403) {
-          this.cb.recordFailure(`auth ${status}`);
-          throw Object.assign(new Error(`Gemini auth error ${status}`), { statusCode: status });
-        }
+        if (status === 401 || status === 403) throw Object.assign(new Error(`Gemini auth error ${status}`), { statusCode: status });
         if (status >= 500) {
-          const delay = backoffDelay(attempt);
-          if (attempt < RETRY_MAX_ATTEMPTS - 1) { await _sleep(delay); continue; }
-          this.cb.recordFailure(`server ${status}`);
+          if (attempt < RETRY_MAX_ATTEMPTS - 1) { await _sleep(backoffDelay(attempt)); continue; }
           throw Object.assign(new Error(`Gemini server error ${status}`), { statusCode: status });
         }
         if (status >= 400) {
           let det = ''; try { det = JSON.parse(body)?.error?.message || body.slice(0, 200); } catch {}
-          this.cb.recordFailure(`client ${status}`);
           throw Object.assign(new Error(`Gemini HTTP ${status}: ${det}`), { statusCode: status });
         }
-
         let parsed; try { parsed = JSON.parse(body); } catch { throw new Error('Gemini invalid JSON'); }
-        this.cb.recordSuccess();
-
-        const cand    = parsed.candidates?.[0];
-        const text    = cand?.content?.parts?.map(p => p.text || '').join('') || '';
-        const tokens  = parsed.usageMetadata || {};
+        const cand   = parsed.candidates?.[0];
+        const text   = cand?.content?.parts?.map(p => p.text || '').join('') || '';
+        const tokens = parsed.usageMetadata || {};
         return {
           content:      text,
           toolCalls:    [],
@@ -806,123 +960,119 @@ class GeminiProvider {
           },
           model: this.model,
         };
-      } catch (err) {
-        if (err.circuitOpen || isAuthError(err)) throw err;
-        if (!isRetryable(err) || attempt >= RETRY_MAX_ATTEMPTS - 1) throw err;
-        await _sleep(backoffDelay(attempt));
       }
-    }
-    throw new Error('Gemini: max retries exhausted');
+      throw new Error('Gemini: max retries exhausted');
+    });
   }
 
   async chatStream(messages, tools, opts, onChunk) {
-    // Gemini streaming via SSE
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:gemini'), { circuitOpen: true });
-    if (!this.apiKey) throw new Error('Gemini API key not configured');
+    if (!this.apiKey)     throw new Error('Gemini API key not configured');
 
-    const systemText = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
-    const url = `${this.baseUrl}/v1beta/models/${this.model}:streamGenerateContent?key=${this.apiKey}&alt=sse`;
-
-    const payload = {
-      contents: this._convertToGemini(messages),
-      ...(systemText ? { systemInstruction: { parts: [{ text: systemText }] } } : {}),
-      generationConfig: { temperature: opts?.temperature ?? 0.2, maxOutputTokens: opts?.max_tokens ?? 4096 },
-    };
-
-    const { status, stream } = await httpStream(url, { headers: { 'Content-Type': 'application/json' } }, payload);
-    if (status === 429) { this.cb.recordFailure('rate-limit'); throw Object.assign(new Error('Gemini rate-limited'), { statusCode: 429 }); }
-    if (status >= 400) { this.cb.recordFailure(`stream ${status}`); throw Object.assign(new Error(`Gemini stream error ${status}`), { statusCode: status }); }
-
-    let fullContent = '';
-    await _consumeSSE(stream, (line) => {
-      try {
-        const evt  = JSON.parse(line);
-        const text = evt.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
-        if (text) { fullContent += text; if (onChunk) onChunk({ type: 'text', text }); }
-      } catch {}
+    return this._timed(async () => {
+      const systemText = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
+      const url = `${this.baseUrl}/v1beta/models/${this.model}:streamGenerateContent?key=${this.apiKey}&alt=sse`;
+      const payload = {
+        contents: this._convertToGemini(messages),
+        ...(systemText ? { systemInstruction: { parts: [{ text: systemText }] } } : {}),
+        generationConfig: { temperature: opts?.temperature ?? 0.2, maxOutputTokens: opts?.max_tokens ?? 4096 },
+      };
+      const { status, stream } = await httpStream(url, { headers: { 'Content-Type': 'application/json' } }, payload);
+      if (status >= 400) throw Object.assign(new Error(`Gemini stream error ${status}`), { statusCode: status });
+      let fullContent = '';
+      await _consumeSSE(stream, (line) => {
+        try {
+          const evt  = JSON.parse(line);
+          const text = evt.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
+          if (text) { fullContent += text; if (onChunk) onChunk({ type: 'text', text }); }
+        } catch {}
+      });
+      return { content: fullContent, toolCalls: [], finishReason: 'stop', usage: { totalTokens: 0 }, model: this.model };
     });
-    this.cb.recordSuccess();
-    return { content: fullContent, toolCalls: [], finishReason: 'stop', usage: { totalTokens: 0 }, model: this.model };
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  MOCK PROVIDER (always available — last resort)
+//  MOCK PROVIDER (always available — graceful degradation last resort)
 // ═══════════════════════════════════════════════════════════════════════════════
-class MockProvider {
-  constructor() { this.model = 'mock-security-analyst-v1'; }
-  get name() { return 'mock'; }
+class MockProvider extends BaseProvider {
+  constructor() {
+    super('mock');
+    this.model  = 'mock-security-analyst-v2';
+    this.apiKey = 'mock'; // always has key
+  }
 
   async chat(messages, tools = [], opts = {}) {
-    const userMsg = [...messages].reverse().find(m => m.role === 'user')?.content || '';
-    const lower   = userMsg.toLowerCase();
-
-    // Only trigger tool calls when tools are provided AND keyword matches
+    const userMsg  = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+    const lower    = userMsg.toLowerCase();
     const toolCalls = [];
-    if (tools && tools.length > 0) {
-      if (lower.match(/cve-[\d-]+/i)) {
+    if (tools?.length) {
+      if (lower.match(/cve-[\d-]+/i))
         toolCalls.push({ id: 'mock_1', name: 'cve_lookup', arguments: { cve_id: userMsg.match(/CVE-[\d-]+/i)?.[0] || 'CVE-2024-12356' } });
-      } else if (lower.includes('sigma')) {
+      else if (lower.includes('sigma'))
         toolCalls.push({ id: 'mock_1', name: 'sigma_search', arguments: { query: userMsg.slice(0, 100) } });
-      } else if (lower.includes('kql') || lower.includes('sentinel') || lower.includes('splunk')) {
+      else if (lower.includes('kql') || lower.includes('sentinel') || lower.includes('splunk'))
         toolCalls.push({ id: 'mock_1', name: 'kql_generate', arguments: { description: userMsg.slice(0, 200), siem: lower.includes('splunk') ? 'splunk' : 'sentinel' } });
-      } else if (lower.match(/t\d{4}/i) || lower.includes('mitre')) {
-        const id = userMsg.match(/T\d{4}(?:\.\d{3})?/i)?.[0] || 'T1059';
-        toolCalls.push({ id: 'mock_1', name: 'mitre_lookup', arguments: { query: id } });
-      }
+      else if (lower.match(/t\d{4}/i) || lower.includes('mitre'))
+        toolCalls.push({ id: 'mock_1', name: 'mitre_lookup', arguments: { query: userMsg.match(/T\d{4}(?:\.\d{3})?/i)?.[0] || 'T1059' } });
     }
-
-    if (toolCalls.length) {
-      return { content: '', toolCalls, finishReason: 'tool_calls', usage: { totalTokens: 50 }, model: this.model };
-    }
-
-    const content = _mockResponse(lower, tools);
-    return { content, toolCalls: [], finishReason: 'stop', usage: { promptTokens: 80, completionTokens: Math.ceil(content.length / 4), totalTokens: 80 + Math.ceil(content.length / 4) }, model: this.model };
+    if (toolCalls.length) return { content: '', toolCalls, finishReason: 'tool_calls', usage: { totalTokens: 50 }, model: this.model };
+    const content = _mockResponse(lower);
+    this.health.record(true, 50);
+    return {
+      content, toolCalls: [], finishReason: 'stop',
+      usage: { promptTokens: 80, completionTokens: Math.ceil(content.length / 4), totalTokens: 80 + Math.ceil(content.length / 4) },
+      model: this.model,
+    };
   }
 
   async chatStream(messages, tools, opts, onChunk) {
     const result = await this.chat(messages, tools, opts);
-    // Simulate streaming by chunking the response
     if (result.content && onChunk) {
       const words = result.content.split(' ');
-      for (const word of words) {
-        onChunk({ type: 'text', text: word + ' ' });
-        await _sleep(20);
-      }
+      for (const word of words) { onChunk({ type: 'text', text: word + ' ' }); await _sleep(15); }
     }
     return result;
   }
 }
 
-function _mockResponse(lower, tools) {
-  if (lower.match(/cve-[\d-]+/)) {
-    return `**CVE Analysis (Demo Mode)**\n\nI found references to this CVE. In full AI mode, I would:\n- Query the NVD database via the \`cve_lookup\` tool\n- Show CVSS scores, affected versions, patch status\n- Provide remediation guidance\n\n*To enable real CVE lookups, ensure OPENAI_API_KEY or CLAUDE_API_KEY is set on the server.*`;
-  }
-  if (lower.includes('sigma')) {
-    return `**Sigma Detection Rule (Demo Mode)**\n\n\`\`\`yaml\ntitle: Suspicious PowerShell Execution\nstatus: experimental\nlogsource:\n  category: process_creation\n  product: windows\ndetection:\n  selection:\n    CommandLine|contains:\n      - '-enc'\n      - '-encodedcommand'\n      - '-bypass'\n  condition: selection\nlevel: high\ntags:\n  - attack.execution\n  - attack.t1059.001\n\`\`\`\n\n*Demo mode — configure AI provider keys for context-aware rule generation.*`;
-  }
-  if (lower.includes('mitre') || lower.match(/t\d{4}/i)) {
-    return `**MITRE ATT&CK (Demo Mode)**\n\nI can provide detailed technique analysis. In full AI mode I would:\n- Map to specific technique IDs (e.g., T1059.001)\n- Show real-world threat actor usage\n- Provide detection and mitigation strategies\n\n*Configure AI provider for full ATT&CK analysis.*`;
-  }
-  const toolCount = tools ? tools.length : 0;
-  return `I'm **RAKAY**, your AI Security Analyst.\n\n**Current mode:** Demo (AI provider keys not configured or all providers temporarily unavailable)\n\n**Available capabilities:** Sigma rules · KQL/SPL queries · IOC enrichment · MITRE ATT&CK · CVE research · Threat actor profiling\n\n**Tool-calling:** ${toolCount > 0 ? `${toolCount} tools available` : 'Disabled in demo mode'}\n\n⚠️ *To enable full AI capabilities, set \`OPENAI_API_KEY\` or \`CLAUDE_API_KEY\` in your Render environment variables.*`;
+function _mockResponse(lower) {
+  if (lower.match(/cve-[\d-]+/))
+    return `**CVE Analysis (Demo Mode)**\n\nI found references to this CVE. In full AI mode I would:\n- Query the NVD database via the \`cve_lookup\` tool\n- Show CVSS scores, affected versions, patch status\n- Provide remediation guidance\n\n*To enable real CVE lookups, ensure \`OPENAI_API_KEY\` or \`CLAUDE_API_KEY\` is set.*`;
+  if (lower.includes('sigma'))
+    return `**Sigma Detection Rule (Demo Mode)**\n\n\`\`\`yaml\ntitle: Suspicious PowerShell Execution\nstatus: experimental\nlogsource:\n  category: process_creation\n  product: windows\ndetection:\n  selection:\n    CommandLine|contains:\n      - '-enc'\n      - '-encodedcommand'\n      - '-bypass'\n  condition: selection\nlevel: high\n\`\`\`\n\n*Demo mode — configure AI provider keys for context-aware rule generation.*`;
+  if (lower.includes('mitre') || lower.match(/t\d{4}/i))
+    return `**MITRE ATT&CK (Demo Mode)**\n\nIn full AI mode I would map to specific technique IDs, show real-world usage and provide detection strategies.\n\n*Configure AI provider for full ATT&CK analysis.*`;
+  return `I'm **RAKAY**, your AI Security Analyst.\n\n**Current mode:** Demo (all AI providers temporarily unavailable)\n\n**Available capabilities:** Sigma rules · KQL/SPL queries · IOC enrichment · MITRE ATT&CK · CVE research · Threat actor profiling\n\n⚠️ *Set \`OPENAI_API_KEY\`, \`CLAUDE_API_KEY\`, or \`GEMINI_API_KEY\` in your environment to enable full AI capabilities.*`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  MULTI-PROVIDER (FAILOVER CHAIN)
+//  MULTI-PROVIDER  (TASKS 1, 4, 6, 7)
+//  Failover chain: OpenAI → Ollama → Anthropic → Gemini → DeepSeek → Mock
+//  Dynamic ordering by health score before each request.
+//  Per-call 15s timeout via Promise.race.
+//  True graceful degradation on total failure.
 // ═══════════════════════════════════════════════════════════════════════════════
 class MultiProvider {
-  /**
-   * @param {Array} providers — ordered list of provider instances
-   */
   constructor(providers) {
-    this.providers = providers;
+    this.providers     = providers;
     this._mockProvider = providers.find(p => p.name === 'mock') || new MockProvider();
   }
 
+  /**
+   * TASK 7: Sort real providers by health score (descending).
+   * Mock provider always stays last as the final fallback.
+   */
+  _sortedProviders() {
+    const real = this.providers.filter(p => p.name !== 'mock');
+    // Sort by health score descending (higher = better)
+    real.sort((a, b) => (b.health?.score ?? 50) - (a.health?.score ?? 50));
+    const mock = this.providers.filter(p => p.name === 'mock');
+    return [...real, ...mock];
+  }
+
   get name() {
-    // Return name of first non-open provider
-    const live = this.providers.find(p => !p.cb?.isOpen?.() && p.name !== 'mock');
+    const live = this._sortedProviders().find(p => !p.cb?.isOpen() && p.name !== 'mock' && p.apiKey);
     return live ? live.name : 'mock';
   }
 
@@ -930,181 +1080,190 @@ class MultiProvider {
     return this.providers.map(p => ({
       name:   p.name,
       model:  p.model,
-      hasKey: !!(p.apiKey),
+      hasKey: !!(p.apiKey && p.apiKey !== 'local' && p.apiKey !== 'mock'),
       cb:     p.cb?.getStatus?.() || { state: 'N/A' },
+      health: p.health?.stats    || { score: 'N/A' },
     }));
   }
 
-  async chat(messages, tools = [], opts = {}) {
-    const tried = [];
+  /**
+   * TASK 4: Wrap any provider call with a 15s timeout.
+   * On timeout, the circuit breaker records a failure and failover continues.
+   */
+  _withTimeout(providerCallPromise, providerName) {
+    return withCallTimeout(providerCallPromise, PROVIDER_CALL_TIMEOUT, providerName);
+  }
 
-    for (const provider of this.providers) {
+  /**
+   * TASK 6: Never throw — always return a valid response object.
+   * On total failure, returns degraded mock response.
+   */
+  async chat(messages, tools = [], opts = {}) {
+    const tried  = [];
+    const errors = [];
+
+    for (const provider of this._sortedProviders()) {
+      // Skip if circuit is open
       if (provider.cb?.isOpen?.()) {
-        console.log(`[MultiProvider] Skipping ${provider.name} — circuit OPEN`);
+        const status = provider.cb.getStatus();
+        console.log(`[MultiProvider] Skipping ${provider.name} — circuit OPEN (${status.remainingOpenMs}ms remaining, will probe at HALF_OPEN)`);
         continue;
       }
-      if (!provider.apiKey && provider.name !== 'mock') {
-        console.log(`[MultiProvider] Skipping ${provider.name} — no API key`);
+      // Skip if no API key (Ollama uses 'local' sentinel, Mock uses 'mock' sentinel)
+      const hasKey = provider.apiKey && provider.apiKey.length > 0;
+      if (!hasKey && provider.name !== 'mock') {
+        console.log(`[MultiProvider] Skipping ${provider.name} — no API key configured`);
         continue;
       }
 
       tried.push(provider.name);
-      console.log(`[MultiProvider] Trying ${provider.name} (${provider.model})`);
+      const healthScore = provider.health?.score ?? '?';
+      console.log(`[MultiProvider] Trying ${provider.name} (${provider.model}) health_score=${healthScore}`);
 
       try {
-        const result = await provider.chat(messages, tools, opts);
+        // TASK 4: 15s hard timeout per provider call
+        const result = await this._withTimeout(
+          provider.chat(messages, tools, opts),
+          provider.name
+        );
         if (tried.length > 1) {
-          console.log(`[MultiProvider] FAILOVER SUCCESS: ${tried.slice(0, -1).join('→')} failed → ${provider.name} succeeded`);
+          console.log(`[MultiProvider] FAILOVER_SUCCESS: ${tried.slice(0, -1).join(' → ')} failed → ${provider.name} succeeded`);
         }
         return { ...result, _provider: provider.name };
       } catch (err) {
+        const reason = err.message?.slice(0, 100) || 'unknown';
+        errors.push({ provider: provider.name, error: reason, ts: new Date().toISOString() });
+
         if (err.circuitOpen) {
-          console.warn(`[MultiProvider] ${provider.name} circuit opened — trying next`);
+          console.warn(`[MultiProvider] ${provider.name} circuit just opened mid-request — trying next`);
           continue;
         }
         if (isAuthError(err)) {
-          console.warn(`[MultiProvider] ${provider.name} auth error — skipping: ${err.message}`);
+          console.warn(`[MultiProvider] ${provider.name} AUTH_ERROR — skipping (CB not triggered): ${reason}`);
           continue;
         }
-        if (isRetryable(err)) {
-          console.warn(`[MultiProvider] ${provider.name} retryable error — trying next: ${err.message}`);
+        if (err.ollamaDown) {
+          console.warn(`[MultiProvider] Ollama not running at ${provider.baseUrl} — skipping`);
           continue;
         }
-        // Non-retryable, non-auth error (bad request etc.) — log but try next
-        console.warn(`[MultiProvider] ${provider.name} failed (${err.message}) — trying next`);
-        continue;
+        if (err.isTimeout) {
+          console.warn(`[MultiProvider] ${provider.name} TIMED_OUT (${PROVIDER_CALL_TIMEOUT}ms) — failing over`);
+          continue;
+        }
+        console.warn(`[MultiProvider] ${provider.name} FAILED (${reason}) — trying next provider`);
       }
     }
 
-    // All real providers failed — use mock as graceful degradation
-    console.warn(`[MultiProvider] ALL_PROVIDERS_FAILED tried=[${tried.join(',')}] — using mock fallback`);
+    // TASK 6: True graceful degradation — NEVER throw, always return valid JSON
+    console.warn(`[MultiProvider] ALL_PROVIDERS_FAILED tried=[${tried.join(', ')}] errors=${JSON.stringify(errors)} — activating mock fallback`);
     const mockResult = await this._mockProvider.chat(messages, tools, opts);
-    return { ...mockResult, _provider: 'mock', _degraded: true };
+    return {
+      ...mockResult,
+      _provider: 'mock',
+      _degraded:  true,
+      _errors:    errors,
+      reply:      mockResult.content,
+    };
   }
 
   async chatStream(messages, tools = [], opts = {}, onChunk) {
-    const tried = [];
+    const tried  = [];
+    const errors = [];
 
-    for (const provider of this.providers) {
-      if (provider.cb?.isOpen?.()) continue;
-      if (!provider.apiKey && provider.name !== 'mock') continue;
+    for (const provider of this._sortedProviders()) {
+      if (provider.cb?.isOpen?.()) {
+        console.log(`[MultiProvider:stream] Skipping ${provider.name} — circuit OPEN`);
+        continue;
+      }
+      const hasKey = provider.apiKey && provider.apiKey.length > 0;
+      if (!hasKey && provider.name !== 'mock') continue;
 
       tried.push(provider.name);
-      console.log(`[MultiProvider:stream] Trying ${provider.name}`);
+      console.log(`[MultiProvider:stream] Trying ${provider.name} health_score=${provider.health?.score ?? '?'}`);
 
       try {
-        const result = await provider.chatStream(messages, tools, opts, onChunk);
+        // TASK 4: 15s timeout on stream initiation
+        const result = await this._withTimeout(
+          provider.chatStream(messages, tools, opts, onChunk),
+          provider.name + ':stream'
+        );
+        if (tried.length > 1) {
+          console.log(`[MultiProvider:stream] FAILOVER_SUCCESS: ${tried.slice(0, -1).join(' → ')} → ${provider.name}`);
+        }
         return { ...result, _provider: provider.name };
       } catch (err) {
-        if (err.circuitOpen || isAuthError(err) || isRetryable(err)) {
-          console.warn(`[MultiProvider:stream] ${provider.name} failed — trying next: ${err.message}`);
+        errors.push({ provider: provider.name, error: err.message?.slice(0, 80) });
+        if (err.circuitOpen || isAuthError(err) || err.ollamaDown || err.isTimeout) {
+          console.warn(`[MultiProvider:stream] ${provider.name} skipped: ${err.message?.slice(0, 60)}`);
           continue;
         }
-        console.warn(`[MultiProvider:stream] ${provider.name} non-retryable — trying next: ${err.message}`);
-        continue;
+        console.warn(`[MultiProvider:stream] ${provider.name} FAILED: ${err.message?.slice(0, 60)} — trying next`);
       }
     }
 
-    // All real providers failed for streaming — use mock
-    console.warn(`[MultiProvider:stream] All failed, using mock`);
+    // Graceful degradation for streaming — use mock
+    console.warn(`[MultiProvider:stream] All providers failed tried=[${tried.join(', ')}] — mock fallback`);
     const mockResult = await this._mockProvider.chatStream(messages, tools, opts, onChunk);
-    return { ...mockResult, _provider: 'mock', _degraded: true };
+    return { ...mockResult, _provider: 'mock', _degraded: true, _errors: errors };
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  SSE CONSUMER HELPER
-// ═══════════════════════════════════════════════════════════════════════════════
-function _consumeSSE(stream, onLine) {
-  return new Promise((resolve, reject) => {
-    let buffer = '';
-    stream.on('data', (chunk) => {
-      buffer += chunk.toString('utf8');
-      const lines = buffer.split('\n');
-      buffer = lines.pop(); // last partial line stays in buffer
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith('data: ')) {
-          const data = trimmed.slice(6).trim();
-          if (data) onLine(data);
-        }
-      }
-    });
-    stream.on('end', () => {
-      // flush remaining
-      if (buffer.trim().startsWith('data: ')) onLine(buffer.trim().slice(6).trim());
-      resolve();
-    });
-    stream.on('error', reject);
-  });
-}
-
-function _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-// ═══════════════════════════════════════════════════════════════════════════════
 //  FACTORY
+//  Default order: OpenAI → Ollama → Anthropic → Gemini → DeepSeek → Mock
 // ═══════════════════════════════════════════════════════════════════════════════
-/**
- * createMultiProvider — builds the failover chain from environment variables.
- * Provider order: OpenAI → Claude → DeepSeek → Gemini → Mock
- *
- * @param {object} config  — optional config overrides (e.g., { apiKey, provider })
- * @returns {MultiProvider}
- */
 function createMultiProvider(config = {}) {
   const providers = [];
 
-  // Explicit single-provider override (legacy compatibility)
+  // Single-provider override (e.g., for testing)
   if (config.provider && config.provider !== 'multi') {
     switch (config.provider.toLowerCase()) {
-      case 'openai':
-        providers.push(new OpenAIProvider(config));
-        break;
+      case 'openai':    providers.push(new OpenAIProvider(config));    break;
       case 'anthropic':
-      case 'claude':
-        providers.push(new AnthropicProvider(config));
-        break;
-      case 'deepseek':
-        providers.push(new DeepSeekProvider(config));
-        break;
-      case 'gemini':
-        providers.push(new GeminiProvider(config));
-        break;
-      case 'mock':
-      case 'local':
-        providers.push(new MockProvider());
-        break;
+      case 'claude':    providers.push(new AnthropicProvider(config)); break;
+      case 'deepseek':  providers.push(new DeepSeekProvider(config));  break;
+      case 'gemini':    providers.push(new GeminiProvider(config));    break;
+      case 'ollama':
+      case 'local':     providers.push(new OllamaProvider(config));    break;
+      case 'mock':      providers.push(new MockProvider()); break;
     }
     providers.push(new MockProvider());
     return new MultiProvider(providers);
   }
 
-  // Full failover chain — add all providers that have keys
+  // TASK 1: Full failover chain — OpenAI → Ollama → Anthropic → Gemini → DeepSeek → Mock
   providers.push(new OpenAIProvider(config));
+  providers.push(new OllamaProvider(config));    // local — no rate limit, offline-capable
   providers.push(new AnthropicProvider(config));
-  providers.push(new DeepSeekProvider(config));
   providers.push(new GeminiProvider(config));
+  providers.push(new DeepSeekProvider(config));
   providers.push(new MockProvider());
 
+  console.log(`[MultiProvider] Initialized chain: ${providers.map(p => p.name).join(' → ')}`);
   return new MultiProvider(providers);
 }
 
-// Legacy compatibility — single provider factory
-function createLLMProvider(config = {}) {
-  return createMultiProvider(config);
-}
+// Legacy alias
+function createLLMProvider(config = {}) { return createMultiProvider(config); }
 
 module.exports = {
   createMultiProvider,
-  createLLMProvider,   // legacy alias
+  createLLMProvider,
   MultiProvider,
   OpenAIProvider,
+  OllamaProvider,
   AnthropicProvider,
   DeepSeekProvider,
   GeminiProvider,
   MockProvider,
   CircuitBreaker,
+  HealthScorer,
   isRetryable,
   isAuthError,
   backoffDelay,
+  withCallTimeout,
+  PROVIDER_CALL_TIMEOUT,
+  CB_FAILURE_THRESHOLD,
+  CB_OPEN_DURATION_MS,
+  CB_HALF_OPEN_SUCCESSES,
 };
