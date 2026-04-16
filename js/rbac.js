@@ -90,7 +90,22 @@ function renderRBACAdmin() {
   const container = document.getElementById('rbacAdminWrap');
   if (!container) return;
 
-  const canManage = CURRENT_USER?.role === 'SUPER_ADMIN' || CURRENT_USER?.role === 'ADMIN';
+  // ROOT-CAUSE FIX: ARGUS_DATA may be undefined or have empty arrays when
+  // called before the data module loads. Guard with safe defaults so the
+  // page always renders something instead of throwing ReferenceError.
+  const _users   = (typeof ARGUS_DATA !== 'undefined' && Array.isArray(ARGUS_DATA.users))
+    ? ARGUS_DATA.users
+    : [];
+  const _tenants = (typeof ARGUS_DATA !== 'undefined' && Array.isArray(ARGUS_DATA.tenants))
+    ? ARGUS_DATA.tenants
+    : [{ name: 'Default' }];
+
+  // Log debug info so we can verify data is flowing
+  console.info('[RBAC] renderRBACAdmin() — users:', _users.length, '| roles:', RBAC_STORE.roles.length, '| tenants:', _tenants.length);
+
+  const canManage = (typeof CURRENT_USER !== 'undefined') &&
+    (CURRENT_USER?.role === 'SUPER_ADMIN' || CURRENT_USER?.role === 'ADMIN' ||
+     CURRENT_USER?.role === 'super_admin' || CURRENT_USER?.role === 'admin');
 
   container.innerHTML = `
     <div style="margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
@@ -111,9 +126,9 @@ function renderRBACAdmin() {
     <!-- RBAC Stats -->
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:20px;">
       ${[
-        {label:'Total Users', val: ARGUS_DATA.users.length, icon:'fa-users', color:'#3b82f6'},
+        {label:'Total Users', val: _users.length, icon:'fa-users', color:'#3b82f6'},
         {label:'Active Roles', val: RBAC_STORE.roles.length, icon:'fa-shield-alt', color:'#a855f7'},
-        {label:'Tenants', val: ARGUS_DATA.tenants.length, icon:'fa-building', color:'#22d3ee'},
+        {label:'Tenants', val: _tenants.length, icon:'fa-building', color:'#22d3ee'},
         {label:'Active Sessions', val: 4, icon:'fa-wifi', color:'#22c55e'},
         {label:'Failed Logins (24h)', val: 1, icon:'fa-ban', color:'#ef4444'},
         {label:'Audit Events', val: RBAC_STORE.audit_log.length, icon:'fa-list-alt', color:'#f59e0b'},
@@ -144,10 +159,10 @@ function renderRBACAdmin() {
         </select>
         <select class="filter-select" id="rbacTenantFilter" onchange="filterRBACUsers(document.getElementById('rbacUserSearch').value)">
           <option value="">All Tenants</option>
-          ${ARGUS_DATA.tenants.map(t=>`<option value="${t.name}">${t.name}</option>`).join('')}
+          ${_tenants.map(t=>`<option value="${t.name}">${t.name}</option>`).join('')}
         </select>
       </div>
-      <div id="rbacUsersTable">${renderRBACUsersTable(ARGUS_DATA.users)}</div>
+      <div id="rbacUsersTable">${renderRBACUsersTable(_users)}</div>
     </div>
 
     <!-- ROLES TAB -->
@@ -159,7 +174,7 @@ function renderRBACAdmin() {
               <div style="width:36px;height:36px;background:${role.color}22;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;">🛡️</div>
               <div style="flex:1;">
                 <div style="font-size:13px;font-weight:800;color:${role.color};">${role.name}</div>
-                <div style="font-size:10px;color:var(--text-muted);">${ARGUS_DATA.users.filter(u=>u.role===role.name||u.role===role.slug.toUpperCase()).length} users assigned</div>
+                <div style="font-size:10px;color:var(--text-muted);">${_users.filter(u=>u.role===role.name||u.role===role.slug.toUpperCase()).length} users assigned</div>
               </div>
               <span style="font-size:9px;padding:2px 7px;background:${role.color}22;color:${role.color};border-radius:4px;border:1px solid ${role.color}44;font-family:monospace;">${role.slug}</span>
             </div>
@@ -392,10 +407,13 @@ function switchRBACTab(btn, tabId) {
 }
 
 function filterRBACUsers(q) {
-  q = q.toLowerCase();
+  q = (q || '').toLowerCase();
   const roleF = document.getElementById('rbacRoleFilter')?.value.toLowerCase() || '';
   const tenF  = document.getElementById('rbacTenantFilter')?.value.toLowerCase() || '';
-  const filtered = ARGUS_DATA.users.filter(u => {
+  // ROOT-CAUSE FIX: guard ARGUS_DATA safely
+  const users = (typeof ARGUS_DATA !== 'undefined' && Array.isArray(ARGUS_DATA.users))
+    ? ARGUS_DATA.users : [];
+  const filtered = users.filter(u => {
     const matchQ = !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
     const matchR = !roleF || u.role.toLowerCase().includes(roleF);
     const matchT = !tenF  || u.tenant.toLowerCase().includes(tenF);
@@ -424,7 +442,9 @@ function exportAuditLog() {
 }
 
 function exportRBACReport() {
-  const data = { generated: new Date().toISOString(), users: ARGUS_DATA.users, roles: RBAC_STORE.roles, audit_log: RBAC_STORE.audit_log };
+  const users = (typeof ARGUS_DATA !== 'undefined' && Array.isArray(ARGUS_DATA.users))
+    ? ARGUS_DATA.users : [];
+  const data = { generated: new Date().toISOString(), users, roles: RBAC_STORE.roles, audit_log: RBAC_STORE.audit_log };
   downloadFile('threatpilot_rbac_report.json', JSON.stringify(data,null,2),'application/json');
   showToast('RBAC report exported','success');
 }
@@ -836,30 +856,42 @@ async function toggleUserStatus(userId) {
 }
 
 /* ─── Enhanced renderRBACAdmin — loads from API first ──────── */
-const _originalRenderRBACAdmin = typeof renderRBACAdmin === 'function' ? renderRBACAdmin : null;
+// ROOT-CAUSE FIX: The async override must:
+//   1. Show a skeleton loader immediately (tab never appears empty)
+//   2. Load API data in parallel with a timeout
+//   3. Call the base renderRBACAdmin() which now safely falls back to local data
+//   4. Override window.renderRBACAdmin so main.js picks up the async version
 
 async function renderRBACAdminWithAPI() {
   const container = document.getElementById('rbacAdminWrap');
   if (!container) return;
 
-  // Show skeleton loader
+  // Show skeleton loader immediately — user sees activity, not blank tab
   container.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:center;padding:60px;gap:12px;">
       <i class="fas fa-shield-alt fa-spin" style="font-size:22px;color:var(--accent-cyan);"></i>
       <span style="color:var(--text-muted);font-size:13px;">Loading RBAC data from backend…</span>
     </div>`;
 
-  // Load from API in parallel
-  await Promise.allSettled([
-    loadRBACRolesFromAPI(),
-    loadRBACUsersFromAPI(),
-    loadRBACAuditLogFromAPI(),
+  console.info('[RBAC] renderRBACAdminWithAPI() — fetching API data...');
+
+  // Load from API in parallel (max 5 seconds before fallback to local data)
+  const timeout = ms => new Promise(r => setTimeout(r, ms));
+  await Promise.race([
+    Promise.allSettled([
+      loadRBACRolesFromAPI(),
+      loadRBACUsersFromAPI(),
+      loadRBACAuditLogFromAPI(),
+    ]),
+    timeout(5000), // never block render > 5s
   ]);
 
-  // Now render with live data
-  if (_originalRenderRBACAdmin) {
-    _originalRenderRBACAdmin();
-  }
+  console.info('[RBAC] API load complete — rendering with',
+    RBAC_STORE.roles.length, 'roles,',
+    (typeof ARGUS_DATA !== 'undefined' ? ARGUS_DATA.users?.length : 0), 'users');
+
+  // Render the sync page (it now has safe guards for ARGUS_DATA)
+  renderRBACAdmin();
 }
 
 /* Override the global renderRBACAdmin */

@@ -293,14 +293,39 @@ function extractEntities(text) {
   else severity = 'low';
 
   // Category detection (order matters: more specific first)
+  // NOTE: feedCategory is passed in as a hint — if provided and non-generic,
+  //       it wins over text-based detection for feed-specific categorization
+  //       (e.g. CISA advisory feeds must NOT be reclassified as 'vulnerabilities'
+  //        just because their text mentions CVE numbers).
   let category = 'intelligence';
-  if (/cisa|cisa\.gov|us-cert|ics-cert|government.advisory|federal.advisory/i.test(text)) category = 'advisories';
-  else if (/ransomware|encrypt|ransom|attack.*compan|breach|stolen|hack/i.test(text)) category = 'attacks';
-  else if (/patch.*cve-|cve-.*patch|zero.?day|vulnerability.*critical|critical.*vulnerability|exploit.*cve|cve.*exploit/i.test(text)) category = 'vulnerabilities';
-  else if (/\badvisory\b|\bpatch\b.*\bupdate\b|bulletin/i.test(text) && !/apt|ransomware/i.test(text)) category = 'advisories';
-  else if (/cve-\d{4}-\d+|vulnerability|patch/i.test(text))                       category = 'vulnerabilities';
-  else if (/apt|espionage|nation.?state|intelligence|campaign|ttps/i.test(text))   category = 'threats';
-  else if (/research|discover|analysis|technique|method/i.test(text))              category = 'research';
+  const _feedCat = (text.match(/\[FEED_CATEGORY:([a-z]+)\]/) || [])[1]; // injected hint
+  if (_feedCat && _feedCat !== 'intelligence') {
+    // Feed has an explicit non-generic category — respect it, but allow
+    // text-based override only for strong signals (ransomware/attack/apt).
+    if (/ransomware|encrypt\s+.*ransom|attack.*compan|breach.*data|stolen.*data/i.test(text) &&
+        _feedCat !== 'attacks') {
+      category = 'attacks';
+    } else if (/apt\d+|nation.?state.{0,20}attack|espionage.*campaign/i.test(text) &&
+               _feedCat !== 'threats') {
+      category = 'threats';
+    } else {
+      category = _feedCat;  // honour feed-level assignment
+    }
+  } else if (/cisa|cisa\.gov|us-cert|ics-cert|government.{0,10}advisory|federal.{0,10}advisory/i.test(text)) {
+    category = 'advisories';
+  } else if (/ransomware|encrypt\s+.*ransom|attack.*compan|breach.*data|stolen.*data|hack.*compan/i.test(text)) {
+    category = 'attacks';
+  } else if (/patch.*cve-|cve-.*patch|zero.?day|vulnerability.*critical|critical.*vulnerability|exploit.*cve|cve.*exploit/i.test(text)) {
+    category = 'vulnerabilities';
+  } else if (/\badvisory\b|\bpatch\b.*\bupdate\b|bulletin/i.test(text) && !/apt|ransomware/i.test(text)) {
+    category = 'advisories';
+  } else if (/cve-\d{4}-\d+|vulnerability|patch/i.test(text)) {
+    category = 'vulnerabilities';
+  } else if (/apt|espionage|nation.?state|intelligence|campaign|ttps/i.test(text)) {
+    category = 'threats';
+  } else if (/research|discover|analysis|technique|method/i.test(text)) {
+    category = 'research';
+  }
 
   // Tags
   const tags = [];
@@ -426,7 +451,13 @@ async function ingestCyberNews(tenantId, options = {}) {
 
   // Enrich each article
   const enriched = allRawArticles.map(item => {
-    const fullText  = `${item.title} ${item.description || ''}`;
+    // ROOT-CAUSE FIX: inject feed category as a hint token so extractEntities()
+    // can respect feed-level assignments (e.g., CISA advisory feeds must not
+    // be reclassified as 'vulnerabilities' just because text mentions CVE IDs).
+    const feedCatHint = item.feedCategory && item.feedCategory !== 'intelligence'
+      ? ` [FEED_CATEGORY:${item.feedCategory}]`
+      : '';
+    const fullText  = `${item.title} ${item.description || ''}${feedCatHint}`;
     const entities  = extractEntities(fullText);
     const pubDate   = item.pubDate ? new Date(item.pubDate) : new Date();
     const isValid   = !isNaN(pubDate.getTime());
