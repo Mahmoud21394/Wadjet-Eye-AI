@@ -302,7 +302,10 @@ const kqlGenerateTool = {
   },
 
   async execute(params, _context) {
-    const { scenario, target_siem = 'kql', technique_id, sigma_yaml } = params;
+    // Accept both 'scenario' and 'description' (legacy compat)
+    const scenario_raw = params.scenario || params.description || params.query || '';
+    const { target_siem = 'kql', technique_id, sigma_yaml } = params;
+    const scenario = scenario_raw;
     const scenarioLower = scenario.toLowerCase();
 
     // Build query based on scenario keywords and target SIEM
