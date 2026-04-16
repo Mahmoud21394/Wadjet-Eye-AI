@@ -32,6 +32,8 @@ const { createMultiProvider } = require('./llm-provider');
 const store                   = require('./rakay-store');
 const { executeTool, TOOL_SCHEMAS } = require('./rakay-tools');
 const crypto                  = require('crypto');
+const ResponseProcessor       = require('./response-processor');
+const MITREEnricher           = require('./mitre-enricher');
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const MAX_TOOL_ITERATIONS  = 5;
@@ -482,7 +484,24 @@ class RAKAYEngine {
       // Guard: empty finalText after max iterations
       if (!finalText) {
         console.warn(`[RAKAYEngine] finalText empty after ${iteration} iterations — using fallback`);
-        finalText = 'I completed the analysis using the security tools. Please review the tool results above for details.';
+        // Build response from tool results if LLM returned nothing
+        if (toolTrace.length) {
+          finalText = ResponseProcessor.mergeToolResults(toolTrace, '');
+        } else {
+          finalText = 'I completed the analysis using the security tools. Please review the tool results above for details.';
+        }
+      }
+
+      // ── 4b. Post-process response through pipeline ────────────────────────
+      const toolNames = toolTrace.map(t => t.tool);
+      finalText = ResponseProcessor.process(finalText, {
+        toolNames,
+        degraded: !!(llmResponse?._degraded),
+      });
+
+      // If there were tool calls, merge them cleanly
+      if (toolTrace.length && llmResponse?.content) {
+        finalText = ResponseProcessor.mergeToolResults(toolTrace, finalText);
       }
 
       // ── 5. Persist assistant response ─────────────────────────────────────
@@ -558,6 +577,8 @@ class RAKAYEngine {
 
       // ── 4. Stream loop ────────────────────────────────────────────────────
       let iteration = 0;
+      // Track tool invocation count so UI only sees single indicator
+      let toolIndicatorSent = false;
 
       while (iteration < MAX_TOOL_ITERATIONS) {
         iteration++;
@@ -589,14 +610,22 @@ class RAKAYEngine {
           break;
         }
 
-        // Execute tools, notify UI
+        // Execute tools, notify UI with SINGLE clean indicator (not one per tool)
+        const toolNames = toolCalls.map(tc => tc.name || tc.function?.name).filter(Boolean);
+        if (!toolIndicatorSent && onChunk) {
+          // Sanitize: show exactly ONE indicator, never raw tool names
+          const { indicator } = ResponseProcessor.sanitizeToolOutput(
+            toolNames.map(n => ({ tool: n }))
+          );
+          if (indicator) onChunk(`\n\n${indicator}\n\n`);
+          toolIndicatorSent = true;
+        }
+
         for (const tc of toolCalls) {
           const toolName = tc.name || tc.function?.name;
           const rawArgs  = tc.arguments || tc.function?.arguments || {};
           const toolArgs = typeof rawArgs === 'string' ? _parseToolArgs(rawArgs) : rawArgs;
           const callId   = tc.id || `call_${Date.now()}_${toolName}`;
-
-          if (onChunk) onChunk(`\n\n🔧 *Using tool: ${toolName}...*\n\n`);
 
           const toolResult = await executeTool(toolName, toolArgs, { tenantId, userId, authHeader: context?.authHeader });
           toolTrace.push({ iteration, tool: toolName, args: toolArgs, result: toolResult.result, metadata: toolResult.metadata, timestamp: new Date().toISOString() });
@@ -616,7 +645,25 @@ class RAKAYEngine {
         fullText = '';
       }
 
-      if (!fullText) fullText = 'Analysis complete. Please review the tool results above.';
+      if (!fullText) {
+        if (toolTrace.length) {
+          // Build response from tool results via pipeline
+          fullText = ResponseProcessor.mergeToolResults(toolTrace, '');
+        } else {
+          fullText = 'Analysis complete. Please review the tool results above.';
+        }
+      } else {
+        // Run the response through the post-processor pipeline
+        const usedToolNames = toolTrace.map(t => t.tool);
+        fullText = ResponseProcessor.process(fullText, {
+          toolNames:  usedToolNames,
+          degraded:   !!(llmResponse?._degraded),
+        });
+        // If tools were used, merge their results with LLM synthesis
+        if (toolTrace.length) {
+          fullText = ResponseProcessor.mergeToolResults(toolTrace, fullText);
+        }
+      }
 
       // ── 5. Persist ────────────────────────────────────────────────────────
       const assistantMsg = await store.appendMessage({
