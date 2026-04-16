@@ -1455,8 +1455,8 @@
     let warningBadge = '';
     let mainText = text;
     if (text.startsWith('⚠️ Using built-in threat intelligence')) {
-      // ROOT-CAUSE FIX: Replace alarming "Enable Full AI Mode" style badge
-      // with a neutral, informational "Local Intelligence Mode" indicator.
+      // ROOT-CAUSE FIX: Badge updated to show neutral "Local Intelligence Mode" indicator
+      // instead of an alarming call-to-action that prompted key configuration.
       warningBadge = '<div class="rakay-intel-badge" style="background:rgba(59,130,246,0.12);border-color:rgba(59,130,246,0.3);color:#60a5fa;"><i class="fas fa-database"></i> Local Intelligence Mode — all core capabilities active</div>';
       mainText = text.replace(/^⚠️ Using built-in threat intelligence\s*\n+/, '');
     }

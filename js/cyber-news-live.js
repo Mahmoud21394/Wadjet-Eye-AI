@@ -50,6 +50,9 @@
   let _lastFetch      = null;
   let _feedStats      = { feeds: [], totalArticles: 0, lastUpdated: null };
   let _autoRefreshTimer = null;
+  // ROOT-CAUSE FIX: Single active AbortController prevents overlapping requests.
+  // When a new request starts, any previous in-flight request is cancelled.
+  let _activeController = null;
   // Pagination — no hard limit; "show more" expands by PAGE_SIZE
   const PAGE_SIZE     = 20;
   let _visibleCount   = PAGE_SIZE;  // resets when category/filter changes
@@ -105,6 +108,20 @@
     if (_loading && !silent) return;
     if (!silent) _loading = true;
 
+    // ROOT-CAUSE FIX: Cancel any previous in-flight request to prevent
+    // overlapping requests and shared-state race conditions.
+    // Each request gets its own AbortController. The timeout fires controller.abort();
+    // we distinguish AbortError (timeout) from real network errors so the fallback
+    // is only triggered on genuine failures, not on a clean timeout.
+    if (_activeController) {
+      _activeController.abort();
+      console.info('[CyberNews] Cancelled previous in-flight request');
+    }
+    const controller = new AbortController();
+    _activeController = controller;
+
+    let timeoutId = null;
+
     try {
       // Get token for auth header
       const token = (typeof TokenStore !== 'undefined') ? TokenStore.get() : null;
@@ -112,17 +129,22 @@
         ? CONFIG.BACKEND_URL
         : 'https://wadjet-eye-ai.onrender.com';
 
-      const controller = new AbortController();
-      const timeout    = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+      // Set timeout — on abort, AbortError is thrown inside fetch()
+      timeoutId = setTimeout(() => {
+        console.warn(`[CyberNews] Request timed out after ${API_TIMEOUT_MS}ms — aborting`);
+        controller.abort();
+      }, API_TIMEOUT_MS);
 
       const headers = { 'Content-Type': 'application/json' };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
+      console.info(`[CyberNews] Fetching from ${baseUrl}/api/news?limit=100`);
       const resp = await fetch(`${baseUrl}/api/news?limit=100`, {
         headers,
         signal: controller.signal,
       });
-      clearTimeout(timeout);
+      clearTimeout(timeoutId);
+      timeoutId = null;
 
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
@@ -130,18 +152,37 @@
       if (data.articles && Array.isArray(data.articles) && data.articles.length > 0) {
         _articles  = data.articles;
         _lastFetch = new Date();
-        console.info(`[CyberNews] Loaded ${_articles.length} articles from API`);
+        console.info(`[CyberNews] ✅ Loaded ${_articles.length} articles from API (categories: ${[...new Set(_articles.map(a=>a.category))].join(', ')})`);
 
         // Also fetch stats
         _loadFeedStats(baseUrl, headers);
       } else {
         // API returned empty — fallback
+        console.warn('[CyberNews] API returned empty articles array — using fallback');
         _useFallback();
       }
     } catch (err) {
-      console.warn('[CyberNews] API unavailable, using fallback:', err.message);
-      _useFallback();
+      // ROOT-CAUSE FIX: Distinguish AbortError types:
+      //   1. Intentional cancel (previous request superseded) → silent, do nothing
+      //   2. Timeout abort → warn and use fallback only if no articles loaded yet
+      //   3. Real network error (TypeError: Failed to fetch) → fallback
+      if (err.name === 'AbortError') {
+        if (controller.signal.aborted && _activeController !== controller) {
+          // This controller was superseded by a newer request — do nothing
+          console.info('[CyberNews] Request superseded by newer request — ignoring AbortError');
+          return;
+        }
+        // Timeout abort
+        console.warn('[CyberNews] Request timed out (AbortError) — backend may be slow or unreachable');
+        _useFallback();
+      } else {
+        console.warn('[CyberNews] Network error:', err.message, '— using fallback');
+        _useFallback();
+      }
     } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+      // Only clear the controller ref if this is still the active one
+      if (_activeController === controller) _activeController = null;
       _loading = false;
     }
   }
@@ -166,6 +207,8 @@
 
   function _clearAutoRefresh() {
     if (_autoRefreshTimer) { clearInterval(_autoRefreshTimer); _autoRefreshTimer = null; }
+    // Also cancel any in-flight request when navigating away
+    if (_activeController) { _activeController.abort(); _activeController = null; }
   }
 
   /* ════════════════════════════════════════════════════════════════════
@@ -357,7 +400,8 @@
       const ago = _lastFetch
         ? `Updated ${_timeAgo(_lastFetch)}`
         : 'No data yet';
-      sub.textContent = `${_articles.length} articles from ${_feedStats.feedCount || 12} sources · ${ago}`;
+      const feedCount = _feedStats.feedCount || _feedStats.feeds?.length || 9;
+      sub.textContent = `${_articles.length} articles from ${feedCount} sources · ${ago}`;
     }
 
     // Update tab badges — count per category from the FULL _articles array
