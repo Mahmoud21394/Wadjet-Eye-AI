@@ -81,6 +81,7 @@ const adversarySimRoutes  = require('./routes/adversary-sim');
 const threatGraphRoutes   = require('./routes/threat-graph');
 const whatifRoutes        = require('./routes/whatif');
 const rakayRoutes         = require('./routes/rakay');
+const socIntelRoutes      = require('./routes/soc-intelligence');   // ← SOC v2.0
 
 // ── Realtime ─────────────────────────────────────────────────────
 const { initWebSockets } = require('./realtime/websockets');
@@ -328,6 +329,8 @@ app.use('/api/auth', authLimiter, authRoutes);
 // RAKAY handles its own 3-tier auth: JWT | RAKAY service key | demo token
 // Do NOT move below app.use(verifyToken) — the global JWT guard blocks demo auth.
 app.use('/api/RAKAY', rakayRoutes);
+// ── v6.1 SOC Intelligence API (no JWT required — uses RAKAY demo auth) ──────
+app.use('/api/soc', socIntelRoutes);
 
 // ════════════════════════════════════════════════════════════════
 //  PROTECTED ROUTES — JWT required
