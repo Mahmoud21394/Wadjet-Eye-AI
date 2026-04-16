@@ -35,6 +35,13 @@ const crypto                  = require('crypto');
 const ResponseProcessor       = require('./response-processor');
 const MITREEnricher           = require('./mitre-enricher');
 
+// ── Hybrid Intelligence Fallback modules ──────────────────────────────────────
+let _detectionEngine, _intelDB, _correlator, _simulator;
+try { _detectionEngine = require('./detection-engine').defaultEngine; } catch(e) { _detectionEngine = null; }
+try { _intelDB         = require('./intel-db').defaultDB;              } catch(e) { _intelDB = null; }
+try { _correlator      = require('./threat-correlation').defaultCorrelator; } catch(e) { _correlator = null; }
+try { _simulator       = require('./incident-simulator').defaultSimulator;  } catch(e) { _simulator = null; }
+
 // ── Constants ──────────────────────────────────────────────────────────────────
 const MAX_TOOL_ITERATIONS  = 5;
 const CONTEXT_WINDOW_MSGS  = 20;
@@ -536,7 +543,20 @@ class RAKAYEngine {
 
     } catch (err) {
       const latency = Date.now() - startTime;
-      console.error(`[RAKAYEngine] CHAT_ERROR session=${shortSid} latency=${latency}ms — ${err.message}`);
+      console.warn(`[RAKAYEngine] CHAT_ERROR — using hybrid fallback. session=${shortSid} latency=${latency}ms — ${err.message}`);
+      // ── Hybrid Intelligence Fallback ────────────────────────────────────────
+      const fallbackText = _hybridFallback(message);
+      if (fallbackText) {
+        const fallbackProcessed = ResponseProcessor.process(fallbackText, { degraded: true });
+        return {
+          id: `fallback_${Date.now()}`, session_id: sessionId,
+          content: fallbackProcessed, reply: fallbackProcessed,
+          role: 'assistant', tool_trace: [], tokens_used: 0,
+          model: 'local-intel', provider: 'hybrid-fallback',
+          latency_ms: Date.now() - startTime,
+          created_at: new Date().toISOString(), degraded: true,
+        };
+      }
       throw err;
     }
   }
@@ -702,9 +722,23 @@ class RAKAYEngine {
     } catch (err) {
       // TASK 5: Remove pending entry so next retry triggers a real call
       this._msgIdCache.delete(msgId);
-      console.error(`[RAKAYEngine] STREAM_ERROR session=${shortSid} msgId=${shortMsgId} — ${err.message}`);
-      if (onError) onError(err);
-      throw err;
+      console.warn(`[RAKAYEngine] STREAM_ERROR — using hybrid fallback. session=${shortSid} msgId=${shortMsgId} — ${err.message}`);
+      // ── Hybrid Intelligence Fallback ────────────────────────────────────────
+      const fallbackText = _hybridFallback(message);
+      const fallbackFinal = fallbackText
+        ? ResponseProcessor.process(fallbackText, { degraded: true })
+        : '⚠️ Using built-in threat intelligence\n\nUnable to process your request with AI at this time. Please check RAKAY configuration.';
+      if (onChunk) onChunk(fallbackFinal);
+      const fallbackResult = {
+        id: `fallback_${Date.now()}`, message_id: msgId, session_id: sessionId,
+        content: fallbackFinal, reply: fallbackFinal,
+        role: 'assistant', tool_trace: [], tokens_used: 0,
+        model: 'local-intel', provider: 'hybrid-fallback',
+        latency_ms: Date.now() - startTime,
+        created_at: new Date().toISOString(), degraded: true,
+      };
+      if (onDone) onDone(fallbackResult);
+      return fallbackResult;
     }
   }
 
@@ -781,7 +815,176 @@ function _generateTitle(message) {
   return title.length > 50 ? title.slice(0, 50) + '…' : (title || 'Chat');
 }
 
-// ── Singleton engine instance ────────────────────────────────────────────────
+// ── Hybrid Intelligence Fallback ──────────────────────────────────────────────
+//  Called when ALL LLM providers fail. Uses local DetectionEngine,
+//  IntelDB, CorrelationEngine, and SimulationEngine to still deliver value.
+//  Returns null if no local data found for the query.
+// ─────────────────────────────────────────────────────────────────────────────
+function _hybridFallback(message) {
+  if (!message) return null;
+  const s = message.toLowerCase();
+
+  try {
+    // ── CVE query ──────────────────────────────────────────────────────────
+    const cveMatch = message.match(/CVE-\d{4}-\d+/i);
+    if (cveMatch && _intelDB) {
+      const cveId = cveMatch[0].toUpperCase();
+      const formatted = _intelDB.formatCVEForSOC(cveId);
+      if (!formatted.startsWith('No local data')) {
+        return `⚠️ Using built-in threat intelligence\n\n${formatted}`;
+      }
+    }
+
+    // ── MITRE lookup ───────────────────────────────────────────────────────
+    const mitreMatch = message.match(/T\d{4}(?:\.\d{3})?/i);
+    if (mitreMatch && _intelDB) {
+      const techId = mitreMatch[0].toUpperCase();
+      // Detection rules
+      if (_detectionEngine) {
+        const info = _detectionEngine.getTechniqueInfo(techId);
+        if (info) {
+          const formatted = _detectionEngine.formatSOCResponse(techId);
+          return `⚠️ Using built-in threat intelligence\n\n${formatted}`;
+        }
+      }
+      // MITRE DB lookup
+      const formatted = _intelDB.formatMITREForSOC(techId);
+      if (!formatted.startsWith('No local data')) {
+        return `⚠️ Using built-in threat intelligence\n\n${formatted}`;
+      }
+    }
+
+    // ── Sigma generation ───────────────────────────────────────────────────
+    if (_detectionEngine && (s.includes('sigma') || s.includes('detection rule') || s.includes('generate rule'))) {
+      // Try to extract technique from message
+      const techId = (message.match(/T\d{4}(?:\.\d{3})?/i) || [])[0];
+      const technique = techId ? techId.toUpperCase() : 'T1059.001';
+      const sigma = _detectionEngine.generateSigma(technique);
+      const kql   = _detectionEngine.generateKQL(technique);
+      if (sigma && !sigma.found === false) {
+        return `⚠️ Using built-in threat intelligence
+
+## Overview
+Detection rules generated locally for **${sigma.name}** (${sigma.technique}).
+
+## Detection Guidance
+
+### Sigma Rule
+\`\`\`yaml
+${sigma.content}
+\`\`\`
+
+### KQL — Microsoft Sentinel
+\`\`\`kql
+${kql.content}
+\`\`\`
+
+## Analyst Tip
+${sigma.metadata.analystNote}`;
+      }
+    }
+
+    // ── KQL generation ─────────────────────────────────────────────────────
+    if (_detectionEngine && (s.includes('kql') || s.includes('sentinel') || s.includes('defender query'))) {
+      const techId = (message.match(/T\d{4}(?:\.\d{3})?/i) || [])[0];
+      const technique = techId ? techId.toUpperCase() : 'T1059.001';
+      const kql = _detectionEngine.generateKQL(technique);
+      if (kql && !kql.found === false) {
+        return `⚠️ Using built-in threat intelligence
+
+## Overview
+KQL query generated locally for **${kql.name}** (${kql.technique}) — ${kql.siem}.
+
+## Detection Guidance
+
+### KQL Query
+\`\`\`kql
+${kql.content}
+\`\`\`
+
+## Analyst Tip
+${kql.metadata.analystNote}`;
+      }
+    }
+
+    // ── Ransomware / simulate ──────────────────────────────────────────────
+    if (s.includes('ransom') || s.includes('simulate') || s.includes('attack chain') || s.includes('incident')) {
+      if (_simulator) {
+        const scenario = s.includes('apt') ? 'apt espionage' :
+                        s.includes('phish') ? 'phishing' :
+                        s.includes('supply') ? 'supply chain' : 'ransomware';
+        const result = _simulator.simulate(scenario);
+        return `⚠️ Using built-in threat intelligence\n\n${_simulator.formatForSOC(result)}`;
+      }
+    }
+
+    // ── Latest CVEs ────────────────────────────────────────────────────────
+    if (_intelDB && (s.includes('latest') || s.includes('critical cve') || s.includes('exploited') || s.includes('recent vuln'))) {
+      const cves = _intelDB.getLatestCritical(8);
+      const lines = cves.map(c =>
+        `| ${c.id} | ${c.vendor} | CVSS ${c.cvss_score} | ${c.exploited ? '🔴 Exploited' : '🟡 No ITW'} | ${c.published_date} |`
+      );
+      return `⚠️ Using built-in threat intelligence
+
+## Overview
+**Latest Critical CVEs** from local intelligence database.
+
+## Why It Matters
+These critical vulnerabilities require immediate attention. Exploited-in-the-wild CVEs have the highest risk priority.
+
+## Detection Guidance
+
+| CVE ID | Vendor | CVSS | Status | Published |
+|--------|--------|------|--------|-----------|
+${lines.join('\n')}
+
+## Mitigation
+Apply vendor patches immediately for exploited CVEs. Monitor [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) for timeline.
+
+## Analyst Tip
+Sort remediation by: (1) Exploited-in-wild, (2) CVSS ≥9.0, (3) Public-facing systems first.`;
+    }
+
+    // ── PowerShell specific ────────────────────────────────────────────────
+    if (_detectionEngine && (s.includes('powershell') || s.includes('ps1') || s.includes('encoded'))) {
+      const all = _detectionEngine.generateAll('T1059.001');
+      if (all.sigma) {
+        return `⚠️ Using built-in threat intelligence
+
+${_detectionEngine.formatSOCResponse('T1059.001')}`;
+      }
+    }
+
+    // ── Generic MITRE/threat search ────────────────────────────────────────
+    if (_intelDB) {
+      const kw = s.replace(/[^a-z0-9 ]/g, '').split(' ').filter(w => w.length > 4).join(' ');
+      if (kw) {
+        const techs = _intelDB.searchMITRE({ keyword: kw, limit: 3 });
+        const cves  = _intelDB.searchCVEs({ keyword: kw, limit: 3 });
+        if (techs.length || cves.length) {
+          const lines = [];
+          if (techs.length) {
+            lines.push('## Overview\n**Related MITRE Techniques**:');
+            techs.forEach(t => lines.push(`- **${t.id}** — ${t.name} (${t.tactic})`));
+          }
+          if (cves.length) {
+            lines.push('\n**Related CVEs**:');
+            cves.forEach(c => lines.push(`- **${c.id}** — CVSS ${c.cvss_score} ${c.exploited?'🔴 Exploited ITW':''}`));
+          }
+          lines.push('\n## Analyst Tip\nUse ATT&CK Navigator for coverage analysis. Query NVD for full CVE details.');
+          return `⚠️ Using built-in threat intelligence\n\n${lines.join('\n')}`;
+        }
+      }
+    }
+
+  } catch (fallbackErr) {
+    console.warn(`[RAKAYEngine] Hybrid fallback error: ${fallbackErr.message}`);
+  }
+
+  return null; // No local match found — caller will handle
+}
+
+// ── Singleton engine instance ─────────────────────────────────────────────────
 const defaultEngine = new RAKAYEngine({ provider: 'multi' });
 
 module.exports = {
