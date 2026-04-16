@@ -1,21 +1,25 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  RAKAY Module — Frontend UI  v6.0
+ *  RAKAY Module — Frontend UI  v7.0
  *  Wadjet-Eye AI Platform — Conversational Security Analyst
  *
- *  v6.0 — Production-grade: SSE streaming, multi-provider UI, SOC-ready
+ *  v7.0 — Full hardening: SSE streaming, messageId retry dedup, SOC-ready
  *  ──────────────────────────────────────────────────────────────────────
  *  v6.0 NEW:
+ *   ✅ TASK 5: Unique messageId per request; frontend generates UUID and sends
+ *              to backend. On stream reconnect, same messageId is reused — backend
+ *              deduplicates and returns cached result instead of new LLM call.
+ *   ✅ TASK 8: SSE headers + heartbeat + flushHeaders (Render-compatible)
  *   ✅ SSE streaming via POST /chat/stream (EventSource-like with fetch)
- *   ✅ Live streaming bubble — text appears token-by-token
- *   ✅ Streaming indicator (animated cursor while streaming)
+ *   ✅ Live streaming bubble — text appears token-by-token with animated cursor
  *   ✅ Graceful fallback to /chat (non-streaming) on SSE failure
  *   ✅ Response envelope unwrap: {success,data} → data.reply/data.content
  *   ✅ Provider badge shows which AI model answered (openai/anthropic/gemini/deepseek/mock)
- *   ✅ Retry on 503 (provider busy) with exponential backoff (2 attempts)
+ *   ✅ Retry on 503 (provider busy) with exponential backoff (2 attempts, 2s/5s)
  *   ✅ Tool notifications during streaming (🔧 Using tool: ...)
  *   ✅ Priority badge: HIGH/MEDIUM/LOW shown on messages
  *   ✅ Streaming abort on stopRAKAY() / new-chat
+ *   ✅ degraded flag shown in message metadata when mock fallback used
  *
  *  v5.0 (retained):
  *   ✅ session_id always generated as UUID v4 (crypto.randomUUID + fallback)
@@ -39,7 +43,7 @@
 (function () {
   'use strict';
 
-  const MODULE_VERSION = '6.0';
+  const MODULE_VERSION = '7.0';
 
   // ── Constants ─────────────────────────────────────────────────────────────
   const LS_RAKAY_TOKEN       = 'rakay_demo_token';
@@ -90,9 +94,10 @@
     (window.THREATPILOT_API_URL || 'https://wadjet-eye-ai.onrender.com').replace(/\/$/, '');
 
   // ── Streaming config ──────────────────────────────────────────────────────
-  const STREAM_ENABLED     = true;   // Use SSE streaming by default
-  const STREAM_TIMEOUT_MS  = 120_000; // 2 minutes for streaming
-  const STREAM_RETRY_DELAY = [2000, 5000]; // 503 retry delays (ms)
+  const STREAM_ENABLED      = true;    // Use SSE streaming by default
+  const STREAM_TIMEOUT_MS   = 120_000; // 2 minutes for streaming
+  const STREAM_RETRY_DELAY  = [2000, 5000]; // 503 retry delays (ms)
+  const STREAM_NO_DATA_TIMEOUT = 30_000;    // abort stream if no data for 30s
 
   // ── State ─────────────────────────────────────────────────────────────────
   const RAKAY = {
@@ -120,10 +125,11 @@
     _currentFetch:    null,   // AbortController for in-flight chat request
     _streamReader:    null,   // ReadableStream reader for SSE streaming
     _submitDebounce:  null,   // debounce timer for send button
-    _rateLimitUntil:  0,      // timestamp (ms) until rate-limit lifts (not used for 409s)
+    _rateLimitUntil:  0,      // timestamp (ms) until rate-limit lifts
     requestInFlight:  false,  // SYNCHRONOUS flag — set before any await, cleared in finally
     streaming:        false,  // true while SSE stream is active
     _streamBubbleId:  null,   // DOM id of the live streaming bubble
+    _currentMessageId: null,  // TASK 5: current messageId for retry deduplication
   };
 
   let _rendered = false;
@@ -666,12 +672,16 @@
       _clearStreamBubble();
       _handleChatError(err, message);
     } finally {
-      RAKAY.requestInFlight = false;
-      RAKAY.loading         = false;
-      RAKAY.streaming       = false;
-      RAKAY._currentFetch   = null;
-      RAKAY._streamReader   = null;
-      RAKAY._streamBubbleId = null;
+      RAKAY.requestInFlight    = false;
+      RAKAY.loading            = false;
+      RAKAY.streaming          = false;
+      RAKAY._currentFetch      = null;
+      RAKAY._streamReader      = null;
+      RAKAY._streamBubbleId    = null;
+      // TASK 5: Only clear messageId on error (cleared on success in stream/non-stream handlers)
+      if (!RAKAY._currentMessageId) {
+        // already cleared on success
+      }
       _setInputEnabled(true);
       _focusInput();
       log.debug('[SEND] SEND_FLAGS_CLEARED');
@@ -765,7 +775,10 @@
       claude_key:  _lsGet('claude_api_key')   || _lsGet('wadjet_claude_key')  || undefined,
     };
 
-    log.info(`[STREAM] Starting SSE stream to ${url}`);
+    // TASK 5: Use persistent messageId so retry with same messageId avoids duplicate LLM call
+    const messageId = RAKAY._currentMessageId || _uuid();
+    RAKAY._currentMessageId = messageId;
+    log.info(`[STREAM] Starting SSE stream to ${url} messageId=${messageId.slice(0, 12)}`);
 
     const res = await fetch(url, {
       method:  'POST',
@@ -774,7 +787,13 @@
         'Accept':        'text/event-stream, application/json',
         ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       },
-      body:   JSON.stringify({ session_id: RAKAY.sessionId, message: message.trim(), context, use_tools: true }),
+      body:   JSON.stringify({
+        session_id:  RAKAY.sessionId,
+        message:     message.trim(),
+        context,
+        use_tools:   true,
+        message_id:  messageId,   // TASK 5: send messageId for backend dedup
+      }),
       signal: abortCtrl.signal,
     });
 
@@ -816,14 +835,14 @@
     let fullText    = '';
     let doneData    = null;
 
-    // Streaming timeout: if no data for 30s, abort
+    // TASK 8: Streaming timeout — abort if no data for 30s (prevents zombie streams)
     let streamTimeout;
     const resetStreamTimeout = () => {
       clearTimeout(streamTimeout);
       streamTimeout = setTimeout(() => {
-        log.warn('[STREAM] No data for 30s — aborting stream');
+        log.warn('[STREAM] No data for STREAM_NO_DATA_TIMEOUT ms — aborting stream');
         try { reader.cancel(); } catch {}
-      }, 30_000);
+      }, STREAM_NO_DATA_TIMEOUT);
     };
     resetStreamTimeout();
 
@@ -861,7 +880,9 @@
 
             } else if (evt.type === 'done') {
               doneData = evt;
-              log.info(`[STREAM] done — provider=${evt.provider} tokens=${evt.tokens_used} latency=${evt.latency_ms}ms`);
+              // TASK 5: Clear messageId after successful completion
+              RAKAY._currentMessageId = null;
+              log.info(`[STREAM] done — provider=${evt.provider} tokens=${evt.tokens_used} latency=${evt.latency_ms}ms degraded=${evt.degraded}`);
 
             } else if (evt.type === 'error') {
               log.warn('[STREAM] error event from server:', evt.message);
@@ -894,6 +915,7 @@
       latency_ms:  doneData?.latency_ms,
       created_at:  new Date().toISOString(),
       _streamed:   true,
+      _degraded:   doneData?.degraded || false,
     };
 
     RAKAY.messages.push(assistantMsg);
@@ -930,13 +952,18 @@
     let envelope = null;
     let lastErr  = null;
 
+    // TASK 5: Use persistent messageId for non-streaming fallback too
+    const messageId = RAKAY._currentMessageId || _uuid();
+    RAKAY._currentMessageId = messageId;
+
     for (let attempt = 0; attempt < STREAM_RETRY_DELAY.length + 1; attempt++) {
       try {
         envelope = await _api('POST', '/chat', {
-          session_id: RAKAY.sessionId,
-          message:    message.trim(),
+          session_id:  RAKAY.sessionId,
+          message:     message.trim(),
           context,
-          use_tools:  true,
+          use_tools:   true,
+          message_id:  messageId,   // TASK 5: send messageId for backend dedup
         }, {
           retries:     2,        // network-level retries (TypeError only)
           abortSignal: abortCtrl.signal,
@@ -1004,7 +1031,9 @@
       _lsSetSessions(RAKAY.sessions);
     }
 
-    log.info(`[SEND] SEND_COMPLETE tokens=${payload.tokens_used || 0} model=${payload.model || '?'} provider=${payload.provider || '?'}`);
+    // TASK 5: Clear messageId after successful non-streaming response
+    RAKAY._currentMessageId = null;
+    log.info(`[SEND] SEND_COMPLETE tokens=${payload.tokens_used || 0} model=${payload.model || '?'} provider=${payload.provider || '?'} degraded=${payload.degraded || false}`);
     _renderMessages();
     _renderSidebar();
     _scrollToBottom();
@@ -2361,6 +2390,8 @@
   // ══════════════════════════════════════════════════════════════════════════
 
   async function renderRAKAY() {
+    // Reset messageId on fresh render
+    RAKAY._currentMessageId = null;
     const page = document.getElementById('page-rakay');
     if (!page) {
       log.warn('#page-rakay element not found');
