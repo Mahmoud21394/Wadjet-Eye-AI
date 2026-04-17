@@ -22,6 +22,11 @@
 require('dotenv').config();
 
 // ── Validate required environment variables on startup ───────────
+// ROOT-CAUSE FIX: Do NOT exit on missing Supabase/env vars in dev/CI.
+// A hard process.exit(1) here prevents the AI router from ever loading,
+// which causes the "stuck in Local Intelligence Mode" symptom even when
+// API keys ARE set.  We now warn loudly but continue so that the AI
+// routes (and their startup diagnostics) execute and are reachable.
 const REQUIRED_ENV = [
   'SUPABASE_URL',
   'SUPABASE_SERVICE_KEY',
@@ -29,9 +34,10 @@ const REQUIRED_ENV = [
 ];
 const missingEnv = REQUIRED_ENV.filter(k => !process.env[k]);
 if (missingEnv.length > 0) {
-  console.error(`\n❌ [Server] Missing required environment variables:\n   ${missingEnv.join(', ')}`);
-  console.error('   Copy backend/.env.example → backend/.env and fill in your values.\n');
-  process.exit(1);
+  console.warn(`\n⚠️  [Server] Missing recommended environment variables:\n   ${missingEnv.join(', ')}`);
+  console.warn('   DB-dependent routes may fail.  AI routes will still work if AI keys are set.');
+  console.warn('   Copy backend/.env.example → backend/.env and fill in your values.\n');
+  // NOTE: was process.exit(1) — removed so AI Router can start even without Supabase.
 }
 
 // ── Core imports (after env validation) ──────────────────────────
@@ -332,6 +338,43 @@ app.use('/api/RAKAY', rakayRoutes);
 // ── v6.1 SOC Intelligence API (no JWT required — uses RAKAY demo auth) ──────
 app.use('/api/soc', socIntelRoutes);
 
+// ── v7.0 Specific public GET endpoints (no JWT required) ─────────────────────
+// These MUST be registered BEFORE app.use(verifyToken).
+// /api/rbac/health  — returns platform role schema (no sensitive data)
+app.get('/api/rbac/health', (req, res) => {
+  const roles = [
+    { id: 'super_admin', name: 'Super Admin',       slug: 'super_admin', level: 10, color: '#ef4444' },
+    { id: 'admin',       name: 'Admin',             slug: 'admin',       level: 9,  color: '#f97316' },
+    { id: 'soc_l3',      name: 'SOC Analyst L3',    slug: 'soc_l3',      level: 7,  color: '#dc2626' },
+    { id: 'soc_l2',      name: 'SOC Analyst L2',    slug: 'soc_l2',      level: 6,  color: '#3b82f6' },
+    { id: 'soc_l1',      name: 'SOC Analyst L1',    slug: 'soc_l1',      level: 5,  color: '#22d3ee' },
+    { id: 'ir',          name: 'Incident Responder', slug: 'ir',          level: 7,  color: '#7c3aed' },
+    { id: 'threat_hunter', name: 'Threat Hunter',   slug: 'threat_hunter', level: 7, color: '#10b981' },
+    { id: 'viewer',      name: 'Viewer (Read-Only)', slug: 'viewer',      level: 1,  color: '#6b7280' },
+  ];
+  const permissions = ['read','write','delete','export','investigate','hunt','build_detections','contain','manage_users','manage_roles','manage_settings'];
+  const modules = ['dashboard','alerts','iocs','cases','reports','users','settings','collectors',
+                   'threat-hunting','detection-engineering','playbooks','mitre-attack','forensics',
+                   'threat-intel','vulnerabilities','exposure','soar','ai','news','rbac'];
+  res.json({
+    status:          'operational',
+    roles,
+    roleCount:       roles.length,
+    permissions,
+    permissionCount: permissions.length,
+    moduleCount:     modules.length,
+    modules,
+    schemaVersion:   '3.0',
+    timestamp:       new Date().toISOString(),
+  });
+});
+
+// /api/news — Cyber News is public (no user-specific data in news articles).
+// Registered before verifyToken so unauthenticated clients (demo mode, public
+// dashboard) can read news. The POST /ingest endpoint inside newsRoutes does its
+// own role-check, so it's safe to expose the whole router publicly.
+app.use('/api/news', newsRoutes);
+
 // ════════════════════════════════════════════════════════════════
 //  PROTECTED ROUTES — JWT required
 //  verifyToken attaches req.user + req.tenantId to every request
@@ -360,7 +403,8 @@ app.use('/api/ai',        aiRoutes);
 app.use('/api/ingest',    ingestRoutes);
 app.use('/api/settings',  settingsRoutes);
 // ── v5.2 New Routes ───────────────────────────────────────────────
-app.use('/api/news',           newsRoutes);
+// NOTE: /api/news is mounted BEFORE verifyToken (see PUBLIC ROUTES section above)
+//       so it is accessible without JWT.  Do NOT re-mount here.
 // ── v5.3 New Routes ───────────────────────────────────────────────
 app.use('/api/threat-actors',  threatActorRoutes);
 app.use('/api/cve',            cveIntelRoutes);

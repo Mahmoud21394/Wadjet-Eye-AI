@@ -152,7 +152,23 @@
       if (data.articles && Array.isArray(data.articles) && data.articles.length > 0) {
         _articles  = data.articles;
         _lastFetch = new Date();
-        console.info(`[CyberNews] ✅ Loaded ${_articles.length} articles from API (categories: ${[...new Set(_articles.map(a=>a.category))].join(', ')})`);
+
+        // ROOT-CAUSE DEBUG: Log per-category distribution received from backend.
+        // This confirms the API is returning articles with correct category values
+        // BEFORE the frontend filter is applied.
+        const catCounts = {};
+        _articles.forEach(a => { catCounts[a.category] = (catCounts[a.category] || 0) + 1; });
+        const catSummary = Object.entries(catCounts).map(([c,n])=>`${c}:${n}`).join(' | ');
+        console.info(`[CyberNews] ✅ Loaded ${_articles.length} articles from API`);
+        console.info(`[CyberNews] Category distribution: ${catSummary}`);
+
+        // Validate: warn if any expected category has 0 articles
+        Object.keys(CAT_META).filter(c => c !== 'all').forEach(cat => {
+          const count = _articles.filter(a => a.category === cat).length;
+          if (count === 0) {
+            console.warn(`[CyberNews] ⚠️ Category '${cat}' has 0 articles — tab will show empty state`);
+          }
+        });
 
         // Also fetch stats
         _loadFeedStats(baseUrl, headers);
@@ -240,8 +256,11 @@
       btn.addEventListener('click', () => {
         document.querySelectorAll('.cn-tab').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
+        const prevCat = _activeCategory;
         _activeCategory = btn.dataset.cat || 'all';
         _applyFilters(true);   // reset to page 1 on tab switch
+        // ROOT-CAUSE DEBUG: log tab switch with before/after article counts
+        console.info(`[CyberNews] Tab switch: '${prevCat}' → '${_activeCategory}' | filtered: ${_filtered.length} / total: ${_articles.length}`);
         _renderGrid();
       });
     });
@@ -820,6 +839,66 @@
   window.cyberNewsCloseDetail  = _closeDetail;
   window.cyberNewsExtractIOCs  = _extractIOCs;
   window.cyberNewsCreateCase   = _createCase;
+
+  // ─── Debug Mode ───────────────────────────────────────────────────
+  // window.cyberNewsDebug() — call from browser console to inspect state
+  // Logs: total articles, per-category counts, filter state, pagination,
+  // visible article count, and a per-tab breakdown with sample titles.
+  window.cyberNewsDebug = function() {
+    const catCounts = {};
+    _articles.forEach(a => { catCounts[a.category] = (catCounts[a.category] || 0) + 1; });
+
+    const tabBreakdown = {};
+    Object.keys(CAT_META).filter(c => c !== 'all').forEach(cat => {
+      const items = _articles.filter(a => a.category === cat);
+      tabBreakdown[cat] = {
+        count: items.length,
+        samples: items.slice(0, 3).map(a => `[${a.severity?.toUpperCase()}] ${a.title?.slice(0, 70)}`),
+      };
+    });
+
+    const report = {
+      totalArticles:    _articles.length,
+      filteredArticles: _filtered.length,
+      visibleCount:     _visibleCount,
+      activeCategory:   _activeCategory,
+      activeSeverity:   _activeSeverity,
+      searchQuery:      _searchQuery,
+      lastFetch:        _lastFetch?.toISOString() || null,
+      isLoading:        _loading,
+      perCategoryCounts: catCounts,
+      tabBreakdown,
+      fallbackActive:   _articles.length > 0 && _articles[0]?.id?.startsWith('F'),
+    };
+
+    console.group('[CyberNews] 🔍 Debug Report');
+    console.table(Object.entries(catCounts).map(([cat, count]) => ({ category: cat, count })));
+    console.log('Full state:', report);
+    Object.entries(tabBreakdown).forEach(([cat, data]) => {
+      if (data.count > 0) {
+        console.group(`📂 ${cat} (${data.count} articles)`);
+        data.samples.forEach(s => console.log('  •', s));
+        console.groupEnd();
+      } else {
+        console.warn(`📂 ${cat} — ⚠️ EMPTY (0 articles)`);
+      }
+    });
+    console.groupEnd();
+
+    return report;
+  };
+
+  // Also expose a force-refresh function for debugging
+  window.cyberNewsForceRefresh = async function() {
+    console.info('[CyberNews] Force refresh triggered from debug console');
+    _articles = [];
+    _loading  = false;
+    await _loadArticles();
+    _applyFilters();
+    _renderGrid();
+    console.info('[CyberNews] Force refresh complete');
+    return window.cyberNewsDebug();
+  };
 
   // Cleanup when navigating away
   window.addEventListener('beforeunload', _clearAutoRefresh);

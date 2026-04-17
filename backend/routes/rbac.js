@@ -207,6 +207,21 @@ async function _auditRBACChange(userId, tenantId, action, resource, details) {
 //  ROUTES
 // ─────────────────────────────────────────────────────────────────────
 
+/* ── GET /api/rbac/health — Public health/status endpoint (no auth required) ──
+   Returns the default role schema, all permissions, and all modules.
+   Useful for testing RBAC availability and for the frontend to pre-load
+   role metadata before the user authenticates.                              */
+router.get('/health', asyncHandler(async (req, res) => {
+  res.json({
+    status:       'operational',
+    roles:        DEFAULT_ROLES.map(r => ({ id: r.id, name: r.name, slug: r.slug, level: r.level, color: r.color })),
+    permissions:  Object.keys(ALL_PERMISSIONS),
+    modules:      ALL_MODULES,
+    schemaVersion: '3.0',
+    timestamp:    new Date().toISOString(),
+  });
+}));
+
 /* ── GET /api/rbac/roles ── */
 router.get('/roles', verifyToken, asyncHandler(async (req, res) => {
   const tenantId = req.tenantId || req.user?.tenant_id;
@@ -504,12 +519,13 @@ router.get('/audit-log', verifyToken, asyncHandler(async (req, res) => {
   const offset = (parseInt(page) - 1) * parseInt(limit);
 
   if (!supabase) {
-    // Return sample audit log
+    // Return sample audit log using Shape A field names (consistent with Supabase DB format)
+    // Shape A: { id, user_name, action, resource, details, created_at, ip, severity }
     return res.json({
       events: [
-        { id: 'AL001', user: 'Admin',   action: 'RBAC_CREATE_ROLE',  resource: 'roles',  detail: 'Created role SOC L3',    timestamp: new Date(Date.now() - 60000).toISOString(),  severity: 'info' },
-        { id: 'AL002', user: 'Admin',   action: 'RBAC_ASSIGN_ROLE',  resource: 'users',  detail: 'Assigned ANALYST to user@company.com', timestamp: new Date(Date.now() - 120000).toISOString(), severity: 'warning' },
-        { id: 'AL003', user: 'System',  action: 'RBAC_DELETE_ROLE',  resource: 'roles',  detail: 'Deleted custom role',    timestamp: new Date(Date.now() - 180000).toISOString(), severity: 'error' },
+        { id: 'AL001', user_name: 'Admin',   action: 'RBAC_CREATE_ROLE',  resource: 'roles',  details: { info: 'Created role SOC L3' },           created_at: new Date(Date.now() - 60000).toISOString(),  ip: '127.0.0.1', severity: 'info' },
+        { id: 'AL002', user_name: 'Admin',   action: 'RBAC_ASSIGN_ROLE',  resource: 'users',  details: { info: 'Assigned ANALYST to user@company.com' }, created_at: new Date(Date.now() - 120000).toISOString(), ip: '127.0.0.1', severity: 'warning' },
+        { id: 'AL003', user_name: 'System',  action: 'RBAC_DELETE_ROLE',  resource: 'roles',  details: { info: 'Deleted custom role' },             created_at: new Date(Date.now() - 180000).toISOString(), ip: '0.0.0.0',   severity: 'error' },
       ],
       total: 3, page: 1, limit: 50,
     });

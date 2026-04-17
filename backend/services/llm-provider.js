@@ -415,6 +415,9 @@ class OpenAIProvider extends BaseProvider {
   }
 
   async chat(messages, tools = [], opts = {}) {
+    // ROOT-CAUSE FIX: Re-read key from process.env at call-time so that keys
+    // injected via Render Dashboard (after module load) are always picked up.
+    this.apiKey = this.apiKey || process.env.OPENAI_API_KEY || process.env.RAKAY_OPENAI_KEY || '';
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:openai'), { circuitOpen: true });
     if (!this.apiKey)     throw new Error('OpenAI API key not configured');
 
@@ -717,6 +720,13 @@ class AnthropicProvider extends BaseProvider {
   }
 
   async chat(messages, tools = [], opts = {}) {
+    // ROOT-CAUSE FIX: Re-read key at call-time for runtime-injected secrets
+    this.apiKey = this.apiKey
+      || process.env.CLAUDE_API_KEY
+      || process.env.ANTHROPIC_API_KEY
+      || process.env.RAKAY_ANTHROPIC_KEY
+      || process.env.RAKAY_API_KEY
+      || '';
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:anthropic'), { circuitOpen: true });
     if (!this.apiKey)     throw new Error('Anthropic API key not configured');
 
@@ -819,6 +829,8 @@ class DeepSeekProvider extends BaseProvider {
   _headers() { return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` }; }
 
   async chat(messages, tools = [], opts = {}) {
+    // ROOT-CAUSE FIX: Re-read key at call-time for runtime-injected secrets
+    this.apiKey = this.apiKey || process.env.DEEPSEEK_API_KEY || process.env.deepseek_API_KEY || '';
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:deepseek'), { circuitOpen: true });
     if (!this.apiKey)     throw new Error('DeepSeek API key not configured');
 
@@ -917,6 +929,8 @@ class GeminiProvider extends BaseProvider {
   }
 
   async chat(messages, tools = [], opts = {}) {
+    // ROOT-CAUSE FIX: Re-read key at call-time for runtime-injected secrets
+    this.apiKey = this.apiKey || process.env.GEMINI_API_KEY || '';
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:gemini'), { circuitOpen: true });
     if (!this.apiKey)     throw new Error('Gemini API key not configured');
 

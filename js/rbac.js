@@ -695,17 +695,43 @@ async function loadRBACUsersFromAPI() {
 async function loadRBACAuditLogFromAPI() {
   try {
     const data = await _rbacFetch('GET', '/audit-log');
-    if (data && data.logs && data.logs.length) {
-      RBAC_STORE.audit_log = data.logs.map(l => ({
-        id:       l.id,
-        user:     l.user_name || l.user_email || 'System',
-        action:   (l.action || '').replace('RBAC_', ''),
-        resource: l.resource || '',
-        detail:   l.details ? JSON.stringify(l.details) : '',
-        time:     l.created_at ? _rbacTimeAgo(new Date(l.created_at)) : 'unknown',
-        ip:       l.ip || '0.0.0.0',
-        severity: l.severity || 'info',
-      }));
+    // ROOT-CAUSE FIX — Field mapping for two data shapes:
+    //
+    //  Shape A (Supabase DB rows):
+    //    { id, user_id, user_name, user_email, action, resource,
+    //      details (JSON object), created_at (ISO string), ip, severity }
+    //
+    //  Shape B (sample/fallback data returned when Supabase is unavailable):
+    //    { id, user (string), action, resource, detail (string),
+    //      timestamp (ISO string), severity }
+    //
+    //  Previous code only handled Shape A, so Shape B data appeared as
+    //  "System" user with "unknown" time (all fields resolved to undefined).
+    //  This fix handles BOTH shapes with explicit fallback chains.
+    const logEntries = data.events || data.logs || data.data || [];
+    if (logEntries.length) {
+      RBAC_STORE.audit_log = logEntries.map(l => {
+        // User: Shape A uses user_name/user_email; Shape B uses user directly
+        const userField = l.user_name || l.user_email || l.user || 'System';
+        // Detail: Shape A uses details (object); Shape B uses detail (string)
+        const detailField = l.details
+          ? (typeof l.details === 'object' ? JSON.stringify(l.details) : l.details)
+          : (l.detail || '');
+        // Timestamp: Shape A uses created_at; Shape B uses timestamp
+        const tsField = l.created_at || l.timestamp || null;
+        const timeDisplay = tsField ? _rbacTimeAgo(new Date(tsField)) : 'unknown';
+
+        return {
+          id:       l.id,
+          user:     userField,
+          action:   (l.action || '').replace('RBAC_', ''),
+          resource: l.resource || '',
+          detail:   detailField,
+          time:     timeDisplay,
+          ip:       l.ip || '0.0.0.0',
+          severity: l.severity || 'info',
+        };
+      });
       console.info('[RBAC] Loaded', RBAC_STORE.audit_log.length, 'audit events from API');
     }
   } catch (_) {}
@@ -856,15 +882,23 @@ async function toggleUserStatus(userId) {
 }
 
 /* ─── Enhanced renderRBACAdmin — loads from API first ──────── */
-// ROOT-CAUSE FIX: The async override must:
-//   1. Show a skeleton loader immediately (tab never appears empty)
-//   2. Load API data in parallel with a timeout
-//   3. Call the base renderRBACAdmin() which now safely falls back to local data
-//   4. Override window.renderRBACAdmin so main.js picks up the async version
+// ROOT-CAUSE FIX (RBAC not rendering):
+//   The original code set window.renderRBACAdmin = renderRBACAdminWithAPI,
+//   then called renderRBACAdmin() at the end of renderRBACAdminWithAPI.
+//   Since renderRBACAdmin resolves via window scope, this caused INFINITE
+//   RECURSION → stack overflow → RBAC tab shows skeleton loader forever.
+//
+//   Fix: save a direct reference to the synchronous base function BEFORE
+//   overriding the global, then call the saved reference (not window.*).
+
+const _renderRBACAdminSync = renderRBACAdmin;   // ← save base reference first
 
 async function renderRBACAdminWithAPI() {
   const container = document.getElementById('rbacAdminWrap');
-  if (!container) return;
+  if (!container) {
+    console.error('[RBAC] renderRBACAdminWithAPI — #rbacAdminWrap not found in DOM');
+    return;
+  }
 
   // Show skeleton loader immediately — user sees activity, not blank tab
   container.innerHTML = `
@@ -875,23 +909,56 @@ async function renderRBACAdminWithAPI() {
 
   console.info('[RBAC] renderRBACAdminWithAPI() — fetching API data...');
 
-  // Load from API in parallel (max 5 seconds before fallback to local data)
-  const timeout = ms => new Promise(r => setTimeout(r, ms));
-  await Promise.race([
-    Promise.allSettled([
-      loadRBACRolesFromAPI(),
-      loadRBACUsersFromAPI(),
-      loadRBACAuditLogFromAPI(),
-    ]),
-    timeout(5000), // never block render > 5s
-  ]);
+  // Step 1: Try public health endpoint first (no auth required) to confirm
+  // API is reachable before attempting auth-gated endpoints.
+  let apiReachable = false;
+  try {
+    const baseUrl = (typeof CONFIG !== 'undefined' && CONFIG.BACKEND_URL)
+      ? CONFIG.BACKEND_URL
+      : 'https://wadjet-eye-ai.onrender.com';
+    const healthResp = await Promise.race([
+      fetch(`${baseUrl}/api/rbac/health`, { method: 'GET' }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000)),
+    ]);
+    if (healthResp.ok) {
+      const hd = await healthResp.json();
+      apiReachable = true;
+      console.info('[RBAC] API health check ✅ —', (hd.roleCount || hd.roles?.length), 'default roles,', (hd.permissionCount || hd.permissions?.length), 'permissions');
+    }
+  } catch (e) {
+    console.warn('[RBAC] API health check failed — will use local data:', e.message);
+  }
 
-  console.info('[RBAC] API load complete — rendering with',
+  if (apiReachable) {
+    // Load from API in parallel (max 5 seconds before fallback to local data)
+    const timeout = ms => new Promise(r => setTimeout(r, ms));
+    const results = await Promise.race([
+      Promise.allSettled([
+        loadRBACRolesFromAPI(),
+        loadRBACUsersFromAPI(),
+        loadRBACAuditLogFromAPI(),
+      ]),
+      timeout(5000), // never block render > 5s
+    ]);
+
+    if (Array.isArray(results)) {
+      const [rolesR, usersR, auditR] = results;
+      if (rolesR?.status === 'rejected') console.warn('[RBAC] Roles API failed:', rolesR.reason?.message);
+      if (usersR?.status === 'rejected') console.warn('[RBAC] Users API failed:', usersR.reason?.message);
+      if (auditR?.status === 'rejected') console.warn('[RBAC] Audit log API failed:', auditR.reason?.message);
+    }
+  } else {
+    console.info('[RBAC] Using local store data (API unreachable)');
+  }
+
+  console.info('[RBAC] Rendering with',
     RBAC_STORE.roles.length, 'roles,',
-    (typeof ARGUS_DATA !== 'undefined' ? ARGUS_DATA.users?.length : 0), 'users');
+    (typeof ARGUS_DATA !== 'undefined' ? ARGUS_DATA.users?.length : 0), 'users,',
+    RBAC_STORE.audit_log.length, 'audit events');
 
-  // Render the sync page (it now has safe guards for ARGUS_DATA)
-  renderRBACAdmin();
+  // Call the SAVED synchronous reference — NOT window.renderRBACAdmin,
+  // which now points to this async function (infinite recursion prevention).
+  _renderRBACAdminSync();
 }
 
 /* Override the global renderRBACAdmin */
