@@ -221,12 +221,17 @@
   // ══════════════════════════════════════════════════════════════════════════
   function _resolveToken() {
     // 1. Platform token from various storage locations
+    //    NOTE: auth-interceptor.js writes to BOTH 'wadjet_access_token' (primary)
+    //    AND 'we_access_token' (legacy alias) for maximum compatibility.
     const platformToken =
+      (window.UnifiedTokenStore ? window.UnifiedTokenStore.getToken() : null) ||
       _lsGet('wadjet_access_token')   ||
+      _lsGet('we_access_token')        ||  // legacy alias written by auth-interceptor
       _lsGet('accessToken')            ||
       _lsGet('wadjet_token')           ||
       _lsGet('auth_token')             ||
       _lsGet('access_token')           ||
+      sessionStorage.getItem('we_access_token') ||
       sessionStorage.getItem('auth_token') ||
       null;
 
@@ -590,22 +595,42 @@
       return;
     }
 
-    // ── Layer 0: Session guard — MUST have a session before any await ───────
+    // ── Layer 0: Session guard — restore from storage before auto-generating ──
     if (!RAKAY.sessionId) {
-      RAKAY.sessionId = _uuid();
-      log.warn(`[SEND] SESSION_AUTO_GENERATED — no active session, created: ${RAKAY.sessionId.slice(0, 12)}`);
-      const autoSession = {
-        id:            RAKAY.sessionId,
-        title:         message.trim().slice(0, 60),
-        message_count: 0,
-        tokens_used:   0,
-        created_at:    new Date().toISOString(),
-        updated_at:    new Date().toISOString(),
-        _local:        true,
-      };
-      RAKAY.sessions.unshift(autoSession);
-      _lsSetSessions(RAKAY.sessions);
-      _renderSidebar();
+      // Try to recover from localStorage first
+      const savedId = _lsGet('rakay_active_session');
+      const savedSessions = _lsGetSessions();
+      const foundSession  = savedId && savedSessions.find(s => s.id === savedId);
+
+      if (foundSession) {
+        // Session existed — restore it silently
+        RAKAY.sessionId = savedId;
+        RAKAY.sessions  = savedSessions;
+        log.info(`[SEND] Restored session from storage: ${RAKAY.sessionId.slice(0, 12)}`);
+      } else if (savedSessions.length > 0) {
+        // Use most recent saved session
+        RAKAY.sessionId = savedSessions[0].id;
+        RAKAY.sessions  = savedSessions;
+        _lsSet('rakay_active_session', RAKAY.sessionId);
+        log.info(`[SEND] Restored most recent session: ${RAKAY.sessionId.slice(0, 12)}`);
+      } else {
+        // Truly no session anywhere — create one
+        RAKAY.sessionId = _uuid();
+        log.warn(`[SEND] SESSION_CREATED — no session in storage, created: ${RAKAY.sessionId.slice(0, 12)}`);
+        const autoSession = {
+          id:            RAKAY.sessionId,
+          title:         message.trim().slice(0, 60),
+          message_count: 0,
+          tokens_used:   0,
+          created_at:    new Date().toISOString(),
+          updated_at:    new Date().toISOString(),
+          _local:        true,
+        };
+        RAKAY.sessions.unshift(autoSession);
+        _lsSetSessions(RAKAY.sessions);
+        _lsSet('rakay_active_session', RAKAY.sessionId);
+        _renderSidebar();
+      }
     }
 
     // ── Layer 3: Frontend message deduplication (10s window) ───────────────
@@ -1936,6 +1961,8 @@
     const session = await _createSession();
     RAKAY.sessionId = session.id;
     RAKAY.messages  = [];
+    // Persist active session so page refresh restores the right session
+    _lsSet('rakay_active_session', RAKAY.sessionId);
     _renderSidebar();
     _renderMessages();
     _updateHeader();
@@ -1960,6 +1987,8 @@
     if (sid === RAKAY.sessionId) return;
     RAKAY.sessionId = sid;
     RAKAY.messages  = [];
+    // Persist the selection so it survives page refresh
+    _lsSet('rakay_active_session', sid);
     _renderMessages();
     _renderSidebar();
     await _loadHistory(sid);
@@ -3233,42 +3262,93 @@
     RAKAY.wsReconnectDelay = WS_BASE_DELAY_MS;
     RAKAY.wsState          = WS_STATE.DISCONNECTED;
 
-    // ── Step 1: Check backend health first (no auth needed for /health)
+    // ── Step 1: Check backend health (no auth needed) ────────────────────
     await _checkStatus();
 
-    // ── Step 2: Ensure we have a valid auth token
-    const token = await _ensureAuth();
+    // ── Step 2: WAIT FOR AUTH SYNC before resolving token ────────────────
+    //   CRITICAL FIX: Previously RAKAY called _ensureAuth() immediately,
+    //   which raced against auth-interceptor.js and found no token, then
+    //   auto-generated a demo session.
+    //   Now we await StateSync.authReady first so we get the real token.
+    let token = null;
+    if (window.StateSync) {
+      try {
+        log.info('Waiting for auth-interceptor to complete token sync…');
+        const authState = await window.StateSync.authReady;
+        if (authState?.isAuthenticated) {
+          log.info('StateSync: authenticated as', authState.user?.email || 'user');
+          // Read the already-synced token from storage
+          token = _resolveToken();
+          if (token) RAKAY.authToken = token;
+        } else {
+          log.info('StateSync: not authenticated — trying demo auth');
+          token = await _ensureAuth();
+        }
+      } catch (e) {
+        log.warn('StateSync.authReady error:', e.message, '— falling back to _ensureAuth');
+        token = await _ensureAuth();
+      }
+    } else {
+      // Fallback: no StateSync, use original flow
+      token = await _ensureAuth();
+    }
+
     if (token) {
       log.info('Auth ready. Token type:', token === 'RAKAY_DEMO_NO_JWT_LIB' ? 'demo-marker' : 'JWT');
     } else {
       log.warn('Could not obtain auth token — operating in offline mode');
     }
 
-    // ── Step 3: Update status indicator
+    // ── Step 3: Update status indicator ──────────────────────────────────
     _updateStatus();
 
-    // ── Step 4: Load sessions
+    // ── Step 4: Restore session from storage FIRST (never auto-generate) ─
+    //   CRITICAL FIX: Sessions must be loaded from localStorage BEFORE
+    //   calling _startNewChat(). If a session exists, use it.
+    //   SESSION_AUTO_GENERATED must only happen if NO session exists in
+    //   localStorage AND the backend also has no sessions.
     await _loadSessions();
 
-    if (!RAKAY.sessions.length) {
-      await _startNewChat();
-    } else {
-      RAKAY.sessionId = RAKAY.sessions[0].id;
+    // Check localStorage for an active session ID from previous render
+    const savedSessionId = _lsGet('rakay_active_session');
+    const sessionExists  = savedSessionId && RAKAY.sessions.find(s => s.id === savedSessionId);
+
+    if (sessionExists) {
+      // Restore the previously active session
+      RAKAY.sessionId = savedSessionId;
+      log.info(`Restored saved session: ${RAKAY.sessionId.slice(0, 12)}`);
       _renderSidebar();
       _updateHeader();
       await _loadHistory(RAKAY.sessionId);
       _renderMessages();
       _scrollToBottom(false);
+    } else if (RAKAY.sessions.length > 0) {
+      // Use the most recent session
+      RAKAY.sessionId = RAKAY.sessions[0].id;
+      _lsSet('rakay_active_session', RAKAY.sessionId);
+      log.info(`Using most recent session: ${RAKAY.sessionId.slice(0, 12)}`);
+      _renderSidebar();
+      _updateHeader();
+      await _loadHistory(RAKAY.sessionId);
+      _renderMessages();
+      _scrollToBottom(false);
+    } else {
+      // Truly no sessions anywhere — create one now
+      log.info('No existing sessions found — creating initial session');
+      await _startNewChat();
     }
 
     _focusInput();
 
-    // ── Step 5: Start WebSocket (if online)
+    // ── Step 5: Start WebSocket (if online, awaits StateSync.authReady) ──
     if (RAKAY.backendOnline && token) {
       _initWebSocket();
     }
 
-    // ── Step 6: Periodic status checks + timestamp refresh
+    // ── Step 6: Notify StateSync that RAKAY session is ready ─────────────
+    window.StateSync?.markSessionReady({ sessionId: RAKAY.sessionId });
+
+    // ── Step 7: Periodic status checks + timestamp refresh ───────────────
     RAKAY.statusTimer = setInterval(async () => {
       await _checkStatus();
       _renderSidebar();
