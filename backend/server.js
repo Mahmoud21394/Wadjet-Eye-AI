@@ -21,29 +21,58 @@
 // ── Load .env FIRST before any other module ─────────────────────
 require('dotenv').config();
 
-// ── Validate required environment variables on startup ───────────
-// ROOT-CAUSE FIX: Do NOT exit on missing Supabase/env vars in dev/CI.
-// A hard process.exit(1) here prevents the AI router from ever loading,
-// which causes the "stuck in Local Intelligence Mode" symptom even when
-// API keys ARE set.  We now warn loudly but continue so that the AI
-// routes (and their startup diagnostics) execute and are reachable.
-const REQUIRED_ENV = [
-  'SUPABASE_URL',
-  'SUPABASE_SERVICE_KEY',
-  'SUPABASE_ANON_KEY',
+// ── Environment validation (Phase 0+1 security hardening) ───────
+// CRITICAL env vars — fail-fast in production only:
+const CRITICAL_ENV = ['JWT_SECRET'];
+// Recommended (warn-only — AI routes work without Supabase):
+const RECOMMENDED_ENV = ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY', 'SUPABASE_ANON_KEY'];
+// AI providers — warn if ALL are absent (platform falls back to mock):
+const AI_PROVIDER_ENV = [
+  'OPENAI_API_KEY', 'CLAUDE_API_KEY', 'GEMINI_API_KEY',
+  'DEEPSEEK_API_KEY', 'RAKAY_OPENAI_KEY', 'ANTHROPIC_API_KEY',
 ];
-const missingEnv = REQUIRED_ENV.filter(k => !process.env[k]);
-if (missingEnv.length > 0) {
-  console.warn(`\n⚠️  [Server] Missing recommended environment variables:\n   ${missingEnv.join(', ')}`);
-  console.warn('   DB-dependent routes may fail.  AI routes will still work if AI keys are set.');
-  console.warn('   Copy backend/.env.example → backend/.env and fill in your values.\n');
-  // NOTE: was process.exit(1) — removed so AI Router can start even without Supabase.
+
+// Fail-fast for truly critical vars in production
+if (process.env.NODE_ENV === 'production') {
+  const missingCritical = CRITICAL_ENV.filter(k => !process.env[k]);
+  if (missingCritical.length) {
+    console.error(`\n🚨 [Server] CRITICAL: Missing required env vars in production:\n   ${missingCritical.join(', ')}`);
+    console.error('   Set these in Render Dashboard → Environment → Add Environment Variable\n');
+    process.exit(1);
+  }
 }
+
+const missingRecommended = RECOMMENDED_ENV.filter(k => !process.env[k]);
+if (missingRecommended.length > 0) {
+  console.warn(`\n⚠️  [Server] Missing recommended env vars:\n   ${missingRecommended.join(', ')}`);
+  console.warn('   DB-dependent routes may fail. AI routes work if AI keys are set.');
+  console.warn('   Copy backend/.env.example → backend/.env and fill in your values.\n');
+}
+
+const hasAnyAIKey = AI_PROVIDER_ENV.some(k => !!process.env[k]);
+if (!hasAnyAIKey) {
+  console.warn('⚠️  [Server] No AI provider keys detected. RAKAY will operate in Local Intelligence Mode.');
+  console.warn('   Set OPENAI_API_KEY, CLAUDE_API_KEY, GEMINI_API_KEY, or DEEPSEEK_API_KEY to enable external AI.');
+}
+
+// Phase 0 security audit — detect hardcoded key patterns at startup
+(function _securityAudit() {
+  const SUSPICIOUS_PATTERNS = [/sk-proj-[A-Za-z0-9_-]{20,}/, /sk-ant-api03-/, /AIzaSy[A-Za-z0-9_-]{33}/];
+  const envValues = Object.values(process.env);
+  for (const pattern of SUSPICIOUS_PATTERNS) {
+    if (envValues.some(v => pattern.test(v))) {
+      console.warn('[Security] ⚠️  AI key detected in environment — ensure these are set via secure env vars, not committed to source control.');
+      break;
+    }
+  }
+})();
 
 // ── Core imports (after env validation) ──────────────────────────
 const express        = require('express');
-const cors           = require('cors');          // ← Single declaration (was duplicated in v2.0.0)
+const cors           = require('cors');
 const helmet         = require('helmet');
+const cookieParser   = require('cookie-parser');
+const crypto         = require('crypto');
 const morgan         = require('morgan');
 const rateLimit      = require('express-rate-limit');
 const compression    = require('compression');
@@ -273,6 +302,16 @@ app.use(compression());
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
+// ── httpOnly cookie parser (Phase 1: secure token storage) ───────
+app.use(cookieParser());
+
+// ── Request ID middleware (Phase 5: observability) ───────────────
+// Assigns a unique correlation ID to every request for log tracing.
+app.use((req, _res, next) => {
+  req.id = req.headers['x-request-id'] || crypto.randomUUID();
+  next();
+});
+
 // ── Request logging ───────────────────────────────────────────────
 // In production use 'combined' (Apache-style), dev use 'dev' (colorful)
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
@@ -480,6 +519,30 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`║  Supabase:    ${(process.env.SUPABASE_URL ? 'Connected ✓' : '⚠️  Not configured').padEnd(39)}║`);
   console.log(`║  CORS:        ${allowedOrigins.join(', ').slice(0,38).padEnd(39)}║`);
   console.log('╚══════════════════════════════════════════════════════╝\n');
+
+  // ── AI Provider Key Diagnostics (startup) ─────────────────────────────────
+  const _mask = (k) => k ? k.slice(0, 12) + '...[MASKED]' : '⚠️  NOT SET';
+  const openaiKey   = process.env.OPENAI_API_KEY   || process.env.RAKAY_OPENAI_KEY   || '';
+  const claudeKey   = process.env.CLAUDE_API_KEY   || process.env.ANTHROPIC_API_KEY  || process.env.RAKAY_API_KEY || '';
+  const geminiKey   = process.env.GEMINI_API_KEY   || '';
+  const deepseekKey = process.env.DEEPSEEK_API_KEY || process.env.deepseek_API_KEY   || '';
+  const hasAny      = !!(openaiKey || claudeKey || geminiKey || deepseekKey);
+
+  console.log('┌─ AI Provider Keys (startup diagnostic) ─────────────┐');
+  console.log(`│  OPENAI_API_KEY:   ${_mask(openaiKey).padEnd(36)}│`);
+  console.log(`│  CLAUDE_API_KEY:   ${_mask(claudeKey).padEnd(36)}│`);
+  console.log(`│  GEMINI_API_KEY:   ${_mask(geminiKey).padEnd(36)}│`);
+  console.log(`│  DEEPSEEK_API_KEY: ${_mask(deepseekKey).padEnd(36)}│`);
+  console.log(`│  hasRealLLM:       ${String(hasAny).padEnd(36)}│`);
+  console.log(`│  Mode:             ${(hasAny ? 'EXTERNAL AI PROVIDERS' : '⚠️  LOCAL INTELLIGENCE ONLY').padEnd(36)}│`);
+  console.log('└──────────────────────────────────────────────────────┘');
+  if (!hasAny) {
+    console.warn('[STARTUP] ❌ NO AI provider keys detected! RAKAY will use Local Intelligence Mode for ALL requests.');
+    console.warn('[STARTUP]    Add OPENAI_API_KEY / CLAUDE_API_KEY / GEMINI_API_KEY to Render Dashboard environment.');
+    console.warn('[STARTUP]    Diagnostic: GET /api/RAKAY/diag (no auth required)');
+  } else {
+    console.log('[STARTUP] ✅ AI provider keys detected — external LLM providers will be used.');
+  }
 });
 
 module.exports = { app, httpServer, io };

@@ -152,15 +152,20 @@ function resolveRakayDemoToken(token) {
   }
 }
 
-/** Multi-strategy token resolution: Supabase → RAKAY demo → service key → guest */
+/**
+ * Multi-strategy token resolution: Supabase → service key
+ * Phase 1 hardening: guest / unauthenticated access REMOVED.
+ * Unknown tokens are rejected — the socket is disconnected with WS_AUTH_FAILED.
+ */
 async function resolveToken(token) {
-  if (!token) return { userId: 'guest', tenantId: 'guest', userName: 'guest', userRole: 'viewer', authType: 'guest' };
+  // No token → rejected (Phase 1: no anonymous guest sessions)
+  if (!token) return null;
 
   // 1. RAKAY demo token (fast, no network)
   const demoUser = resolveRakayDemoToken(token);
   if (demoUser) return demoUser;
 
-  // 2. Service key bypass
+  // 2. Service key bypass (internal service-to-service only)
   const serviceKey = process.env.RAKAY_SERVICE_KEY || process.env.RAKAY_API_KEY;
   if (serviceKey && token === serviceKey) {
     return { userId: 'service', tenantId: 'service', userName: 'Service', userRole: 'service', authType: 'service-key' };
@@ -170,8 +175,8 @@ async function resolveToken(token) {
   const supabaseUser = await resolveSocketUser(token);
   if (supabaseUser) return supabaseUser;
 
-  // 4. Unknown token — still allow as guest so connection isn't hard-rejected
-  return { userId: 'guest', tenantId: 'guest', userName: 'guest', userRole: 'viewer', authType: 'guest' };
+  // Unknown token → rejected
+  return null;
 }
 
 /* ─────────────────────────────────────────────── */
@@ -211,12 +216,19 @@ async function getRealIOC(tenantId) {
 /* ═══════════════════════════════════════════════ */
 function initSocketIO(io) {
 
-  /* AUTH MIDDLEWARE */
+  /* AUTH MIDDLEWARE — Phase 1 hardening: session-token only, no query-param, no guest */
   io.use(async (socket, next) => {
-    const token   = socket.handshake.auth?.token || socket.handshake.query?.token;
+    // Accept token from handshake.auth only (not query param — Phase 1)
+    const token = socket.handshake.auth?.token;
     const profile = await resolveToken(token);
+
+    if (!profile) {
+      console.warn(`[SIO] AUTH REJECTED — no valid token, id=${socket.id} ip=${socket.handshake.address}`);
+      return next(new Error('WS_AUTH_FAILED: valid authentication token required'));
+    }
+
     Object.assign(socket, profile);
-    socket._isGuest = (profile.authType === 'guest');
+    socket._isGuest = false; // no guest sessions (Phase 1)
     next();
   });
 

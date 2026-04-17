@@ -1,0 +1,39 @@
+{
+  "name": "wadjet-eye-ai",
+  "version": "4.0.0",
+  "description": "Wadjet-Eye AI — Enterprise Security Intelligence Platform (monorepo)",
+  "private": true,
+  "workspaces": [
+    "apps/api",
+    "apps/worker",
+    "packages/contracts",
+    "packages/shared"
+  ],
+  "scripts": {
+    "dev":         "concurrently \"npm run dev:api\" \"npm run dev:worker\"",
+    "dev:api":     "cd apps/api && npm run dev",
+    "dev:worker":  "cd apps/worker && npm run dev",
+    "build":       "npm run build --workspaces --if-present",
+    "test":        "npm run test --workspaces --if-present",
+    "lint":        "npm run lint --workspaces --if-present",
+    "audit:deps":  "npm audit --workspaces",
+    "audit:secrets": "npx gitleaks detect --source . --verbose --no-git",
+    "validate:env": "node apps/api/scripts/validate-env.js",
+    "openapi:validate": "npx @redocly/cli lint apps/api/docs/openapi.yaml",
+    "openapi:preview":  "npx @redocly/cli preview-docs apps/api/docs/openapi.yaml"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm":  ">=9.0.0"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "pnpm": {
+    "overrides": {
+      "follow-redirects": ">=1.15.6",
+      "express":          ">=4.19.2",
+      "ws":               ">=8.17.1"
+    }
+  }
+}

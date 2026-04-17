@@ -1457,7 +1457,7 @@
     if (text.startsWith('⚠️ Using built-in threat intelligence')) {
       // ROOT-CAUSE FIX: Badge updated to show neutral "Local Intelligence Mode" indicator
       // instead of an alarming call-to-action that prompted key configuration.
-      warningBadge = '<div class="rakay-intel-badge" style="background:rgba(59,130,246,0.12);border-color:rgba(59,130,246,0.3);color:#60a5fa;"><i class="fas fa-database"></i> Local Intelligence Mode — all core capabilities active</div>';
+      warningBadge = `<div class="rakay-intel-badge" style="background:rgba(59,130,246,0.12);border-color:rgba(59,130,246,0.3);color:#60a5fa;"><i class="fas fa-database"></i> Local Intelligence Mode — built-in threat intelligence active &nbsp;<a href="${API_BASE()}/api/RAKAY/diag" target="_blank" style="color:#93c5fd;font-size:10px;text-decoration:underline" title="View provider diagnostic">diag</a></div>`;
       mainText = text.replace(/^⚠️ Using built-in threat intelligence\s*\n+/, '');
     }
 
@@ -1690,7 +1690,9 @@
   // ══════════════════════════════════════════════════════════════════════════
   function _getProviderBadge(provider, degraded) {
     if (degraded) {
-      return '<span class="rakay-degraded-badge" title="Using built-in threat intelligence"><i class="fas fa-shield-alt"></i> built-in intel</span>';
+      // Show different badge based on why degraded: billing vs config
+      const _diagUrl = `${API_BASE()}/api/RAKAY/diag`;
+      return `<span class="rakay-degraded-badge" title="External AI providers unavailable — using built-in threat intelligence. Check ${_diagUrl} for details"><i class="fas fa-shield-alt"></i> built-in intel</span>`;
     }
     if (!provider || provider === 'unknown') return '';
 
