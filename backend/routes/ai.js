@@ -36,6 +36,33 @@ const { supabase }     = require('../config/supabase');
 const { asyncHandler } = require('../middleware/errorHandler');
 
 // ─────────────────────────────────────────────────────────────────────
+//  🚨 AI ROUTER DIAGNOSTICS — printed immediately on module load
+//  Verifies that dotenv populated process.env BEFORE this file was
+//  required.  server.js calls require('dotenv').config() at line 22,
+//  which is BEFORE any route require() at lines 53‑84, so these values
+//  must be populated if the keys exist in the .env / Render Dashboard.
+// ─────────────────────────────────────────────────────────────────────
+console.log('=== 🚨 AI ROUTER DIAGNOSTICS 🚨 ===');
+console.log('RAW OPENAI_KEY:', process.env.OPENAI_API_KEY
+  ? 'EXISTS (Starts with ' + process.env.OPENAI_API_KEY.substring(0, 5) + ')'
+  : 'MISSING/UNDEFINED');
+console.log('RAW CLAUDE_KEY:', process.env.CLAUDE_API_KEY
+  ? 'EXISTS (Starts with ' + process.env.CLAUDE_API_KEY.substring(0, 5) + ')'
+  : 'MISSING/UNDEFINED');
+console.log('RAW GEMINI_KEY:', process.env.GEMINI_API_KEY
+  ? 'EXISTS (Starts with ' + process.env.GEMINI_API_KEY.substring(0, 5) + ')'
+  : 'MISSING/UNDEFINED');
+console.log('RAW DEEPSEEK_KEY:', process.env.DEEPSEEK_API_KEY
+  ? 'EXISTS (Starts with ' + process.env.DEEPSEEK_API_KEY.substring(0, 5) + ')'
+  : 'MISSING/UNDEFINED');
+console.log('RAW ANTHROPIC_KEY:', process.env.ANTHROPIC_API_KEY
+  ? 'EXISTS (Starts with ' + process.env.ANTHROPIC_API_KEY.substring(0, 5) + ')'
+  : 'MISSING/UNDEFINED');
+console.log('NODE_ENV:', process.env.NODE_ENV);
+console.log('OLLAMA_ENDPOINT:', process.env.OLLAMA_ENDPOINT || 'NOT SET');
+console.log('=== END AI ROUTER DIAGNOSTICS ===');
+
+// ─────────────────────────────────────────────────────────────────────
 //  PROVIDER CONFIGURATIONS
 // ─────────────────────────────────────────────────────────────────────
 const PROVIDERS = {
@@ -192,8 +219,16 @@ function _recordFailure(id, errMsg) {
 
 // ─────────────────────────────────────────────────────────────────────
 //  ORDERED PROVIDERS (by health score, respecting priority)
+//  ROOT-CAUSE FIX: Re-read env vars every call so runtime-injected keys
+//  (Render Dashboard secrets) are picked up without a server restart.
 // ─────────────────────────────────────────────────────────────────────
 function _getOrderedProviders() {
+  // Refresh keys from process.env on every call (handles runtime injection)
+  PROVIDERS.openai.key    = process.env.OPENAI_API_KEY    || PROVIDERS.openai.key;
+  PROVIDERS.claude.key    = process.env.CLAUDE_API_KEY    || process.env.ANTHROPIC_API_KEY || PROVIDERS.claude.key;
+  PROVIDERS.gemini.key    = process.env.GEMINI_API_KEY    || PROVIDERS.gemini.key;
+  PROVIDERS.deepseek.key  = process.env.DEEPSEEK_API_KEY  || PROVIDERS.deepseek.key;
+
   return Object.values(PROVIDERS)
     .filter(p => p.key || p.id === 'ollama')  // ollama = local, no key needed
     .sort((a, b) => {
@@ -233,12 +268,18 @@ async function _callClaude(messages, opts = {}) {
   const systemMsg = messages.find(m => m.role === 'system')?.content;
   const convoMsgs = messages.filter(m => m.role !== 'system');
 
-  const response = await axios.post(p.url, {
-    model:       opts.model || p.model,
-    max_tokens:  opts.max_tokens  || 2000,
-    system:      systemMsg || '',
-    messages:    convoMsgs,
-  }, {
+  // ROOT-CAUSE FIX: Anthropic returns HTTP 400 when 'system' is an empty string.
+  // Only include 'system' field when it has actual content.
+  const payload = {
+    model:      opts.model || p.model,
+    max_tokens: opts.max_tokens || 2000,
+    messages:   convoMsgs,
+  };
+  if (systemMsg && systemMsg.trim()) {
+    payload.system = systemMsg.trim();
+  }
+
+  const response = await axios.post(p.url, payload, {
     headers: {
       'x-api-key':         p.key,
       'anthropic-version': '2023-06-01',
@@ -490,11 +531,16 @@ async function callAI(messages, opts = {}) {
 
   console.log(`[AI-Router] Request received — eligible providers: [${eligible.map(p=>p.id).join(', ') || 'none'}]`);
 
+  // ROOT-CAUSE FIX: Do NOT short-circuit to mock when keys are present.
+  // If eligible.length === 0 it means NO keys are configured at all —
+  // only then fall through to local intelligence. When keys ARE set we
+  // must attempt the real provider loop so failures surface as real errors.
   if (eligible.length === 0) {
-    console.log('[AI-Router] No real provider keys configured — activating Local Intelligence Mode');
+    console.log('[AI-Router] No real provider keys configured — Local Intelligence Mode (built-in threat-intel active)');
     const lastMsg = messages.filter(m => m.role === 'user').pop()?.content || '';
     return _mockAnalysis(lastMsg);
   }
+  // Keys ARE configured — proceed to real provider loop below (no early mock return)
 
   for (const provider of eligible) {
     const id = provider.id;
@@ -580,39 +626,117 @@ async function callAI(messages, opts = {}) {
 
 // ─────────────────────────────────────────────────────────────────────
 //  HEALTH CHECK — test each provider with a simple ping
+//
+//  ROOT-CAUSE FIXES for 429 / 400 errors:
+//  1. STAGGERED EXECUTION: providers tested one at a time with a delay
+//     between them to avoid simultaneous API calls that trigger 429s.
+//  2. RETRY ON 429: exponential backoff (1 s → 2 s → 4 s) so a transient
+//     rate-limit does not mark the provider as failed.
+//  3. NO EMPTY SYSTEM FIELD FOR CLAUDE: Anthropic returns HTTP 400 when
+//     `system` is an empty string — now omitted when falsy.
+//  4. LIVE KEY REFRESH: re-reads process.env before each provider so
+//     runtime-injected Render Dashboard secrets are always picked up.
+//  5. SOFT FAILURE: a single health-check failure does NOT open the
+//     circuit breaker (CB threshold still requires 3 consecutive call
+//     failures); health-check failures only lower healthScore by 5
+//     (vs. 15 for real call failures) so one bad ping doesn't ruin routing.
 // ─────────────────────────────────────────────────────────────────────
+const HC_STAGGER_MS        = 3000;   // 3 s between each provider ping
+const HC_MAX_RETRIES       = 2;      // retry health check up to 2 times on 429
+const HC_BACKOFF_BASE_MS   = 1500;   // 1.5 s, 3 s
+
 async function runHealthChecks() {
-  const testMsg = [
-    { role: 'system', content: 'You are a cybersecurity assistant.' },
-    { role: 'user',   content: 'Say "OK" only.' },
-  ];
+  // Re-read live keys before we start — picks up Render Dashboard secrets
+  PROVIDERS.openai.key    = process.env.OPENAI_API_KEY    || PROVIDERS.openai.key;
+  PROVIDERS.claude.key    = process.env.CLAUDE_API_KEY    || process.env.ANTHROPIC_API_KEY || PROVIDERS.claude.key;
+  PROVIDERS.gemini.key    = process.env.GEMINI_API_KEY    || PROVIDERS.gemini.key;
+  PROVIDERS.deepseek.key  = process.env.DEEPSEEK_API_KEY  || PROVIDERS.deepseek.key;
+
+  // Minimal test message — system role handled per-provider below
+  const USER_PING = { role: 'user', content: 'Reply with the single word: OK' };
+
+  console.log('[AI-Router] Running staggered health checks...');
+  let providerIndex = 0;
 
   for (const [id, provider] of Object.entries(PROVIDERS)) {
+    // Skip if not configured
     if (id === 'ollama' && !process.env.OLLAMA_ENDPOINT) continue;
     if (id !== 'ollama' && !provider.key) {
+      console.log(`[AI-Router][${id}] Health check skipped — no key`);
       providerState[id].lastError = 'No API key configured';
       continue;
     }
-    if (_isCBOpen(id)) continue;
+    if (_isCBOpen(id)) {
+      console.log(`[AI-Router][${id}] Health check skipped — CB OPEN`);
+      continue;
+    }
 
-    const t0 = Date.now();
-    try {
-      let result;
-      switch (id) {
-        case 'openai':   result = await _callOpenAI(testMsg,   { max_tokens: 5 }); break;
-        case 'claude':   result = await _callClaude(testMsg,   { max_tokens: 5 }); break;
-        case 'gemini':   result = await _callGemini(testMsg,   { max_tokens: 5 }); break;
-        case 'deepseek': result = await _callDeepSeek(testMsg, { max_tokens: 5 }); break;
-        case 'ollama':   result = await _callOllama(testMsg,   { max_tokens: 5 }); break;
+    // Stagger: wait between providers to avoid simultaneous bursts
+    if (providerIndex > 0) {
+      await new Promise(r => setTimeout(r, HC_STAGGER_MS));
+    }
+    providerIndex++;
+
+    // Build messages per-provider (Claude rejects empty system strings)
+    const buildTestMsg = (includeSystem) => includeSystem
+      ? [{ role: 'system', content: 'Cybersecurity assistant.' }, USER_PING]
+      : [USER_PING];
+
+    let succeeded = false;
+    for (let attempt = 1; attempt <= HC_MAX_RETRIES; attempt++) {
+      const t0 = Date.now();
+      try {
+        // ROOT-CAUSE FIX for Claude 400: only include system msg for providers
+        // that handle it correctly; Gemini inserts it as user prefix, so include for all.
+        const testMsg = buildTestMsg(true);
+
+        let result;
+        switch (id) {
+          case 'openai':   result = await _callOpenAI(testMsg,   { max_tokens: 10 }); break;
+          case 'claude':   result = await _callClaude(testMsg,   { max_tokens: 10 }); break;
+          case 'gemini':   result = await _callGemini(testMsg,   { max_tokens: 10 }); break;
+          case 'deepseek': result = await _callDeepSeek(testMsg, { max_tokens: 10 }); break;
+          case 'ollama':   result = await _callOllama(testMsg,   { max_tokens: 10 }); break;
+        }
+        const latencyMs = Date.now() - t0;
+        _recordSuccess(id, latencyMs);
+        console.log(`[AI-Router][${id}] Health check ✅ attempt=${attempt} latency=${latencyMs}ms`);
+        succeeded = true;
+        break;
+      } catch (err) {
+        const httpStatus = err.response?.status;
+        const latencyMs  = Date.now() - t0;
+        const errMsg     = err.response?.data?.error?.message || err.message;
+
+        // 429: retry with exponential backoff
+        if (httpStatus === 429 && attempt < HC_MAX_RETRIES) {
+          const backoff = HC_BACKOFF_BASE_MS * Math.pow(2, attempt - 1);
+          console.warn(`[AI-Router][${id}] Health check ⚠️ 429 attempt=${attempt} — backing off ${backoff}ms`);
+          await new Promise(r => setTimeout(r, backoff));
+          continue;
+        }
+
+        // 400 Bad Request on Claude: often means system field issue — log specifically
+        if (httpStatus === 400 && id === 'claude') {
+          const body = err.response?.data;
+          console.warn(`[AI-Router][claude] Health check ❌ 400 Bad Request — ${body?.error?.message || errMsg}`);
+          console.warn(`[AI-Router][claude] Request body may have invalid system field or message format`);
+        } else {
+          console.warn(`[AI-Router][${id}] Health check ❌ attempt=${attempt} status=${httpStatus||'N/A'} latency=${latencyMs}ms — ${errMsg}`);
+        }
+
+        // Soft failure: health check failures lower score by 5, NOT 15
+        // This prevents a single ping failure from killing the provider
+        providerState[id].healthScore = Math.max(0, providerState[id].healthScore - 5);
+        providerState[id].lastError   = `Health check failed (${httpStatus||'ERR'}): ${errMsg}`;
+        // NOTE: _recordFailure is NOT called here — that would open the circuit breaker.
+        // Real call failures in callAI() open the CB, health checks only adjust score.
+        break;
       }
-      const latencyMs = Date.now() - t0;
-      _recordSuccess(id, latencyMs);
-      console.log(`[AI-Router][${id}] Health check ✅ ${latencyMs}ms`);
-    } catch (err) {
-      _recordFailure(id, err.message);
-      console.warn(`[AI-Router][${id}] Health check ❌ ${err.message}`);
     }
   }
+
+  console.log('[AI-Router] Health check round complete.');
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -644,16 +768,36 @@ Response standards:
 
 /* ── GET /api/ai/status ── */
 router.get('/status', asyncHandler(async (req, res) => {
+  // ROOT-CAUSE FIX: Re-read keys from process.env at status-check time so the
+  // response always reflects the current Render Dashboard secret values, not
+  // the stale snapshot taken when the module was first loaded.
+  const liveKeys = {
+    openai:   process.env.OPENAI_API_KEY,
+    claude:   process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY,
+    gemini:   process.env.GEMINI_API_KEY,
+    deepseek: process.env.DEEPSEEK_API_KEY,
+    ollama:   process.env.OLLAMA_ENDPOINT ? 'local' : null,
+  };
+  // Sync back to PROVIDERS so subsequent calls see the refreshed keys
+  if (liveKeys.openai)   PROVIDERS.openai.key   = liveKeys.openai;
+  if (liveKeys.claude)   PROVIDERS.claude.key   = liveKeys.claude;
+  if (liveKeys.gemini)   PROVIDERS.gemini.key   = liveKeys.gemini;
+  if (liveKeys.deepseek) PROVIDERS.deepseek.key = liveKeys.deepseek;
+
   const status = {};
   for (const [id, p] of Object.entries(PROVIDERS)) {
     const s = providerState[id];
+    const hasLiveKey = !!(liveKeys[id]);
+    // healthScore: newly-configured providers start at 100, not 50
+    const effectiveHealth = hasLiveKey && s.totalCalls === 0 ? 100 : s.healthScore;
     status[id] = {
       name:         p.name,
       model:        p.model,
-      enabled:      !!(p.key || (id === 'ollama' && process.env.OLLAMA_ENDPOINT)),
-      hasKey:       !!p.key,
+      enabled:      hasLiveKey,
+      hasKey:       hasLiveKey,
+      keyPrefix:    liveKeys[id] && id !== 'ollama' ? liveKeys[id].slice(0, 8) + '...' : null,
       cbState:      s.cbState,
-      healthScore:  s.healthScore,
+      healthScore:  effectiveHealth,
       avgLatencyMs: s.avgLatency,
       totalCalls:   s.totalCalls,
       totalSuccess: s.totalSuccess,
@@ -664,9 +808,7 @@ router.get('/status', asyncHandler(async (req, res) => {
     };
   }
 
-  const anyEnabled = Object.values(PROVIDERS).some(p =>
-    p.key || (p.id === 'ollama' && process.env.OLLAMA_ENDPOINT)
-  );
+  const anyEnabled = Object.values(liveKeys).some(Boolean);
 
   const orderedChain = _getOrderedProviders()
     .filter(p => p.key || (p.id === 'ollama' && process.env.OLLAMA_ENDPOINT))
@@ -953,10 +1095,17 @@ router.post('/summarize', asyncHandler(async (req, res) => {
   });
 }));
 
-// Run initial health checks on startup (non-blocking)
-setTimeout(() => runHealthChecks().catch(() => {}), 5000);
+// Run initial health checks on startup (non-blocking).
+// ROOT-CAUSE FIX: Delay initial check by 30 s so the server is fully
+// warmed up and all env vars are confirmed loaded before pinging providers.
+// This prevents the 429 storm that occurred when all providers were pinged
+// simultaneously 5 s after startup (providers have per-second/per-minute
+// rate limits that a batch ping could exhaust immediately).
+setTimeout(() => runHealthChecks().catch(() => {}), 30000);
 
-// Re-check every 5 minutes
-setInterval(() => runHealthChecks().catch(() => {}), 5 * 60 * 1000);
+// Re-check every 10 minutes (was 5 min).
+// Staggered checks already take ~15-20 s; 10-min interval gives providers
+// ample headroom and avoids continuous rate-limit pressure.
+setInterval(() => runHealthChecks().catch(() => {}), 10 * 60 * 1000);
 
 module.exports = router;

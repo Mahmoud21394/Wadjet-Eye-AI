@@ -274,6 +274,22 @@ function parseRSS(xmlText, feedName) {
 
 // ─────────────────────────────────────────────────────────────────────
 //  ENTITY EXTRACTION
+//  ROOT-CAUSE FIX for category mismatch between tabs:
+//  Previous logic only respected [FEED_CATEGORY:x] hint when the feed's
+//  category was NOT 'intelligence'. This meant SecurityWeek, Dark Reading,
+//  and CyberScoop (all assigned category:'intelligence') NEVER got the
+//  hint injected, so their articles were always re-classified by
+//  text-matching into random other categories — causing cross-tab
+//  contamination.
+//
+//  New strategy (strict category binding):
+//  1. The feed's declared category is always injected as a hint token.
+//  2. Text-based category detection is ONLY allowed to STRENGTHEN the
+//     classification (e.g., advisory feed mentioning ransomware attack →
+//     stays 'advisories' unless content is overwhelmingly 'attacks').
+//  3. Category never defaults to 'intelligence' as a catch-all — if no
+//     strong signal is found, we honour the feed's declared category.
+//  4. Added strict per-category keyword sets with no overlap.
 // ─────────────────────────────────────────────────────────────────────
 function extractEntities(text) {
   // CVEs
@@ -292,39 +308,71 @@ function extractEntities(text) {
   else if (/patch|update|advisory|vulnerability|cve/i.test(text)) severity = 'medium';
   else severity = 'low';
 
-  // Category detection (order matters: more specific first)
-  // NOTE: feedCategory is passed in as a hint — if provided and non-generic,
-  //       it wins over text-based detection for feed-specific categorization
-  //       (e.g. CISA advisory feeds must NOT be reclassified as 'vulnerabilities'
-  //        just because their text mentions CVE numbers).
-  let category = 'intelligence';
-  const _feedCat = (text.match(/\[FEED_CATEGORY:([a-z]+)\]/) || [])[1]; // injected hint
-  if (_feedCat && _feedCat !== 'intelligence') {
-    // Feed has an explicit non-generic category — respect it, but allow
-    // text-based override only for strong signals (ransomware/attack/apt).
-    if (/ransomware|encrypt\s+.*ransom|attack.*compan|breach.*data|stolen.*data/i.test(text) &&
-        _feedCat !== 'attacks') {
-      category = 'attacks';
-    } else if (/apt\d+|nation.?state.{0,20}attack|espionage.*campaign/i.test(text) &&
-               _feedCat !== 'threats') {
-      category = 'threats';
-    } else {
-      category = _feedCat;  // honour feed-level assignment
+  // ── ROOT-CAUSE FIX: Strict category binding ──────────────────────
+  // Extract the feed-level hint that was injected by the caller.
+  // The hint is ALWAYS injected now (even for 'intelligence' feeds).
+  const _feedCat = (text.match(/\[FEED_CATEGORY:([a-z_]+)\]/) || [])[1] || '';
+
+  // Define strict per-category keyword patterns (non-overlapping)
+  const SIG = {
+    // ADVISORIES: Official gov/cert advisory signals — highest priority
+    advisories: /\b(cisa|us-cert|ics-cert|cert\.gov|cert-cc|ncsc|enisa|government.{0,10}advisory|federal.{0,10}advisory|official.{0,10}alert|security.{0,10}bulletin|patch.{0,10}tuesday|emergency.{0,10}directive)\b/i,
+
+    // ATTACKS: Active incidents, breaches, ransomware campaigns
+    attacks: /\b(ransomware.{0,30}hit|attack.{0,20}compan|breach.{0,20}data|data.{0,20}stolen|hack(ed|ing).{0,20}(compan|organ|firm|group)|credential.{0,20}theft|intrusion.{0,20}detect|incident.{0,20}response|actively.{0,20}exploit|in.the.wild)\b/i,
+
+    // VULNERABILITIES: CVE-centric, patch, vuln disclosure
+    vulnerabilities: /\b(CVE-\d{4}-\d+|zero.?day.{0,30}(vuln|flaw|bug|patch)|vulnerability.{0,20}(critical|high|disclose|found|patch)|patch.{0,15}tuesday|security.{0,10}update.{0,10}(release|availab)|exploit.{0,20}(code|poc|proof|kit))\b/i,
+
+    // THREATS: APT, nation-state, espionage, campaign attribution
+    threats: /\b(APT\d+|nation.?state|espionage|threat.?actor|campaign.{0,20}(target|attribu)|living.off.the.land|LOTL|cyber.?espionage|state.?sponsored|threat.{0,20}group|cozy.?bear|fancy.?bear|lazarus|volt.?typhoon|scattered.?spider)\b/i,
+
+    // RESEARCH: Analysis papers, new technique discovery, tools
+    research: /\b(research.{0,20}(reveal|find|discover|paper|publish)|new.{0,20}(technique|method|approach|tool|framework|paper)|analys(is|ed).{0,20}(malware|binary|code|sample)|reverse.{0,20}engineer|proof.{0,10}of.{0,10}concept.{0,30}(?!exploit))\b/i,
+
+    // INTELLIGENCE: Strategic analysis, threat landscape, industry reports
+    intelligence: /\b(threat.{0,20}intelligence|threat.{0,20}landscape|industry.{0,20}report|annual.{0,20}report|threat.{0,20}forecast|threat.{0,20}brief|cybersecurity.{0,20}(trend|overview|insight)|sector.{0,20}(analysis|report))\b/i,
+  };
+
+  let category;
+
+  // Step 1: Check for government/official advisory signals first (highest priority)
+  if (SIG.advisories.test(text) || _feedCat === 'advisories') {
+    // Advisories stay as advisories unless clear attack signal
+    if (_feedCat === 'advisories' || SIG.advisories.test(text)) {
+      // Only override to 'attacks' if there's a very strong active-incident signal
+      // AND the feed is NOT an official advisory source
+      if (SIG.attacks.test(text) && _feedCat !== 'advisories') {
+        category = 'attacks';
+      } else {
+        category = 'advisories';
+      }
     }
-  } else if (/cisa|cisa\.gov|us-cert|ics-cert|government.{0,10}advisory|federal.{0,10}advisory/i.test(text)) {
-    category = 'advisories';
-  } else if (/ransomware|encrypt\s+.*ransom|attack.*compan|breach.*data|stolen.*data|hack.*compan/i.test(text)) {
-    category = 'attacks';
-  } else if (/patch.*cve-|cve-.*patch|zero.?day|vulnerability.*critical|critical.*vulnerability|exploit.*cve|cve.*exploit/i.test(text)) {
-    category = 'vulnerabilities';
-  } else if (/\badvisory\b|\bpatch\b.*\bupdate\b|bulletin/i.test(text) && !/apt|ransomware/i.test(text)) {
-    category = 'advisories';
-  } else if (/cve-\d{4}-\d+|vulnerability|patch/i.test(text)) {
-    category = 'vulnerabilities';
-  } else if (/apt|espionage|nation.?state|intelligence|campaign|ttps/i.test(text)) {
-    category = 'threats';
-  } else if (/research|discover|analysis|technique|method/i.test(text)) {
-    category = 'research';
+  }
+
+  // Step 2: Apply text-based classification if no advisory lock
+  if (!category) {
+    // Score each category by signal strength
+    const scores = {};
+    for (const [cat, regex] of Object.entries(SIG)) {
+      const matches = text.match(new RegExp(regex.source, 'gi')) || [];
+      scores[cat] = matches.length;
+    }
+
+    // Also weight the feed's declared category (+2 bonus for declared category)
+    if (_feedCat && SIG[_feedCat]) {
+      scores[_feedCat] = (scores[_feedCat] || 0) + 2;
+    }
+
+    // Pick highest-scoring category
+    const best = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
+
+    if (best && best[1] > 0) {
+      category = best[0];
+    } else {
+      // No strong signal found — honour the feed's declared category exactly
+      category = _feedCat || 'intelligence';
+    }
   }
 
   // Tags
@@ -451,10 +499,12 @@ async function ingestCyberNews(tenantId, options = {}) {
 
   // Enrich each article
   const enriched = allRawArticles.map(item => {
-    // ROOT-CAUSE FIX: inject feed category as a hint token so extractEntities()
-    // can respect feed-level assignments (e.g., CISA advisory feeds must not
-    // be reclassified as 'vulnerabilities' just because text mentions CVE IDs).
-    const feedCatHint = item.feedCategory && item.feedCategory !== 'intelligence'
+    // ROOT-CAUSE FIX: ALWAYS inject the feed category as a hint token,
+    // regardless of whether it is 'intelligence' or not. Previously
+    // 'intelligence' feeds were excluded from the hint injection, which
+    // meant their articles defaulted to text-only classification and got
+    // misassigned to wrong categories, causing cross-tab contamination.
+    const feedCatHint = item.feedCategory
       ? ` [FEED_CATEGORY:${item.feedCategory}]`
       : '';
     const fullText  = `${item.title} ${item.description || ''}${feedCatHint}`;
@@ -498,6 +548,19 @@ async function ingestCyberNews(tenantId, options = {}) {
   for (const cat of Object.keys(NEWS_CATEGORIES)) {
     const catId = NEWS_CATEGORIES[cat].id;
     _newsCache.byCategory[catId] = sorted.filter(a => a.category === catId);
+  }
+
+  // ROOT-CAUSE DEBUG: Log per-category distribution so operators can verify
+  // articles are being classified into the correct categories.
+  const distribution = Object.entries(_newsCache.byCategory).map(([id, arr]) =>
+    `${id}:${arr.length}`
+  ).join(' | ');
+  console.info(`[News] Category distribution: ${distribution}`);
+  // Warn if any category is completely empty (may indicate classification bug)
+  for (const [catId, articles] of Object.entries(_newsCache.byCategory)) {
+    if (articles.length === 0) {
+      console.warn(`[News] ⚠️ Category '${catId}' has 0 articles — check feed assignments and classification logic`);
+    }
   }
 
   // Persist critical articles to DB (fire-and-forget)
@@ -587,9 +650,9 @@ async function getRecentNews(tenantId, opts = {}) {
     articles = result.articles;
   }
 
-  // Filter
+  // Filter — 'all' (or no category) returns every article
   let filtered = articles;
-  if (category) filtered = filtered.filter(a => a.category === category);
+  if (category && category !== 'all') filtered = filtered.filter(a => a.category === category);
   if (severity) filtered = filtered.filter(a => a.severity === severity);
   if (search) {
     const q = search.toLowerCase();
@@ -625,9 +688,16 @@ function _timeAgo(date) {
 }
 
 function getCacheStats() {
+  // Convert byCategory (which stores full article arrays) into a count map
+  // so all callers receive consistent numeric values.
+  const byCategoryCounts = {};
+  for (const [catId, val] of Object.entries(_newsCache.byCategory || {})) {
+    byCategoryCounts[catId] = Array.isArray(val) ? val.length : (val || 0);
+  }
+
   return {
     totalArticles: _newsCache.articles.length,
-    byCategory:    _newsCache.byCategory,
+    byCategory:    byCategoryCounts,
     lastFetch:     _newsCache.lastFetch ? new Date(_newsCache.lastFetch).toISOString() : null,
     cacheAgeMs:    Date.now() - _newsCache.lastFetch,
     fetchCount:    _newsCache.fetchCount,

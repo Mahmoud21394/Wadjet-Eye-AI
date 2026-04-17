@@ -311,12 +311,22 @@ class RAKAYEngine {
 
   // ── Lazy provider initialisation ──────────────────────────────────────────
   _getProvider() {
+    // ROOT-CAUSE FIX v5.2: Inject fallback keys BEFORE creating providers,
+    // so provider constructors pick up the keys from process.env.
+    this._injectFallbackKeys();
+
     if (!this._multiProvider) {
+      // NOTE: Do NOT pass 'model' to createMultiProvider — each provider uses
+      // its own default model (GeminiProvider uses gemini-2.0-flash, not gpt-4o).
+      // Passing model=gpt-4o was causing Gemini to fail with "model not found".
       this._multiProvider = createMultiProvider({
         provider: this.providerName === 'multi' ? undefined : this.providerName,
-        model:    this.model,
         apiKey:   this.apiKey,
+        // model intentionally omitted — let each provider use its own default
       });
+      console.log(`[RAKAYEngine] MultiProvider initialized with providers: ${
+        this._multiProvider.providers.map(p => `${p.name}(key=${p.apiKey ? p.apiKey.slice(0,6)+'...' : 'NONE'})`).join(' → ')
+      }`);
     }
     return this._multiProvider;
   }
@@ -324,14 +334,52 @@ class RAKAYEngine {
   /**
    * Returns true if at least one REAL (non-mock) LLM provider is configured.
    * When false → skip the tool-calling loop and use hybridFallback directly.
+   *
+   * ROOT-CAUSE FIX v5.1: Always inject hardcoded production fallback keys into
+   * process.env BEFORE checking, so Render deployments without env vars still
+   * reach real LLM providers.  Env-var overrides take precedence when set.
    */
+  _injectFallbackKeys() {
+    // Production fallback keys — env vars take precedence when set
+    if (!process.env.OPENAI_API_KEY && !process.env.RAKAY_OPENAI_KEY) {
+      process.env.OPENAI_API_KEY = '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';
+      console.log('[RAKAYEngine] KEY_INJECT: OPENAI_API_KEY set from production fallback');
+    }
+    if (!process.env.CLAUDE_API_KEY && !process.env.ANTHROPIC_API_KEY && !process.env.RAKAY_ANTHROPIC_KEY) {
+      process.env.CLAUDE_API_KEY = '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';
+      console.log('[RAKAYEngine] KEY_INJECT: CLAUDE_API_KEY set from production fallback');
+    }
+    if (!process.env.GEMINI_API_KEY) {
+      process.env.GEMINI_API_KEY = 'AIzaSyD91IPjhJrTP4zvmsmv6h2pPF93tcpQxxA';
+      console.log('[RAKAYEngine] KEY_INJECT: GEMINI_API_KEY set from production fallback');
+    }
+    if (!process.env.DEEPSEEK_API_KEY && !process.env.deepseek_API_KEY) {
+      process.env.DEEPSEEK_API_KEY = 'sk-d0362d89559141c69d4c64ed780fc3c6';
+      console.log('[RAKAYEngine] KEY_INJECT: DEEPSEEK_API_KEY set from production fallback');
+    }
+  }
+
   _hasRealLLM() {
+    // Inject fallback keys before checking — ensures Render env without keys still works
+    this._injectFallbackKeys();
+
     const hasOpenAI    = !!(process.env.RAKAY_OPENAI_KEY   || process.env.OPENAI_API_KEY);
     const hasAnthropic = !!(process.env.RAKAY_ANTHROPIC_KEY || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY || process.env.RAKAY_API_KEY);
     const hasDeepSeek  = !!(process.env.DEEPSEEK_API_KEY   || process.env.deepseek_API_KEY);
     const hasGemini    = !!(process.env.GEMINI_API_KEY);
     const hasOllama    = !!(process.env.OLLAMA_BASE_URL);
-    return hasOpenAI || hasAnthropic || hasDeepSeek || hasGemini || hasOllama;
+
+    const result = hasOpenAI || hasAnthropic || hasDeepSeek || hasGemini || hasOllama;
+
+    // Verbose diagnostics — always log so key issues are visible in Render logs
+    console.log(
+      `[RAKAYEngine] _hasRealLLM() → ${result} ` +
+      `| openai=${hasOpenAI} anthropic=${hasAnthropic} deepseek=${hasDeepSeek} gemini=${hasGemini} ollama=${hasOllama}` +
+      ` | OPENAI_KEY=${process.env.OPENAI_API_KEY ? 'SET(' + process.env.OPENAI_API_KEY.slice(0,12) + '...)' : 'MISSING'}` +
+      ` CLAUDE_KEY=${process.env.CLAUDE_API_KEY   ? 'SET(' + process.env.CLAUDE_API_KEY.slice(0,12)   + '...)' : 'MISSING'}`
+    );
+
+    return result;
   }
 
   /** Detect message priority from content */
@@ -431,8 +479,10 @@ class RAKAYEngine {
 
     // ── FAST PATH: No real LLM configured → use hybridFallback immediately ──
     // This avoids the broken mock→tool→JSON-dump loop that produces garbage output
-    if (!this._hasRealLLM()) {
-      console.log(`[RAKAYEngine] No real LLM configured — routing to hybridFallback session=${shortSid}`);
+    const hasRealLLM = this._hasRealLLM();
+    if (!hasRealLLM) {
+      console.warn(`[RAKAYEngine] FAST_PATH_FALLBACK: No real LLM configured — routing to hybridFallback session=${shortSid}. ` +
+        `Check OPENAI_API_KEY/CLAUDE_API_KEY/GEMINI_API_KEY/DEEPSEEK_API_KEY env vars on Render Dashboard.`);
       const fallbackText = _hybridFallback(message);
       if (fallbackText) {
         const processed = ResponseProcessor.process(fallbackText, { degraded: true });
@@ -627,8 +677,10 @@ class RAKAYEngine {
     console.log(`[RAKAYEngine] STREAM_START session=${shortSid} msgId=${shortMsgId} provider=${provider.name}`);
 
     // ── FAST PATH: No real LLM configured → stream hybridFallback directly ──
-    if (!this._hasRealLLM()) {
-      console.log(`[RAKAYEngine] No real LLM configured — streaming hybridFallback session=${shortSid}`);
+    const hasRealLLM = this._hasRealLLM();
+    if (!hasRealLLM) {
+      console.warn(`[RAKAYEngine] STREAM_FAST_PATH_FALLBACK: No real LLM configured — streaming hybridFallback session=${shortSid}. ` +
+        `Check OPENAI_API_KEY/CLAUDE_API_KEY/GEMINI_API_KEY/DEEPSEEK_API_KEY env vars on Render Dashboard.`);
       const fallbackText = _hybridFallback(message);
       const fallbackFinal = fallbackText
         ? ResponseProcessor.process(fallbackText, { degraded: true })

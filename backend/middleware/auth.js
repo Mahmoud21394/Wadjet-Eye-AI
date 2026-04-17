@@ -1,52 +1,57 @@
 /**
  * ══════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Enhanced Auth Middleware v5.2
+ *  Wadjet-Eye AI — Secure Auth Middleware v6.0
  *  backend/middleware/auth.js
  *
- *  ROOT CAUSE FIXES (v5.2):
- *  ─────────────────────────
- *  1. verifyToken() now returns structured error JSON with 'code' field
- *     so frontend can distinguish MISSING_TOKEN vs EXPIRED_TOKEN vs
- *     INVALID_TOKEN and take appropriate action (redirect vs refresh).
+ *  Phase 1 Security Hardening:
+ *  ──────────────────────────
+ *  1. Token extraction priority: httpOnly Cookie → Authorization header → X-Access-Token
+ *     Query-param tokens REMOVED (leaked in server logs / browser history).
  *
- *  2. Added optionalAuth() middleware — for routes that work both
- *     authenticated and unauthenticated (e.g. public feed status).
+ *  2. Added requireTenant() — tenant isolation guard that verifies
+ *     req.user.tenant_id matches the :tenantId route param (or body field).
  *
- *  3. Enhanced logging: every 401/403 logs which token key was
- *     attempted, helping debug key-name mismatches.
+ *  3. Enhanced logging: every 401/403 includes method, path, IP.
  *
- *  4. Token extraction order matches ALL known frontend storage keys:
- *     - Authorization header (Bearer)
- *     - X-Access-Token header (legacy)
- *     - 'token' query param (WebSocket handshake)
+ *  4. verifyToken() returns structured error JSON with 'code' field.
  *
- *  5. Added authInfo() — returns sanitized token status without
- *     blocking the request. Used by /api/auth/debug endpoint.
+ *  5. optionalAuth() — non-blocking; sets req.user when token present.
+ *
+ *  6. authInfo() — returns sanitized token status (for debug endpoints).
+ *
+ *  Breaking changes vs v5:
+ *   - Query param token extraction REMOVED. WebSocket handshake must
+ *     use socket.handshake.auth.token (not query.token).
  * ══════════════════════════════════════════════════════════════════
  */
 'use strict';
 
 const { supabase } = require('../config/supabase');
 
-// ── Token extraction: try all known locations ──────────────────────
+// ── Token extraction ───────────────────────────────────────────
+// Priority: httpOnly cookie → Authorization header → X-Access-Token header
+// Query-param tokens intentionally excluded (Phase 1 hardening).
 function extractToken(req) {
-  // 1. Standard Authorization header
+  // 1. httpOnly secure cookie (preferred — not accessible from JS)
+  const cookieToken = req.cookies?.access_token || req.cookies?.token;
+  if (cookieToken) {
+    return { token: cookieToken, source: 'httpOnly-cookie' };
+  }
+
+  // 2. Standard Authorization header
   const authHeader = req.headers['authorization'];
   if (authHeader && authHeader.startsWith('Bearer ')) {
-    return { token: authHeader.split(' ')[1], source: 'Authorization header' };
+    return { token: authHeader.split(' ')[1], source: 'Authorization-header' };
   }
 
-  // 2. X-Access-Token header (legacy support)
+  // 3. X-Access-Token header (legacy frontend support)
   const xToken = req.headers['x-access-token'];
   if (xToken) {
-    return { token: xToken, source: 'X-Access-Token header' };
+    return { token: xToken, source: 'X-Access-Token-header' };
   }
 
-  // 3. Query param (WebSocket + SSE handshake)
-  if (req.query?.token) {
-    return { token: req.query.token, source: 'query param' };
-  }
-
+  // NOTE: query param extraction intentionally removed (Phase 1).
+  // If you see MISSING_TOKEN for WebSocket, ensure socket.handshake.auth.token is set.
   return { token: null, source: null };
 }
 
@@ -59,38 +64,34 @@ function extractToken(req) {
  *   req.token    — raw JWT string
  *
  * Returns structured 401/403 with 'code' field:
- *   MISSING_TOKEN   — no Bearer header at all → redirect to login
- *   INVALID_TOKEN   — token can't be decoded → force re-login
- *   EXPIRED_TOKEN   — token expired → try refresh endpoint
- *   PROFILE_MISSING — auth OK but no user record → contact support
+ *   MISSING_TOKEN    — no token at all → redirect to login
+ *   INVALID_TOKEN    — token can't be decoded → force re-login
+ *   EXPIRED_TOKEN    — token expired → try refresh endpoint
+ *   PROFILE_MISSING  — auth OK but no user record → contact support
  *   ACCOUNT_INACTIVE — user suspended → show suspension message
  */
 async function verifyToken(req, res, next) {
   const { token, source } = extractToken(req);
+  const reqId = req.id || req.headers['x-request-id'] || '-';
 
   if (!token) {
-    // Detailed log to help debug frontend key mismatches
-    console.warn(`[Auth] 401 MISSING_TOKEN — ${req.method} ${req.path}`,
-      `Headers present: ${Object.keys(req.headers).filter(h => h.toLowerCase().includes('auth') || h.toLowerCase().includes('token')).join(', ') || 'none'}`
-    );
+    console.warn(`[Auth] 401 MISSING_TOKEN reqId=${reqId} ${req.method} ${req.path} ip=${_ip(req)}`);
     return res.status(401).json({
       error:   'Missing or invalid Authorization header',
       code:    'MISSING_TOKEN',
-      hint:    'Include: Authorization: Bearer <your_token>',
+      hint:    'Include: Authorization: Bearer <your_token>  OR  use httpOnly cookie',
       path:    req.path,
     });
   }
 
   try {
-    // Verify token with Supabase Auth
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
 
     if (authError) {
       const isExpired = authError.message?.toLowerCase().includes('expired') ||
                         authError.message?.toLowerCase().includes('jwt expired');
       const code = isExpired ? 'EXPIRED_TOKEN' : 'INVALID_TOKEN';
-
-      console.warn(`[Auth] 401 ${code} from ${source} — ${req.method} ${req.path}: ${authError.message}`);
+      console.warn(`[Auth] 401 ${code} src=${source} reqId=${reqId} ${req.method} ${req.path}: ${authError.message}`);
       return res.status(401).json({
         error: isExpired ? 'Token has expired. Please refresh your session.' : 'Invalid token. Please log in again.',
         code,
@@ -99,14 +100,11 @@ async function verifyToken(req, res, next) {
     }
 
     if (!user) {
-      console.warn(`[Auth] 401 INVALID_TOKEN — no user returned from ${source} — ${req.method} ${req.path}`);
-      return res.status(401).json({
-        error: 'Token verification failed',
-        code:  'INVALID_TOKEN',
-      });
+      console.warn(`[Auth] 401 INVALID_TOKEN src=${source} reqId=${reqId} ${req.method} ${req.path}`);
+      return res.status(401).json({ error: 'Token verification failed', code: 'INVALID_TOKEN' });
     }
 
-    // Fetch user profile from our users table
+    // Fetch user profile
     const { data: profile, error: profileError } = await supabase
       .from('users')
       .select('id, name, email, role, tenant_id, status, permissions, avatar, mfa_enabled')
@@ -114,11 +112,7 @@ async function verifyToken(req, res, next) {
       .single();
 
     if (profileError || !profile) {
-      // Profile missing but Supabase auth is valid — likely new user
-      // Create a minimal profile from auth data so they're not locked out
-      console.warn(`[Auth] Profile not found for auth_id=${user.id} — using minimal profile`);
-
-      // Attempt to find by email as fallback
+      // Fallback: find by email
       const { data: profileByEmail } = await supabase
         .from('users')
         .select('id, name, email, role, tenant_id, status, permissions, avatar')
@@ -132,6 +126,7 @@ async function verifyToken(req, res, next) {
         return next();
       }
 
+      console.warn(`[Auth] 401 PROFILE_MISSING auth_id=${user.id} email=${user.email}`);
       return res.status(401).json({
         error: 'User profile not found. Please contact your administrator.',
         code:  'PROFILE_MISSING',
@@ -140,23 +135,21 @@ async function verifyToken(req, res, next) {
     }
 
     if (profile.status === 'suspended' || profile.status === 'inactive') {
-      console.warn(`[Auth] 403 ACCOUNT_INACTIVE — user=${profile.email} status=${profile.status}`);
+      console.warn(`[Auth] 403 ACCOUNT_INACTIVE user=${profile.email} status=${profile.status}`);
       return res.status(403).json({
-        error: `Account is ${profile.status}. Contact your administrator.`,
-        code:  'ACCOUNT_INACTIVE',
+        error:  `Account is ${profile.status}. Contact your administrator.`,
+        code:   'ACCOUNT_INACTIVE',
         status: profile.status,
       });
     }
 
-    // Attach to request
     req.user     = { ...profile, authId: user.id };
     req.tenantId = profile.tenant_id;
     req.token    = token;
-
     next();
 
   } catch (err) {
-    console.error('[Auth] Token verification exception:', err.message);
+    console.error(`[Auth] Exception reqId=${reqId} ${req.method} ${req.path}:`, err.message);
     return res.status(500).json({
       error: 'Authentication service error. Please try again.',
       code:  'AUTH_SERVICE_ERROR',
@@ -167,7 +160,6 @@ async function verifyToken(req, res, next) {
 /**
  * optionalAuth — non-blocking auth middleware
  * Sets req.user if token is valid, continues even if not.
- * Use for routes that are publicly accessible but offer more data when authenticated.
  */
 async function optionalAuth(req, res, next) {
   const { token } = extractToken(req);
@@ -195,7 +187,7 @@ async function optionalAuth(req, res, next) {
 
 /**
  * requireRole — RBAC middleware factory
- * @param {string[]} roles - Allowed role names
+ * @param {string|string[]} roles - Allowed role names
  */
 function requireRole(roles = []) {
   return (req, res, next) => {
@@ -204,12 +196,12 @@ function requireRole(roles = []) {
     }
     const roleList = Array.isArray(roles) ? roles : [roles];
     if (!roleList.includes(req.user.role)) {
-      console.warn(`[Auth] 403 INSUFFICIENT_ROLE — user=${req.user.email} role=${req.user.role} required=${roleList.join(',')}`);
+      console.warn(`[Auth] 403 INSUFFICIENT_ROLE user=${req.user.email} role=${req.user.role} required=${roleList.join(',')}`);
       return res.status(403).json({
-        error:     `Access denied. Required role: ${roleList.join(' or ')}`,
-        code:      'INSUFFICIENT_ROLE',
-        yourRole:  req.user.role,
-        required:  roleList,
+        error:    `Access denied. Required role: ${roleList.join(' or ')}`,
+        code:     'INSUFFICIENT_ROLE',
+        yourRole: req.user.role,
+        required: roleList,
       });
     }
     next();
@@ -231,13 +223,54 @@ function requirePermission(permission) {
                     req.user.role === 'ADMIN';
 
     if (!hasPerm) {
-      console.warn(`[Auth] 403 MISSING_PERMISSION — user=${req.user.email} permission=${permission}`);
+      console.warn(`[Auth] 403 MISSING_PERMISSION user=${req.user.email} permission=${permission}`);
       return res.status(403).json({
         error:      `Permission denied: '${permission}' required`,
         code:       'MISSING_PERMISSION',
         permission,
       });
     }
+    next();
+  };
+}
+
+/**
+ * requireTenant — tenant isolation guard (Phase 1)
+ * Verifies the authenticated user's tenant_id matches the request context.
+ *
+ * Checks (in order):
+ *   1. req.params.tenantId
+ *   2. req.body.tenant_id
+ *   3. req.query.tenant_id
+ *
+ * SUPER_ADMIN bypasses tenant isolation (can access all tenants).
+ */
+function requireTenant() {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Not authenticated', code: 'MISSING_TOKEN' });
+    }
+
+    // SUPER_ADMIN can access any tenant
+    if (req.user.role === 'SUPER_ADMIN') return next();
+
+    const requestedTenant = req.params?.tenantId || req.body?.tenant_id || req.query?.tenant_id;
+
+    // If no tenant specified in the request, use the user's own tenant
+    if (!requestedTenant) {
+      req.tenantId = req.user.tenant_id;
+      return next();
+    }
+
+    if (requestedTenant !== req.user.tenant_id) {
+      console.warn(`[Auth] 403 TENANT_MISMATCH user=${req.user.email} userTenant=${req.user.tenant_id} requestedTenant=${requestedTenant}`);
+      return res.status(403).json({
+        error: 'Access denied: cross-tenant access not permitted',
+        code:  'TENANT_MISMATCH',
+      });
+    }
+
+    req.tenantId = req.user.tenant_id;
     next();
   };
 }
@@ -265,11 +298,18 @@ async function authInfo(req) {
   }
 }
 
+// ── Internal helpers ───────────────────────────────────────────
+function _ip(req) {
+  return req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+         req.socket?.remoteAddress || 'unknown';
+}
+
 module.exports = {
   verifyToken,
   optionalAuth,
   requireRole,
   requirePermission,
+  requireTenant,
   authInfo,
   extractToken,
 };
