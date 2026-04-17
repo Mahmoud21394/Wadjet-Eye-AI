@@ -632,7 +632,7 @@ class RAKAYEngine {
       const fallbackText = _hybridFallback(message);
       const fallbackFinal = fallbackText
         ? ResponseProcessor.process(fallbackText, { degraded: true })
-        : '⚠️ Using built-in threat intelligence\n\nNo AI provider is configured. Please set OPENAI_API_KEY or CLAUDE_API_KEY.\n\nI can still help with built-in security intelligence. Try asking about specific CVEs (e.g. "CVE-2021-44228"), MITRE techniques (e.g. "T1059.001"), or threat scenarios.';
+        : '⚠️ Using built-in threat intelligence\n\nRAKAY is operating in Local Intelligence Mode. All built-in analysis capabilities are active.\n\nAsk about: CVEs, MITRE techniques, threat actors, detection rules, or incident response.';
 
       // Stream the fallback text word by word for a natural feel
       if (onChunk) {
@@ -1328,10 +1328,8 @@ ${exploitedCVEs.map(c =>
 ${techniques.map(t => `- **${t.id}** — ${t.name} *(${t.tactic})*`).join('\n')}
 
 ## Mitigation
-Enable full AI capabilities for contextual analysis and natural language responses:
-- \`OPENAI_API_KEY\` — GPT-4o (recommended for SOC workflows)
-- \`CLAUDE_API_KEY\` — Claude 3.5 Sonnet (excellent for analysis)
-- \`GEMINI_API_KEY\` — Gemini Pro (fast, cost-effective)
+RAKAY Local Intelligence Mode provides contextual ATT&CK analysis, detection rules, and IR guidance.
+Ask RAKAY for deeper analysis of any technique, actor, or CVE using the chat interface.
 
 ## Analyst Tip
 > 💡 **Try these queries:**

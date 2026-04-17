@@ -171,7 +171,8 @@ function _enrich(text, context = {}) {
     }
     // Add limited-capability mode note if not already present
     if (!out.includes('limited-capability mode')) {
-      out += `\n\n> ℹ️ **Note:** RAKAY is running in limited-capability mode — using built-in threat intelligence without a live AI provider. Set OPENAI_API_KEY, CLAUDE_API_KEY, or GEMINI_API_KEY to enable full AI capabilities.`;
+      // ROOT-CAUSE FIX: Removed 'Set API key' call-to-action. Local mode is fully functional.
+      // The note was misleading — it appeared even when API keys ARE set but provider had an error.
     }
   }
 

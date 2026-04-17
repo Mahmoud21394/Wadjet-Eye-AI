@@ -282,7 +282,7 @@ router.get('/health', (req, res) => {
     message_id_cache: msgIdStats,
     auth_modes:      ['jwt', 'demo', 'service-key'],
     demo_auth_url:   '/api/RAKAY/demo-auth',
-    note: !llm_ready ? 'No LLM API key configured. Set OPENAI_API_KEY, CLAUDE_API_KEY, DEEPSEEK_API_KEY, or GEMINI_API_KEY.' : undefined,
+    note: !llm_ready ? 'Local Intelligence Mode active — no external AI provider keys detected. See GET /api/ai/env-check for key status.' : undefined,
   });
 });
 
