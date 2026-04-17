@@ -36,6 +36,33 @@ const { supabase }     = require('../config/supabase');
 const { asyncHandler } = require('../middleware/errorHandler');
 
 // ─────────────────────────────────────────────────────────────────────
+//  🚨 AI ROUTER DIAGNOSTICS — printed immediately on module load
+//  Verifies that dotenv populated process.env BEFORE this file was
+//  required.  server.js calls require('dotenv').config() at line 22,
+//  which is BEFORE any route require() at lines 53‑84, so these values
+//  must be populated if the keys exist in the .env / Render Dashboard.
+// ─────────────────────────────────────────────────────────────────────
+console.log('=== 🚨 AI ROUTER DIAGNOSTICS 🚨 ===');
+console.log('RAW OPENAI_KEY:', process.env.OPENAI_API_KEY
+  ? 'EXISTS (Starts with ' + process.env.OPENAI_API_KEY.substring(0, 5) + ')'
+  : 'MISSING/UNDEFINED');
+console.log('RAW CLAUDE_KEY:', process.env.CLAUDE_API_KEY
+  ? 'EXISTS (Starts with ' + process.env.CLAUDE_API_KEY.substring(0, 5) + ')'
+  : 'MISSING/UNDEFINED');
+console.log('RAW GEMINI_KEY:', process.env.GEMINI_API_KEY
+  ? 'EXISTS (Starts with ' + process.env.GEMINI_API_KEY.substring(0, 5) + ')'
+  : 'MISSING/UNDEFINED');
+console.log('RAW DEEPSEEK_KEY:', process.env.DEEPSEEK_API_KEY
+  ? 'EXISTS (Starts with ' + process.env.DEEPSEEK_API_KEY.substring(0, 5) + ')'
+  : 'MISSING/UNDEFINED');
+console.log('RAW ANTHROPIC_KEY:', process.env.ANTHROPIC_API_KEY
+  ? 'EXISTS (Starts with ' + process.env.ANTHROPIC_API_KEY.substring(0, 5) + ')'
+  : 'MISSING/UNDEFINED');
+console.log('NODE_ENV:', process.env.NODE_ENV);
+console.log('OLLAMA_ENDPOINT:', process.env.OLLAMA_ENDPOINT || 'NOT SET');
+console.log('=== END AI ROUTER DIAGNOSTICS ===');
+
+// ─────────────────────────────────────────────────────────────────────
 //  PROVIDER CONFIGURATIONS
 // ─────────────────────────────────────────────────────────────────────
 const PROVIDERS = {
@@ -192,8 +219,16 @@ function _recordFailure(id, errMsg) {
 
 // ─────────────────────────────────────────────────────────────────────
 //  ORDERED PROVIDERS (by health score, respecting priority)
+//  ROOT-CAUSE FIX: Re-read env vars every call so runtime-injected keys
+//  (Render Dashboard secrets) are picked up without a server restart.
 // ─────────────────────────────────────────────────────────────────────
 function _getOrderedProviders() {
+  // Refresh keys from process.env on every call (handles runtime injection)
+  PROVIDERS.openai.key    = process.env.OPENAI_API_KEY    || PROVIDERS.openai.key;
+  PROVIDERS.claude.key    = process.env.CLAUDE_API_KEY    || process.env.ANTHROPIC_API_KEY || PROVIDERS.claude.key;
+  PROVIDERS.gemini.key    = process.env.GEMINI_API_KEY    || PROVIDERS.gemini.key;
+  PROVIDERS.deepseek.key  = process.env.DEEPSEEK_API_KEY  || PROVIDERS.deepseek.key;
+
   return Object.values(PROVIDERS)
     .filter(p => p.key || p.id === 'ollama')  // ollama = local, no key needed
     .sort((a, b) => {
@@ -490,11 +525,16 @@ async function callAI(messages, opts = {}) {
 
   console.log(`[AI-Router] Request received — eligible providers: [${eligible.map(p=>p.id).join(', ') || 'none'}]`);
 
+  // ROOT-CAUSE FIX: Do NOT short-circuit to mock when keys are present.
+  // If eligible.length === 0 it means NO keys are configured at all —
+  // only then fall through to local intelligence. When keys ARE set we
+  // must attempt the real provider loop so failures surface as real errors.
   if (eligible.length === 0) {
-    console.log('[AI-Router] No real provider keys configured — activating Local Intelligence Mode');
+    console.log('[AI-Router] No real provider keys configured — Local Intelligence Mode (built-in threat-intel active)');
     const lastMsg = messages.filter(m => m.role === 'user').pop()?.content || '';
     return _mockAnalysis(lastMsg);
   }
+  // Keys ARE configured — proceed to real provider loop below (no early mock return)
 
   for (const provider of eligible) {
     const id = provider.id;
@@ -644,16 +684,36 @@ Response standards:
 
 /* ── GET /api/ai/status ── */
 router.get('/status', asyncHandler(async (req, res) => {
+  // ROOT-CAUSE FIX: Re-read keys from process.env at status-check time so the
+  // response always reflects the current Render Dashboard secret values, not
+  // the stale snapshot taken when the module was first loaded.
+  const liveKeys = {
+    openai:   process.env.OPENAI_API_KEY,
+    claude:   process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY,
+    gemini:   process.env.GEMINI_API_KEY,
+    deepseek: process.env.DEEPSEEK_API_KEY,
+    ollama:   process.env.OLLAMA_ENDPOINT ? 'local' : null,
+  };
+  // Sync back to PROVIDERS so subsequent calls see the refreshed keys
+  if (liveKeys.openai)   PROVIDERS.openai.key   = liveKeys.openai;
+  if (liveKeys.claude)   PROVIDERS.claude.key   = liveKeys.claude;
+  if (liveKeys.gemini)   PROVIDERS.gemini.key   = liveKeys.gemini;
+  if (liveKeys.deepseek) PROVIDERS.deepseek.key = liveKeys.deepseek;
+
   const status = {};
   for (const [id, p] of Object.entries(PROVIDERS)) {
     const s = providerState[id];
+    const hasLiveKey = !!(liveKeys[id]);
+    // healthScore: newly-configured providers start at 100, not 50
+    const effectiveHealth = hasLiveKey && s.totalCalls === 0 ? 100 : s.healthScore;
     status[id] = {
       name:         p.name,
       model:        p.model,
-      enabled:      !!(p.key || (id === 'ollama' && process.env.OLLAMA_ENDPOINT)),
-      hasKey:       !!p.key,
+      enabled:      hasLiveKey,
+      hasKey:       hasLiveKey,
+      keyPrefix:    liveKeys[id] && id !== 'ollama' ? liveKeys[id].slice(0, 8) + '...' : null,
       cbState:      s.cbState,
-      healthScore:  s.healthScore,
+      healthScore:  effectiveHealth,
       avgLatencyMs: s.avgLatency,
       totalCalls:   s.totalCalls,
       totalSuccess: s.totalSuccess,
@@ -664,9 +724,7 @@ router.get('/status', asyncHandler(async (req, res) => {
     };
   }
 
-  const anyEnabled = Object.values(PROVIDERS).some(p =>
-    p.key || (p.id === 'ollama' && process.env.OLLAMA_ENDPOINT)
-  );
+  const anyEnabled = Object.values(liveKeys).some(Boolean);
 
   const orderedChain = _getOrderedProviders()
     .filter(p => p.key || (p.id === 'ollama' && process.env.OLLAMA_ENDPOINT))

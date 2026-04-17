@@ -22,6 +22,11 @@
 require('dotenv').config();
 
 // ── Validate required environment variables on startup ───────────
+// ROOT-CAUSE FIX: Do NOT exit on missing Supabase/env vars in dev/CI.
+// A hard process.exit(1) here prevents the AI router from ever loading,
+// which causes the "stuck in Local Intelligence Mode" symptom even when
+// API keys ARE set.  We now warn loudly but continue so that the AI
+// routes (and their startup diagnostics) execute and are reachable.
 const REQUIRED_ENV = [
   'SUPABASE_URL',
   'SUPABASE_SERVICE_KEY',
@@ -29,9 +34,10 @@ const REQUIRED_ENV = [
 ];
 const missingEnv = REQUIRED_ENV.filter(k => !process.env[k]);
 if (missingEnv.length > 0) {
-  console.error(`\n❌ [Server] Missing required environment variables:\n   ${missingEnv.join(', ')}`);
-  console.error('   Copy backend/.env.example → backend/.env and fill in your values.\n');
-  process.exit(1);
+  console.warn(`\n⚠️  [Server] Missing recommended environment variables:\n   ${missingEnv.join(', ')}`);
+  console.warn('   DB-dependent routes may fail.  AI routes will still work if AI keys are set.');
+  console.warn('   Copy backend/.env.example → backend/.env and fill in your values.\n');
+  // NOTE: was process.exit(1) — removed so AI Router can start even without Supabase.
 }
 
 // ── Core imports (after env validation) ──────────────────────────
