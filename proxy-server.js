@@ -153,11 +153,13 @@ function proxyRequest(targetUrl, req, res, extraHeaders = {}) {
 // ── Route table (non-NVD routes) ──────────────────────────────
 // NVD has its own dedicated handler below that matches both
 // `/proxy/nvd` (no trailing slash) and `/proxy/nvd/` (with slash).
-// ── Static AI API Keys (production-grade, server-side only) ──
-const HARDCODED_OPENAI_KEY   = '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';
-const HARDCODED_CLAUDE_KEY   = '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';
-const HARDCODED_GEMINI_KEY   = 'AIzaSyD91IPjhJrTP4zvmsmv6h2pPF93tcpQxxA';
-const HARDCODED_DEEPSEEK_KEY = 'sk-d0362d89559141c69d4c64ed780fc3c6';
+//
+// ⚠️  SECURITY (Phase 0): All API keys via environment variables ONLY.
+//   Hardcoded fallback keys have been intentionally removed.
+//   Set in .env / Render Dashboard / Vercel:
+//     OPENAI_API_KEY, CLAUDE_API_KEY, GEMINI_API_KEY, DEEPSEEK_API_KEY,
+//     VT_API_KEY, ABUSEIPDB_API_KEY, SHODAN_API_KEY, OTX_API_KEY, URLHAUS_API_KEY
+//
 
 const PROXY_ROUTES = [
   // VirusTotal
@@ -573,68 +575,80 @@ const server = http.createServer((req, res) => {
       let   qs           = parsedUrl.search || '';
       const extraHeaders = {};
 
-      // ── Hardcoded API keys — always available, no env var needed ──
-      const HARDCODED_VT_KEY      = 'ebe28cff859d6364a86124619de26a2b9c5e2874789f8a9165ed38fb8c8c9ae0';
-      const HARDCODED_ABUSE_KEY   = 'c5708a7dd63b526a1d293e13d06f1d66f9d50fe673171ed36af277f408b72be057ed7c8f1311eb4d';
-      const HARDCODED_SHODAN_KEY  = '0sDDXz5M0275ddF1nQwH0zlGyVdfB380';
-      const HARDCODED_OTX_KEY     = 'a635f5b8ca93ae4863cdd7e8179f62d0edb1b6c57b3f291d';
-      const HARDCODED_URLHAUS_KEY = 'a635f5b8ca93ae4863cdd7e8179f62d0edb1b6c57b3f291d';
+      // ── API key injection — environment variables ONLY (Phase 0 security) ──
+      // All keys must be supplied via process.env. No fallback constants.
+      // Missing keys log a clear warning; the proxy still forwards so the
+      // upstream API returns its own 401/403 (visible to operators).
 
-      // Strip client-sent Shodan key from URL; inject resolved key
+      // Strip client-sent Shodan key from URL; inject server-side key
       if (route.prefix === '/proxy/shodan/') {
         const qp = new URLSearchParams(parsedUrl.query || '');
         qp.delete('key');
-        const shodanKey = process.env.SHODAN_API_KEY || HARDCODED_SHODAN_KEY;
-        qp.set('key', shodanKey);
+        const shodanKey = process.env.SHODAN_API_KEY || '';
+        if (!shodanKey) console.warn('[Proxy] SHODAN_API_KEY not set — Shodan requests will be unauthenticated');
+        if (shodanKey) qp.set('key', shodanKey);
         qs = qp.toString() ? '?' + qp.toString() : '';
       }
       // Inject VT key
       if (route.prefix === '/proxy/vt/') {
-        const vtKey = process.env.VT_API_KEY || HARDCODED_VT_KEY;
-        extraHeaders['x-apikey'] = vtKey;
+        const vtKey = process.env.VT_API_KEY || process.env.VIRUSTOTAL_API_KEY || '';
+        if (!vtKey) console.warn('[Proxy] VT_API_KEY not set');
+        else extraHeaders['x-apikey'] = vtKey;
       }
       // Inject AbuseIPDB key
       if (route.prefix === '/proxy/abuseipdb/') {
-        const abuseKey = process.env.ABUSEIPDB_API_KEY || HARDCODED_ABUSE_KEY;
-        extraHeaders['Key'] = abuseKey; extraHeaders['Accept'] = 'application/json';
+        const abuseKey = process.env.ABUSEIPDB_API_KEY || '';
+        if (!abuseKey) console.warn('[Proxy] ABUSEIPDB_API_KEY not set');
+        else extraHeaders['Key'] = abuseKey;
+        extraHeaders['Accept'] = 'application/json';
       }
       // Inject OTX key
       if (route.prefix === '/proxy/otx/') {
-        const otxKey = process.env.OTX_API_KEY || HARDCODED_OTX_KEY;
-        extraHeaders['X-OTX-API-KEY'] = otxKey;
+        const otxKey = process.env.OTX_API_KEY || '';
+        if (!otxKey) console.warn('[Proxy] OTX_API_KEY not set');
+        else extraHeaders['X-OTX-API-KEY'] = otxKey;
       }
-      // Inject OpenAI key — hardcoded production key, env override supported
+      // Inject OpenAI key (env-only — Phase 0 security)
       if (route.prefix === '/proxy/openai/') {
-        const openaiKey = process.env.OPENAI_API_KEY || HARDCODED_OPENAI_KEY;
-        if (openaiKey) extraHeaders['Authorization'] = `Bearer ${openaiKey}`;
+        const openaiKey = process.env.OPENAI_API_KEY || '';
+        if (!openaiKey) console.warn('[Proxy] OPENAI_API_KEY not set — OpenAI proxy will fail');
+        else extraHeaders['Authorization'] = `Bearer ${openaiKey}`;
       }
-      // Inject Claude key — hardcoded production key, env override supported
+      // Inject Claude key (env-only)
       if (route.prefix === '/proxy/claude/') {
-        const claudeKey = process.env.CLAUDE_API_KEY || HARDCODED_CLAUDE_KEY;
-        if (claudeKey) {
+        const claudeKey = process.env.CLAUDE_API_KEY || '';
+        if (!claudeKey) console.warn('[Proxy] CLAUDE_API_KEY not set — Claude proxy will fail');
+        else {
           extraHeaders['x-api-key'] = claudeKey;
           extraHeaders['anthropic-version'] = '2023-06-01';
-          extraHeaders['anthropic-dangerous-direct-browser-access'] = 'true';
         }
       }
-      // Inject Gemini key — append as query param
+      // Inject Gemini key — append as query param (env-only)
       if (route.prefix === '/proxy/gemini/') {
-        const geminiKey = process.env.GEMINI_API_KEY || HARDCODED_GEMINI_KEY;
-        if (geminiKey) {
+        const geminiKey = process.env.GEMINI_API_KEY || '';
+        if (!geminiKey) console.warn('[Proxy] GEMINI_API_KEY not set — Gemini proxy will fail');
+        else {
           const qp = new URLSearchParams(parsedUrl.query || '');
           qp.set('key', geminiKey);
           qs = '?' + qp.toString();
         }
       }
-      // Inject DeepSeek key
+      // Inject DeepSeek key (env-only)
       if (route.prefix === '/proxy/deepseek/') {
-        const dsKey = process.env.DEEPSEEK_API_KEY || HARDCODED_DEEPSEEK_KEY;
-        if (dsKey) extraHeaders['Authorization'] = `Bearer ${dsKey}`;
+        const dsKey = process.env.DEEPSEEK_API_KEY || '';
+        if (!dsKey) console.warn('[Proxy] DEEPSEEK_API_KEY not set — DeepSeek proxy will fail');
+        else extraHeaders['Authorization'] = `Bearer ${dsKey}`;
       }
       // Inject URLhaus Auth-Key
       if (route.prefix === '/proxy/urlhaus/') {
-        const urlhausKey = process.env.URLHAUS_API_KEY || HARDCODED_URLHAUS_KEY;
-        extraHeaders['Auth-Key'] = urlhausKey;
+        const urlhausKey = process.env.URLHAUS_API_KEY || '';
+        if (!urlhausKey) console.warn('[Proxy] URLHAUS_API_KEY not set');
+        else extraHeaders['Auth-Key'] = urlhausKey;
+      }
+      // CISA / news RSS — no auth needed, just CORS bypass
+      if (route.prefix === '/proxy/cisa/' || route.prefix === '/proxy/rss/' ||
+          route.prefix === '/proxy/bleeping/' || route.prefix === '/proxy/secweek/') {
+        extraHeaders['Accept'] = 'application/xml, application/rss+xml, text/xml, */*';
       }
       // CISA / news RSS — no auth needed, just CORS bypass
       if (route.prefix === '/proxy/cisa/' || route.prefix === '/proxy/rss/' ||

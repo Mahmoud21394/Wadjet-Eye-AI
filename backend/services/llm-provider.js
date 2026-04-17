@@ -415,9 +415,9 @@ class OpenAIProvider extends BaseProvider {
   }
 
   async chat(messages, tools = [], opts = {}) {
-    // ROOT-CAUSE FIX: Re-read key from process.env at call-time so that keys
-    // injected via Render Dashboard (after module load) are always picked up.
-    this.apiKey = this.apiKey || process.env.OPENAI_API_KEY || process.env.RAKAY_OPENAI_KEY || '';
+    // ROOT-CAUSE FIX v2: env takes precedence so runtime-injected keys always work.
+    this.apiKey = process.env.OPENAI_API_KEY || process.env.RAKAY_OPENAI_KEY || this.apiKey || '';
+    console.log(`[OpenAI] key_check: ${this.apiKey ? 'SET(' + this.apiKey.slice(0,12) + '...)' : 'MISSING'}`);
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:openai'), { circuitOpen: true });
     if (!this.apiKey)     throw new Error('OpenAI API key not configured');
 
@@ -451,6 +451,8 @@ class OpenAIProvider extends BaseProvider {
   }
 
   async chatStream(messages, tools = [], opts = {}, onChunk) {
+    // ROOT-CAUSE FIX v2: always re-read key at call-time
+    this.apiKey = process.env.OPENAI_API_KEY || process.env.RAKAY_OPENAI_KEY || this.apiKey || '';
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:openai'), { circuitOpen: true });
     if (!this.apiKey)     throw new Error('OpenAI API key not configured');
 
@@ -720,13 +722,9 @@ class AnthropicProvider extends BaseProvider {
   }
 
   async chat(messages, tools = [], opts = {}) {
-    // ROOT-CAUSE FIX: Re-read key at call-time for runtime-injected secrets
-    this.apiKey = this.apiKey
-      || process.env.CLAUDE_API_KEY
-      || process.env.ANTHROPIC_API_KEY
-      || process.env.RAKAY_ANTHROPIC_KEY
-      || process.env.RAKAY_API_KEY
-      || '';
+    // ROOT-CAUSE FIX v2: env takes precedence so runtime-injected keys always work.
+    this.apiKey = process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.RAKAY_ANTHROPIC_KEY || process.env.RAKAY_API_KEY || this.apiKey || '';
+    console.log(`[Anthropic] key_check: ${this.apiKey ? 'SET(' + this.apiKey.slice(0,12) + '...)' : 'MISSING'}`);
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:anthropic'), { circuitOpen: true });
     if (!this.apiKey)     throw new Error('Anthropic API key not configured');
 
@@ -760,6 +758,8 @@ class AnthropicProvider extends BaseProvider {
   }
 
   async chatStream(messages, tools = [], opts = {}, onChunk) {
+    // ROOT-CAUSE FIX v2: always re-read key at call-time
+    this.apiKey = process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.RAKAY_ANTHROPIC_KEY || process.env.RAKAY_API_KEY || this.apiKey || '';
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:anthropic'), { circuitOpen: true });
     if (!this.apiKey)     throw new Error('Anthropic API key not configured');
 
@@ -829,8 +829,9 @@ class DeepSeekProvider extends BaseProvider {
   _headers() { return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` }; }
 
   async chat(messages, tools = [], opts = {}) {
-    // ROOT-CAUSE FIX: Re-read key at call-time for runtime-injected secrets
-    this.apiKey = this.apiKey || process.env.DEEPSEEK_API_KEY || process.env.deepseek_API_KEY || '';
+    // ROOT-CAUSE FIX v2: env takes precedence so runtime-injected keys always work.
+    this.apiKey = process.env.DEEPSEEK_API_KEY || process.env.deepseek_API_KEY || this.apiKey || '';
+    console.log(`[DeepSeek] key_check: ${this.apiKey ? 'SET(' + this.apiKey.slice(0,12) + '...)' : 'MISSING'}`);
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:deepseek'), { circuitOpen: true });
     if (!this.apiKey)     throw new Error('DeepSeek API key not configured');
 
@@ -878,6 +879,8 @@ class DeepSeekProvider extends BaseProvider {
   }
 
   async chatStream(messages, tools, opts, onChunk) {
+    // ROOT-CAUSE FIX v2: always re-read key at call-time
+    this.apiKey = process.env.DEEPSEEK_API_KEY || process.env.deepseek_API_KEY || this.apiKey || '';
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:deepseek'), { circuitOpen: true });
     if (!this.apiKey)     throw new Error('DeepSeek API key not configured');
 
@@ -929,8 +932,9 @@ class GeminiProvider extends BaseProvider {
   }
 
   async chat(messages, tools = [], opts = {}) {
-    // ROOT-CAUSE FIX: Re-read key at call-time for runtime-injected secrets
-    this.apiKey = this.apiKey || process.env.GEMINI_API_KEY || '';
+    // ROOT-CAUSE FIX v2: env takes precedence so runtime-injected keys always work.
+    this.apiKey = process.env.GEMINI_API_KEY || this.apiKey || '';
+    console.log(`[Gemini] key_check: ${this.apiKey ? 'SET(' + this.apiKey.slice(0,12) + '...)' : 'MISSING'}`);
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:gemini'), { circuitOpen: true });
     if (!this.apiKey)     throw new Error('Gemini API key not configured');
 
@@ -980,6 +984,8 @@ class GeminiProvider extends BaseProvider {
   }
 
   async chatStream(messages, tools, opts, onChunk) {
+    // ROOT-CAUSE FIX v2: always re-read key at call-time
+    this.apiKey = process.env.GEMINI_API_KEY || this.apiKey || '';
     if (this.cb.isOpen()) throw Object.assign(new Error('CIRCUIT_OPEN:gemini'), { circuitOpen: true });
     if (!this.apiKey)     throw new Error('Gemini API key not configured');
 
@@ -1127,6 +1133,16 @@ class MultiProvider {
     const tried  = [];
     const errors = [];
 
+    // ── DIAGNOSTIC: Log provider chain state before selection ──────────────
+    const chainStatus = this._sortedProviders().map(p => ({
+      name: p.name,
+      hasKey: !!(p.apiKey && p.apiKey.length > 0),
+      keyPreview: (p.apiKey && p.apiKey !== 'local' && p.apiKey !== 'mock') ? p.apiKey.slice(0, 12) + '...' : p.apiKey || 'EMPTY',
+      cbState: p.cb?.state || 'N/A',
+      healthScore: p.health?.score ?? '?',
+    }));
+    console.log(`[MultiProvider] PROVIDER_CHAIN_STATUS: ${JSON.stringify(chainStatus)}`);
+
     for (const provider of this._sortedProviders()) {
       // Skip if circuit is open
       if (provider.cb?.isOpen?.()) {
@@ -1137,7 +1153,7 @@ class MultiProvider {
       // Skip if no API key (Ollama uses 'local' sentinel, Mock uses 'mock' sentinel)
       const hasKey = provider.apiKey && provider.apiKey.length > 0;
       if (!hasKey && provider.name !== 'mock') {
-        console.log(`[MultiProvider] Skipping ${provider.name} — no API key configured`);
+        console.log(`[MultiProvider] Skipping ${provider.name} — no API key configured (apiKey='${provider.apiKey}')`);
         continue;
       }
 
@@ -1181,6 +1197,11 @@ class MultiProvider {
 
     // TASK 6: True graceful degradation — NEVER throw, always return valid JSON
     console.warn(`[MultiProvider] ALL_PROVIDERS_FAILED tried=[${tried.join(', ')}] errors=${JSON.stringify(errors)} — activating mock fallback`);
+    console.warn(`[MultiProvider] ⚠️  ROOT CAUSE ANALYSIS: tried=${tried.length} providers. If tried=[] it means ALL providers were skipped (no API keys). If tried>0 it means keys were present but all calls failed.`);
+    if (tried.length === 0) {
+      console.warn(`[MultiProvider] ❌ CRITICAL: Zero providers attempted. This means _hasRealLLM() returned false or all provider keys are empty strings.`);
+      console.warn(`[MultiProvider]    Check: OPENAI_API_KEY=${process.env.OPENAI_API_KEY ? 'SET' : 'MISSING'}, CLAUDE_API_KEY=${process.env.CLAUDE_API_KEY ? 'SET' : 'MISSING'}, GEMINI_API_KEY=${process.env.GEMINI_API_KEY ? 'SET' : 'MISSING'}`);
+    }
     const mockResult = await this._mockProvider.chat(messages, tools, opts);
     return {
       ...mockResult,

@@ -1,0 +1,473 @@
+openapi: 3.1.0
+info:
+  title: Wadjet-Eye AI — Security Intelligence Platform API
+  version: 4.0.0
+  description: |
+    Enterprise threat intelligence and AI-powered security operations platform.
+
+    ## Authentication
+    All endpoints (except `/health`, `/api/RAKAY/diag`, and `/api/auth/*`) require a valid
+    JWT bearer token.  Issue tokens via `POST /api/auth/login`.
+
+    ### Token delivery options (Phase 1 hardening)
+    - **Preferred**: `Authorization: Bearer <token>` header
+    - **Legacy**: `X-Access-Token: <token>` header
+    - **Browser sessions**: httpOnly secure cookie `access_token` (set via login endpoint)
+
+  contact:
+    name: Security Operations
+    email: security@wadjet-eye-ai.example.com
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://wadjet-eye-ai.onrender.com
+    description: Production (Render)
+  - url: http://localhost:4000
+    description: Local development
+
+tags:
+  - name: Auth
+    description: Authentication, session management, token refresh
+  - name: AI / RAKAY
+    description: AI assistant (RAKAY engine), provider status, streaming chat
+  - name: IOCs
+    description: Indicators of Compromise — CRUD, search, enrichment
+  - name: Alerts
+    description: Security alerts
+  - name: Threats
+    description: Threat intelligence, CVEs, actors
+  - name: Dashboard
+    description: Aggregated metrics and dashboards
+  - name: Tenants
+    description: Multi-tenant management (SUPER_ADMIN only)
+  - name: Health
+    description: Service health and diagnostics
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    CookieAuth:
+      type: apiKey
+      in: cookie
+      name: access_token
+
+  schemas:
+    # ── Envelope ─────────────────────────────────────────────────
+    SuccessEnvelope:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          description: Payload — varies by endpoint
+        requestId:
+          type: string
+          format: uuid
+
+    ErrorEnvelope:
+      type: object
+      required: [success, error, code]
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          example: Validation failed
+        code:
+          type: string
+          example: VALIDATION_ERROR
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              part:    { type: string }
+              issues:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    path:    { type: string }
+                    message: { type: string }
+                    code:    { type: string }
+        requestId:
+          type: string
+          format: uuid
+
+    # ── Auth ──────────────────────────────────────────────────────
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:    { type: string, format: email }
+        password: { type: string, minLength: 8 }
+
+    LoginResponse:
+      type: object
+      properties:
+        success:      { type: boolean }
+        accessToken:  { type: string }
+        refreshToken: { type: string }
+        user:
+          $ref: '#/components/schemas/UserProfile'
+
+    UserProfile:
+      type: object
+      properties:
+        id:          { type: string, format: uuid }
+        email:       { type: string, format: email }
+        name:        { type: string }
+        role:        { type: string, enum: [SUPER_ADMIN, ADMIN, ANALYST, VIEWER] }
+        tenant_id:   { type: string }
+        permissions: { type: object }
+        mfa_enabled: { type: boolean }
+
+    # ── RAKAY Chat ────────────────────────────────────────────────
+    ChatRequest:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          minLength: 1
+          maxLength: 8000
+          description: User message / query
+        sessionId:
+          type: string
+          format: uuid
+          description: Conversation session (optional — creates new if omitted)
+        tenantId:
+          type: string
+        userId:
+          type: string
+        priority:
+          type: string
+          enum: [LOW, MEDIUM, HIGH]
+          default: MEDIUM
+
+    ChatResponse:
+      type: object
+      properties:
+        success:    { type: boolean }
+        message_id: { type: string, format: uuid }
+        session_id: { type: string, format: uuid }
+        content:    { type: string }
+        provider:   { type: string, example: openai }
+        model:      { type: string, example: gpt-4o }
+        degraded:   { type: boolean }
+        latency_ms: { type: integer }
+        tokens_used:
+          type: object
+          properties:
+            prompt:     { type: integer }
+            completion: { type: integer }
+            total:      { type: integer }
+
+    # ── IOC ───────────────────────────────────────────────────────
+    IOC:
+      type: object
+      required: [type, value]
+      properties:
+        id:          { type: string, format: uuid }
+        type:        { type: string, enum: [ip, domain, url, hash, email] }
+        value:       { type: string }
+        severity:    { type: string, enum: [LOW, MEDIUM, HIGH, CRITICAL] }
+        source:      { type: string }
+        tenant_id:   { type: string }
+        risk_score:  { type: integer, minimum: 0, maximum: 100 }
+        tags:        { type: array, items: { type: string } }
+        created_at:  { type: string, format: date-time }
+        last_seen:   { type: string, format: date-time }
+
+    # ── AI Provider Status ────────────────────────────────────────
+    ProviderStatus:
+      type: object
+      properties:
+        provider:    { type: string }
+        model:       { type: string }
+        hasKey:      { type: boolean }
+        cbStatus:    { type: string, enum: [CLOSED, OPEN, HALF_OPEN] }
+        healthScore: { type: number, minimum: 0, maximum: 100 }
+
+    DiagnosticStatus:
+      type: object
+      properties:
+        status:        { type: string, example: ok }
+        hasRealLLM:    { type: boolean }
+        mode:          { type: string, example: EXTERNAL_AI_PROVIDER }
+        providers:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProviderStatus'
+        keys:
+          type: object
+          description: Masked key presence (never exposes actual values)
+
+security:
+  - BearerAuth: []
+  - CookieAuth: []
+
+paths:
+  # ── Health ────────────────────────────────────────────────────────
+  /health:
+    get:
+      tags: [Health]
+      summary: Service health check
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:      { type: string, example: OK }
+                  service:     { type: string }
+                  version:     { type: string }
+                  timestamp:   { type: string, format: date-time }
+                  uptime_s:    { type: integer }
+                  memory_mb:   { type: integer }
+                  db:          { type: string }
+                  db_latency_ms: { type: integer }
+
+  # ── AI Diagnostics ────────────────────────────────────────────────
+  /api/RAKAY/diag:
+    get:
+      tags: [AI / RAKAY]
+      summary: AI provider diagnostic (unauthenticated)
+      description: |
+        Returns AI provider status, key presence, and diagnostics.
+        **No authentication required** — safe to check from CI/CD or browser.
+        Key values are NEVER returned; only presence/absence is indicated.
+      security: []
+      responses:
+        '200':
+          description: Diagnostic information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiagnosticStatus'
+
+  # ── Auth ──────────────────────────────────────────────────────────
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Login — obtain access + refresh tokens
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+          headers:
+            Set-Cookie:
+              description: httpOnly access_token cookie (Phase 1)
+              schema:
+                type: string
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /api/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh access token
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200':
+          description: New access token issued
+        '401':
+          description: Invalid or expired refresh token
+
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke session and clear cookies
+      responses:
+        '200':
+          description: Logged out
+
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: Get current user profile
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          description: Not authenticated
+
+  # ── RAKAY Chat ────────────────────────────────────────────────────
+  /api/RAKAY/chat:
+    post:
+      tags: [AI / RAKAY]
+      summary: Send message to RAKAY AI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: AI response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
+        '400':
+          description: Validation error
+        '429':
+          description: Rate limit exceeded
+
+  /api/RAKAY/chat/stream:
+    post:
+      tags: [AI / RAKAY]
+      summary: Stream AI response via SSE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: Server-Sent Events stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  # ── IOCs ──────────────────────────────────────────────────────────
+  /api/iocs:
+    get:
+      tags: [IOCs]
+      summary: List IOCs (paginated)
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 20, maximum: 200 }
+        - in: query
+          name: type
+          schema: { type: string, enum: [ip, domain, url, hash, email] }
+        - in: query
+          name: severity
+          schema: { type: string, enum: [LOW, MEDIUM, HIGH, CRITICAL] }
+      responses:
+        '200':
+          description: IOC list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/IOC'
+                          total: { type: integer }
+                          page:  { type: integer }
+                          limit: { type: integer }
+
+    post:
+      tags: [IOCs]
+      summary: Create IOC
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IOC'
+      responses:
+        '201':
+          description: IOC created
+        '400':
+          description: Validation error
+
+  /api/iocs/{id}:
+    get:
+      tags: [IOCs]
+      summary: Get IOC by ID
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: IOC details
+        '404':
+          description: Not found
+
+    patch:
+      tags: [IOCs]
+      summary: Update IOC
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IOC'
+      responses:
+        '200':
+          description: Updated
+
+    delete:
+      tags: [IOCs]
+      summary: Delete IOC
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Deleted

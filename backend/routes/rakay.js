@@ -286,6 +286,65 @@ router.get('/health', (req, res) => {
   });
 });
 
+// ── Diagnostic endpoint — UNAUTHENTICATED, shows key presence and runtime state ─
+// GET /api/RAKAY/diag  — no auth required; safe (keys masked to first 12 chars)
+router.get('/diag', (req, res) => {
+  const openaiKey    = process.env.OPENAI_API_KEY   || process.env.RAKAY_OPENAI_KEY   || '';
+  const claudeKey    = process.env.CLAUDE_API_KEY   || process.env.ANTHROPIC_API_KEY  || process.env.RAKAY_ANTHROPIC_KEY || process.env.RAKAY_API_KEY || '';
+  const geminiKey    = process.env.GEMINI_API_KEY   || '';
+  const deepseekKey  = process.env.DEEPSEEK_API_KEY || process.env.deepseek_API_KEY   || '';
+  const ollamaUrl    = process.env.OLLAMA_BASE_URL   || '';
+
+  const hasOpenAI    = !!openaiKey;
+  const hasAnthropic = !!claudeKey;
+  const hasGemini    = !!geminiKey;
+  const hasDeepSeek  = !!deepseekKey;
+  const hasOllama    = !!ollamaUrl;
+  const hasRealLLM   = hasOpenAI || hasAnthropic || hasGemini || hasDeepSeek || hasOllama;
+
+  // Mask keys — only first 12 chars shown
+  const mask = (k) => k ? k.slice(0, 12) + '...' : 'NOT_SET';
+
+  let providerStatuses = [];
+  try {
+    if (_engineSingleton) {
+      const caps = _engineSingleton.getCapabilities();
+      providerStatuses = caps.providers || [];
+    }
+  } catch {}
+
+  console.log(`[RAKAY/diag] Diagnostic requested — hasRealLLM=${hasRealLLM} openai=${hasOpenAI} anthropic=${hasAnthropic} gemini=${hasGemini} deepseek=${hasDeepSeek}`);
+
+  res.json({
+    status:        'ok',
+    timestamp:     new Date().toISOString(),
+    hasRealLLM,
+    expectedMode:  hasRealLLM ? 'EXTERNAL_AI_PROVIDER' : 'LOCAL_INTELLIGENCE_FALLBACK',
+    keys: {
+      OPENAI_API_KEY:    { present: hasOpenAI,    masked: mask(openaiKey),   source: process.env.OPENAI_API_KEY ? 'env' : process.env.RAKAY_OPENAI_KEY ? 'env(RAKAY)' : 'missing' },
+      CLAUDE_API_KEY:    { present: hasAnthropic,  masked: mask(claudeKey),   source: process.env.CLAUDE_API_KEY ? 'env' : process.env.ANTHROPIC_API_KEY ? 'env(ANTHROPIC)' : claudeKey ? 'env(RAKAY)' : 'missing' },
+      GEMINI_API_KEY:    { present: hasGemini,     masked: mask(geminiKey),   source: process.env.GEMINI_API_KEY ? 'env' : 'missing' },
+      DEEPSEEK_API_KEY:  { present: hasDeepSeek,   masked: mask(deepseekKey), source: process.env.DEEPSEEK_API_KEY ? 'env' : process.env.deepseek_API_KEY ? 'env(lower)' : 'missing' },
+      OLLAMA_BASE_URL:   { present: hasOllama,     value: ollamaUrl || 'NOT_SET' },
+    },
+    engineSingleton: !!_engineSingleton,
+    providerRuntimeStatus: providerStatuses.map(p => ({
+      name:   p.name,
+      hasKey: p.hasKey,
+      cbState: p.cb?.state || 'N/A',
+      health: p.health,
+    })),
+    diagnosis: hasRealLLM
+      ? '✅ At least one real LLM provider is configured. If still getting Local Intelligence Mode, check provider CB state and key validity.'
+      : '❌ NO real LLM keys found in environment. System will always use Local Intelligence (hybridFallback). Add API keys to Render Dashboard environment variables.',
+    fix: hasRealLLM ? null : {
+      action: 'Add environment variables to Render Dashboard',
+      url: 'https://dashboard.render.com → Your Service → Environment',
+      vars: ['OPENAI_API_KEY', 'CLAUDE_API_KEY', 'GEMINI_API_KEY', 'DEEPSEEK_API_KEY'],
+    },
+  });
+});
+
 router.get('/capabilities', generalLimiter, (req, res) => {
   const engine = _getEngine();
   res.json({ ...engine.getCapabilities(), auth_required: true, demo_auth_url: '/api/RAKAY/demo-auth' });

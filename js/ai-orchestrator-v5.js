@@ -12,14 +12,16 @@
 /* ═══════════════════════════════════════════════════════
    STATE
 ═══════════════════════════════════════════════════════ */
-// Pre-load provided API keys into localStorage on first load
+// ⚠️  SECURITY (Phase 0): Hardcoded API keys have been removed from this file.
+// API keys are managed server-side via environment variables.
+// The frontend communicates with the backend proxy — no keys in the browser.
+// Users can optionally store personal keys in localStorage via the Settings UI,
+// but the platform will work without them using the backend proxy.
 (function _preloadApiKeys() {
-  const PRESET = {
-    wadjet_openai_key: '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',
-    wadjet_claude_key: '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',
-    wadjet_ai_provider: 'openai',
-  };
-  Object.entries(PRESET).forEach(([k, v]) => {
+  // No preset keys — all AI calls are routed through the backend.
+  // If a user has entered their own key via Settings, respect it.
+  const defaults = { wadjet_ai_provider: 'platform' };
+  Object.entries(defaults).forEach(([k, v]) => {
     if (!localStorage.getItem(k)) localStorage.setItem(k, v);
   });
 })();
