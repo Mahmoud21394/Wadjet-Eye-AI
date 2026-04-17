@@ -636,10 +636,19 @@ function _cfCard(c) {
 
 /* Campaign drill-down detail panel */
 window._cfOpenDetail = async function(id) {
+  // ROUTING FIX: id is the immutable campaign ID.
+  // Clear panel content first to avoid showing content from a previous campaign.
   const panel = document.getElementById('cf-detail-panel');
   if (!panel) return;
+
+  // Track which campaign is being loaded to detect race conditions
+  const reqId = String(id);
+  panel.dataset.currentCampaignId = reqId;
+
   panel.style.display = 'block';
   panel.style.transform = 'translateX(100%)';
+  // Clear immediately before skeleton to prevent flash of old content
+  panel.innerHTML = '';
   panel.innerHTML = `
     <div style="padding:20px">
       <button onclick="_cfCloseDetail()" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:1.2em;float:right"><i class="fas fa-times"></i></button>
@@ -650,9 +659,14 @@ window._cfOpenDetail = async function(id) {
   try {
     const [campaign, iocs, alerts] = await Promise.all([
       _fetch(`/cti/campaigns/${encodeURIComponent(id)}`).catch(() => null),
+      // FIXED: scoped to this campaign ID, not a global query
       _fetch(`/iocs?limit=10&search=${encodeURIComponent(id)}`).catch(() => ({ data: [] })),
-      _fetch(`/alerts?limit=8&sort=created_at`).catch(() => ({ data: [] })),
+      // FIXED: scope alerts to this campaign
+      _fetch(`/alerts?limit=8&sort=created_at&search=${encodeURIComponent(id)}`).catch(() => ({ data: [] })),
     ]);
+
+    // Guard against race: if user opened another campaign while loading, discard
+    if (panel.dataset.currentCampaignId !== reqId) return;
 
     const c = campaign || { id, name: 'Campaign ' + id, status: 'unknown', severity: 'MEDIUM' };
     const relatedIOCs   = iocs?.data || [];
@@ -942,18 +956,31 @@ async function _taLoad(nation='', motivation='') {
   document.getElementById('ta-pages').innerHTML=_paginator(_at,_ap,'_taPage','ta-pag');
 }
 
-/** Open actor modal with mock data support */
+/** Open actor modal with mock data support — ROUTING FIX: immutable ID, race guard, clear-first */
 window._openActorModal = function(id, name) {
   const modal = document.getElementById('actorModal');
   const body  = document.getElementById('actorModalBody');
   if (!modal || !body) return;
+
+  // Track immutable ID to detect race conditions
+  const reqId = String(id);
+  modal.dataset.currentActorModalId = reqId;
+
+  // Clear FIRST to prevent flash of stale content from a previous actor
+  body.innerHTML = '';
   modal.classList.add('active');
   body.innerHTML = `<div style="padding:20px">${_skel(4,40)}</div>`;
+
   // Try real API first, fall back to mock
   const mockActor = _MOCK_ACTORS.find(a => a.id===id || a.name===name);
   _fetch(`/cti/actors/${encodeURIComponent(id)}`)
-    .then(actor => _renderActorModalContent(body, actor, []))
+    .then(actor => {
+      // Guard: discard if user opened a different actor while loading
+      if (modal.dataset.currentActorModalId !== reqId) return;
+      _renderActorModalContent(body, actor, []);
+    })
     .catch(() => {
+      if (modal.dataset.currentActorModalId !== reqId) return;
       if (mockActor) {
         _renderActorModalContent(body, mockActor, []);
       } else {
@@ -2365,16 +2392,29 @@ async function _taLoad(nation='', motivation='', search='') {
 }
 
 window._openActorDetail = async (id) => {
+  // ROUTING FIX: id is always the immutable actor ID, never an array index.
+  // We clear the modal body FIRST to prevent stale content from a prior actor.
   const modal = document.getElementById('actorModal');
   const body  = document.getElementById('actorModalBody');
   if(!modal||!body) return;
+  // Clear previous content immediately to avoid showing wrong actor
+  body.innerHTML = '';
   modal.classList.add('active');
   body.innerHTML = _skel(6,48);
+
+  // Store current actor ID on the modal so re-entrancy can be detected
+  const reqId = id;
+  modal.dataset.currentActorId = reqId;
+
   try {
     const [actor, iocsResp] = await Promise.all([
-      _fetch(`/cti/actors/${id}`).catch(()=>null),
-      _fetch(`/iocs?limit=10&sort=risk_score`).catch(()=>({data:[]}))
+      _fetch(`/cti/actors/${encodeURIComponent(id)}`).catch(()=>null),
+      // FIXED: Filter IOCs by actor ID/name, not a shared global sort query
+      _fetch(`/iocs?limit=10&sort=risk_score&search=${encodeURIComponent(id)}`).catch(()=>({data:[]}))
     ]);
+
+    // Guard: if user opened another actor while this was loading, discard
+    if (modal.dataset.currentActorId !== reqId) return;
     const a = actor || {};
     const iocs = iocsResp?.data || [];
     body.innerHTML = `
@@ -2672,16 +2712,29 @@ async function _expLoad() {
 }
 
 window._openCVEDetail = async (id) => {
+  // ROUTING FIX: id is the immutable CVE ID (e.g. "CVE-2024-1234")
+  // Clear body immediately to prevent flash of stale CVE content
   const modal=document.getElementById('exposureModal');
   const body=document.getElementById('exposureModalBody');
   if(!modal||!body) return;
+
+  const reqId = String(id);
+  modal.dataset.currentCveId = reqId;
+
+  // Clear BEFORE adding active class to avoid old content flash
+  body.innerHTML = '';
   modal.classList.add('active');
   body.innerHTML=_skel(5,48);
+
   try {
-    const v=await _fetch(`/cti/vulnerabilities/${id}`).catch(async()=>{
-      const all=await _fetch(`/cti/vulnerabilities?limit=100`);
-      return (all?.data||[]).find(x=>x.id===id)||null;
+    const v=await _fetch(`/cti/vulnerabilities/${encodeURIComponent(id)}`).catch(async()=>{
+      // Only fallback-search if the direct fetch failed
+      const all=await _fetch(`/cti/vulnerabilities?limit=100&search=${encodeURIComponent(id)}`).catch(()=>null);
+      return (all?.data||[]).find(x=>(x.id===id||x.cve_id===id))||null;
     });
+
+    // Guard: discard if user opened another CVE while loading
+    if (modal.dataset.currentCveId !== reqId) return;
     if(!v){body.innerHTML=`<div style="text-align:center;padding:30px;color:#8b949e">CVE details not found</div>`;return;}
     body.innerHTML=`
     <div style="margin-bottom:16px">

@@ -565,55 +565,98 @@ const API = {
 };
 
 /* ════════════════════════════════════════════
-   WEBSOCKET CLIENT
-   v3.1 fixes:
-   - Expose _socket via WS._socket getter so live-detections-soc.js
-     can reuse the shared connection without duplicating it.
-   - Refresh access token BEFORE connecting so WS auth never fails
-     due to an expired token.
-   - On connect_error with auth failure, attempt token refresh and
-     reconnect once instead of silently failing.
-   - updateAuth() lets callers push a fresh token to an existing socket.
+   WEBSOCKET CLIENT v4.0
+   Architecture-corrected: token-gated, state-sync aware.
+
+   KEY FIXES:
+   - connectAsync() AWAITS StateSync.authReady before touching the socket.
+     This means WS NEVER tries to connect with a dead/empty token.
+   - On WS_AUTH_FAILED (connect_error with auth pattern): trigger
+     silentRefresh → update socket.auth → let Socket.IO auto-reconnect.
+     Never disconnect + reconnect manually (causes retry storms).
+   - Exponential backoff on auth errors: 1s, 2s, 4s, 8s, 16s (max 30s).
+   - updateAuth() syncs token to both the socket AND TokenStore.
+   - StateSync.markWsConnected / markWsDisconnected called on state change.
 ═════════════════════════════════════════════ */
-let _socket = null;
+let _socket         = null;
+let _wsAuthRetries  = 0;
+const WS_MAX_AUTH_RETRIES = 5;
+const WS_AUTH_BACKOFF_MS  = [1000, 2000, 4000, 8000, 16000];
 
 const WS = {
-  /** Expose the internal socket for read-only access by other modules */
   get _socket() { return _socket; },
 
   /**
-   * connect() — establish or return the existing Socket.IO connection.
-   * Automatically refreshes the access token if it is expired before
-   * creating the connection, preventing immediate auth errors.
+   * connectAsync() — the ONLY connect method that should be called externally.
+   *
+   * Startup sequence:
+   *   1. Await StateSync.authReady — ensures tokens are synced before we proceed
+   *   2. If auth state says unauthenticated → skip (no point connecting)
+   *   3. If token expired → silentRefresh first
+   *   4. Create Socket.IO connection with fresh token
    */
-  connect() {
-    if (_socket?.connected) return _socket;
+  async connectAsync() {
+    // ── Step 1: Wait for auth to be ready (tokens restored from storage) ──
+    const ss = window.StateSync;
+    if (ss) {
+      try {
+        await ss.authReady;
+      } catch (_) { /* timeout or failure — continue with whatever token we have */ }
+    }
 
-    if (typeof io === 'undefined') {
-      console.warn('[WS] socket.io not loaded — ensure socket.io-client CDN is included');
+    // ── Step 2: Skip if clearly unauthenticated ───────────────────────────
+    const hasToken = !!(
+      (typeof window.UnifiedTokenStore !== 'undefined' && window.UnifiedTokenStore.getToken()) ||
+      TokenStore.get()
+    );
+    if (!hasToken) {
+      console.info('[WS] No auth token after sync — skipping WebSocket connect');
       return null;
     }
 
-    // Get the best available token (after any prior refresh)
-    const token = TokenStore.get() || '';
+    // ── Step 3: Pre-refresh if token is expiring ──────────────────────────
+    if (!TokenStore.isValid() && TokenStore.canRefresh()) {
+      console.info('[WS] Token expired — refreshing before WebSocket connect…');
+      await refreshAccessToken();
+    }
+
+    // ── Step 4: Connect ───────────────────────────────────────────────────
+    return this._connect();
+  },
+
+  /** Internal: create or return existing socket */
+  _connect() {
+    if (_socket?.connected) return _socket;
+
+    if (typeof io === 'undefined') {
+      console.warn('[WS] socket.io not loaded');
+      return null;
+    }
+
+    const token = (typeof window.UnifiedTokenStore !== 'undefined'
+      ? window.UnifiedTokenStore.getToken()
+      : TokenStore.get()) || '';
 
     _socket = io(CONFIG.WS_URL, {
-      auth:                { token },
-      transports:          ['websocket', 'polling'],
-      reconnection:        true,
+      auth:                 { token },
+      transports:           ['websocket', 'polling'],
+      reconnection:         true,
       reconnectionAttempts: 10,
-      reconnectionDelay:   3000,
-      reconnectionDelayMax: 15000,
-      timeout:             12000,
+      reconnectionDelay:    3000,
+      reconnectionDelayMax: 20000,
+      timeout:              15000,
     });
 
     _socket.on('connect', () => {
-      console.log('[WS] Connected ✅');
+      console.log('[WS] ✅ Connected');
+      _wsAuthRetries = 0;   // Reset retry counter on successful connect
+      window.StateSync?.markWsConnected(token);
       window.dispatchEvent(new CustomEvent('ws:connected'));
     });
 
     _socket.on('disconnect', (reason) => {
       console.log('[WS] Disconnected:', reason);
+      window.StateSync?.markWsDisconnected(reason);
       window.dispatchEvent(new CustomEvent('ws:disconnected', { detail: { reason } }));
     });
 
@@ -621,24 +664,49 @@ const WS = {
       console.warn('[WS] Connection error:', err.message);
       window.dispatchEvent(new CustomEvent('ws:error', { detail: { message: err.message } }));
 
-      // If the error looks like an auth/JWT problem, try refreshing the token once
-      const isAuthErr = /auth|token|jwt|expired|invalid/i.test(err.message);
-      if (isAuthErr && TokenStore.canRefresh()) {
-        console.info('[WS] Auth error — refreshing token and retrying…');
-        const refreshed = await refreshAccessToken();
-        if (refreshed && _socket) {
-          // Push updated token to the socket's auth object so the next
-          // reconnection attempt (handled automatically by Socket.IO) uses
-          // the new token.
-          _socket.auth = { token: TokenStore.get() };
-        }
+      // ── Auth error pattern: WS_AUTH_FAILED or JWT/token related ─────────
+      const isAuthErr = /auth|token|jwt|expired|invalid|WS_AUTH/i.test(err.message);
+      if (!isAuthErr) return;   // Non-auth errors: let Socket.IO auto-retry
+
+      if (_wsAuthRetries >= WS_MAX_AUTH_RETRIES) {
+        console.warn(`[WS] Auth retry limit (${WS_MAX_AUTH_RETRIES}) reached — stopping WS auth retries`);
+        return;
+      }
+
+      const backoffMs = WS_AUTH_BACKOFF_MS[Math.min(_wsAuthRetries, WS_AUTH_BACKOFF_MS.length - 1)];
+      _wsAuthRetries++;
+
+      console.info(`[WS] Auth error (attempt ${_wsAuthRetries}) — refreshing token in ${backoffMs}ms…`);
+      await new Promise(r => setTimeout(r, backoffMs));
+
+      // Attempt token refresh
+      let refreshed = false;
+      if (typeof window.silentRefresh !== 'undefined') {
+        refreshed = await window.silentRefresh();
+      } else {
+        refreshed = await refreshAccessToken();
+      }
+
+      if (refreshed && _socket) {
+        const newToken = (typeof window.UnifiedTokenStore !== 'undefined'
+          ? window.UnifiedTokenStore.getToken()
+          : TokenStore.get()) || '';
+
+        // Push new token to socket — Socket.IO will use it on next reconnect
+        _socket.auth = { token: newToken };
+        console.info('[WS] Token refreshed — Socket.IO will reconnect with new token');
+        // Do NOT call _socket.connect() manually — Socket.IO's reconnection handles it
+      } else {
+        console.warn('[WS] Token refresh failed during WS auth retry');
       }
     });
 
-    // Forward all backend events as DOM CustomEvents
-    ['alert:new', 'alert:updated', 'alert:escalated', 'alert:assigned',
-     'case:new',  'case:updated',  'detection:event',
-     'ioc:new',   'feed:updated',  'system:status'].forEach(evt => {
+    // ── Forward backend events as DOM CustomEvents ────────────────────────
+    [
+      'alert:new', 'alert:updated', 'alert:escalated', 'alert:assigned',
+      'case:new',  'case:updated',  'detection:event',
+      'ioc:new',   'feed:updated',  'system:status',
+    ].forEach(evt => {
       _socket.on(evt, (data) => {
         window.dispatchEvent(new CustomEvent(`ws:${evt}`, { detail: data }));
       });
@@ -647,30 +715,33 @@ const WS = {
     return _socket;
   },
 
-  /**
-   * connectAsync() — same as connect() but refreshes the token first
-   * if it is expired.  Returns a Promise so callers can await it.
-   */
-  async connectAsync() {
-    if (!TokenStore.isValid() && TokenStore.canRefresh()) {
-      console.info('[WS] Token expired — refreshing before WebSocket connect…');
-      await refreshAccessToken();
-    }
-    return this.connect();
+  /** Synchronous connect (does NOT await auth) — use connectAsync() instead */
+  connect() {
+    return this._connect();
   },
 
   /**
-   * updateAuth() — push a fresh token to an already-connected socket.
-   * Call this after a silent token refresh to keep the WS session alive.
+   * updateAuth() — push a fresh token to an active socket.
+   * Called automatically by auth-interceptor after every silent refresh.
    */
   updateAuth() {
-    const token = TokenStore.get() || '';
-    if (_socket) _socket.auth = { token };
+    const token = (typeof window.UnifiedTokenStore !== 'undefined'
+      ? window.UnifiedTokenStore.getToken()
+      : TokenStore.get()) || '';
+
+    if (_socket) {
+      _socket.auth = { token };
+      console.info('[WS] Auth token updated on socket');
+    }
+
+    // Also keep TokenStore in sync
+    if (token) TokenStore.set(token, TokenStore.getRefresh(), null);
   },
 
   disconnect() {
     _socket?.disconnect();
     _socket = null;
+    _wsAuthRetries = 0;
   },
 
   startDetections() { _socket?.emit('detections:start'); },
@@ -688,11 +759,11 @@ const WS = {
 
 /* ════════════════════════════════════════════
    SESSION RESTORE ON PAGE LOAD
-   Called automatically when script loads — this
-   enables seamless session persistence on refresh.
+   v4.0: Waits for StateSync.authReady first.
+   auth-interceptor.js handles the actual token
+   restore + refresh. We just read the result here.
 ═════════════════════════════════════════════ */
 (async function _autoRestoreSession() {
-  // Don't attempt restore if we're already in login screen logic
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', _tryRestore);
   } else {
@@ -703,6 +774,21 @@ const WS = {
 async function _tryRestore() {
   // Skip if we have a valid session in memory already
   if (typeof window.CURRENT_USER !== 'undefined' && window.CURRENT_USER) return;
+
+  // CRITICAL: Wait for auth-interceptor.js to finish its sync first.
+  // This prevents api-client from racing ahead with a stale/empty token.
+  if (window.StateSync) {
+    try {
+      const authState = await window.StateSync.authReady;
+      if (!authState?.isAuthenticated) {
+        console.info('[ApiClient] Auth sync complete — user not authenticated, skipping session restore');
+        return;
+      }
+      console.info('[ApiClient] Auth sync complete — restoring session for', authState.user?.email || 'user');
+    } catch (e) {
+      console.warn('[ApiClient] StateSync.authReady error:', e);
+    }
+  }
 
   const user = await restoreSession();
   if (user) {

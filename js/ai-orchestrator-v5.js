@@ -94,19 +94,125 @@ function _apiBase() {
   return (window.THREATPILOT_API_URL || 'https://wadjet-eye-ai.onrender.com').replace(/\/$/,'');
 }
 function _token() {
+  // Always read from UnifiedTokenStore when available (auth-interceptor v6.0)
+  if (window.UnifiedTokenStore) return window.UnifiedTokenStore.getToken() || '';
   return localStorage.getItem('wadjet_access_token')
       || localStorage.getItem('tp_access_token')
       || sessionStorage.getItem('wadjet_access_token') || '';
 }
 async function _apiFetch(path, opts={}) {
+  // Prefer authFetch (auth-interceptor v6.0) — it handles 401 + silent refresh
   if (window.authFetch) return window.authFetch(path, opts);
+  // Fallback plain fetch
   const r = await fetch(`${_apiBase()}/api${path}`, {
     method: opts.method||'GET',
     headers: { 'Content-Type':'application/json', ...(_token()?{Authorization:`Bearer ${_token()}`}:{}) },
+    credentials: 'include',
     ...(opts.body ? {body: typeof opts.body==='string'?opts.body:JSON.stringify(opts.body)} : {}),
   });
   if (!r.ok) { const err = await r.text().catch(()=>''); throw new Error(`HTTP ${r.status}: ${err.slice(0,120)}`); }
   return r.status===204 ? null : r.json();
+}
+
+/* ═══════════════════════════════════════════════════════
+   PROVIDER STATUS CACHE + BACKGROUND RECHECK
+   
+   KEY FIX v6.0: Provider status is fetched from /api/ai/status
+   and cached for 60 seconds. A 401 on a CHAT call does NOT mean
+   "invalid API key" — it means the auth token expired.
+   
+   Sequence:
+   1. Await StateSync.authReady before first provider check
+   2. Cache provider status in StateSync.providerStatus (60s TTL)
+   3. Background recheck every 60s
+   4. On 401 from chat: check auth state FIRST, then check providers
+═══════════════════════════════════════════════════════ */
+const _PROVIDER_CACHE_TTL = 60_000; // 60 seconds
+let _providerBgTimer = null;
+
+async function _fetchProviderStatus() {
+  try {
+    const data = await _apiFetch('/ai/status');
+    if (data) {
+      window.StateSync?.markProviderReady(data);
+      AIORCH._providerStatus   = data;
+      AIORCH._providerCachedAt = Date.now();
+      console.log('[AIOrch] Provider status:', JSON.stringify({
+        openai: data.openai, anthropic: data.anthropic,
+        gemini: data.gemini, deepseek: data.deepseek,
+      }));
+    }
+    return data;
+  } catch (err) {
+    console.warn('[AIOrch] Provider status check failed:', err.message);
+    return null;
+  }
+}
+
+function _getCachedProviderStatus() {
+  // Prefer StateSync cache (shared with all modules)
+  if (window.StateSync?.isProviderCacheValid()) {
+    return window.StateSync.getProviderStatus();
+  }
+  // Fallback to local cache
+  if (AIORCH._providerStatus &&
+      (Date.now() - (AIORCH._providerCachedAt || 0)) < _PROVIDER_CACHE_TTL) {
+    return AIORCH._providerStatus;
+  }
+  return null;
+}
+
+async function _ensureProviderStatus() {
+  const cached = _getCachedProviderStatus();
+  if (cached) return cached;
+  return _fetchProviderStatus();
+}
+
+function _startProviderBgRecheck() {
+  if (_providerBgTimer) return;
+  _providerBgTimer = setInterval(async () => {
+    // Use StateSync or window.isAuthenticated — whichever is available
+    const authed = window.StateSync?.isAuthenticated() ?? window.isAuthenticated?.() ?? true;
+    if (!authed) return; // skip if not auth'd
+    await _fetchProviderStatus();
+  }, _PROVIDER_CACHE_TTL);
+}
+
+// Extend AIORCH state with provider cache
+AIORCH._providerStatus   = null;
+AIORCH._providerCachedAt = 0;
+
+/**
+ * _isAuthError — true if HTTP status indicates an auth problem.
+ * Used to distinguish "token expired" from "provider key invalid".
+ * CRITICAL FIX: A 401 from /api/ai/chat means the JWT expired,
+ * NOT that OpenAI/Claude keys are wrong.
+ */
+function _isAuthError(status) {
+  return status === 401 || status === 403;
+}
+
+async function _handleChatError401(err, providerName) {
+  const status = err.status || (err.message?.match(/HTTP (\d+)/)?.[1]|0);
+  if (_isAuthError(status)) {
+    console.warn(`[AIOrch] 401 on ${providerName} chat — checking auth state before blaming provider key`);
+    // Check if auth is alive
+    const isAuth = window.isAuthenticated?.() || window.StateSync?.isAuthenticated();
+    if (!isAuth) {
+      // This is a real auth failure — trigger refresh
+      if (window.silentRefresh) {
+        const ok = await window.silentRefresh();
+        if (!ok) {
+          throw new Error('AUTH_EXPIRED: Session expired. Please log in again.');
+        }
+        // Retry will happen at the call site
+        return true; // indicate "was auth error, retry possible"
+      }
+    }
+    // Auth is valid — the 401 might be a provider key issue, but only after confirming auth
+    return false;
+  }
+  return false;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -501,38 +607,88 @@ async function _orchSendMessage(prompt) {
 async function _callAI(messages, ioc) {
   const provider = AIORCH.aiProvider;
 
-  // Priority 1: OpenAI (if key available)
+  // ── Priority 1: Platform backend AI (always checked first when provider='platform') ──
+  // The platform AI goes through /api/ai/chat which handles auth server-side.
+  // We prefer this BEFORE direct provider keys because:
+  //   a) It routes to the best available backend provider
+  //   b) A 401 here means auth issue, not key issue — authFetch handles it
+  if (provider === 'platform' || (!AIORCH.apiKeys.openai && !AIORCH.apiKeys.claude)) {
+    try {
+      _orchLog('ai_call', `Platform AI: ${messages.length} messages`);
+      const result = await _callPlatformAI(messages);
+      if (result && !result.includes('unavailable') && !result.includes('Platform AI unavailable')) {
+        return result;
+      }
+    } catch(err) {
+      // CRITICAL FIX: If platform returns 401/403, check auth state FIRST
+      const wasAuth = await _handleChatError401(err, 'platform');
+      if (wasAuth) {
+        // Auth was refreshed — retry once
+        try {
+          const retry = await _callPlatformAI(messages);
+          if (retry && !retry.includes('unavailable')) return retry;
+        } catch(e2) {
+          console.warn('[AI Orch] Platform AI retry failed:', e2.message);
+        }
+      }
+      console.warn('[AI Orch] Platform AI failed:', err.message);
+      _orchLog('ai_fallback', `Platform AI failed: ${err.message}`, 'warning');
+    }
+  }
+
+  // ── Priority 2: Direct OpenAI (if user supplied their own key) ────────────
   if (AIORCH.apiKeys.openai && (provider === 'openai' || provider === 'platform')) {
     try {
       _orchLog('ai_call', `OpenAI GPT-4o: ${messages.length} messages`);
       return await _callOpenAI(messages);
     } catch(err) {
+      // A 401 from the proxy is an AUTH error, not a bad OpenAI key
+      // (the proxy validates the JWT before forwarding to OpenAI)
+      const wasAuth = await _handleChatError401(err, 'openai');
+      if (wasAuth) {
+        try { return await _callOpenAI(messages); } catch(_) {}
+      }
       console.warn('[AI Orch] OpenAI failed:', err.message);
       _orchLog('ai_fallback', `OpenAI failed: ${err.message}. Trying Claude…`, 'warning');
     }
   }
 
-  // Priority 2: Claude (if key available)
+  // ── Priority 3: Direct Claude (if user supplied their own key) ───────────
   if (AIORCH.apiKeys.claude && (provider === 'claude' || provider === 'openai' || provider === 'platform')) {
     try {
       _orchLog('ai_call', `Claude 3.5 Sonnet: ${messages.length} messages`);
       return await _callClaude(messages);
     } catch(err) {
+      const wasAuth = await _handleChatError401(err, 'claude');
+      if (wasAuth) {
+        try { return await _callClaude(messages); } catch(_) {}
+      }
       console.warn('[AI Orch] Claude failed:', err.message);
-      _orchLog('ai_fallback', `Claude failed: ${err.message}. Trying platform…`, 'warning');
+      _orchLog('ai_fallback', `Claude failed: ${err.message}. Using local analysis…`, 'warning');
     }
   }
 
-  // Priority 3: Platform backend AI
-  try {
-    const platformResult = await _callPlatformAI(messages);
-    if (platformResult && !platformResult.includes('unavailable')) return platformResult;
-  } catch(err) {
-    console.warn('[AI Orch] Platform AI failed:', err.message);
+  // ── Final fallback: local intelligence analysis ────────────────────────
+  return _localAnalysis(messages[messages.length-1]?.content || '');
+}
+
+/* ═══════════════════════════════════════════════════════
+   ORCHESTRATOR INIT — awaits StateSync.authReady
+   Ensures providers are never checked before auth is done.
+═══════════════════════════════════════════════════════ */
+async function _orchInit() {
+  // Wait for auth-interceptor to finish token sync
+  if (window.StateSync) {
+    try {
+      await window.StateSync.authReady;
+      console.log('[AIOrch] Auth ready — initializing provider status check');
+    } catch (_) {}
   }
 
-  // Final fallback: local analysis
-  return _localAnalysis(messages[messages.length-1]?.content || '');
+  // Kick off provider status fetch (non-blocking)
+  _ensureProviderStatus().then(() => {
+    _startProviderBgRecheck();
+  });
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -1716,5 +1872,8 @@ window._orchSaveConfig = function(btn) {
 
   setTimeout(() => window.renderAIOrchestrator(), 500);
 };
+
+// Initialize orchestrator after auth is ready
+_orchInit().catch(e => console.warn('[AIOrch] Init error:', e));
 
 })(); // end IIFE
