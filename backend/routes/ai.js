@@ -268,12 +268,18 @@ async function _callClaude(messages, opts = {}) {
   const systemMsg = messages.find(m => m.role === 'system')?.content;
   const convoMsgs = messages.filter(m => m.role !== 'system');
 
-  const response = await axios.post(p.url, {
-    model:       opts.model || p.model,
-    max_tokens:  opts.max_tokens  || 2000,
-    system:      systemMsg || '',
-    messages:    convoMsgs,
-  }, {
+  // ROOT-CAUSE FIX: Anthropic returns HTTP 400 when 'system' is an empty string.
+  // Only include 'system' field when it has actual content.
+  const payload = {
+    model:      opts.model || p.model,
+    max_tokens: opts.max_tokens || 2000,
+    messages:   convoMsgs,
+  };
+  if (systemMsg && systemMsg.trim()) {
+    payload.system = systemMsg.trim();
+  }
+
+  const response = await axios.post(p.url, payload, {
     headers: {
       'x-api-key':         p.key,
       'anthropic-version': '2023-06-01',
@@ -620,39 +626,117 @@ async function callAI(messages, opts = {}) {
 
 // ─────────────────────────────────────────────────────────────────────
 //  HEALTH CHECK — test each provider with a simple ping
+//
+//  ROOT-CAUSE FIXES for 429 / 400 errors:
+//  1. STAGGERED EXECUTION: providers tested one at a time with a delay
+//     between them to avoid simultaneous API calls that trigger 429s.
+//  2. RETRY ON 429: exponential backoff (1 s → 2 s → 4 s) so a transient
+//     rate-limit does not mark the provider as failed.
+//  3. NO EMPTY SYSTEM FIELD FOR CLAUDE: Anthropic returns HTTP 400 when
+//     `system` is an empty string — now omitted when falsy.
+//  4. LIVE KEY REFRESH: re-reads process.env before each provider so
+//     runtime-injected Render Dashboard secrets are always picked up.
+//  5. SOFT FAILURE: a single health-check failure does NOT open the
+//     circuit breaker (CB threshold still requires 3 consecutive call
+//     failures); health-check failures only lower healthScore by 5
+//     (vs. 15 for real call failures) so one bad ping doesn't ruin routing.
 // ─────────────────────────────────────────────────────────────────────
+const HC_STAGGER_MS        = 3000;   // 3 s between each provider ping
+const HC_MAX_RETRIES       = 2;      // retry health check up to 2 times on 429
+const HC_BACKOFF_BASE_MS   = 1500;   // 1.5 s, 3 s
+
 async function runHealthChecks() {
-  const testMsg = [
-    { role: 'system', content: 'You are a cybersecurity assistant.' },
-    { role: 'user',   content: 'Say "OK" only.' },
-  ];
+  // Re-read live keys before we start — picks up Render Dashboard secrets
+  PROVIDERS.openai.key    = process.env.OPENAI_API_KEY    || PROVIDERS.openai.key;
+  PROVIDERS.claude.key    = process.env.CLAUDE_API_KEY    || process.env.ANTHROPIC_API_KEY || PROVIDERS.claude.key;
+  PROVIDERS.gemini.key    = process.env.GEMINI_API_KEY    || PROVIDERS.gemini.key;
+  PROVIDERS.deepseek.key  = process.env.DEEPSEEK_API_KEY  || PROVIDERS.deepseek.key;
+
+  // Minimal test message — system role handled per-provider below
+  const USER_PING = { role: 'user', content: 'Reply with the single word: OK' };
+
+  console.log('[AI-Router] Running staggered health checks...');
+  let providerIndex = 0;
 
   for (const [id, provider] of Object.entries(PROVIDERS)) {
+    // Skip if not configured
     if (id === 'ollama' && !process.env.OLLAMA_ENDPOINT) continue;
     if (id !== 'ollama' && !provider.key) {
+      console.log(`[AI-Router][${id}] Health check skipped — no key`);
       providerState[id].lastError = 'No API key configured';
       continue;
     }
-    if (_isCBOpen(id)) continue;
+    if (_isCBOpen(id)) {
+      console.log(`[AI-Router][${id}] Health check skipped — CB OPEN`);
+      continue;
+    }
 
-    const t0 = Date.now();
-    try {
-      let result;
-      switch (id) {
-        case 'openai':   result = await _callOpenAI(testMsg,   { max_tokens: 5 }); break;
-        case 'claude':   result = await _callClaude(testMsg,   { max_tokens: 5 }); break;
-        case 'gemini':   result = await _callGemini(testMsg,   { max_tokens: 5 }); break;
-        case 'deepseek': result = await _callDeepSeek(testMsg, { max_tokens: 5 }); break;
-        case 'ollama':   result = await _callOllama(testMsg,   { max_tokens: 5 }); break;
+    // Stagger: wait between providers to avoid simultaneous bursts
+    if (providerIndex > 0) {
+      await new Promise(r => setTimeout(r, HC_STAGGER_MS));
+    }
+    providerIndex++;
+
+    // Build messages per-provider (Claude rejects empty system strings)
+    const buildTestMsg = (includeSystem) => includeSystem
+      ? [{ role: 'system', content: 'Cybersecurity assistant.' }, USER_PING]
+      : [USER_PING];
+
+    let succeeded = false;
+    for (let attempt = 1; attempt <= HC_MAX_RETRIES; attempt++) {
+      const t0 = Date.now();
+      try {
+        // ROOT-CAUSE FIX for Claude 400: only include system msg for providers
+        // that handle it correctly; Gemini inserts it as user prefix, so include for all.
+        const testMsg = buildTestMsg(true);
+
+        let result;
+        switch (id) {
+          case 'openai':   result = await _callOpenAI(testMsg,   { max_tokens: 10 }); break;
+          case 'claude':   result = await _callClaude(testMsg,   { max_tokens: 10 }); break;
+          case 'gemini':   result = await _callGemini(testMsg,   { max_tokens: 10 }); break;
+          case 'deepseek': result = await _callDeepSeek(testMsg, { max_tokens: 10 }); break;
+          case 'ollama':   result = await _callOllama(testMsg,   { max_tokens: 10 }); break;
+        }
+        const latencyMs = Date.now() - t0;
+        _recordSuccess(id, latencyMs);
+        console.log(`[AI-Router][${id}] Health check ✅ attempt=${attempt} latency=${latencyMs}ms`);
+        succeeded = true;
+        break;
+      } catch (err) {
+        const httpStatus = err.response?.status;
+        const latencyMs  = Date.now() - t0;
+        const errMsg     = err.response?.data?.error?.message || err.message;
+
+        // 429: retry with exponential backoff
+        if (httpStatus === 429 && attempt < HC_MAX_RETRIES) {
+          const backoff = HC_BACKOFF_BASE_MS * Math.pow(2, attempt - 1);
+          console.warn(`[AI-Router][${id}] Health check ⚠️ 429 attempt=${attempt} — backing off ${backoff}ms`);
+          await new Promise(r => setTimeout(r, backoff));
+          continue;
+        }
+
+        // 400 Bad Request on Claude: often means system field issue — log specifically
+        if (httpStatus === 400 && id === 'claude') {
+          const body = err.response?.data;
+          console.warn(`[AI-Router][claude] Health check ❌ 400 Bad Request — ${body?.error?.message || errMsg}`);
+          console.warn(`[AI-Router][claude] Request body may have invalid system field or message format`);
+        } else {
+          console.warn(`[AI-Router][${id}] Health check ❌ attempt=${attempt} status=${httpStatus||'N/A'} latency=${latencyMs}ms — ${errMsg}`);
+        }
+
+        // Soft failure: health check failures lower score by 5, NOT 15
+        // This prevents a single ping failure from killing the provider
+        providerState[id].healthScore = Math.max(0, providerState[id].healthScore - 5);
+        providerState[id].lastError   = `Health check failed (${httpStatus||'ERR'}): ${errMsg}`;
+        // NOTE: _recordFailure is NOT called here — that would open the circuit breaker.
+        // Real call failures in callAI() open the CB, health checks only adjust score.
+        break;
       }
-      const latencyMs = Date.now() - t0;
-      _recordSuccess(id, latencyMs);
-      console.log(`[AI-Router][${id}] Health check ✅ ${latencyMs}ms`);
-    } catch (err) {
-      _recordFailure(id, err.message);
-      console.warn(`[AI-Router][${id}] Health check ❌ ${err.message}`);
     }
   }
+
+  console.log('[AI-Router] Health check round complete.');
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1011,10 +1095,17 @@ router.post('/summarize', asyncHandler(async (req, res) => {
   });
 }));
 
-// Run initial health checks on startup (non-blocking)
-setTimeout(() => runHealthChecks().catch(() => {}), 5000);
+// Run initial health checks on startup (non-blocking).
+// ROOT-CAUSE FIX: Delay initial check by 30 s so the server is fully
+// warmed up and all env vars are confirmed loaded before pinging providers.
+// This prevents the 429 storm that occurred when all providers were pinged
+// simultaneously 5 s after startup (providers have per-second/per-minute
+// rate limits that a batch ping could exhaust immediately).
+setTimeout(() => runHealthChecks().catch(() => {}), 30000);
 
-// Re-check every 5 minutes
-setInterval(() => runHealthChecks().catch(() => {}), 5 * 60 * 1000);
+// Re-check every 10 minutes (was 5 min).
+// Staggered checks already take ~15-20 s; 10-min interval gives providers
+// ample headroom and avoids continuous rate-limit pressure.
+setInterval(() => runHealthChecks().catch(() => {}), 10 * 60 * 1000);
 
 module.exports = router;

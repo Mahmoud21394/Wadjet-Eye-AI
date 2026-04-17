@@ -88,13 +88,18 @@ router.get('/categories', asyncHandler(async (req, res) => {
   const stats = newsService.getCacheStats();
   const cats  = newsService.NEWS_CATEGORIES;
 
-  const categories = Object.values(cats).map(cat => ({
-    id:           cat.id,
-    label:        cat.label,
-    icon:         cat.icon,
-    color:        cat.color,
-    articleCount: stats.byCategory?.[cat.id] || 0,
-  })).sort((a, b) => b.articleCount - a.articleCount);
+  const categories = Object.values(cats).map(cat => {
+    const byCatEntry = stats.byCategory?.[cat.id];
+    // byCategory can hold either a count (number) or an array of articles
+    const articleCount = Array.isArray(byCatEntry) ? byCatEntry.length : (byCatEntry || 0);
+    return {
+      id:           cat.id,
+      label:        cat.label,
+      icon:         cat.icon,
+      color:        cat.color,
+      articleCount,
+    };
+  }).sort((a, b) => b.articleCount - a.articleCount);
 
   res.json({
     categories,
@@ -145,6 +150,56 @@ router.get('/stats', asyncHandler(async (req, res) => {
     ...stats,
     feedList: newsService.RSS_FEEDS.map(f => f.name),
     categoriesList: Object.values(newsService.NEWS_CATEGORIES).map(c => c.label),
+  });
+}));
+
+/* ══════════════════════════════════════════════════════════
+   GET /api/news/debug — Category distribution debug endpoint
+   PUBLIC — no auth required.
+   Returns per-category article counts, feed-to-category mapping,
+   and sample articles from each category.  Used to verify the
+   category classification is working correctly.
+══════════════════════════════════════════════════════════ */
+router.get('/debug', asyncHandler(async (req, res) => {
+  if (!newsService) {
+    return res.json({ error: 'News service unavailable' });
+  }
+
+  const tenantId = req.user?.tenant_id;
+  const result   = await newsService.getRecentNews(tenantId, { limit: 500 });
+  const articles = result.articles || [];
+
+  // Per-category distribution
+  const distribution = {};
+  for (const cat of Object.values(newsService.NEWS_CATEGORIES)) {
+    const catArticles = articles.filter(a => a.category === cat.id);
+    distribution[cat.id] = {
+      label:       cat.label,
+      count:       catArticles.length,
+      // Sample: first 3 titles from each category
+      samples:     catArticles.slice(0, 3).map(a => ({
+        title:    a.title,
+        source:   a.source,
+        severity: a.severity,
+      })),
+    };
+  }
+
+  // Feed → category mapping
+  const feedMapping = newsService.RSS_FEEDS.map(f => ({
+    id:       f.id,
+    name:     f.name,
+    declaredCategory: f.category,
+    priority: f.priority,
+  }));
+
+  res.json({
+    totalArticles:    articles.length,
+    distribution,
+    feedMapping,
+    categories:       newsService.NEWS_CATEGORIES,
+    cacheStats:       newsService.getCacheStats(),
+    timestamp:        new Date().toISOString(),
   });
 }));
 

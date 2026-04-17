@@ -338,6 +338,43 @@ app.use('/api/RAKAY', rakayRoutes);
 // ── v6.1 SOC Intelligence API (no JWT required — uses RAKAY demo auth) ──────
 app.use('/api/soc', socIntelRoutes);
 
+// ── v7.0 Specific public GET endpoints (no JWT required) ─────────────────────
+// These MUST be registered BEFORE app.use(verifyToken).
+// /api/rbac/health  — returns platform role schema (no sensitive data)
+app.get('/api/rbac/health', (req, res) => {
+  const roles = [
+    { id: 'super_admin', name: 'Super Admin',       slug: 'super_admin', level: 10, color: '#ef4444' },
+    { id: 'admin',       name: 'Admin',             slug: 'admin',       level: 9,  color: '#f97316' },
+    { id: 'soc_l3',      name: 'SOC Analyst L3',    slug: 'soc_l3',      level: 7,  color: '#dc2626' },
+    { id: 'soc_l2',      name: 'SOC Analyst L2',    slug: 'soc_l2',      level: 6,  color: '#3b82f6' },
+    { id: 'soc_l1',      name: 'SOC Analyst L1',    slug: 'soc_l1',      level: 5,  color: '#22d3ee' },
+    { id: 'ir',          name: 'Incident Responder', slug: 'ir',          level: 7,  color: '#7c3aed' },
+    { id: 'threat_hunter', name: 'Threat Hunter',   slug: 'threat_hunter', level: 7, color: '#10b981' },
+    { id: 'viewer',      name: 'Viewer (Read-Only)', slug: 'viewer',      level: 1,  color: '#6b7280' },
+  ];
+  const permissions = ['read','write','delete','export','investigate','hunt','build_detections','contain','manage_users','manage_roles','manage_settings'];
+  const modules = ['dashboard','alerts','iocs','cases','reports','users','settings','collectors',
+                   'threat-hunting','detection-engineering','playbooks','mitre-attack','forensics',
+                   'threat-intel','vulnerabilities','exposure','soar','ai','news','rbac'];
+  res.json({
+    status:          'operational',
+    roles,
+    roleCount:       roles.length,
+    permissions,
+    permissionCount: permissions.length,
+    moduleCount:     modules.length,
+    modules,
+    schemaVersion:   '3.0',
+    timestamp:       new Date().toISOString(),
+  });
+});
+
+// /api/news — Cyber News is public (no user-specific data in news articles).
+// Registered before verifyToken so unauthenticated clients (demo mode, public
+// dashboard) can read news. The POST /ingest endpoint inside newsRoutes does its
+// own role-check, so it's safe to expose the whole router publicly.
+app.use('/api/news', newsRoutes);
+
 // ════════════════════════════════════════════════════════════════
 //  PROTECTED ROUTES — JWT required
 //  verifyToken attaches req.user + req.tenantId to every request
@@ -366,7 +403,8 @@ app.use('/api/ai',        aiRoutes);
 app.use('/api/ingest',    ingestRoutes);
 app.use('/api/settings',  settingsRoutes);
 // ── v5.2 New Routes ───────────────────────────────────────────────
-app.use('/api/news',           newsRoutes);
+// NOTE: /api/news is mounted BEFORE verifyToken (see PUBLIC ROUTES section above)
+//       so it is accessible without JWT.  Do NOT re-mount here.
 // ── v5.3 New Routes ───────────────────────────────────────────────
 app.use('/api/threat-actors',  threatActorRoutes);
 app.use('/api/cve',            cveIntelRoutes);

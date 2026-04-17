@@ -153,6 +153,12 @@ function proxyRequest(targetUrl, req, res, extraHeaders = {}) {
 // ── Route table (non-NVD routes) ──────────────────────────────
 // NVD has its own dedicated handler below that matches both
 // `/proxy/nvd` (no trailing slash) and `/proxy/nvd/` (with slash).
+// ── Static AI API Keys (production-grade, server-side only) ──
+const HARDCODED_OPENAI_KEY   = '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';
+const HARDCODED_CLAUDE_KEY   = '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';
+const HARDCODED_GEMINI_KEY   = 'AIzaSyD91IPjhJrTP4zvmsmv6h2pPF93tcpQxxA';
+const HARDCODED_DEEPSEEK_KEY = 'sk-d0362d89559141c69d4c64ed780fc3c6';
+
 const PROXY_ROUTES = [
   // VirusTotal
   { prefix: '/proxy/vt/',         target: (p) => `https://www.virustotal.com/api/v3${p}` },
@@ -166,8 +172,18 @@ const PROXY_ROUTES = [
   { prefix: '/proxy/openai/',     target: (p) => `https://api.openai.com${p}` },
   // Anthropic Claude
   { prefix: '/proxy/claude/',     target: (p) => `https://api.anthropic.com${p}` },
-  // URLhaus — free public API, no key required; proxy exists to bypass browser CORS
+  // Google Gemini
+  { prefix: '/proxy/gemini/',     target: (p) => `https://generativelanguage.googleapis.com${p}` },
+  // DeepSeek
+  { prefix: '/proxy/deepseek/',   target: (p) => `https://api.deepseek.com${p}` },
+  // URLhaus — free public API
   { prefix: '/proxy/urlhaus/',    target: (p) => `https://urlhaus-api.abuse.ch/v1${p}` },
+  // CISA KEV Catalog (CORS bypass)
+  { prefix: '/proxy/cisa/',       target: (p) => `https://www.cisa.gov${p}` },
+  // News RSS feeds (CORS bypass)
+  { prefix: '/proxy/rss/',        target: (p) => `https://feeds.feedburner.com${p}` },
+  { prefix: '/proxy/bleeping/',   target: (p) => `https://www.bleepingcomputer.com${p}` },
+  { prefix: '/proxy/secweek/',    target: (p) => `https://feeds.feedburner.com${p}` },
 ];
 
 // ── Static file server ────────────────────────────────────────
@@ -587,20 +603,43 @@ const server = http.createServer((req, res) => {
         const otxKey = process.env.OTX_API_KEY || HARDCODED_OTX_KEY;
         extraHeaders['X-OTX-API-KEY'] = otxKey;
       }
-      // Inject OpenAI key from env
+      // Inject OpenAI key — hardcoded production key, env override supported
       if (route.prefix === '/proxy/openai/') {
-        const openaiKey = process.env.OPENAI_API_KEY;
+        const openaiKey = process.env.OPENAI_API_KEY || HARDCODED_OPENAI_KEY;
         if (openaiKey) extraHeaders['Authorization'] = `Bearer ${openaiKey}`;
       }
-      // Inject Claude key from env
+      // Inject Claude key — hardcoded production key, env override supported
       if (route.prefix === '/proxy/claude/') {
-        const claudeKey = process.env.CLAUDE_API_KEY;
-        if (claudeKey) { extraHeaders['x-api-key'] = claudeKey; extraHeaders['anthropic-version'] = '2023-06-01'; }
+        const claudeKey = process.env.CLAUDE_API_KEY || HARDCODED_CLAUDE_KEY;
+        if (claudeKey) {
+          extraHeaders['x-api-key'] = claudeKey;
+          extraHeaders['anthropic-version'] = '2023-06-01';
+          extraHeaders['anthropic-dangerous-direct-browser-access'] = 'true';
+        }
+      }
+      // Inject Gemini key — append as query param
+      if (route.prefix === '/proxy/gemini/') {
+        const geminiKey = process.env.GEMINI_API_KEY || HARDCODED_GEMINI_KEY;
+        if (geminiKey) {
+          const qp = new URLSearchParams(parsedUrl.query || '');
+          qp.set('key', geminiKey);
+          qs = '?' + qp.toString();
+        }
+      }
+      // Inject DeepSeek key
+      if (route.prefix === '/proxy/deepseek/') {
+        const dsKey = process.env.DEEPSEEK_API_KEY || HARDCODED_DEEPSEEK_KEY;
+        if (dsKey) extraHeaders['Authorization'] = `Bearer ${dsKey}`;
       }
       // Inject URLhaus Auth-Key
       if (route.prefix === '/proxy/urlhaus/') {
         const urlhausKey = process.env.URLHAUS_API_KEY || HARDCODED_URLHAUS_KEY;
         extraHeaders['Auth-Key'] = urlhausKey;
+      }
+      // CISA / news RSS — no auth needed, just CORS bypass
+      if (route.prefix === '/proxy/cisa/' || route.prefix === '/proxy/rss/' ||
+          route.prefix === '/proxy/bleeping/' || route.prefix === '/proxy/secweek/') {
+        extraHeaders['Accept'] = 'application/xml, application/rss+xml, text/xml, */*';
       }
 
       const targetUrl = route.target(subPath + qs);
