@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Global Auth Validator & API Health Monitor v5.3
+ *  Wadjet-Eye AI — Global Auth Validator & API Health Monitor v5.4
  *  js/auth-validator.js
  *
  *  PURPOSE:
@@ -121,12 +121,34 @@ async function authFetch(pathOrUrl, opts = {}) {
   }
 
   // ── 401 Handler ──────────────────────────────────────────────
+  // ROOT-CAUSE FIX v5.4:
+  //   - Use window.silentRefresh (auth-interceptor v6.0) OR
+  //     window.PersistentAuth_silentRefresh as fallback.
+  //   - Never use `global.PersistentAuth_silentRefresh` — in a browser
+  //     `global` is undefined, so the refresh never fires.
+  //   - If the user is simply not logged in (no token at all), skip
+  //     the refresh attempt entirely and avoid noisy 401 banners for
+  //     background checks run before auth is established.
   if (response.status === 401) {
-    // Attempt silent refresh once
-    if (!_refreshInProgress && typeof global.PersistentAuth_silentRefresh === 'function') {
+    // If we have NO token at all, the request was already unauthenticated
+    // — this is expected during background status checks before login.
+    // Throw quietly without showing a banner.
+    const currentToken = getToken();
+    if (!currentToken) {
+      throw new Error('Not authenticated (HTTP 401). Token not present.');
+    }
+
+    // Attempt silent refresh once using the correct global reference
+    const _silentRefreshFn = typeof window.silentRefresh === 'function'
+      ? window.silentRefresh
+      : (typeof window.PersistentAuth_silentRefresh === 'function'
+          ? window.PersistentAuth_silentRefresh
+          : null);
+
+    if (!_refreshInProgress && _silentRefreshFn) {
       _refreshInProgress = true;
       try {
-        const refreshed = await global.PersistentAuth_silentRefresh();
+        const refreshed = await _silentRefreshFn();
         if (refreshed) {
           const newToken = getToken();
           const retryHeaders = {
@@ -135,7 +157,9 @@ async function authFetch(pathOrUrl, opts = {}) {
           };
           const retryResp = await fetch(url, { ...opts, headers: retryHeaders });
           if (retryResp.ok) {
-            return retryResp.json();
+            // Parse based on content-type
+            const ct = retryResp.headers.get('content-type') || '';
+            return ct.includes('application/json') ? retryResp.json() : retryResp.text();
           }
           if (retryResp.status === 401) {
             _show401Banner();
@@ -143,7 +167,7 @@ async function authFetch(pathOrUrl, opts = {}) {
           }
         }
       } catch (e) {
-        if (!e.message.includes('expired')) {
+        if (!e.message.includes('expired') && !e.message.includes('Not authenticated')) {
           console.warn('[AuthFetch] Silent refresh failed:', e.message);
         }
       } finally {
