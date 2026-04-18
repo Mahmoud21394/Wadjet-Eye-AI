@@ -285,6 +285,19 @@ const authLimiter = rateLimit({
   message:  { error: 'Too many login attempts. Please wait 15 minutes.' },
   standardHeaders: true,
   legacyHeaders:   false,
+  // Only apply strict limit to login and register (not to refresh/me)
+  skip: (req) => ['/api/auth/refresh', '/api/auth/refresh-from-cookie', '/api/auth/me', '/api/auth/logout'].includes(req.path),
+});
+
+// Separate, more permissive limiter for token-refresh endpoints.
+// Silent refresh fires proactively at 80% TTL, so it should be allowed
+// up to ~20x per 15-min window (much less than login spam).
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max:      30,                    // 30 refresh attempts per 15 min per IP
+  message:  { error: 'Too many token refresh requests. Please wait before retrying.' },
+  standardHeaders: true,
+  legacyHeaders:   false,
 });
 
 const intelLimiter = rateLimit({
@@ -368,6 +381,9 @@ app.get('/api/health', async (req, res) => {
 // ════════════════════════════════════════════════════════════════
 //  PUBLIC ROUTES — No JWT required
 // ════════════════════════════════════════════════════════════════
+// Apply strict login limiter for login/register, permissive refresh limiter for refresh endpoints
+app.use('/api/auth/refresh', refreshLimiter);
+app.use('/api/auth/refresh-from-cookie', refreshLimiter);
 app.use('/api/auth', authLimiter, authRoutes);
 
 // ── v5.4 RAKAY AI Analyst Module (self-contained auth — must be BEFORE global verifyToken) ──
