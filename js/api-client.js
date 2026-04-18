@@ -181,10 +181,59 @@ async function _doRefresh() {
 /* ════════════════════════════════════════════
    BASE HTTP CLIENT — with auto-refresh on 401
    This is the single source of truth for ALL API calls.
+
+   v6.3 ROOT-CAUSE FIX (three bugs eliminated):
+   ─────────────────────────────────────────────
+   RC-1  Pre-flight refresh BYPASSED for public auth routes.
+         Previously refreshAccessToken() fired before every request,
+         including /auth/login — causing a spurious 400/401 refresh
+         round-trip that added up to 30 s on cold-start and could
+         itself trigger error handling before login even fired.
+
+   RC-2  Authorization header NOW attached on every non-auth request.
+         Previously `token` was read but NEVER placed into `headers`,
+         so every first call to a protected route arrived without a
+         Bearer token, got a 401, then recovered via the retry path.
+         Now the header is set before the first fetch(), eliminating
+         the unnecessary extra round-trip.
+
+   RC-3  401 handler BYPASSED for /auth/login|refresh|logout|register.
+         When the backend returns 401 for a bad password it is correct
+         behaviour.  The old handler intercepted that 401, called
+         silentRefresh() (which had no refresh token → failed), cleared
+         all stores, and rethrew "Authentication required. Please log in."
+         — completely hiding "Invalid email or password." from the UI.
+         Now the 401 is passed through as-is for public auth paths so
+         login-secure-patch.js can map it to the right UI message.
 ═════════════════════════════════════════════ */
+
+/**
+ * Paths that MUST NOT carry an Authorization header and MUST NOT
+ * trigger the silent-refresh 401 handler.
+ * The backend mounts these routes BEFORE app.use(verifyToken) so
+ * they are already public — the client must not interfere.
+ */
+const _AUTH_PUBLIC_PATHS = [
+  '/auth/login',
+  '/auth/refresh',
+  '/auth/refresh-from-cookie',
+  '/auth/logout',
+  '/auth/register',
+];
+
+/** Returns true if `path` is one of the unauthenticated auth endpoints. */
+function _isPublicAuthPath(path) {
+  return _AUTH_PUBLIC_PATHS.some(p => path === p || path.startsWith(p + '?'));
+}
+
 async function apiRequest(method, path, body = null, opts = {}) {
+  const isPublicAuth = _isPublicAuthPath(path);
+
   // ── 1. Pre-flight token refresh if expiring soon ──────────
-  if (!TokenStore.isValid() && TokenStore.canRefresh()) {
+  // RC-1 FIX: Skip entirely for public auth paths.
+  // There is no token during login, and calling refresh first only
+  // causes a useless 400/401 round-trip that wastes 1–30 seconds.
+  if (!isPublicAuth && !TokenStore.isValid() && TokenStore.canRefresh()) {
     await refreshAccessToken();
   }
 
@@ -195,6 +244,13 @@ async function apiRequest(method, path, body = null, opts = {}) {
     'Content-Type': 'application/json',
      ...(opts.headers || {}),
   };
+
+  // RC-2 FIX: Attach Authorization header on the FIRST fetch, not only
+  // on the retry.  Public auth routes deliberately get NO header so the
+  // backend's public route handlers are reached without interference.
+  if (!isPublicAuth && token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
 
   const fetchOpts = {
     method,
@@ -211,11 +267,13 @@ async function apiRequest(method, path, body = null, opts = {}) {
   }
 
   // ── 2. Handle 401 → auto-refresh → one retry ─────────────
-  if (response.status === 401) {
-    // ROOT-CAUSE FIX v6.2: Prefer the unified silentRefresh from
-    // auth-interceptor.js (if loaded) over the local refreshAccessToken().
-    // auth-interceptor handles the full retry chain (cookie fallback, backoff,
-    // StateSync coordination) and also refreshes UnifiedTokenStore keys.
+  // RC-3 FIX: Skip 401 interception entirely for public auth paths.
+  // A 401 from /api/auth/login means "wrong credentials" — the server
+  // is correct.  We must let the error bubble to the caller (login-
+  // secure-patch.js) so it can show the right message to the user.
+  if (response.status === 401 && !isPublicAuth) {
+    // Prefer the unified silentRefresh from auth-interceptor.js when
+    // loaded — it handles cookie fallback, backoff, and StateSync.
     const _preferredRefresh = typeof window.silentRefresh === 'function'
       ? window.silentRefresh
       : refreshAccessToken;
@@ -237,7 +295,7 @@ async function apiRequest(method, path, body = null, opts = {}) {
         } catch (retryErr) {
           throw new Error(`Network error on retry: ${retryErr.message}`);
         }
-        // If still 401 after refresh, fall through to error handling
+        // If still 401 after refresh, fall through to error handling below
       } else {
         // Refresh failed — clear all stores and signal session expiry
         TokenStore.clear();
@@ -248,7 +306,7 @@ async function apiRequest(method, path, body = null, opts = {}) {
         throw new Error('Session expired. Please log in again.');
       }
     } else {
-      // No refresh token anywhere — session invalid
+      // No refresh token anywhere — session is invalid
       TokenStore.clear();
       if (typeof window.UnifiedTokenStore !== 'undefined') window.UnifiedTokenStore.clear();
       if (typeof window !== 'undefined') {
