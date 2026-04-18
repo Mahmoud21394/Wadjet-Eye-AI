@@ -621,4 +621,99 @@ router.get('/activity', verifyToken, asyncHandler(async (req, res) => {
   res.json({ activity: data || [] });
 }));
 
+/* ════════════════════════════════════════════════
+   POST /api/auth/refresh-from-cookie
+   Cookie-based token refresh (no body needed).
+   Called by auth-interceptor.js when:
+     - No refresh token is found in localStorage
+     - The browser may still hold an httpOnly session cookie
+   Strategy: Use the httpOnly session cookie (set by Supabase/login)
+   to get a new access token via Supabase's admin createSession.
+═══════════════════════════════════════════════ */
+router.post('/refresh-from-cookie', asyncHandler(async (req, res) => {
+  // Try to find a Supabase session token in the httpOnly cookie
+  const cookieToken = req.cookies?.access_token || req.cookies?.token || req.cookies?.sb_access_token;
+
+  if (!cookieToken) {
+    return res.status(400).json({
+      error: 'No session cookie found. Please log in again.',
+      code:  'NO_COOKIE',
+    });
+  }
+
+  // Validate the cookie token to get the user
+  try {
+    const { data: { user }, error: authError } = await supabase.auth.getUser(cookieToken);
+
+    if (authError || !user) {
+      return res.status(401).json({
+        error: 'Cookie session expired. Please log in again.',
+        code:  'COOKIE_EXPIRED',
+      });
+    }
+
+    // Fetch user profile
+    const { data: profile } = await supabase
+      .from('users')
+      .select('id, name, email, role, tenant_id, auth_id, permissions, status')
+      .eq('auth_id', user.id)
+      .single();
+
+    if (!profile || profile.status !== 'active') {
+      return res.status(403).json({ error: 'Account inactive or not found.', code: 'ACCOUNT_INACTIVE' });
+    }
+
+    // Issue new tokens: access + refresh
+    let accessToken = cookieToken; // reuse the valid cookie token as access token
+    let expiresAt   = new Date(Date.now() + ACCESS_TOKEN_EXPIRY_SEC * 1000).toISOString();
+
+    // Try to create a fresh Supabase session
+    try {
+      const { data: adminSession, error: adminErr } = await supabase.auth.admin.createSession({
+        user_id: user.id,
+      });
+      if (!adminErr && adminSession?.session?.access_token) {
+        accessToken = adminSession.session.access_token;
+        expiresAt   = adminSession.session.expires_at
+          ? new Date(adminSession.session.expires_at * 1000).toISOString()
+          : expiresAt;
+      }
+    } catch (adminErr) {
+      // Fall back to the cookie token — it's still valid per getUser() above
+      console.warn('[Auth] refresh-from-cookie: admin.createSession failed, using cookie token:', adminErr.message);
+    }
+
+    // Issue a new refresh token
+    const refreshToken = generateRefreshToken();
+    const sessionId    = await storeRefreshToken(profile.id, profile.tenant_id, refreshToken, req);
+
+    await logActivity(profile.id, profile.tenant_id, 'TOKEN_REFRESH_FROM_COOKIE', req, { session_id: sessionId });
+
+    console.log('[Auth] ✅ refresh-from-cookie succeeded for', profile.email);
+
+    return res.json({
+      token:        accessToken,
+      refreshToken,
+      expiresIn:    ACCESS_TOKEN_EXPIRY_SEC,
+      expiresAt,
+      sessionId,
+      user: {
+        id:          profile.id,
+        name:        profile.name,
+        email:       profile.email,
+        role:        profile.role,
+        tenant_id:   profile.tenant_id,
+        permissions: profile.permissions,
+      },
+    });
+
+  } catch (err) {
+    console.warn('[Auth] refresh-from-cookie error:', err.message);
+    return res.status(401).json({
+      error: 'Session restoration failed. Please log in again.',
+      code:  'REFRESH_FAILED',
+    });
+  }
+}));
+
 module.exports = router;

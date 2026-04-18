@@ -954,34 +954,91 @@ window.loadIOCs          = (p) => API.iocs.list(p).then(r => r?.data || []).catc
 
 /* ════════════════════════════════════════════════════════════
    GLOBAL API CONVENIENCE HELPERS — used by new v25.0 modules
+   v4.1 FIX: Use UnifiedTokenStore (auth-interceptor v6.0) when available;
+   fall back to TokenStore. Also pre-flight refresh on 401.
 ═══════════════════════════════════════════════════════════ */
 (function _installGlobalHelpers() {
-  const BACKEND = (() => {
-    const u = (typeof window !== 'undefined' && window.THREATPILOT_API_URL)
+  // BACKEND URL — computed lazily so THREATPILOT_API_URL can be set after script load
+  function _getBackend() {
+    return (typeof window !== 'undefined' && window.THREATPILOT_API_URL)
       ? window.THREATPILOT_API_URL.replace(/\/$/, '')
-      : (window.location.hostname === 'localhost' ? 'http://localhost:3000' : '');
-    return u;
-  })();
+      : 'https://wadjet-eye-ai.onrender.com';
+  }
+
+  /** Get the best available auth token across all stores */
+  function _getBestToken() {
+    // 1. UnifiedTokenStore (auth-interceptor v6.0) — most up-to-date
+    if (typeof window.UnifiedTokenStore !== 'undefined') {
+      const t = window.UnifiedTokenStore.getToken();
+      if (t) return t;
+    }
+    // 2. Legacy TokenStore (api-client TokenStore)
+    if (typeof TokenStore !== 'undefined') {
+      const t = TokenStore.get();
+      if (t) return t;
+    }
+    // 3. Direct localStorage fallbacks
+    return localStorage.getItem('wadjet_access_token')
+        || localStorage.getItem('we_access_token')
+        || sessionStorage.getItem('we_access_token')
+        || null;
+  }
 
   function _authHeaders() {
-    const token = typeof TokenStore !== 'undefined' ? TokenStore.get() : null;
+    const token = _getBestToken();
     const h = { 'Content-Type': 'application/json' };
     if (token) h['Authorization'] = `Bearer ${token}`;
     return h;
   }
 
   async function _apiFetch(method, path, body) {
-    const url = BACKEND + (path.startsWith('http') ? path.replace(BACKEND, '') : path);
-    const opts = { method, headers: _authHeaders() };
+    // Pre-flight: delegate to authFetch (auth-interceptor) when available
+    // This handles silent token refresh and 401 retries automatically.
+    if (typeof window.authFetch === 'function') {
+      return window.authFetch(path, {
+        method,
+        ...(body !== undefined ? { body } : {}),
+      });
+    }
+
+    // Fallback: manual fetch with best available token
+    const BACKEND = _getBackend();
+    const url = path.startsWith('http') ? path : `${BACKEND}${path.startsWith('/api') ? '' : '/api'}${path}`;
+    const opts = { method, headers: _authHeaders(), credentials: 'include' };
     if (body !== undefined) opts.body = JSON.stringify(body);
-    const res = await fetch(url, opts);
-    if (!res.ok) {
-      let errMsg = `HTTP ${res.status}`;
-      try { const j = await res.json(); errMsg = j.error || j.message || errMsg; } catch {}
-      throw new Error(errMsg);
+
+    let res;
+    try {
+      res = await fetch(url, opts);
+    } catch (netErr) {
+      console.warn('[apiHelpers] Network error:', netErr.message);
+      return null;
+    }
+
+    // 401 retry: refresh token then retry once
+    if (res.status === 401) {
+      let refreshed = false;
+      if (typeof window.silentRefresh === 'function') {
+        refreshed = await window.silentRefresh().catch(() => false);
+      } else if (typeof refreshAccessToken === 'function') {
+        refreshed = await refreshAccessToken().catch(() => false);
+      }
+      if (refreshed) {
+        opts.headers = _authHeaders(); // re-read fresh token
+        try { res = await fetch(url, opts); } catch { /* fall through */ }
+      }
+    }
+
+    if (!res || !res.ok) {
+      if (res) {
+        let errMsg = `HTTP ${res.status}`;
+        try { const j = await res.json(); errMsg = j.error || j.message || errMsg; } catch {}
+        throw new Error(errMsg);
+      }
+      throw new Error('Network error');
     }
     if (res.status === 204) return null;
-    return res.json();
+    return res.json().catch(() => null);
   }
 
   // Install globally — safe to call from any new module

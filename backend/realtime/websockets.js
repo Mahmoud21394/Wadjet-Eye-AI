@@ -271,7 +271,8 @@ function initSocketIO(io) {
     /* AUTH REFRESH */
     socket.on('auth:refresh', async ({ token }) => {
       const profile = await resolveToken(token);
-      if (profile.authType === 'guest') {
+      // CRITICAL FIX: null-check before accessing profile.authType
+      if (!profile || profile.authType === 'guest') {
         socket.emit('auth:refresh_failed', { reason: 'invalid token' });
         return;
       }
@@ -358,9 +359,20 @@ function initNativeWS(httpServer) {
     // ── Auth ──────────────────────────────────────────────
     const token  = query.token || null;
     const user   = await resolveToken(token);
-    ws._user     = user;
-    ws._alive    = true;
-    ws._interval = null;
+
+    // ── CRITICAL FIX: reject unauthenticated native WS connections ────
+    if (!user) {
+      console.warn('[NWS] AUTH REJECTED — no valid token from query.token');
+      try {
+        ws.send(JSON.stringify({ type: 'auth_failed', reason: 'WS_AUTH_FAILED: valid authentication token required' }));
+      } catch (_) {}
+      ws.close(4001, 'WS_AUTH_FAILED');
+      return;
+    }
+
+    ws._user      = user;
+    ws._alive     = true;
+    ws._interval  = null;
     ws._pingTimer = null;
 
     _wsRegistryAdd(user.userId, ws);
@@ -401,7 +413,7 @@ function initNativeWS(httpServer) {
         // In-band auth (alternative to query-param)
         case 'auth': {
           const refreshedUser = await resolveToken(msg.token);
-          if (refreshedUser.authType !== 'guest') {
+          if (refreshedUser && refreshedUser.authType !== 'guest') {
             ws._user = refreshedUser;
             _wsSend(ws, { type: 'auth_ok', userId: refreshedUser.userId, tenant: refreshedUser.tenantId });
             console.log(`[NWS] AUTH_OK clientId=${clientId} userId=${refreshedUser.userId}`);
