@@ -47,6 +47,9 @@ window.addEventListener('DOMContentLoaded', function () {
    If the server is down, the user cannot log in. Full stop.
 ════════════════════════════════════════════════════════════════ */
 async function secureDoLogin() {
+  if (window.UnifiedTokenStore) {
+  UnifiedTokenStore.clear();
+}
   const emailEl  = document.getElementById('loginEmail');
   const passEl   = document.getElementById('loginPassword');
   const tenantEl = document.getElementById('loginTenant');
