@@ -1103,7 +1103,9 @@
       if (typeof window.renderTenantManagement === 'function') window.renderTenantManagement();
     });
     _wire('rbac-admin', () => {
-      if (typeof window.renderTenantManagement === 'function') window.renderTenantManagement();
+      // Use the dedicated RBAC admin renderer; fall back to tenant management if unavailable
+      if (typeof window.renderRBACAdmin === 'function') window.renderRBACAdmin();
+      else if (typeof window.renderTenantManagement === 'function') window.renderTenantManagement();
     });
 
     // Reports v2.0

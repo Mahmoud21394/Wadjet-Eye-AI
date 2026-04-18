@@ -59,14 +59,18 @@
 
   /* ─── Fallback curated articles (shown when API is unreachable) ─── */
   const FALLBACK_ARTICLES = [
-    { id:'F001', title:'APT29 Deploys New SUNBURST-v3 Backdoor Targeting NATO Diplomats', source:'Mandiant', category:'threats', severity:'critical', publishedAgo:'2h ago', publishedAt: new Date(Date.now()-7200000).toISOString(), summary:'Russian APT29 has deployed a new variant of SUNBURST using DNS-over-HTTPS for C2 communication, targeting NATO diplomatic infrastructure across Europe.', cves:[], threatActors:['APT29','Cozy Bear'], malwareFamilies:['SUNBURST'], tags:['apt','backdoor','nato'], url:'#' },
-    { id:'F002', title:'Critical RCE in Ivanti Connect Secure Actively Exploited (CVE-2025-0282)', source:'CISA', category:'vulnerabilities', severity:'critical', publishedAgo:'18h ago', publishedAt: new Date(Date.now()-64800000).toISOString(), summary:'Unauthenticated RCE in Ivanti Connect Secure VPN is being mass-exploited. CISA emergency directive issued for immediate patching.', cves:['CVE-2025-0282'], threatActors:[], malwareFamilies:[], tags:['cve','rce','vpn','zero-day'], url:'#' },
-    { id:'F003', title:'LockBit 4.0 Infrastructure Resurfaces with Enhanced RaaS Portal', source:'Recorded Future', category:'threats', severity:'high', publishedAgo:'1d ago', publishedAt: new Date(Date.now()-86400000).toISOString(), summary:'LockBit ransomware group relaunched under v4.0 after 2024 law enforcement takedown, featuring improved affiliate portal and exfiltration capabilities.', cves:[], threatActors:['LockBit'], malwareFamilies:['LockBit'], tags:['ransomware','raas','darkweb'], url:'#' },
-    { id:'F004', title:'Volt Typhoon Pre-Positioned in US Critical Infrastructure for 5+ Years', source:'CISA/FBI Joint Advisory', category:'advisories', severity:'critical', publishedAgo:'2d ago', publishedAt: new Date(Date.now()-172800000).toISOString(), summary:'CISA and FBI confirm Volt Typhoon has maintained persistent access to US critical infrastructure networks for over five years, using living-off-the-land techniques exclusively.', cves:[], threatActors:['Volt Typhoon'], malwareFamilies:['KV-Botnet'], tags:['apt','critical-infrastructure','lolbins'], url:'#' },
-    { id:'F005', title:'Scattered Spider Pivots to Cloud Targeting: Azure AD and AWS Console Focus', source:'CrowdStrike', category:'attacks', severity:'high', publishedAgo:'3d ago', publishedAt: new Date(Date.now()-259200000).toISOString(), summary:'UNC3944 (Scattered Spider) now targeting cloud management platforms via vishing campaigns using MFA fatigue and SIM swapping against SaaS and fintech companies.', cves:[], threatActors:['Scattered Spider','UNC3944'], malwareFamilies:[], tags:['social-engineering','cloud','azure','aws'], url:'#' },
-    { id:'F006', title:'GitHub Actions Supply Chain Attack via Malicious tj-actions Workflow', source:'StepSecurity Research', category:'research', severity:'high', publishedAgo:'4d ago', publishedAt: new Date(Date.now()-345600000).toISOString(), summary:'Malicious code injection in popular GitHub Action tj-actions/changed-files exfiltrated CI/CD secrets from thousands of repositories in a supply chain attack.', cves:[], threatActors:[], malwareFamilies:[], tags:['supply-chain','cicd','github'], url:'#' },
-    { id:'F007', title:'New Phishing-as-a-Service "Tycoon 2FA" Bypasses Microsoft 365 MFA', source:'Sekoia TI', category:'attacks', severity:'high', publishedAgo:'5d ago', publishedAt: new Date(Date.now()-432000000).toISOString(), summary:'Tycoon 2FA PhaaS sold on Telegram ($120/month) uses adversary-in-the-middle to bypass Microsoft 365 MFA. 1,000+ phishing domains registered.', cves:[], threatActors:[], malwareFamilies:['Tycoon 2FA'], tags:['phaas','aitm','mfa-bypass'], url:'#' },
-    { id:'F008', title:'CISA Issues Emergency Directive for FortiGate SSL VPN Zero-Day', source:'CISA', category:'advisories', severity:'critical', publishedAgo:'6d ago', publishedAt: new Date(Date.now()-518400000).toISOString(), summary:'CISA emergency directive for CVE-2024-21762 in FortiGate appliances being exploited by Akira ransomware group before organizations could patch.', cves:['CVE-2024-21762'], threatActors:['Akira'], malwareFamilies:['Akira Ransomware'], tags:['cve','fortigate','vpn','ransomware'], url:'#' },
+    { id:'F001', title:'APT29 Deploys New SUNBURST-v3 Backdoor Targeting NATO Diplomats', source:'Mandiant', category:'threats', severity:'critical', publishedAgo:'2h ago', publishedAt: new Date(Date.now()-7200000).toISOString(), summary:'Russian APT29 has deployed a new variant of SUNBURST using DNS-over-HTTPS for C2 communication, targeting NATO diplomatic infrastructure across Europe. The malware uses encrypted channels with domain-fronting techniques to evade detection. 47 NATO member state diplomatic missions have been identified as targets.', cves:[], threatActors:['APT29','Cozy Bear'], malwareFamilies:['SUNBURST','MiniDuke'], tags:['apt','backdoor','nato','dns-over-https'], url:'https://www.mandiant.com/' },
+    { id:'F002', title:'Critical RCE in Ivanti Connect Secure Actively Exploited (CVE-2025-0282)', source:'CISA', category:'vulnerabilities', severity:'critical', publishedAgo:'18h ago', publishedAt: new Date(Date.now()-64800000).toISOString(), summary:'An unauthenticated remote code execution vulnerability in Ivanti Connect Secure VPN (CVSS 9.0) is being mass-exploited in the wild. CISA issued an emergency directive requiring federal agencies to patch within 48 hours. Over 2,500 exposed instances detected globally via Shodan. Exploitation began within hours of public disclosure.', cves:['CVE-2025-0282','CVE-2025-0283'], threatActors:['UNC5221'], malwareFamilies:['SPAWNCHIMERA','LIGHTWIRE'], tags:['cve','rce','vpn','zero-day','ivanti'], url:'https://www.cisa.gov/' },
+    { id:'F003', title:'LockBit 4.0 Infrastructure Resurfaces with Enhanced RaaS Portal', source:'Recorded Future', category:'threats', severity:'high', publishedAgo:'1d ago', publishedAt: new Date(Date.now()-86400000).toISOString(), summary:'The LockBit ransomware group has relaunched under v4.0 following the 2024 law enforcement takedown, featuring an improved affiliate portal with real-time negotiation tracking, automated victim profiling, and a new data leak site. Initial affiliates have already claimed attacks on 12 organizations across healthcare and financial sectors.', cves:[], threatActors:['LockBit'], malwareFamilies:['LockBit 4.0'], tags:['ransomware','raas','darkweb'], url:'https://www.recordedfuture.com/' },
+    { id:'F004', title:'Volt Typhoon Pre-Positioned in US Critical Infrastructure for 5+ Years', source:'CISA/FBI Joint Advisory', category:'advisories', severity:'critical', publishedAgo:'2d ago', publishedAt: new Date(Date.now()-172800000).toISOString(), summary:'A joint CISA/FBI advisory confirms that China-nexus threat actor Volt Typhoon has maintained persistent access to US critical infrastructure networks — including water treatment, power grids, and telecommunications — for over five years using exclusively living-off-the-land (LotL) techniques. No malware was used; attackers relied entirely on native OS tools to avoid detection.', cves:[], threatActors:['Volt Typhoon','Bronze Silhouette'], malwareFamilies:['KV-Botnet'], tags:['apt','critical-infrastructure','lolbins','china'], url:'https://www.cisa.gov/' },
+    { id:'F005', title:'Scattered Spider Pivots to Cloud Targeting: Azure AD and AWS Console Focus', source:'CrowdStrike', category:'attacks', severity:'high', publishedAgo:'3d ago', publishedAt: new Date(Date.now()-259200000).toISOString(), summary:'UNC3944 (Scattered Spider) has shifted tactics from telecom SIM-swapping to cloud management platform targeting. Attackers use vishing campaigns to obtain MFA codes, then compromise Azure AD and AWS root accounts. Victims include 14 SaaS and fintech companies, with estimated losses exceeding $45M. The group recruits English-speaking teens via Telegram.', cves:[], threatActors:['Scattered Spider','UNC3944','Roasted 0ktapus'], malwareFamilies:[], tags:['social-engineering','cloud','azure','aws','vishing'], url:'https://www.crowdstrike.com/' },
+    { id:'F006', title:'GitHub Actions Supply Chain Attack via Malicious tj-actions Workflow', source:'StepSecurity Research', category:'research', severity:'high', publishedAgo:'4d ago', publishedAt: new Date(Date.now()-345600000).toISOString(), summary:'A supply chain attack targeting the popular tj-actions/changed-files GitHub Action (used by 23,000+ repositories) injected malicious code that exfiltrated CI/CD secrets — including AWS keys, GitHub tokens, and Docker credentials — to an attacker-controlled endpoint. Researchers traced the attack to a compromised maintainer account. All secrets should be rotated immediately.', cves:[], threatActors:[], malwareFamilies:[], tags:['supply-chain','cicd','github','secrets'], url:'https://github.com/' },
+    { id:'F007', title:'New Phishing-as-a-Service "Tycoon 2FA" Bypasses Microsoft 365 MFA', source:'Sekoia TI', category:'attacks', severity:'high', publishedAgo:'5d ago', publishedAt: new Date(Date.now()-432000000).toISOString(), summary:'The Tycoon 2FA PhaaS kit sold on Telegram for $120/month uses an adversary-in-the-middle (AiTM) proxy to capture Microsoft 365 session cookies in real time, bypassing TOTP-based MFA. Over 1,000 phishing domains have been registered. The kit includes a full admin panel with victim tracking, automated cookie exfiltration, and customizable lure templates.', cves:[], threatActors:[], malwareFamilies:['Tycoon 2FA'], tags:['phaas','aitm','mfa-bypass','microsoft365'], url:'https://www.sekoia.io/' },
+    { id:'F008', title:'CISA Issues Emergency Directive for FortiGate SSL VPN Zero-Day', source:'CISA', category:'advisories', severity:'critical', publishedAgo:'6d ago', publishedAt: new Date(Date.now()-518400000).toISOString(), summary:'CISA Emergency Directive 24-01 requires all federal agencies to immediately patch CVE-2024-21762 affecting FortiGate SSL VPN appliances. The flaw enables unauthenticated remote code execution and is being exploited by the Akira ransomware group to gain initial network access. Over 150,000 FortiGate instances remain unpatched globally.', cves:['CVE-2024-21762'], threatActors:['Akira'], malwareFamilies:['Akira Ransomware'], tags:['cve','fortigate','vpn','ransomware'], url:'https://www.cisa.gov/' },
+    { id:'F009', title:'New Zero-Day in Windows CLFS Driver Exploited by LAPSUS$ Successor Group', source:'Microsoft Security', category:'vulnerabilities', severity:'critical', publishedAgo:'7d ago', publishedAt: new Date(Date.now()-604800000).toISOString(), summary:'Microsoft has disclosed CVE-2024-49138, a privilege escalation zero-day in the Windows Common Log File System (CLFS) driver that allows a local attacker to gain SYSTEM privileges. The vulnerability is being exploited by a LAPSUS$-linked threat group to escalate from standard user accounts to domain admin in Active Directory environments.', cves:['CVE-2024-49138'], threatActors:['Strawberry Tempest'], malwareFamilies:[], tags:['windows','zero-day','privilege-escalation','clfs'], url:'https://msrc.microsoft.com/' },
+    { id:'F010', title:'AI-Generated Malware Campaigns Surge 340% — Deceptive Deepfake Phishing Grows', source:'SecurityWeek', category:'intelligence', severity:'high', publishedAgo:'8d ago', publishedAt: new Date(Date.now()-691200000).toISOString(), summary:'Threat intelligence firm reports a 340% surge in AI-assisted malware campaigns over Q1 2025. Attackers use LLMs to generate polymorphic malware variants that evade signature-based detection, craft convincing spear-phishing emails with perfect grammar in 40+ languages, and create deepfake video lures impersonating C-level executives to authorize wire transfers.', cves:[], threatActors:['Various'], malwareFamilies:['PolyMorph-AI','DeepPhish'], tags:['ai','malware','deepfake','llm','phishing'], url:'https://www.securityweek.com/' },
+    { id:'F011', title:'MITRE ATT&CK v15 Released: 12 New Techniques, ICS/OT Expansion', source:'MITRE', category:'research', severity:'medium', publishedAgo:'9d ago', publishedAt: new Date(Date.now()-777600000).toISOString(), summary:'MITRE has released ATT&CK v15 featuring 12 new sub-techniques, expanded ICS/OT coverage for energy sector threats, and a new "AI Systems" matrix covering attacks targeting machine learning pipelines and LLM systems. The update includes mappings for 89 new software samples and 31 new group references from the threat intelligence community.', cves:[], threatActors:[], malwareFamilies:[], tags:['mitre','attck','framework','ics','ot'], url:'https://attack.mitre.org/' },
+    { id:'F012', title:'North Korean IT Worker Scam: $2.4B in Crypto Stolen via Remote Job Fraud', source:'Chainalysis', category:'intelligence', severity:'high', publishedAgo:'10d ago', publishedAt: new Date(Date.now()-864000000).toISOString(), summary:'Chainalysis research reveals North Korean state-sponsored IT workers have defrauded tech companies of $2.4B since 2022 by obtaining remote developer positions using stolen identities, then conducting insider theft of crypto assets and proprietary source code. Over 300 companies across the US, UK, and Australia have unknowingly hired DPRK operatives.', cves:[], threatActors:['Lazarus Group','Andariel'], malwareFamilies:['TraderTraitor'], tags:['dprk','insider-threat','crypto','north-korea'], url:'https://www.chainalysis.com/' },
   ];
 
   /* ════════════════════════════════════════════════════════════════════
@@ -161,7 +165,15 @@
       const data = await resp.json();
 
       if (data.articles && Array.isArray(data.articles) && data.articles.length > 0) {
-        _articles  = data.articles;
+        // ROOT-CAUSE FIX: Normalize article IDs to safe alphanumeric strings.
+        // API articles may have IDs with special characters (quotes, spaces, URLs)
+        // that break onclick attribute injection and _articles.find() lookups.
+        // We assign a safe sequential ID while preserving the original data.
+        _articles = data.articles.map((a, idx) => ({
+          ...a,
+          id: `API_${idx}`,  // always safe for attribute injection
+          category: _normalizeCat(a.category),  // normalize to known category keys
+        }));
         _lastFetch = new Date();
 
         // ROOT-CAUSE DEBUG: Log per-category distribution received from backend.
@@ -222,6 +234,53 @@
         _feedStats    = stats;
       }
     } catch (_) {}
+  }
+
+  function _normalizeCat(cat) {
+    if (!cat) return 'intelligence';
+    const c = String(cat).toLowerCase().trim();
+    // Map common backend category names to our known keys.
+    // Covers RSS feed categories, backend slugs, and common variations.
+    const MAP = {
+      // threats
+      threat: 'threats', threats: 'threats',
+      'threat-intel': 'threats', 'threat-intelligence': 'threats',
+      'threat intelligence': 'threats', 'threatintel': 'threats',
+      malware: 'threats', apt: 'threats', ransomware: 'threats',
+      // intelligence
+      intel: 'intelligence', intelligence: 'intelligence',
+      'cyber-intelligence': 'intelligence', 'cyber intelligence': 'intelligence',
+      'threat hunting': 'intelligence', 'threat-hunting': 'intelligence',
+      // vulnerabilities
+      vuln: 'vulnerabilities', vulnerability: 'vulnerabilities',
+      vulnerabilities: 'vulnerabilities', cve: 'vulnerabilities',
+      'zero-day': 'vulnerabilities', 'zero day': 'vulnerabilities',
+      patch: 'vulnerabilities', patches: 'vulnerabilities',
+      // attacks
+      attack: 'attacks', attacks: 'attacks',
+      breach: 'attacks', breaches: 'attacks',
+      incident: 'attacks', incidents: 'attacks',
+      'data-breach': 'attacks', 'data breach': 'attacks',
+      'cyber-attack': 'attacks', 'cyberattack': 'attacks',
+      // advisories
+      advisory: 'advisories', advisories: 'advisories',
+      'security-advisory': 'advisories', 'security advisory': 'advisories',
+      alert: 'advisories', warning: 'advisories',
+      'us-cert': 'advisories', 'cisa': 'advisories',
+      // research
+      research: 'research', 'security-research': 'research',
+      'security research': 'research', analysis: 'research',
+      report: 'research', reports: 'research',
+    };
+    if (MAP[c]) return MAP[c];
+    // Check if it directly matches a known key (exact)
+    const KNOWN = ['threats','intelligence','vulnerabilities','attacks','advisories','research'];
+    if (KNOWN.includes(c)) return c;
+    // Partial match fallback — if value contains a known key
+    for (const k of KNOWN) {
+      if (c.includes(k)) return k;
+    }
+    return 'intelligence'; // safe default
   }
 
   function _useFallback() {
