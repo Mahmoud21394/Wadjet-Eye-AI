@@ -553,11 +553,25 @@ async function authFetch(path, opts = {}) {
       ? `${base}${path}`
       : `${base}/api${path}`;
 
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(opts.headers || {}),
-  };
+  const AUTH_BYPASS = [
+  '/api/auth/login',
+  '/api/auth/refresh',
+  '/api/auth/logout'
+];
+
+function shouldBypassAuth(url = '') {
+  return AUTH_BYPASS.some(p => url.includes(p));
+}
+
+const headers = {
+  'Content-Type': 'application/json',
+  ...(opts.headers || {}),
+};
+
+// ❗ Only attach token for non-auth routes
+if (token && !shouldBypassAuth(url)) {
+  headers.Authorization = `Bearer ${token}`;
+}
 
   const fetchOpts = {
     method:      opts.method || 'GET',
