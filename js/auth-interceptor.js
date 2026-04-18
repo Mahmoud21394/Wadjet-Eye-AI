@@ -535,81 +535,80 @@ function _scheduleProactiveRefresh() {
    We check auth state FIRST. Only if auth is valid do we treat the 401
    as a provider credential error.
 ═══════════════════════════════════════════════════════════════ */
+/* ========================= AUTH FETCH (FIXED) ========================= */
+
 async function authFetch(path, opts = {}) {
   const base = BACKEND_URL();
 
-  // ── Pre-flight: refresh if token is expiring ─────────────────────
-  if (!UnifiedTokenStore.isOffline() &&
-      UnifiedTokenStore.isExpired(60_000) &&
-      UnifiedTokenStore.hasSession()) {
-    await silentRefresh();
-  }
-
-  const token   = UnifiedTokenStore.getToken();
-  // CRITICAL FIX: Don't double-prefix /api — if path already starts with /api, don't prepend again
   const fullUrl = path.startsWith('http')
     ? path
     : path.startsWith('/api')
       ? `${base}${path}`
       : `${base}/api${path}`;
 
+  // ───────── AUTH BYPASS (CRITICAL FIX) ─────────
   const AUTH_BYPASS = [
-  '/api/auth/login',
-  '/api/auth/refresh',
-  '/api/auth/logout'
-];
+    '/api/auth/login',
+    '/api/auth/refresh',
+    '/api/auth/logout'
+  ];
 
-function shouldBypassAuth(url = '') {
-  return AUTH_BYPASS.some(p => url.includes(p));
-}
+  const isAuthRoute = AUTH_BYPASS.some(p => fullUrl.includes(p));
 
-const headers = {
-  'Content-Type': 'application/json',
-  ...(opts.headers || {}),
-};
+  // ───────── PRE-FLIGHT REFRESH (SKIP FOR AUTH ROUTES) ─────────
+  if (!isAuthRoute &&
+      !UnifiedTokenStore.isOffline() &&
+      UnifiedTokenStore.isExpired(60_000) &&
+      UnifiedTokenStore.hasSession()) {
+    await silentRefresh();
+  }
 
-// ❗ Only attach token for non-auth routes
-if (token && !shouldBypassAuth(url)) {
-  headers.Authorization = `Bearer ${token}`;
-}
+  const token = UnifiedTokenStore.getToken();
+
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(opts.headers || {}),
+  };
+
+  // ───────── ONLY ATTACH TOKEN FOR NON-AUTH ROUTES ─────────
+  if (token && !isAuthRoute) {
+    headers.Authorization = `Bearer ${token}`;
+  }
 
   const fetchOpts = {
-    method:      opts.method || 'GET',
+    method: opts.method || 'GET',
     headers,
     credentials: 'include',
-    ...(opts.body ? { body: typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body) } : {}),
+    ...(opts.body
+      ? { body: typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body) }
+      : {}),
   };
 
   let resp;
+
   try {
     resp = await fetch(fullUrl, fetchOpts);
   } catch (netErr) {
-    console.warn('[AuthFetch] Network error:', path, '—', netErr.message);
+    console.warn('[AuthFetch] Network error:', path, netErr.message);
     return { data: [], total: 0, page: 1, limit: 25, _offline: true };
   }
 
-  // ── 401 / 403 handling ───────────────────────────────────────────
-  if (resp.status === 401 || resp.status === 403) {
-    console.warn(`[AuthFetch] ${resp.status} on ${path} — checking auth state first`);
-
-    // CRITICAL FIX: Attempt token refresh
+  // ───────── 401/403 HANDLING ─────────
+  if ((resp.status === 401 || resp.status === 403) && !isAuthRoute) {
     const refreshed = await silentRefresh();
 
     if (refreshed) {
       const newToken = UnifiedTokenStore.getToken();
-      try {
-        resp = await fetch(fullUrl, {
-          ...fetchOpts,
-          headers: { ...headers, Authorization: `Bearer ${newToken}` },
-        });
-      } catch { /* fall through */ }
+      resp = await fetch(fullUrl, {
+        ...fetchOpts,
+        headers: { ...headers, Authorization: `Bearer ${newToken}` },
+      });
     }
 
-    // Still 401 after refresh → session truly dead
     if (!resp || resp.status === 401 || resp.status === 403) {
       _dispatchAuthEvent('auth:expired', { path });
       window.StateSync?.handleAuthExpiry({ path });
-      throw new Error(`AUTH_EXPIRED: Session expired. Please log in again. (path: ${path})`);
+      throw new Error(`AUTH_EXPIRED: Session expired. Please log in again. (${path})`);
     }
   }
 
@@ -627,7 +626,6 @@ if (token && !shouldBypassAuth(url)) {
     return null;
   }
 }
-
 /* ═══════════════════════════════════════════════════════════════
    STARTUP — _syncStoresOnLoad
    Restores BOTH access and refresh tokens from all storage
@@ -661,10 +659,11 @@ async function _syncStoresOnLoad() {
   const user       = UnifiedTokenStore.getUser();
 
   // ── Step 3: Nothing at all — mark unauthenticated ────────────────
-  if (!hasToken && !hasRefresh) {
-    window.StateSync?.markAuthReady({ isAuthenticated: false, user: null });
-    return;
-  }
+   if (!hasToken && !hasRefresh) {
+      UnifiedTokenStore.clear();   // ← FIX: clears stale UI/auth state
+      window.StateSync?.markAuthReady({ isAuthenticated: false, user: null });
+      return;
+   }
 
   // ── Step 4: Token valid — schedule refresh and mark ready ────────
   if (hasToken && !isExpired) {
