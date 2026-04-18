@@ -158,11 +158,14 @@ async function _doRefresh() {
       // Push new token to any active WebSocket connection so it stays authenticated
       if (typeof WS !== 'undefined' && WS.updateAuth) WS.updateAuth();
 
-      // Dispatch event so other modules (live-detections-soc, etc.) can react
+      // Dispatch events so all modules react.
+      // ROOT-CAUSE FIX v6.2: Dispatch BOTH event name variants since older
+      // modules listen to 'auth:token_refreshed' and newer ones listen to
+      // 'auth:token-refreshed'. Both names must fire to avoid stale state.
       if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('auth:token_refreshed', {
-          detail: { token: body.token || body.access_token },
-        }));
+        const _refreshDetail = { token: body.token || body.access_token };
+        window.dispatchEvent(new CustomEvent('auth:token_refreshed', { detail: _refreshDetail }));
+        window.dispatchEvent(new CustomEvent('auth:token-refreshed', { detail: _refreshDetail }));
       }
 
       return true;
@@ -209,12 +212,26 @@ async function apiRequest(method, path, body = null, opts = {}) {
 
   // ── 2. Handle 401 → auto-refresh → one retry ─────────────
   if (response.status === 401) {
-    if (TokenStore.canRefresh()) {
-      const refreshed = await refreshAccessToken();
+    // ROOT-CAUSE FIX v6.2: Prefer the unified silentRefresh from
+    // auth-interceptor.js (if loaded) over the local refreshAccessToken().
+    // auth-interceptor handles the full retry chain (cookie fallback, backoff,
+    // StateSync coordination) and also refreshes UnifiedTokenStore keys.
+    const _preferredRefresh = typeof window.silentRefresh === 'function'
+      ? window.silentRefresh
+      : refreshAccessToken;
+
+    const canTryRefresh = TokenStore.canRefresh() ||
+      (typeof window.UnifiedTokenStore !== 'undefined' && window.UnifiedTokenStore.getRefresh());
+
+    if (canTryRefresh) {
+      const refreshed = await _preferredRefresh();
 
       if (refreshed) {
         // Retry original request with new token
-        headers['Authorization'] = `Bearer ${TokenStore.get()}`;
+        const freshToken = (typeof window.UnifiedTokenStore !== 'undefined'
+          ? window.UnifiedTokenStore.getToken()
+          : null) || TokenStore.get();
+        headers['Authorization'] = `Bearer ${freshToken}`;
         try {
           response = await fetch(url, { ...fetchOpts, headers });
         } catch (retryErr) {
@@ -222,16 +239,18 @@ async function apiRequest(method, path, body = null, opts = {}) {
         }
         // If still 401 after refresh, fall through to error handling
       } else {
-        // Refresh failed — session invalid
+        // Refresh failed — clear all stores and signal session expiry
         TokenStore.clear();
+        if (typeof window.UnifiedTokenStore !== 'undefined') window.UnifiedTokenStore.clear();
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent('auth:expired'));
         }
         throw new Error('Session expired. Please log in again.');
       }
     } else {
-      // No refresh token — session invalid
+      // No refresh token anywhere — session invalid
       TokenStore.clear();
+      if (typeof window.UnifiedTokenStore !== 'undefined') window.UnifiedTokenStore.clear();
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('auth:expired'));
       }

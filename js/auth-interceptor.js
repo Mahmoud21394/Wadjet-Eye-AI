@@ -281,13 +281,23 @@ async function _doTokenRefresh(attempt = 0) {
   }
 
   // ── No refresh token in storage → try cookie refresh ────────────────
+  // ROOT-CAUSE FIX v6.2: Only attempt cookie refresh if we actually had a
+  // session at some point (i.e., there IS an access token, it's just expired).
+  // If there's NO access token AND no refresh token, the user is not logged
+  // in at all — skip the cookie attempt entirely to avoid the NO_COOKIE 400 loop.
   if (!refreshToken) {
-    console.warn('[AuthInterceptor] No refresh token in storage — attempting cookie-based refresh');
+    const hasAnyToken = !!(UnifiedTokenStore.getToken() ||
+                           localStorage.getItem('wadjet_access_token') ||
+                           localStorage.getItem('we_access_token'));
+    if (!hasAnyToken) {
+      // Completely unauthenticated — no point trying cookie refresh
+      return false;
+    }
     return _refreshFromCookie();
   }
 
   try {
-    console.log(`[AuthInterceptor] 🔄 Refreshing access token (attempt ${attempt + 1}/${MAX_ATTEMPTS})…`);
+
     const res = await fetch(`${BACKEND_URL()}/api/auth/refresh`, {
       method:      'POST',
       headers:     { 'Content-Type': 'application/json' },
@@ -375,7 +385,12 @@ async function _doTokenRefresh(attempt = 0) {
     if (window.WS?.updateAuth) window.WS.updateAuth();
 
     _scheduleProactiveRefresh();
-    _dispatchAuthEvent('auth:token-refreshed', { token: newToken });
+    // ROOT-CAUSE FIX v6.3: Dispatch BOTH event name variants.
+    // api-client.js listens to 'auth:token_refreshed' (underscore).
+    // auth-persistent.js and campaign/soc modules listen to 'auth:token-refreshed' (hyphen).
+    // Both must fire so all modules react consistently.
+    _dispatchAuthEvent('auth:token-refreshed',  { token: newToken });
+    _dispatchAuthEvent('auth:token_refreshed',  { token: newToken });
     window.StateSync?.updateAuthState({ isAuthenticated: true, user: data.user });
 
     return true;
@@ -475,7 +490,24 @@ async function _refreshFromCookie() {
       user:         data.user,
     });
 
+    // Sync legacy TokenStore if loaded
+    if (typeof window.TokenStore !== 'undefined') {
+      window.TokenStore.set(
+        newToken,
+        data.refreshToken || data.refresh_token,
+        data.expiresAt || data.expiresIn,
+      );
+    }
+
+    // Notify WS
+    if (window.WS?.updateAuth) window.WS.updateAuth();
+
     _scheduleProactiveRefresh();
+    // ROOT-CAUSE FIX v6.3: Cookie-based refresh also dispatches token events
+    // so that StateSync + WS + ai-orchestrator all receive the updated token.
+    _dispatchAuthEvent('auth:token-refreshed', { token: newToken });
+    _dispatchAuthEvent('auth:token_refreshed', { token: newToken });
+    window.StateSync?.updateAuthState({ isAuthenticated: true, user: data.user });
     return true;
 
   } catch (err) {
@@ -521,7 +553,7 @@ function _scheduleProactiveRefresh() {
 
   // Fire at 80% of remaining time (ensures refresh before expiry)
   const delay = Math.max(10_000, msLeft * 0.80);
-  console.log(`[AuthInterceptor] ⏱ Proactive refresh scheduled in ${Math.round(delay / 60_000)} min`);
+
   _proactiveTimer = setTimeout(() => {
     if (UnifiedTokenStore.hasSession()) silentRefresh();
   }, delay);
@@ -593,8 +625,16 @@ async function authFetch(path, opts = {}) {
     return { data: [], total: 0, page: 1, limit: 25, _offline: true };
   }
 
-  // ───────── 401/403 HANDLING ─────────
+  // ── 401 / 403 handling ─────────────────────────────────────────────
+  // Skip for auth routes (login/refresh/logout handle their own errors).
   if ((resp.status === 401 || resp.status === 403) && !isAuthRoute) {
+    // ROOT-CAUSE FIX v6.3: If the user has NO session at all, the request was
+    // already unauthenticated — don't trigger cookie-refresh NO_COOKIE loop.
+    if (!UnifiedTokenStore.hasSession()) {
+      throw new Error(`Not authenticated (HTTP ${resp.status}) — no session present. Path: ${path}`);
+    }
+
+    // Has a session → attempt one silent refresh, then retry
     const refreshed = await silentRefresh();
 
     if (refreshed) {
@@ -605,6 +645,7 @@ async function authFetch(path, opts = {}) {
       });
     }
 
+    // Still 401 after refresh → session truly dead (revoked / expired)
     if (!resp || resp.status === 401 || resp.status === 403) {
       _dispatchAuthEvent('auth:expired', { path });
       window.StateSync?.handleAuthExpiry({ path });
@@ -748,7 +789,16 @@ window.PersistentAuth_onLogin = function(user, token, refreshToken, expiresAt, i
     if (user) window.TokenStore.setUser(user);
   }
 
-  window.StateSync?.updateAuthState({ isAuthenticated: true, user, tenantId: user?.tenant_id });
+  // ROOT-CAUSE FIX v6.2: If StateSync.authReady is not yet resolved (e.g. login
+  // happened before _syncStoresOnLoad completed), resolve it now so all modules
+  // that await StateSync.authReady can proceed immediately.
+  if (window.StateSync) {
+    if (!window.StateSync.isAuthDone()) {
+      window.StateSync.markAuthReady({ isAuthenticated: true, user, tenantId: user?.tenant_id });
+    } else {
+      window.StateSync.updateAuthState({ isAuthenticated: true, user, tenantId: user?.tenant_id });
+    }
+  }
 };
 
 /** Called by main.js on logout */
@@ -757,6 +807,16 @@ window.PersistentAuth_onLogout = function() {
   UnifiedTokenStore.clear();
   if (typeof window.TokenStore !== 'undefined') window.TokenStore.clear();
   window.StateSync?.updateAuthState({ isAuthenticated: false, user: null });
+
+  // ROOT-CAUSE FIX v6.2: Reset the expired-event dedup flag so that a fresh
+  // login after logout doesn't get blocked by the 15-second cooldown.
+  _expiredHandled = false;
+
+  // Remove any stale session-expired banners left from the previous session
+  try { document.getElementById('session-expired-banner')?.remove(); } catch (_) {}
+
+  // Persist cookie-refresh state to prevent immediate re-attempt after logout
+  _clearCookieRefreshState();
 };
 
 window.PersistentAuth_silentRefresh = silentRefresh;

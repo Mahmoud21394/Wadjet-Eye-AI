@@ -226,33 +226,19 @@ async function _finalizeLogin(data) {
   const expiresAt      = data.expiresAt || data.expires_at      || null;
   const expiresIn      = data.expiresIn || data.expires_in      || null;
 
-  // ── STEP 1: Save JWT token to storage (fixes 401 on all API calls) ──
+  // ── STEP 1: Token storage — handled via PersistentAuth_onLogin in STEP 5 ──
   //
-  // Priority A: Use UnifiedTokenStore from auth-interceptor.js
-  // It writes to ALL known keys so every module finds its token.
-  if (typeof window.UnifiedTokenStore !== 'undefined' &&
-      typeof window.UnifiedTokenStore.save === 'function') {
-    window.UnifiedTokenStore.save({
-      token:        accessToken,
-      refreshToken: refreshToken,
-      expiresAt:    expiresAt,
-      expiresIn:    expiresIn,
-      user:         displayUser,
-      offline:      false,
-    });
-
-  // Priority B: Use PersistentAuth_onLogin from auth-persistent.js
-  } else if (typeof window.PersistentAuth_onLogin === 'function') {
-    window.PersistentAuth_onLogin(
-      displayUser,
-      accessToken,
-      refreshToken,
-      expiresAt || expiresIn,
-      false
-    );
-
-  // Priority C: Direct localStorage write (absolute fallback)
-  } else if (accessToken) {
+  // ROOT-CAUSE FIX v6.2: PersistentAuth_onLogin (auth-interceptor.js) is now
+  // the SINGLE point of truth for all token storage + StateSync coordination.
+  // It calls UnifiedTokenStore.save() internally, schedules proactive refresh,
+  // and calls StateSync.markAuthReady(). We do NOT call UnifiedTokenStore.save()
+  // directly here anymore to avoid bypassing the StateSync coordination step.
+  //
+  // Absolute fallback: only write direct if BOTH PersistentAuth_onLogin AND
+  // UnifiedTokenStore are unavailable (e.g., interceptor script failed to load).
+  if (typeof window.PersistentAuth_onLogin !== 'function' &&
+      typeof window.UnifiedTokenStore?.save !== 'function' &&
+      accessToken) {
     const TOKEN_KEYS = [
       'wadjet_access_token', 'we_access_token', 'tp_access_token',
     ];
@@ -264,7 +250,6 @@ async function _finalizeLogin(data) {
       localStorage.setItem('wadjet_refresh_token', refreshToken);
       localStorage.setItem('we_refresh_token', refreshToken);
     }
-    // Set expiry
     const exp = expiresAt ||
       (expiresIn ? new Date(Date.now() + Number(expiresIn) * 1000).toISOString()
                  : new Date(Date.now() + 900 * 1000).toISOString());
@@ -274,7 +259,6 @@ async function _finalizeLogin(data) {
       localStorage.setItem('wadjet_user_profile', userJson);
       localStorage.setItem('we_user', userJson);
     }
-    console.info('[SecureLogin v6.1] ✅ Token saved via direct localStorage (fallback)');
   }
 
   // ── STEP 2: Sync with legacy TokenStore (api-client.js) ──────────
@@ -305,22 +289,34 @@ async function _finalizeLogin(data) {
     _offline:    false,
   };
 
-  // ── STEP 5: Dispatch events ───────────────────────────────────────
-  window.dispatchEvent(new CustomEvent('auth:login', { detail: window.CURRENT_USER }));
+  // ── STEP 5: Notify auth-interceptor (handles StateSync + proactive refresh) ──
+  // ROOT-CAUSE FIX v6.2: _finalizeLogin MUST call PersistentAuth_onLogin so that
+  //  1. auth-interceptor schedules the proactive refresh
+  //  2. StateSync.markAuthReady() is called (unblocks orchestrator + WS + RAKAY)
+  //  3. Window.isAuthenticated() returns true immediately after login
+  // Previously UnifiedTokenStore.save() was called directly — this bypassed the
+  // StateSync coordination step, leaving all awaiting modules blocked.
+  if (typeof window.PersistentAuth_onLogin === 'function') {
+    window.PersistentAuth_onLogin(
+      displayUser,
+      accessToken,
+      refreshToken,
+      expiresAt || expiresIn,
+      false,
+    );
+  }
+
+  // ── STEP 6: Dispatch DOM events ──────────────────────────────────
+  window.dispatchEvent(new CustomEvent('auth:login',    { detail: window.CURRENT_USER }));
+  // Also dispatch auth:restored so _onAuthReady() in ai-orchestrator fires
+  // (it listens to BOTH auth:login AND auth:restored)
+  window.dispatchEvent(new CustomEvent('auth:restored', { detail: window.CURRENT_USER }));
 
   if (typeof showToast === 'function') {
     showToast(`✅ Welcome, ${window.CURRENT_USER.name}`, 'success');
   }
 
-  // Verify token was saved correctly (debug log)
-  const savedToken = localStorage.getItem('wadjet_access_token');
-  if (savedToken) {
-    console.info('[SecureLogin v6.1] ✅ Token verified in localStorage —', savedToken.slice(0, 20) + '…');
-  } else {
-    console.warn('[SecureLogin v6.1] ⚠️ Token not found in localStorage after save — check UnifiedTokenStore');
-  }
-
-  // ── STEP 6: Animate into app ──────────────────────────────────────
+  // ── STEP 7: Animate into app ──────────────────────────────────────
   _enterApp();
 }
 

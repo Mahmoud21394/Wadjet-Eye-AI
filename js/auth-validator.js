@@ -261,7 +261,13 @@ async function checkFeedAuthStatus() {
 }
 
 /* ── Expose globally ─────────────────────────────────────────────*/
-global.authFetch   = authFetch;
+// ROOT-CAUSE FIX v5.5: Only install authFetch if auth-interceptor.js has NOT
+// already installed a better version. auth-interceptor.js (loaded before this
+// file) sets window.authFetch with full silent-refresh + StateSync integration.
+// Unconditionally overwriting it here STRIPS those features from every caller.
+if (typeof global.authFetch !== 'function') {
+  global.authFetch = authFetch;
+}
 global.getToken    = getToken;
 global.checkAPIHealth = checkAPIHealth;
 global.checkFeedAuthStatus = checkFeedAuthStatus;
@@ -280,6 +286,6 @@ window.addEventListener('auth:restored', () => {
   setTimeout(checkFeedAuthStatus, 5000);
 });
 
-console.log('[AuthValidator] ✅ Auth validator loaded — authFetch() available globally');
+// Auth validator loaded;
 
 })(window);
