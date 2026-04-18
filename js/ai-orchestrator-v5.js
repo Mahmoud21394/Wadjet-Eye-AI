@@ -131,6 +131,39 @@ const _PROVIDER_CACHE_TTL = 60_000; // 60 seconds
 let _providerBgTimer = null;
 
 async function _fetchProviderStatus() {
+  // ROOT-CAUSE FIX v5.1: Guard against calling /api/ai/status when the user
+  // is not authenticated. Calling this endpoint with no token (or an expired
+  // token) always returns 401, which then triggers a cookie-refresh attempt
+  // that returns 400 NO_COOKIE, filling the console with spurious errors.
+  //
+  // Check auth state BEFORE making the network request:
+  //   1. UnifiedTokenStore.getToken() — direct token check (fastest)
+  //   2. window.isAuthenticated()      — live getter from auth-interceptor
+  //   3. StateSync.isAuthenticated()   — shared state from state-sync
+  //
+  // If no credential is available, return a synthetic degraded-mode status
+  // object so the UI renders gracefully in demo/offline mode.
+  const hasToken = !!(window.UnifiedTokenStore?.getToken?.() ||
+                      window.getAuthToken?.() ||
+                      localStorage.getItem('wadjet_access_token') ||
+                      localStorage.getItem('we_access_token') ||
+                      localStorage.getItem('tp_access_token'));
+
+  if (!hasToken) {
+    console.info('[AIOrch] Skipping /api/ai/status — no auth token present (user not logged in)');
+    // Return a synthetic status so the UI shows demo/offline mode without errors
+    const demoStatus = {
+      degradedMode: true,
+      demoMode: true,
+      providers: {},
+      _source: 'no-auth-demo',
+    };
+    window.StateSync?.markProviderReady(demoStatus);
+    AIORCH._providerStatus   = demoStatus;
+    AIORCH._providerCachedAt = Date.now();
+    return demoStatus;
+  }
+
   try {
     const data = await _apiFetch('/ai/status');
     if (data) {
@@ -182,7 +215,10 @@ async function _fetchProviderStatus() {
     return data;
   } catch (err) {
     // If auth error — don't log provider errors, just note the auth issue
-    if (err.message?.includes('AUTH_EXPIRED') || err.message?.includes('401') || err.message?.includes('403')) {
+    if (err.message?.includes('AUTH_EXPIRED') ||
+        err.message?.includes('Not authenticated') ||
+        err.message?.includes('401') ||
+        err.message?.includes('403')) {
       console.warn('[AIOrch] Provider status check skipped — auth token expired. Will retry after refresh.');
     } else {
       console.warn('[AIOrch] Provider status check failed:', err.message);
@@ -739,15 +775,53 @@ async function _orchInit() {
   // Wait for auth-interceptor to finish token sync
   if (window.StateSync) {
     try {
-      await window.StateSync.authReady;
-      console.log('[AIOrch] Auth ready — initializing provider status check');
-    } catch (_) {}
-  }
+      const authState = await window.StateSync.authReady;
+      console.log('[AIOrch] Auth ready — authenticated:', authState?.isAuthenticated ?? 'unknown');
 
-  // Kick off provider status fetch (non-blocking)
-  _ensureProviderStatus().then(() => {
-    _startProviderBgRecheck();
-  });
+      // ROOT-CAUSE FIX v5.1: Only kick off the provider status fetch if the
+      // user is actually authenticated. If unauthenticated, defer the provider
+      // check until after the 'auth:login' or 'auth:restored' event fires.
+      // This prevents the 401 → cookie-400 error chain on unauthenticated loads.
+      if (authState?.isAuthenticated) {
+        _ensureProviderStatus().then(() => {
+          _startProviderBgRecheck();
+        });
+      } else {
+        console.info('[AIOrch] User not authenticated — deferring provider status check until login');
+        // Set demo mode status immediately so UI renders without errors
+        const demoStatus = { degradedMode: true, demoMode: true, providers: {}, _source: 'pre-login' };
+        window.StateSync?.markProviderReady(demoStatus);
+        AIORCH._providerStatus   = demoStatus;
+        AIORCH._providerCachedAt = Date.now();
+
+        // When user logs in, fetch real provider status
+        const _onAuthReady = () => {
+          window.removeEventListener('auth:login',    _onAuthReady);
+          window.removeEventListener('auth:restored', _onAuthReady);
+          window.removeEventListener('auth:ready',    _onAuthReady);
+          // Reset cache so next call fetches fresh
+          AIORCH._providerStatus   = null;
+          AIORCH._providerCachedAt = 0;
+          _ensureProviderStatus().then(() => {
+            _startProviderBgRecheck();
+          });
+        };
+        window.addEventListener('auth:login',    _onAuthReady);
+        window.addEventListener('auth:restored', _onAuthReady);
+        window.addEventListener('auth:ready',    _onAuthReady);
+      }
+    } catch (_) {
+      // StateSync.authReady rejected or timed out — attempt provider check anyway
+      _ensureProviderStatus().then(() => {
+        _startProviderBgRecheck();
+      });
+    }
+  } else {
+    // No StateSync — fall back to original behaviour
+    _ensureProviderStatus().then(() => {
+      _startProviderBgRecheck();
+    });
+  }
 }
 
 /* ═══════════════════════════════════════════════════════

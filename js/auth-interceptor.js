@@ -216,10 +216,40 @@ let _proactiveTimer = null;
 // ── Rate-limit guards for cookie-refresh ─────────────────────────────
 // Prevent hammering /api/auth/refresh-from-cookie when the backend
 // returns 400 (no cookie) or 429 (too many requests).
-let _cookieRefreshFailedAt   = 0;   // timestamp of last failure
-let _cookieRefreshBackoffMs  = 0;   // current cooldown (doubles on each fail)
+//
+// ROOT-CAUSE FIX v6.1:
+//   The `_cookieRefreshFailedAt` and `_cookieRefreshBackoffMs` variables
+//   were pure in-memory state, which means they reset on every page reload.
+//   This caused the NO_COOKIE 400 error to fire again on the first request
+//   of every new page load, even if the user had already demonstrated they
+//   have no httpOnly cookie.
+//
+//   Fix: Persist the "no cookie available" state in sessionStorage so
+//   within the same browser tab session we don't attempt the cookie refresh
+//   again if we already got a definitive 400 NO_COOKIE response.
+//   (sessionStorage is cleared on tab close, so the user can try again
+//   after a fresh open, e.g. if they logged in on a different device.)
+const _COOKIE_FAIL_KEY = 'wadjet_cookie_refresh_blocked_until';
+let _cookieRefreshFailedAt   = parseInt(sessionStorage.getItem('wadjet_cookie_refresh_failed_at') || '0', 10);
+let _cookieRefreshBackoffMs  = parseInt(sessionStorage.getItem('wadjet_cookie_refresh_backoff') || '0', 10);
 const COOKIE_REFRESH_MIN_INTERVAL_MS = 30_000;   // 30 s minimum between attempts
 const COOKIE_REFRESH_MAX_BACKOFF_MS  = 300_000;  // 5 min maximum backoff
+
+function _persistCookieRefreshState() {
+  try {
+    sessionStorage.setItem('wadjet_cookie_refresh_failed_at', String(_cookieRefreshFailedAt));
+    sessionStorage.setItem('wadjet_cookie_refresh_backoff',   String(_cookieRefreshBackoffMs));
+  } catch (_) {}
+}
+function _clearCookieRefreshState() {
+  _cookieRefreshFailedAt  = 0;
+  _cookieRefreshBackoffMs = 0;
+  try {
+    sessionStorage.removeItem('wadjet_cookie_refresh_failed_at');
+    sessionStorage.removeItem('wadjet_cookie_refresh_backoff');
+    sessionStorage.removeItem(_COOKIE_FAIL_KEY);
+  } catch (_) {}
+}
 
 // ── Refresh-from-main guard — prevent 429 storms on /api/auth/refresh
 let _lastRefreshAttemptAt = 0;
@@ -404,9 +434,10 @@ async function _refreshFromCookie() {
     if (res.status === 400) {
       const body = await res.json().catch(() => ({}));
       console.warn('[AuthInterceptor] Cookie refresh 400 — no httpOnly cookie present (', body.code || body.error, ')');
-      // Set a long backoff — cookie won't appear until user logs in
+      // Set a long backoff — cookie won't appear until user logs in fresh
       _cookieRefreshFailedAt  = Date.now();
       _cookieRefreshBackoffMs = COOKIE_REFRESH_MAX_BACKOFF_MS; // 5 min
+      _persistCookieRefreshState(); // persist across module re-evaluations
       return false;
     }
 
@@ -415,6 +446,7 @@ async function _refreshFromCookie() {
       const retryAfter = parseInt(res.headers.get('retry-after') || '60', 10);
       _cookieRefreshFailedAt  = Date.now();
       _cookieRefreshBackoffMs = Math.min(retryAfter * 1000, COOKIE_REFRESH_MAX_BACKOFF_MS);
+      _persistCookieRefreshState();
       console.warn(`[AuthInterceptor] Cookie refresh rate limited — backing off ${retryAfter}s`);
       return false;
     }
@@ -426,6 +458,7 @@ async function _refreshFromCookie() {
         (_cookieRefreshBackoffMs || COOKIE_REFRESH_MIN_INTERVAL_MS) * 2,
         COOKIE_REFRESH_MAX_BACKOFF_MS,
       );
+      _persistCookieRefreshState();
       console.warn(`[AuthInterceptor] Cookie refresh failed (${res.status}) — backing off ${_cookieRefreshBackoffMs / 1000}s`);
       return false;
     }
@@ -435,8 +468,7 @@ async function _refreshFromCookie() {
     if (!newToken) return false;
 
     // ── Success: reset backoff ──────────────────────────────────────────
-    _cookieRefreshFailedAt  = 0;
-    _cookieRefreshBackoffMs = 0;
+    _clearCookieRefreshState();
 
     UnifiedTokenStore.save({
       token:        newToken,
@@ -457,6 +489,7 @@ async function _refreshFromCookie() {
       (_cookieRefreshBackoffMs || COOKIE_REFRESH_MIN_INTERVAL_MS) * 2,
       COOKIE_REFRESH_MAX_BACKOFF_MS,
     );
+    _persistCookieRefreshState();
     console.warn('[AuthInterceptor] Cookie refresh error:', err.message, `— backing off ${_cookieRefreshBackoffMs / 1000}s`);
     return false;
   }
@@ -695,6 +728,9 @@ async function _syncStoresOnLoad() {
 
 /** Called by main.js / login handler after successful login */
 window.PersistentAuth_onLogin = function(user, token, refreshToken, expiresAt, isOffline) {
+  // Clear any cookie-refresh backoff so the new session can use cookie if available
+  _clearCookieRefreshState();
+
   UnifiedTokenStore.save({
     token,
     refreshToken,
