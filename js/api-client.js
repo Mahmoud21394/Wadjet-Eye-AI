@@ -190,8 +190,7 @@ async function apiRequest(method, path, body = null, opts = {}) {
 
   const headers = {
     'Content-Type': 'application/json',
-    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-    ...(opts.headers || {}),
+     ...(opts.headers || {}),
   };
 
   const fetchOpts = {
