@@ -228,6 +228,10 @@ router.post('/login', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'Email and password are required' });
   }
 
+  // ── Hard-reset: sign out any stale Supabase session before fresh login ──
+  // Ensures previous session cookie is cleared; non-fatal if no active session.
+  try { await supabase.auth.signOut(); } catch { /* non-fatal */ }
+
   // ── Authenticate via Supabase (with 20s timeout for cold-start / DNS issues) ──
   const _supabaseLoginTimeout = new Promise((_, reject) =>
     setTimeout(() => reject(new Error('SUPABASE_TIMEOUT')), 20_000)
@@ -407,18 +411,25 @@ router.post('/refresh', asyncHandler(async (req, res) => {
 
   if (authId) {
     try {
-      // Strategy 1: Try Supabase admin to create a session for the auth user
-      // This gives us a proper Supabase JWT the middleware can validate
-      const { data: adminSession, error: adminErr } = await supabase.auth.admin.createSession({
-        user_id: authId,
-      });
+      // Strategy 1: Try Supabase admin to create a session for the auth user.
+      // Wrap in a 6-second timeout to avoid hanging on Render cold-start / Supabase
+      // connectivity issues that produce AbortError in the backend logs.
+      const ADMIN_SESSION_TIMEOUT_MS = 6_000;
+      const adminSessionPromise = supabase.auth.admin.createSession({ user_id: authId });
+      const timeoutPromise = new Promise((_, rej) =>
+        setTimeout(() => rej(new Error('admin.createSession timed out')), ADMIN_SESSION_TIMEOUT_MS)
+      );
+
+      const { data: adminSession, error: adminErr } = await Promise.race([
+        adminSessionPromise,
+        timeoutPromise,
+      ]);
 
       if (!adminErr && adminSession?.session?.access_token) {
         accessToken = adminSession.session.access_token;
         expiresAt   = adminSession.session.expires_at
           ? new Date(adminSession.session.expires_at * 1000).toISOString()
           : expiresAt;
-        console.log('[Auth] ✅ Refresh: Supabase admin.createSession succeeded');
       } else {
         throw new Error(adminErr?.message || 'admin.createSession returned no token');
       }

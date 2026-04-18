@@ -84,8 +84,24 @@ async function verifyToken(req, res, next) {
     });
   }
 
+  // Wrap the entire auth check in a timeout to avoid hanging during
+  // Render cold-start / Supabase connection delays (AbortError symptoms).
+  // 8 s is enough for a warm connection; on cold start the 503 is better UX.
+  const VERIFY_TIMEOUT_MS = 8_000;
+  let _verifyTimeoutId;
+  const _timeoutPromise = new Promise((_, rej) => {
+    _verifyTimeoutId = setTimeout(
+      () => rej(new Error('Supabase auth verification timed out')),
+      VERIFY_TIMEOUT_MS
+    );
+  });
+
   try {
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+    const { data: { user }, error: authError } = await Promise.race([
+      supabase.auth.getUser(token),
+      _timeoutPromise,
+    ]);
+    clearTimeout(_verifyTimeoutId);
 
     if (authError) {
       const isExpired = authError.message?.toLowerCase().includes('expired') ||
@@ -149,6 +165,17 @@ async function verifyToken(req, res, next) {
     next();
 
   } catch (err) {
+    clearTimeout(_verifyTimeoutId);
+    // Surface timeout as a 503 (service unavailable) so clients retry,
+    // rather than silently swallowing it as a 500 (which looks like a bug).
+    if (err.message?.includes('timed out')) {
+      console.warn(`[Auth] 503 VERIFY_TIMEOUT reqId=${reqId} ${req.method} ${req.path} — Supabase cold-start?`);
+      return res.status(503).json({
+        error: 'Authentication service temporarily unavailable. Please retry in a moment.',
+        code:  'AUTH_SERVICE_TIMEOUT',
+        retryAfter: 5,
+      });
+    }
     console.error(`[Auth] Exception reqId=${reqId} ${req.method} ${req.path}:`, err.message);
     return res.status(500).json({
       error: 'Authentication service error. Please try again.',
