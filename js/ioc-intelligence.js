@@ -305,7 +305,6 @@ function _iocdbMaybeShowAllTenantsToggle(stats) {
   headerEl.insertBefore(toggleBtn, headerEl.firstChild);
 }
 
-
 /**
  * Show an actionable RLS warning banner when 0 IOCs are returned.
  * This is the #1 root cause: RLS enabled with no SELECT policy.
@@ -522,8 +521,6 @@ async function iocdbLoadPage(page = 1) {
     // Fall back to iocs.length as a lower bound.
     const rawTotal = res.total ?? res.count ?? res.pagination?.total;
     IOCDB.total = (rawTotal === -1 || rawTotal == null) ? iocs.length : rawTotal;
-
-    console.log(`[IOC-Intel] Loaded page ${page}: ${iocs.length} IOCs, total=${IOCDB.total}`);
 
     renderIOCTable(iocs, inner);
     renderIOCPagination(IOCDB.total, page);
@@ -963,7 +960,6 @@ window.iocdbRunDiagnostic   = iocdbRunDiagnostic;
         IOCDB.loading = false;
         renderIOCDatabase();
       };
-      console.log('[IOC-Intel] PAGE_CONFIG[ioc-database].onEnter patched ✅');
     } else {
       // PAGE_CONFIG not yet available — retry after a short delay
       setTimeout(_install, 100);
@@ -1022,12 +1018,9 @@ setInterval(function _iocdbLoadingWatchdog() {
       const iocPage = document.getElementById('page-ioc-database');
       const isVisible = iocPage && (iocPage.classList.contains('active') || iocPage.style.display !== 'none');
       if (isVisible) {
-        console.log(`[IOC-Intel] ${evt} received — re-rendering IOC page with fresh auth`);
         IOCDB.loading = false;
         renderIOCDatabase();
       }
     }
   });
 });
-
-console.log('[IOC-Intel v5.2] ioc-intelligence.js loaded — window.renderIOCDatabase set to production version ✅');

@@ -171,8 +171,6 @@ async function doLogin() {
       );
     }
 
-    console.info('[Wadjet-Eye AI] ✅ Authenticated via real backend as', CURRENT_USER.role, '/', CURRENT_USER.email);
-
     if (typeof showToast === 'function')
       showToast(`✅ Welcome, ${CURRENT_USER.name}`, 'success');
 
@@ -251,7 +249,6 @@ async function doLogout() {
   if (loginScreen) { loginScreen.style.display = 'flex'; loginScreen.style.opacity = '1'; }
 
   if (typeof showToast === 'function') showToast('Logged out securely', 'info');
-  console.info('[Auth] Session ended');
 }
 
 /* ────────────────── PAGE REGISTRY ────────────────── */
@@ -1422,7 +1419,6 @@ function initApp() {
 
   // ── AI Orchestrator (floating chat panel) ──
   if (typeof AIOrchestrator !== 'undefined' && typeof AIOrchestrator.init === 'function') {
-    console.log('[Wadjet-Eye AI] AI Orchestrator ready');
   }
 
   // Wire AutoRefresh to tab navigation
@@ -1440,10 +1436,6 @@ function initApp() {
   startLiveUpdates();
   setTimeout(bootSequence, 500);
 
-  console.log('[Wadjet-Eye AI] Platform initialized — v17.0');
-  console.log('[Wadjet-Eye AI] User:', CURRENT_USER?.name, '|', CURRENT_USER?.role);
-  console.log('[Wadjet-Eye AI] Backend:', window.THREATPILOT_API_URL);
-  console.log('[Wadjet-Eye AI] Mode: LIVE DATA + CTI v3.0');
 }
 
 /* ════════════════════════════════════════════════

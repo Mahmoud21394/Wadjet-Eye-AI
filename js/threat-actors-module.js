@@ -1158,7 +1158,6 @@ window._taIngestOTX = async () => {
     const msg = result?.iocs_new
       ? `✓ Synced ${result.iocs_new} new IOCs from OTX`
       : '✓ OTX sync complete';
-    console.info('[ThreatActors]', msg);
 
     // Wait 2s then reload
     setTimeout(() => renderThreatActorsDashboard(), 2000);
@@ -1199,5 +1198,3 @@ if (window.PAGE_CONFIG) {
   window.PAGE_CONFIG['threat-actors'] = window.PAGE_CONFIG['threat-actors'] || {};
   window.PAGE_CONFIG['threat-actors'].onEnter = () => window.renderThreatActors();
 }
-
-console.log('[ThreatActors v5.2] Module loaded — real data only');

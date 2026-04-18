@@ -219,5 +219,4 @@
   // ── Expose globally ───────────────────────────────────────
   window.CTI = CTI;
 
-  console.log('[CTI API] v3.0 ready — backend:', window.THREATPILOT_API_URL || 'http://localhost:4000');
 })();

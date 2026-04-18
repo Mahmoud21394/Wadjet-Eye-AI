@@ -39,7 +39,6 @@
 window.addEventListener('DOMContentLoaded', function () {
   // Replace the potentially vulnerable doLogin with the secure version
   window.doLogin = secureDoLogin;
-  console.info('[SecureLogin v6.0] ✅ Secure login function installed — no client-side emergency accounts');
 });
 
 /* ══════════════════════════════════════════════════════════════════
@@ -238,7 +237,6 @@ async function _finalizeLogin(data) {
       user:         displayUser,
       offline:      false,
     });
-    console.info('[SecureLogin v6.1] ✅ Token saved via UnifiedTokenStore');
 
   // Priority B: Use PersistentAuth_onLogin from auth-persistent.js
   } else if (typeof window.PersistentAuth_onLogin === 'function') {
@@ -249,7 +247,6 @@ async function _finalizeLogin(data) {
       expiresAt || expiresIn,
       false
     );
-    console.info('[SecureLogin v6.1] ✅ Token saved via PersistentAuth_onLogin');
 
   // Priority C: Direct localStorage write (absolute fallback)
   } else if (accessToken) {
@@ -387,5 +384,3 @@ function _mapLoginError(msg) {
 function _escapeHtml(str) {
   return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
-
-console.info('[SecureLogin v6.1] Loaded — token-to-storage bridge active, emergency bypass removed, MFA wired');

@@ -31,7 +31,6 @@
     return Math.floor(d/86400) + 'd ago';
   }
 
-
   /* ══════════════════════════════════════════════════════════════════
      INNOVATION 1: WHAT-IF ATTACK SIMULATOR
      ─────────────────────────────────────────────────────────────────
@@ -225,7 +224,6 @@
     };
   };
 
-
   /* ══════════════════════════════════════════════════════════════════
      INNOVATION 2: SECURITY MEMORY BRAIN (Cross-Org Federated Learning)
      ─────────────────────────────────────────────────────────────────
@@ -375,7 +373,6 @@
       </div>
     `;
   };
-
 
   /* ══════════════════════════════════════════════════════════════════
      INNOVATION 3: AUTONOMOUS INVESTIGATION AGENT
@@ -577,6 +574,5 @@
   };
 
   /* ── Register innovations ── */
-  console.log('[InnovationModules v1.0] What-If Simulator · Security Memory Brain · Autonomous Agent — initialized');
 
 })();

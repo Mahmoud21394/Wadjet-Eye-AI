@@ -41,7 +41,6 @@
     if (typeof window.showToast === 'function') {
       try { window.showToast(msg, type); return; } catch {}
     }
-    console.log(`[Toast][${type}] ${msg}`);
   }
 
   function _esc(s) {
@@ -161,7 +160,6 @@
     setTimeout(_overrideSettingsSave, 2000);
     setTimeout(_overrideSettingsSave, 5000);
 
-    console.log('[PlatformFix] ✅ Settings UPSERT fix installed');
   }
 
   /* ══════════════════════════════════════════════════════════
@@ -453,7 +451,6 @@
       };
 
       window._expFilter = function (f) {
-        console.log('[Exposure] Filter:', f);
         window.renderExposureAssessment();
       };
     };
@@ -601,7 +598,7 @@
     // Expose abort signal for modules that need it
     window._getNavController = () => _navController;
 
-    console.log('[PlatformFix] ✅ Navigation freeze fix installed (debounce wrapper)');
+
   }
 
   function _showPageSkeleton(pageEl) {
@@ -899,12 +896,11 @@
         }
       });
 
-      console.log('[PlatformFix] ✅ PAGE_CONFIG wiring complete');
     }, 200);
 
     setTimeout(() => clearInterval(_wirePages), 8000);
 
-    console.log('[PlatformFix] ✅ All critical fixes installed (v20.0)');
+
   }
 
   if (document.readyState === 'loading') {

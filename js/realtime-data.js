@@ -66,7 +66,6 @@ async function checkBackendOnline() {
   } catch {
     _backendOnline = false;
   }
-  console.info(`[LiveData] Backend online: ${_backendOnline}`);
   return _backendOnline;
 }
 
@@ -690,7 +689,6 @@ const AutoRefresh = {
 
   start() {
     this._restartTimer();
-    console.info('[AutoRefresh] Started — interval:', this._intervalMs, 'ms');
   },
 
   stop() {
@@ -758,7 +756,6 @@ function sleep(ms) {
    INIT — called after login
 ═════════════════════════════════════════════ */
 async function initLiveData() {
-  console.info('[LiveData] Initialising real-time data module…');
 
   // Wire up auto-refresh subscribers
   AutoRefresh.subscribe('command-center', () => DashboardData.render());
@@ -785,7 +782,6 @@ async function initLiveData() {
   setupLiveSearch('alert-search',  'alerts', LiveAlerts.render.bind(LiveAlerts), 'alerts-table-body');
   setupLiveSearch('ioc-search',    'iocs',   LiveIOCs.render.bind(LiveIOCs),     'iocs-table-body');
 
-  console.info('[LiveData] Ready');
 }
 
 /* ════════════════════════════════════════════

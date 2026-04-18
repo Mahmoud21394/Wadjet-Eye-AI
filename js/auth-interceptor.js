@@ -267,7 +267,6 @@ async function _doTokenRefresh(attempt = 0) {
     const newToken  = 'offline_' + Date.now().toString(36);
     const newExpiry = new Date(Date.now() + 15 * 60_000).toISOString();
     UnifiedTokenStore.save({ token: newToken, expiresAt: newExpiry, offline: true });
-    console.log('[AuthInterceptor] 🔌 Offline token extended');
     return true;
   }
 
@@ -379,7 +378,6 @@ async function _doTokenRefresh(attempt = 0) {
     _dispatchAuthEvent('auth:token-refreshed', { token: newToken });
     window.StateSync?.updateAuthState({ isAuthenticated: true, user: data.user });
 
-    console.log('[AuthInterceptor] ✅ Token refreshed successfully');
     return true;
 
   } catch (err) {
@@ -422,7 +420,6 @@ async function _refreshFromCookie() {
   }
 
   try {
-    console.log('[AuthInterceptor] Attempting cookie-based refresh at /api/auth/refresh-from-cookie');
     const res = await fetch(`${BACKEND_URL()}/api/auth/refresh-from-cookie`, {
       method:      'POST',
       credentials: 'include',
@@ -478,7 +475,6 @@ async function _refreshFromCookie() {
       user:         data.user,
     });
 
-    console.log('[AuthInterceptor] ✅ Cookie refresh succeeded');
     _scheduleProactiveRefresh();
     return true;
 
@@ -625,7 +621,6 @@ async function authFetch(path, opts = {}) {
    then resolves StateSync.authReady.
 ═══════════════════════════════════════════════════════════════ */
 async function _syncStoresOnLoad() {
-  console.log('[AuthInterceptor] 🔍 Syncing token stores on load…');
 
   // ── Step 1: Migrate legacy token keys if needed ──────────────────
   const legacyAccess  = localStorage.getItem('we_access_token')
@@ -639,12 +634,10 @@ async function _syncStoresOnLoad() {
   if (legacyAccess && !primaryAccess) {
     localStorage.setItem(UNIFIED_KEYS.ACCESS,        legacyAccess);
     localStorage.setItem(UNIFIED_KEYS.LEGACY_ACCESS, legacyAccess);
-    console.log('[AuthInterceptor] Migrated legacy access token → unified store');
   }
   if (legacyRefresh && !primaryRefresh) {
     localStorage.setItem(UNIFIED_KEYS.REFRESH,        legacyRefresh);
     localStorage.setItem(UNIFIED_KEYS.LEGACY_REFRESH, legacyRefresh);
-    console.log('[AuthInterceptor] Migrated legacy refresh token → unified store');
   }
 
   // ── Step 2: Evaluate current state ──────────────────────────────
@@ -653,18 +646,14 @@ async function _syncStoresOnLoad() {
   const isExpired  = UnifiedTokenStore.isExpired(30_000);
   const user       = UnifiedTokenStore.getUser();
 
-  console.log(`[AuthInterceptor] State: hasToken=${hasToken} hasRefresh=${hasRefresh} isExpired=${isExpired}`);
-
   // ── Step 3: Nothing at all — mark unauthenticated ────────────────
   if (!hasToken && !hasRefresh) {
-    console.log('[AuthInterceptor] No tokens found — user not logged in');
     window.StateSync?.markAuthReady({ isAuthenticated: false, user: null });
     return;
   }
 
   // ── Step 4: Token valid — schedule refresh and mark ready ────────
   if (hasToken && !isExpired) {
-    console.log('[AuthInterceptor] ✅ Valid token found for', user?.email || 'unknown user');
     _scheduleProactiveRefresh();
 
     // Sync with legacy TokenStore
@@ -687,12 +676,10 @@ async function _syncStoresOnLoad() {
 
   // ── Step 5: Token expired but refresh exists → silent refresh ────
   if (isExpired && hasRefresh) {
-    console.log('[AuthInterceptor] Token expired — attempting silent refresh before signalling ready…');
     const ok = await silentRefresh();
 
     if (ok) {
       const updatedUser = UnifiedTokenStore.getUser() || user;
-      console.log('[AuthInterceptor] ✅ Session restored via silent refresh');
       window.StateSync?.markAuthReady({
         isAuthenticated: true,
         user:            updatedUser,
@@ -707,7 +694,6 @@ async function _syncStoresOnLoad() {
 
   // ── Step 6: Only refresh token (no access token at all) ─────────
   if (!hasToken && hasRefresh) {
-    console.log('[AuthInterceptor] No access token, have refresh — refreshing now…');
     const ok = await silentRefresh();
     const updatedUser = UnifiedTokenStore.getUser() || user;
     window.StateSync?.markAuthReady({
@@ -750,7 +736,6 @@ window.PersistentAuth_onLogin = function(user, token, refreshToken, expiresAt, i
   }
 
   window.StateSync?.updateAuthState({ isAuthenticated: true, user, tenantId: user?.tenant_id });
-  console.log('[AuthInterceptor] ✅ Login recorded for', user?.email);
 };
 
 /** Called by main.js on logout */
@@ -759,7 +744,6 @@ window.PersistentAuth_onLogout = function() {
   UnifiedTokenStore.clear();
   if (typeof window.TokenStore !== 'undefined') window.TokenStore.clear();
   window.StateSync?.updateAuthState({ isAuthenticated: false, user: null });
-  console.log('[AuthInterceptor] 👋 Logged out — all tokens cleared');
 };
 
 window.PersistentAuth_silentRefresh = silentRefresh;
@@ -815,7 +799,6 @@ document.addEventListener('visibilitychange', () => {
     const msLeft = UnifiedTokenStore.msUntilExpiry();
     // If less than 3 minutes left when tab becomes visible → refresh now
     if (msLeft > 0 && msLeft < 180_000) {
-      console.log('[AuthInterceptor] Tab visible — token expiring soon, refreshing');
       silentRefresh();
     }
   }
@@ -826,7 +809,6 @@ document.addEventListener('visibilitychange', () => {
 ═══════════════════════════════════════════════════════════════ */
 window.addEventListener('online', () => {
   if (UnifiedTokenStore.hasSession() && !UnifiedTokenStore.isOffline()) {
-    console.log('[AuthInterceptor] Network restored — refreshing token');
     silentRefresh();
   }
 });
@@ -848,5 +830,3 @@ if (document.readyState === 'loading') {
 } else {
   _syncStoresOnLoad();
 }
-
-console.log('[AuthInterceptor] ✅ Auth Interceptor v6.0 loaded — syncing stores…');

@@ -581,7 +581,6 @@ async function _dsocConnectWS() {
         // Check if the shared socket is already live
         if (window.WS._socket?.connected) {
           socket = window.WS._socket;
-          console.log('[DetectSOC] Reusing existing WS connection from api-client.js');
         } else {
           // connectAsync() refreshes token before connecting
           socket = await window.WS.connectAsync();
@@ -607,7 +606,6 @@ async function _dsocConnectWS() {
       const _onConnect = () => {
         DetectSOC.wsConn    = socket;
         DetectSOC._wsRetries = 0;
-        console.log('[DetectSOC] Socket.IO connected ✅');
         socket.emit('detections:start');
         const badge = document.getElementById('dsoc-ws-badge');
         if (badge) { badge.textContent = '● Live'; badge.style.color = '#22c55e'; }
@@ -627,7 +625,6 @@ async function _dsocConnectWS() {
         // If auth-related, attempt token refresh and push new token to socket
         const isAuthErr = /auth|token|jwt|expired|invalid/i.test(err.message);
         if (isAuthErr && typeof window.TokenStore !== 'undefined' && window.TokenStore.canRefresh()) {
-          console.info('[DetectSOC] Auth error — refreshing token…');
           const ok = await (typeof refreshAccessToken === 'function'
             ? refreshAccessToken()
             : window.TokenStore.canRefresh() && false); // no-op if not available
@@ -646,7 +643,6 @@ async function _dsocConnectWS() {
 
       const _onDisconnect = reason => {
         DetectSOC.wsConn = null;
-        console.log('[DetectSOC] Socket.IO disconnected:', reason);
         const badge = document.getElementById('dsoc-ws-badge');
         if (badge) { badge.textContent = '◌ Reconnecting…'; badge.style.color = '#f59e0b'; }
       };
@@ -915,7 +911,6 @@ window.stopDetections = function() {
         _dsocStopPolling();
       };
       DetectSOC._patchDone = true;
-      console.log('[DetectSOC v3.0] PAGE_CONFIG[detections] patched ✅');
     } else {
       if (_attempts < 40) setTimeout(_tryPatch, 150);
       else console.warn('[DetectSOC] PAGE_CONFIG not found after 6s — using window.renderDetections override');
@@ -945,5 +940,3 @@ window.stopDetections = function() {
     }
   });
 });
-
-console.log('[DetectSOC v3.0] live-detections-soc.js loaded ✅');

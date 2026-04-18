@@ -1652,29 +1652,27 @@
       window._v22ShowPage(page);
     }, true); // capture phase
 
-    console.log('[v22] ✅ Fix #9: Navigation stability (watchdog-only mode — no navigateTo re-wrap)');
+
   }
 
   /* ════════════════════════════════════════════════════════════════════════
      INITIALIZATION — Run all fixes in correct order
   ════════════════════════════════════════════════════════════════════════ */
   function _init() {
-    console.log('[v22] Applying 9 production fixes…');
 
     // Fix #9 first — navigation stability is foundational
-    try { _fixNavigation(); console.log('[v22] ✅ Fix #9: Navigation stability'); } catch (e) { console.error('[v22] Fix #9 error:', e); }
+    try { _fixNavigation(); } catch (e) { console.error('[v22] Fix #9 error:', e); }
 
     // DOM-ready fixes
     const _domReady = () => {
-      try { _fixBranding(); console.log('[v22] ✅ Fix #1: Branding tab'); } catch (e) { console.error('[v22] Fix #1:', e); }
-      try { _fixSettings(); console.log('[v22] ✅ Fix #2: Settings save'); } catch (e) { console.error('[v22] Fix #2:', e); }
-      try { _fixPricing(); console.log('[v22] ✅ Fix #3: Pricing tab'); } catch (e) { console.error('[v22] Fix #3:', e); }
-      try { _fixPredictiveEngine(); console.log('[v22] ✅ Fix #4: Predictive Engine'); } catch (e) { console.error('[v22] Fix #4:', e); }
-      try { _fixMalwareDNA(); console.log('[v22] ✅ Fix #5: Malware DNA Engine'); } catch (e) { console.error('[v22] Fix #5:', e); }
-      try { _fixNeverSeenBefore(); console.log('[v22] ✅ Fix #6: Label cleanup'); } catch (e) { console.error('[v22] Fix #6:', e); }
-      try { _fixWhatIfSimulator(); console.log('[v22] ✅ Fix #7: What-If Simulator'); } catch (e) { console.error('[v22] Fix #7:', e); }
-      try { _fixTenantManagement(); console.log('[v22] ✅ Fix #8: Tenant CRUD'); } catch (e) { console.error('[v22] Fix #8:', e); }
-      console.log('[v22] 🎯 All fixes applied — Wadjet-Eye AI v22.0 ready');
+      try { _fixBranding(); } catch (e) { console.error('[v22] Fix #1:', e); }
+      try { _fixSettings(); } catch (e) { console.error('[v22] Fix #2:', e); }
+      try { _fixPricing(); } catch (e) { console.error('[v22] Fix #3:', e); }
+      try { _fixPredictiveEngine(); } catch (e) { console.error('[v22] Fix #4:', e); }
+      try { _fixMalwareDNA(); } catch (e) { console.error('[v22] Fix #5:', e); }
+      try { _fixNeverSeenBefore(); } catch (e) { console.error('[v22] Fix #6:', e); }
+      try { _fixWhatIfSimulator(); } catch (e) { console.error('[v22] Fix #7:', e); }
+      try { _fixTenantManagement(); } catch (e) { console.error('[v22] Fix #8:', e); }
     };
 
     if (document.readyState === 'loading') {

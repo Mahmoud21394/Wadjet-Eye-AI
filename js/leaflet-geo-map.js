@@ -482,7 +482,7 @@ window._geoIframeLoaded = function() {
       _geoShowFallback();
     } catch(e) {
       // Cross-origin error = iframe loaded radware.com successfully → keep iframe
-      console.info('[GeoMap] Radware iframe loaded successfully (cross-origin).');
+
     }
   }, 3000);
 };
@@ -495,7 +495,6 @@ function _geoShowFallback() {
   const iframe = document.getElementById('geo-iframe');
   const fallback = document.getElementById('geo-fallback');
   if (!iframe || !fallback) return;
-  console.info('[GeoMap] Radware iframe blocked — showing animated fallback map.');
   iframe.style.display = 'none';
   fallback.style.display = 'block';
 }
@@ -514,5 +513,3 @@ setTimeout(() => {
     }
   }
 }, 8000);
-
-console.info('[GeoMap] Radware Live Threat Map v5.0 loaded');

@@ -548,5 +548,3 @@ window._kcShowPhase        = _kcShowPhase;
 window._kcShowTechModal    = _kcShowTechModal;
 window._kcHuntTactic       = _kcHuntTactic;
 window._kcExportSVG        = _kcExportSVG;
-
-console.info('[KillChain] MITRE ATT&CK Kill Chain v3.0 loaded');

@@ -985,6 +985,4 @@ global.renderThreatActors = renderThreatActors;
 // Also expose for direct calls
 global.renderThreatActorsDashboard = renderThreatActors;
 
-console.log('[ThreatActors-v2] ✅ Module loaded — overriding pages.js renderThreatActors with real API module');
-
 })(window);

@@ -663,5 +663,3 @@ window.showCaseDetail    = showCaseDetail;
 window.showActorDetail   = showActorDetail;
 window.closeDpModal      = closeDpModal;
 window.showDetailModal   = showDetailModal;
-
-console.info('[DetailPages] Dynamic detail pages v2.0 loaded');

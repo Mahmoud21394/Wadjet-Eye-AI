@@ -621,5 +621,3 @@ window.exportDarkWeb  = function() {
   URL.revokeObjectURL(url);
   if (window.showToast) showToast('Dark web intel exported', 'success');
 };
-
-console.info('[DarkWeb] Module v4.0 loaded — hacker-style GUI ready');

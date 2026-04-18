@@ -1551,8 +1551,6 @@
       nodeData = { label: nodeName, color: '#8b949e', status: 'unknown', detail: '', mitre: [] };
     }
 
-    console.log('[AttackGraph] Action:', action, 'Node:', nodeName, nodeData);
-
     if (action === 'block')            _agActionBlock(nodeName, nodeData);
     else if (action === 'investigate') _agActionInvestigate(nodeName, nodeData);
     else if (action === 'simulate')    _agActionSimulate(nodeName, nodeData);
@@ -2381,7 +2379,5 @@
     if (q) _toast(`🧠 SOC Memory: Finding cases similar to "${q.slice(0,40)}…"`, 'info');
     else   _toast('Please enter a description', 'warning');
   };
-
-  console.log('[CyberBrainModules] ✅ All 8 next-gen modules loaded v1.0');
 
 })();

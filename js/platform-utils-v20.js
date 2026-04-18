@@ -262,7 +262,6 @@
       }
     });
 
-    console.log('[PlatformUtils v20.0] ✅ Initialized');
   }
 
   if (document.readyState === 'loading') {

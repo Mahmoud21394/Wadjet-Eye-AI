@@ -221,7 +221,6 @@ async function checkAPIHealth() {
     const resp = await fetch(url, { timeout: 8000 });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
-    console.info('[AuthValidator] ✅ Backend health OK:', data.status || 'healthy');
     global._WADJET_BACKEND_HEALTHY = true;
     return true;
   } catch (err) {
@@ -254,7 +253,6 @@ async function checkFeedAuthStatus() {
         );
       }
     } else {
-      console.info('[FeedAuth] ✅ All required feed API keys are configured');
     }
     return resp;
   } catch (err) {

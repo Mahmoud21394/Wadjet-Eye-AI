@@ -96,7 +96,6 @@
      */
     clear() {
       sessionStorage.removeItem(DISPLAY_KEY);
-      console.info('[SecureSession] Session cleared');
     },
 
     /** Remove all v5.x localStorage/sessionStorage token keys — LOGOUT ONLY */
@@ -107,7 +106,6 @@
         if (sessionStorage.getItem(k)) { sessionStorage.removeItem(k); removed++; }
       });
       if (removed > 0) {
-        console.info(`[SecureSession] Cleaned up ${removed} legacy token storage keys`);
       }
     },
   };
@@ -262,7 +260,6 @@
             if (data.refreshToken || data.refresh_token) {
               localStorage.setItem('wadjet_refresh_token', data.refreshToken || data.refresh_token);
             }
-            console.info('[SecureSession] ✅ Bearer token refreshed');
             return true;
           }
         }
@@ -335,7 +332,6 @@
     const hasDisplaySession = SecureSession.exists();
 
     if (!hasDisplaySession && !hasToken) {
-      console.info('[SecureSession] No session — showing login screen');
       return false;
     }
 
@@ -356,14 +352,12 @@
           SecureSession.save(data.user || data);
           global.CURRENT_USER = data.user || data;
           global.dispatchEvent(new CustomEvent('auth:restored', { detail: global.CURRENT_USER }));
-          console.info('[SecureSession] ✅ Session restored for:', global.CURRENT_USER?.email);
           return true;
         }
 
         if (resp.status === 401) {
           // v6.2: Only clear display session, NOT tokens
           sessionStorage.removeItem(DISPLAY_KEY);
-          console.info('[SecureSession] 401 on /api/auth/me — display session cleared');
           return false;
         }
 
@@ -397,7 +391,6 @@
     console.warn('[SecureAuth v6.2] auth-interceptor.js not loaded — installing fallback authFetch');
     global.authFetch = _fallbackAuthFetch;
   } else {
-    console.info('[SecureAuth v6.2] auth-interceptor.js authFetch detected — not overriding');
   }
 
   // getAuthToken reads from UnifiedTokenStore first, then localStorage
@@ -436,7 +429,5 @@
   document.addEventListener('DOMContentLoaded', () => {
     migrateFromV5();
   });
-
-  console.log('[SecureAuth v6.2] ✅ Loaded — fallback authFetch only if interceptor absent. Tokens preserved on 401.');
 
 })(window);
