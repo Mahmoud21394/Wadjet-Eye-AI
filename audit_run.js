@@ -16,6 +16,8 @@ const apiClient  = fs.readFileSync('js/api-client/index.js', 'utf8');
 const authStore  = fs.readFileSync('js/api-client/auth-store.js', 'utf8');
 const loginPatch = fs.readFileSync('js/login-secure-patch.js', 'utf8');
 const loginV20   = fs.readFileSync('js/login-v20.js', 'utf8');
+// The OLD top-level api-client.js (the one referenced in the screenshots)
+const oldApiClient = fs.readFileSync('js/api-client.js', 'utf8');
 
 // ── BACKEND ──────────────────────────────────────────────────────────────────
 const authIdx  = server.indexOf("app.use('/api/auth'");
@@ -87,6 +89,27 @@ check('FE-25-CRIT', 'CRITICAL: no live localStorage.getItem(wadjet_token) in api
 
 // ── login-v20.js ─────────────────────────────────────────────────────────────
 check('FE-26', 'login-v20 wraps doLogin without replacing auth logic', loginV20.includes('origDoLogin') && loginV20.includes('window.doLogin'));
+
+// ── OLD api-client.js (top-level) — RC-1/2/3 fixes ───────────────────────────
+// RC-1: Pre-flight refresh must be bypassed for public auth paths
+check('FE-27-CRIT', 'RC-1 FIX: api-client.js pre-flight refresh skipped for auth routes',
+  oldApiClient.includes('_isPublicAuthPath') &&
+  oldApiClient.includes('!isPublicAuth && !TokenStore.isValid()'));
+
+// RC-2: Authorization header must be attached BEFORE first fetch (not only on retry)
+check('FE-28-CRIT', 'RC-2 FIX: api-client.js attaches Authorization header before first fetch',
+  oldApiClient.includes('!isPublicAuth && token') &&
+  oldApiClient.includes("headers['Authorization'] = `Bearer ${token}`"));
+
+// RC-3: 401 handler must be bypassed for login/refresh/logout paths
+check('FE-29-CRIT', 'RC-3 FIX: api-client.js 401 handler bypassed for public auth paths',
+  oldApiClient.includes('response.status === 401 && !isPublicAuth'));
+
+// _AUTH_PUBLIC_PATHS list must include login, refresh, logout
+check('FE-30', 'api-client.js _AUTH_PUBLIC_PATHS includes login/refresh/logout',
+  oldApiClient.includes("'/auth/login'") &&
+  oldApiClient.includes("'/auth/refresh'") &&
+  oldApiClient.includes("'/auth/logout'"));
 
 // ── PRINT ─────────────────────────────────────────────────────────────────────
 console.log('\n══════ AUTH FORENSIC AUDIT RESULTS ══════');
