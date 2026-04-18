@@ -573,8 +573,8 @@ const API = {
 ═════════════════════════════════════════════ */
 let _socket         = null;
 let _wsAuthRetries  = 0;
-const WS_MAX_AUTH_RETRIES = 5;
-const WS_AUTH_BACKOFF_MS  = [1000, 2000, 4000, 8000, 16000];
+const WS_MAX_AUTH_RETRIES = 8;  // more retries for cold-start scenarios
+const WS_AUTH_BACKOFF_MS  = [1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000];
 
 const WS = {
   get _socket() { return _socket; },
@@ -634,8 +634,8 @@ const WS = {
       reconnection:         true,
       reconnectionAttempts: 10,
       reconnectionDelay:    3000,
-      reconnectionDelayMax: 20000,
-      timeout:              15000,
+      reconnectionDelayMax: 30000,  // max 30s between reconnect attempts
+      timeout:              45000,  // 45s handles Render cold-start
     });
 
     _socket.on('connect', () => {

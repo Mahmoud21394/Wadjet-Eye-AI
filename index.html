@@ -931,6 +931,43 @@
      5. auth-validator.js  — 401 banner helper
      6. auth-secure.js     — Bearer+cookie bridge (does NOT override authFetch)
 -->
+<!-- Backend Wake-Up Pinger: fires immediately on page load to warm up Render free-tier server.
+     This is NON-BLOCKING — it never delays page render or script execution.
+     The ping goes to /api/ping (no JWT, no DB) so it returns in < 1ms once the server is warm. -->
+<script>
+(function _backendWakeUp() {
+  var BACKEND = 'https://wadjet-eye-ai.onrender.com';
+  var pingUrl  = BACKEND + '/api/ping';
+  var maxRetries = 8;   // retry for up to ~2 min total (covers cold-start time)
+  var attempt    = 0;
+
+  function _ping() {
+    attempt++;
+    var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function(){ ctrl.abort(); }, 8000) : null;
+    fetch(pingUrl, {
+      method: 'GET',
+      cache:  'no-store',
+      signal: ctrl ? ctrl.signal : undefined,
+    })
+    .then(function(r) {
+      clearTimeout(timer);
+      if (!r.ok && attempt < maxRetries) {
+        setTimeout(_ping, Math.min(attempt * 3000, 20000));
+      }
+    })
+    .catch(function() {
+      clearTimeout(timer);
+      if (attempt < maxRetries) {
+        setTimeout(_ping, Math.min(attempt * 4000, 20000));
+      }
+    });
+  }
+
+  _ping();
+})();
+</script>
+
 <script src="js/state-sync.js"></script>
 <script src="js/data.js"></script>
 <script src="js/api-client.js"></script>

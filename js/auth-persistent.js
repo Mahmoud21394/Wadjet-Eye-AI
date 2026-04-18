@@ -83,8 +83,8 @@
   // How long to show "idle" warning before logging out
   const IDLE_TIMEOUT_MS          = 60 * 60 * 1000;  // 60 min
   // Cold-start retry settings
-  const MAX_RESTORE_RETRIES      = 4;
-  const RESTORE_RETRY_BASE_MS    = 2000;
+  const MAX_RESTORE_RETRIES      = 6;
+  const RESTORE_RETRY_BASE_MS    = 3000;
 
   /* ══════════════════════════════════════════════════════
      PERSISTENT TOKEN STORE
@@ -243,7 +243,7 @@
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({ refresh_token: refreshToken }),
-          signal:  AbortSignal.timeout(15000),
+          signal:  AbortSignal.timeout(45000)   /* 45s: Render cold-start */,
         });
 
         if (res.status === 401) {
@@ -413,7 +413,7 @@
 
       // Refresh failed — retry with exponential back-off (handles cold starts)
       if (retryCount < MAX_RESTORE_RETRIES) {
-        const delay = RESTORE_RETRY_BASE_MS * Math.pow(2, retryCount);
+        const delay = Math.min(RESTORE_RETRY_BASE_MS * Math.pow(2, retryCount), 30000);
         console.warn(`[PersistentAuth] Refresh failed — retry ${retryCount + 1}/${MAX_RESTORE_RETRIES} in ${delay}ms`);
         await _sleep(delay);
         return this.restore(backendUrl, retryCount + 1);

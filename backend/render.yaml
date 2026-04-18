@@ -27,7 +27,7 @@ services:
 
     # ── Health Check ───────────────────────────────────────
     # Render pings this URL every 30s; restarts if it fails 3× in a row
-    healthCheckPath: /health
+    healthCheckPath: /api/ping   # Ultra-fast, no DB required — returns in <1ms when warm
 
     # ── Auto-Deploy ────────────────────────────────────────
     autoDeploy: true          # Redeploy automatically on git push
@@ -114,6 +114,25 @@ services:
     #   sizeGB: 1
 
 # ─────────────────────────────────────────────────────────
+#  COLD-START MITIGATION (Free Tier)
+# ─────────────────────────────────────────────────────────
+# Render free tier sleeps after 15 min of inactivity. Cold starts take 10-30s.
+# To prevent cold starts:
+#
+#  OPTION A — External Uptime Monitor (Recommended, Free):
+#    Use UptimeRobot (https://uptimerobot.com) to ping /api/ping every 5 min.
+#    Free plan supports 5-minute intervals.
+#    Setup: New Monitor → HTTP(s) → URL: https://wadjet-eye-ai.onrender.com/api/ping
+#
+#  OPTION B — Render Cron Job (paid feature, requires starter plan):
+#    Uncomment the cron job below after upgrading from free tier.
+#
+#  OPTION C — Upgrade to Starter ($7/mo):
+#    - No sleep on inactivity (always warm)
+#    - Faster cold start if it does happen
+#    - Persistent disk support
+#
+# ─────────────────────────────────────────────────────────
 #  NOTES FOR PRODUCTION UPGRADE
 # ─────────────────────────────────────────────────────────
 # 1. Upgrade from "free" to "starter" for:
@@ -132,3 +151,23 @@ services:
 # 4. Database:
 #    - ThreatPilot uses Supabase (external) — no Render DB needed
 #    - Supabase free tier: 500MB, 2 CPU, 1GB RAM
+
+# ─────────────────────────────────────────────────────────
+#  KEEP-ALIVE CRON JOB (requires Render starter plan or above)
+#  Uncomment after upgrading from free tier.
+#  This pings /api/ping every 14 minutes to prevent cold starts.
+# ─────────────────────────────────────────────────────────
+#  - type: cron
+#    name: keep-alive-pinger
+#    runtime: node
+#    region: oregon
+#    plan: starter
+#    schedule: "*/14 * * * *"   # Every 14 minutes
+#    buildCommand: echo "no build needed"
+#    startCommand: >
+#      node -e "
+#        const https = require('https');
+#        https.get('https://wadjet-eye-ai.onrender.com/api/ping', r => {
+#          process.stdout.write('Ping ' + r.statusCode + '\\n');
+#        }).on('error', e => process.stderr.write(e.message + '\\n'));
+#      "

@@ -197,15 +197,26 @@
      TIMEOUT SAFETY — resolve auth after 10s if interceptor never fires
      Prevents modules from hanging if auth-interceptor.js fails to load
   ══════════════════════════════════════════════════════════════════════ */
-  const _AUTH_TIMEOUT_MS = 10_000;
+  const _AUTH_TIMEOUT_MS = 45_000;
+
+  // Backend warm-up detection: warn at 10s if still waiting (Render cold start can take 10-30s)
+  const _warmupWarningTimer = setTimeout(() => {
+    if (!_state.authDone) {
+      console.warn('[StateSync] ⏳ Auth still pending after 10s — backend may be cold-starting (Render free tier). Waiting up to 45s…');
+    }
+  }, 10_000);
+
   const _authTimeoutTimer = setTimeout(() => {
     if (!_state.authDone) {
-      console.warn('[StateSync] ⚠️  Auth ready timeout — resolving unauthenticated (10s elapsed)');
+      console.warn('[StateSync] ⚠️  Auth ready timeout — resolving unauthenticated (45s elapsed)');
       _markAuthFailed('timeout');
     }
   }, _AUTH_TIMEOUT_MS);
 
-  authReady.then(() => clearTimeout(_authTimeoutTimer));
+  authReady.then(() => {
+    clearTimeout(_authTimeoutTimer);
+    clearTimeout(_warmupWarningTimer);
+  });
 
   /* ══════════════════════════════════════════════════════════════════════
      EXPORT — window.StateSync
