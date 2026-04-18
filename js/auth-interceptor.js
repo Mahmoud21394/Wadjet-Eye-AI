@@ -253,13 +253,13 @@ function _clearCookieRefreshState() {
 
 // ── Refresh-from-main guard — prevent 429 storms on /api/auth/refresh
 let _lastRefreshAttemptAt = 0;
-const REFRESH_MIN_INTERVAL_MS = 5_000; // 5 s minimum between refresh attempts
+const REFRESH_MIN_INTERVAL_MS = 3_000; // 3 s minimum between refresh attempts
 
 const BACKEND_URL = () =>
   (window.THREATPILOT_API_URL || 'https://wadjet-eye-ai.onrender.com').replace(/\/$/, '');
 
 async function _doTokenRefresh(attempt = 0) {
-  const MAX_ATTEMPTS = 3;
+  const MAX_ATTEMPTS = 5;   // 5 retries with backoff handles cold-starts (2,4,8,16,30s)
   const refreshToken = UnifiedTokenStore.getRefresh();
 
   // ── Offline mode: extend token locally ──────────────────────────────
@@ -293,7 +293,7 @@ async function _doTokenRefresh(attempt = 0) {
       headers:     { 'Content-Type': 'application/json' },
       body:        JSON.stringify({ refresh_token: refreshToken }),
       credentials: 'include',        // also send cookies
-      signal:      AbortSignal.timeout(15_000),
+      signal:      AbortSignal.timeout(45_000),   // 45s allows for Render cold-start (10-30s)
     });
 
     // ── Refresh token rejected (truly expired or revoked) ────────────
@@ -322,7 +322,7 @@ async function _doTokenRefresh(attempt = 0) {
     if (!res.ok) {
       console.warn('[AuthInterceptor] Refresh endpoint returned', res.status);
       if (attempt < MAX_ATTEMPTS - 1) {
-        await _sleep(Math.pow(2, attempt) * 1000);
+        await _sleep(Math.min(Math.pow(2, attempt) * 1_000, 30_000));
         return _doTokenRefresh(attempt + 1);
       }
       return false;
@@ -391,7 +391,7 @@ async function _doTokenRefresh(attempt = 0) {
     }
     if (attempt < MAX_ATTEMPTS - 1) {
       console.warn(`[AuthInterceptor] Refresh attempt ${attempt + 1} failed:`, err.message, '— retrying');
-      await _sleep(Math.pow(2, attempt) * 1000);
+      await _sleep(Math.min(Math.pow(2, attempt) * 1_000, 30_000));
       return _doTokenRefresh(attempt + 1);
     }
     console.warn('[AuthInterceptor] All refresh attempts exhausted:', err.message);
@@ -424,7 +424,7 @@ async function _refreshFromCookie() {
       method:      'POST',
       credentials: 'include',
       headers:     { 'Content-Type': 'application/json' },
-      signal:      AbortSignal.timeout(10_000),
+      signal:      AbortSignal.timeout(30_000),   // 30s allows for backend cold-start
     });
 
     // ── 400: No cookie present — don't retry (no cookie will magically appear)

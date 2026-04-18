@@ -228,11 +228,33 @@ router.post('/login', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'Email and password are required' });
   }
 
-  // ── Authenticate via Supabase ──
-  const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({
-    email:    email.trim().toLowerCase(),
-    password: password.trim(),
-  });
+  // ── Authenticate via Supabase (with 20s timeout for cold-start / DNS issues) ──
+  const _supabaseLoginTimeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('SUPABASE_TIMEOUT')), 20_000)
+  );
+  let loginData, loginError;
+  try {
+    ({ data: loginData, error: loginError } = await Promise.race([
+      supabase.auth.signInWithPassword({
+        email:    email.trim().toLowerCase(),
+        password: password.trim(),
+      }),
+      _supabaseLoginTimeout,
+    ]));
+  } catch (supabaseErr) {
+    if (supabaseErr.message === 'SUPABASE_TIMEOUT' ||
+        supabaseErr.message?.includes('Failed to fetch') ||
+        supabaseErr.message?.includes('NetworkError') ||
+        supabaseErr.message?.includes('ECONNREFUSED')) {
+      console.error('[Auth] Supabase login unreachable:', supabaseErr.message);
+      return res.status(503).json({
+        error:   'Authentication service temporarily unavailable. Please try again in a few seconds.',
+        code:    'AUTH_SERVICE_UNAVAILABLE',
+        retryIn: 5,
+      });
+    }
+    throw supabaseErr; // re-throw unexpected errors
+  }
 
   if (loginError) {
     await logActivity(null, null, 'LOGIN_FAILED', req, {
@@ -339,8 +361,24 @@ router.post('/refresh', asyncHandler(async (req, res) => {
 
   let rotated;
   try {
-    rotated = await rotateRefreshToken(oldRefreshToken, req);
+    const _rotateTimeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('REFRESH_TIMEOUT')), 20_000)
+    );
+    rotated = await Promise.race([
+      rotateRefreshToken(oldRefreshToken, req),
+      _rotateTimeout,
+    ]);
   } catch (err) {
+    const isTimeout  = err.message === 'REFRESH_TIMEOUT';
+    const isNetwork  = err.message?.includes('Failed to fetch') ||
+                       err.message?.includes('ECONNREFUSED');
+    if (isTimeout || isNetwork) {
+      return res.status(503).json({
+        error:   'Token refresh service temporarily unavailable. Please try again.',
+        code:    'REFRESH_SERVICE_UNAVAILABLE',
+        retryIn: 5,
+      });
+    }
     await logActivity(null, null, 'TOKEN_REFRESH_FAILED', req, {
       success: false,
       failure_reason: err.message,

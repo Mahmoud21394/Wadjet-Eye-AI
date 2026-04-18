@@ -156,6 +156,13 @@ const allowedOrigins = (
   .map(s => s.trim())
   .filter(Boolean);
 
+// ── Wildcard: allow all e2b/genspark sandbox preview origins ─────────────────
+// These are the *.e2b.dev preview URLs used during development in GenSpark AI
+const _sandboxOriginRegex = /^https?:\/\/[^.]+\.(e2b\.dev|genspark\.ai|vercel\.app|render\.com)$/;
+function _isSandboxOrigin(origin) {
+  return _sandboxOriginRegex.test(origin);
+}
+
 console.log('[CORS] Allowed origins:', allowedOrigins);
 
 // ── Socket.IO — configured BEFORE middleware ─────────────────────
@@ -224,7 +231,9 @@ const corsOptions = {
     if (!origin) return callback(null, true);
 
     // Allow if origin is in the whitelist OR we're in local development
-    if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
+    if (allowedOrigins.includes(origin) ||
+        _isSandboxOrigin(origin) ||
+        process.env.NODE_ENV === 'development') {
       return callback(null, true);
     }
 
@@ -377,6 +386,13 @@ app.get('/api/health', async (req, res) => {
   } catch { health.db = 'unreachable'; }
   res.status(200).json(health);
 });
+
+// ── /api/ping — ultra-fast liveness check, no DB, no JWT ────────────────────
+// Used by the frontend wake-up pinger on page load to trigger Render warm-up.
+app.get('/api/ping', (req, res) => {
+  res.status(200).json({ ok: true, t: Date.now() });
+});
+
 
 // ════════════════════════════════════════════════════════════════
 //  PUBLIC ROUTES — No JWT required
@@ -560,5 +576,23 @@ httpServer.listen(PORT, '0.0.0.0', () => {
     console.log('[STARTUP] ✅ AI provider keys detected — external LLM providers will be used.');
   }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  KEEP-ALIVE SELF-PINGER
+//  Render free tier spins down after 15 min of inactivity.
+//  This pings /api/ping every 14 minutes to keep the server warm.
+//  NOTE: This only helps if the server is already running (won't wake from
+//        cold start by itself). Use an external uptime monitor (e.g. UptimeRobot)
+//        to also ping the service from outside.
+// ═══════════════════════════════════════════════════════════════════════════
+if (process.env.NODE_ENV === 'production') {
+  const _keepAliveInterval = 14 * 60 * 1000;  // 14 min
+  setInterval(() => {
+    const selfUrl = `http://localhost:${process.env.PORT || 4000}/api/ping`;
+    fetch(selfUrl, { signal: AbortSignal.timeout(5000) })
+      .then(() => {})
+      .catch(() => {}); // Silent — if we're down we can't self-ping anyway
+  }, _keepAliveInterval);
+}
 
 module.exports = { app, httpServer, io };

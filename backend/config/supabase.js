@@ -43,6 +43,21 @@
 
 const { createClient } = require('@supabase/supabase-js');
 
+// ── Timeout-aware fetch wrapper for Supabase client ──────────────────────────
+// Without this, if Supabase is unreachable (DNS/TLS issues), requests hang for
+// 60-132 seconds, blocking the event loop and causing the frontend to see
+// "upstream request timeout" errors.
+const SUPABASE_FETCH_TIMEOUT_MS = 15_000; // 15s — generous but bounded
+
+function _fetchWithTimeout(input, init = {}) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), SUPABASE_FETCH_TIMEOUT_MS);
+  // Don't override an existing signal if the caller already set one
+  const signal = init.signal ?? ctrl.signal;
+  return fetch(input, { ...init, signal })
+    .finally(() => clearTimeout(timer));
+}
+
 // ── Required env vars ──────────────────────────────────────────────
 const SUPABASE_URL      = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
@@ -104,6 +119,7 @@ const supabase = createClient(
     },
     db: { schema: 'public' },
     global: {
+      fetch:   _fetchWithTimeout,   // 15s timeout prevents 132s hang on Supabase unreachable
       headers: {
         'x-application-name': 'wadjet-eye-ai-backend',
       },
