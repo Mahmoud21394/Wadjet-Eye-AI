@@ -123,11 +123,22 @@
     let timeoutId = null;
 
     try {
-      // Get token for auth header
-      const token = (typeof TokenStore !== 'undefined') ? TokenStore.get() : null;
+      // Get token for auth header — prefer UnifiedTokenStore (auth-interceptor v6.0),
+      // then legacy TokenStore, then raw localStorage keys
+      let token = null;
+      if (typeof window.UnifiedTokenStore !== 'undefined') {
+        token = window.UnifiedTokenStore.getToken();
+      } else if (typeof TokenStore !== 'undefined') {
+        token = TokenStore.get();
+      } else {
+        token = localStorage.getItem('wadjet_access_token')
+             || localStorage.getItem('we_access_token')
+             || localStorage.getItem('tp_access_token')
+             || null;
+      }
       const baseUrl = (typeof CONFIG !== 'undefined' && CONFIG.BACKEND_URL)
         ? CONFIG.BACKEND_URL
-        : 'https://wadjet-eye-ai.onrender.com';
+        : (window.THREATPILOT_API_URL || 'https://wadjet-eye-ai.onrender.com');
 
       // Set timeout — on abort, AbortError is thrown inside fetch()
       timeoutId = setTimeout(() => {

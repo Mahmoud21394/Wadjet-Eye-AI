@@ -213,6 +213,18 @@ let _refreshLock    = false;
 let _refreshPromise = null;
 let _proactiveTimer = null;
 
+// ── Rate-limit guards for cookie-refresh ─────────────────────────────
+// Prevent hammering /api/auth/refresh-from-cookie when the backend
+// returns 400 (no cookie) or 429 (too many requests).
+let _cookieRefreshFailedAt   = 0;   // timestamp of last failure
+let _cookieRefreshBackoffMs  = 0;   // current cooldown (doubles on each fail)
+const COOKIE_REFRESH_MIN_INTERVAL_MS = 30_000;   // 30 s minimum between attempts
+const COOKIE_REFRESH_MAX_BACKOFF_MS  = 300_000;  // 5 min maximum backoff
+
+// ── Refresh-from-main guard — prevent 429 storms on /api/auth/refresh
+let _lastRefreshAttemptAt = 0;
+const REFRESH_MIN_INTERVAL_MS = 5_000; // 5 s minimum between refresh attempts
+
 const BACKEND_URL = () =>
   (window.THREATPILOT_API_URL || 'https://wadjet-eye-ai.onrender.com').replace(/\/$/, '');
 
@@ -227,6 +239,16 @@ async function _doTokenRefresh(attempt = 0) {
     UnifiedTokenStore.save({ token: newToken, expiresAt: newExpiry, offline: true });
     console.log('[AuthInterceptor] 🔌 Offline token extended');
     return true;
+  }
+
+  // ── Rate-limit guard: don't hammer the endpoint ──────────────────────
+  if (attempt === 0) {
+    const elapsed = Date.now() - _lastRefreshAttemptAt;
+    if (elapsed < REFRESH_MIN_INTERVAL_MS) {
+      console.warn(`[AuthInterceptor] Refresh requested too soon (${elapsed}ms since last attempt) — skipping`);
+      return false;
+    }
+    _lastRefreshAttemptAt = Date.now();
   }
 
   // ── No refresh token in storage → try cookie refresh ────────────────
@@ -249,13 +271,22 @@ async function _doTokenRefresh(attempt = 0) {
     if (res.status === 401) {
       const body = await res.json().catch(() => ({}));
       console.warn('[AuthInterceptor] Refresh token rejected:', body.error || 'session_expired');
-      // Try cookie as last resort before giving up
+      // Try cookie as last resort before giving up (only once)
       if (attempt === 0) {
         const cookieOk = await _refreshFromCookie();
         if (cookieOk) return true;
       }
       _dispatchAuthEvent('auth:session-expired', { reason: body.error || 'refresh_rejected' });
       window.StateSync?.handleAuthExpiry({ reason: 'refresh_rejected' });
+      return false;
+    }
+
+    // ── Rate limited by backend ──────────────────────────────────────
+    if (res.status === 429) {
+      const retryAfter = parseInt(res.headers.get('retry-after') || '60', 10);
+      console.warn(`[AuthInterceptor] Rate limited by /api/auth/refresh — backing off ${retryAfter}s`);
+      // Back off — don't retry this cycle
+      _lastRefreshAttemptAt = Date.now() + (retryAfter * 1000) - REFRESH_MIN_INTERVAL_MS;
       return false;
     }
 
@@ -343,8 +374,23 @@ async function _doTokenRefresh(attempt = 0) {
 /**
  * Cookie-based refresh — called when localStorage has no refresh token
  * but the browser may still have an httpOnly session cookie.
+ *
+ * v6.1 FIX: Implements backoff to prevent 429 storms.
+ *   - 400 (no cookie): permanently skip until next hard login
+ *   - 429 (rate limited): back off using Retry-After header
+ *   - Other errors: exponential backoff up to 5 min
  */
 async function _refreshFromCookie() {
+  // ── Check cooldown ──────────────────────────────────────────────────
+  const now    = Date.now();
+  const sinceLast = now - _cookieRefreshFailedAt;
+
+  // If currently in backoff, skip
+  if (_cookieRefreshFailedAt > 0 && sinceLast < _cookieRefreshBackoffMs) {
+    console.warn(`[AuthInterceptor] Cookie refresh in backoff — ${Math.round((_cookieRefreshBackoffMs - sinceLast) / 1000)}s remaining`);
+    return false;
+  }
+
   try {
     console.log('[AuthInterceptor] Attempting cookie-based refresh at /api/auth/refresh-from-cookie');
     const res = await fetch(`${BACKEND_URL()}/api/auth/refresh-from-cookie`, {
@@ -354,14 +400,43 @@ async function _refreshFromCookie() {
       signal:      AbortSignal.timeout(10_000),
     });
 
+    // ── 400: No cookie present — don't retry (no cookie will magically appear)
+    if (res.status === 400) {
+      const body = await res.json().catch(() => ({}));
+      console.warn('[AuthInterceptor] Cookie refresh 400 — no httpOnly cookie present (', body.code || body.error, ')');
+      // Set a long backoff — cookie won't appear until user logs in
+      _cookieRefreshFailedAt  = Date.now();
+      _cookieRefreshBackoffMs = COOKIE_REFRESH_MAX_BACKOFF_MS; // 5 min
+      return false;
+    }
+
+    // ── 429: Rate limited — respect Retry-After header
+    if (res.status === 429) {
+      const retryAfter = parseInt(res.headers.get('retry-after') || '60', 10);
+      _cookieRefreshFailedAt  = Date.now();
+      _cookieRefreshBackoffMs = Math.min(retryAfter * 1000, COOKIE_REFRESH_MAX_BACKOFF_MS);
+      console.warn(`[AuthInterceptor] Cookie refresh rate limited — backing off ${retryAfter}s`);
+      return false;
+    }
+
     if (!res.ok) {
-      console.warn('[AuthInterceptor] Cookie refresh failed:', res.status);
+      // Exponential backoff for other errors
+      _cookieRefreshFailedAt  = Date.now();
+      _cookieRefreshBackoffMs = Math.min(
+        (_cookieRefreshBackoffMs || COOKIE_REFRESH_MIN_INTERVAL_MS) * 2,
+        COOKIE_REFRESH_MAX_BACKOFF_MS,
+      );
+      console.warn(`[AuthInterceptor] Cookie refresh failed (${res.status}) — backing off ${_cookieRefreshBackoffMs / 1000}s`);
       return false;
     }
 
     const data     = await res.json();
     const newToken = data.token || data.access_token;
     if (!newToken) return false;
+
+    // ── Success: reset backoff ──────────────────────────────────────────
+    _cookieRefreshFailedAt  = 0;
+    _cookieRefreshBackoffMs = 0;
 
     UnifiedTokenStore.save({
       token:        newToken,
@@ -376,7 +451,13 @@ async function _refreshFromCookie() {
     return true;
 
   } catch (err) {
-    console.warn('[AuthInterceptor] Cookie refresh error:', err.message);
+    // Network timeout or other transient error
+    _cookieRefreshFailedAt  = Date.now();
+    _cookieRefreshBackoffMs = Math.min(
+      (_cookieRefreshBackoffMs || COOKIE_REFRESH_MIN_INTERVAL_MS) * 2,
+      COOKIE_REFRESH_MAX_BACKOFF_MS,
+    );
+    console.warn('[AuthInterceptor] Cookie refresh error:', err.message, `— backing off ${_cookieRefreshBackoffMs / 1000}s`);
     return false;
   }
 }

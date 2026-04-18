@@ -922,6 +922,15 @@
 
 <!-- Socket.IO -->
 <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4/dist/socket.io.min.js"></script>
+
+<!-- ⚠️ LOAD ORDER — DO NOT CHANGE:
+     1. state-sync.js     — creates AuthReadyPromise; MUST be first
+     2. api-client.js     — creates TokenStore; awaits state-sync
+     3. auth-persistent.js — legacy compat
+     4. auth-interceptor.js — resolves AuthReadyPromise after token sync
+     5. auth-validator.js  — 401 banner helper
+     6. auth-secure.js     — Bearer+cookie bridge (does NOT override authFetch)
+-->
 <script src="js/state-sync.js"></script>
 <script src="js/data.js"></script>
 <script src="js/api-client.js"></script>

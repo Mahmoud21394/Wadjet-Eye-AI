@@ -137,14 +137,56 @@ async function _fetchProviderStatus() {
       window.StateSync?.markProviderReady(data);
       AIORCH._providerStatus   = data;
       AIORCH._providerCachedAt = Date.now();
-      console.log('[AIOrch] Provider status:', JSON.stringify({
-        openai: data.openai, anthropic: data.anthropic,
-        gemini: data.gemini, deepseek: data.deepseek,
-      }));
+
+      // Log a clean summary of provider availability
+      const enabled  = [];
+      const disabled = [];
+      const errors   = [];
+      if (data.providers) {
+        Object.entries(data.providers).forEach(([id, p]) => {
+          if (p.hasKey && p.healthScore >= 50) {
+            enabled.push(`${id}(${p.model || id})`);
+          } else if (p.hasKey && p.healthScore < 50) {
+            errors.push(`${id}: ${p.lastError || 'unhealthy'}`);
+          } else {
+            disabled.push(id);
+          }
+        });
+      }
+      if (enabled.length > 0)  console.log(`[AIOrch] ✅ Active AI providers: ${enabled.join(', ')}`);
+      if (errors.length > 0)   console.warn(`[AIOrch] ⚠️ Degraded AI providers: ${errors.join('; ')}`);
+      if (disabled.length > 0) console.info(`[AIOrch] ℹ️ Unconfigured AI providers (no key): ${disabled.join(', ')}`);
+
+      if (data.degradedMode) {
+        console.warn('[AIOrch] ⚠️ All remote AI providers unavailable — local analysis only');
+        _toast('AI providers unavailable — using local analysis. Check API keys in Settings.', 'warning');
+      }
+
+      // Show informative messages for specific provider errors
+      if (data.providers) {
+        Object.entries(data.providers).forEach(([id, p]) => {
+          if (!p.hasKey) return; // Skip unconfigured ones — user knows
+          if (p.lastError) {
+            const errLower = (p.lastError || '').toLowerCase();
+            if (errLower.includes('invalid') || errLower.includes('unauthorized') || errLower.includes('401') || errLower.includes('403')) {
+              console.warn(`[AIOrch] ❌ ${id} API key appears invalid: ${p.lastError}`);
+            } else if (errLower.includes('quota') || errLower.includes('rate') || errLower.includes('429') || errLower.includes('insufficient_quota')) {
+              console.warn(`[AIOrch] ⚡ ${id} quota/rate-limit exceeded: ${p.lastError}`);
+            } else if (errLower.includes('insufficient_balance') || errLower.includes('balance')) {
+              console.warn(`[AIOrch] 💳 ${id} insufficient balance: ${p.lastError}`);
+            }
+          }
+        });
+      }
     }
     return data;
   } catch (err) {
-    console.warn('[AIOrch] Provider status check failed:', err.message);
+    // If auth error — don't log provider errors, just note the auth issue
+    if (err.message?.includes('AUTH_EXPIRED') || err.message?.includes('401') || err.message?.includes('403')) {
+      console.warn('[AIOrch] Provider status check skipped — auth token expired. Will retry after refresh.');
+    } else {
+      console.warn('[AIOrch] Provider status check failed:', err.message);
+    }
     return null;
   }
 }
@@ -315,7 +357,18 @@ For non-IOC queries, use structured headers with bullet points. Be precise and a
   });
   if (!r.ok) {
     const e = await r.json().catch(()=>({}));
-    throw new Error(e.error?.message || `OpenAI API error ${r.status}`);
+    const errMsg = e.error?.message || `OpenAI API error ${r.status}`;
+    // Classify the error for better user messaging
+    if (r.status === 401 || r.status === 403) {
+      throw new Error(`OpenAI key invalid or unauthorized. Check your API key in Settings. (${r.status})`);
+    } else if (r.status === 429) {
+      const errCode = e.error?.code || '';
+      if (errCode === 'insufficient_quota' || errMsg.includes('insufficient_quota')) {
+        throw new Error('OpenAI quota exceeded. Please check your billing at platform.openai.com.');
+      }
+      throw new Error('OpenAI rate limit reached. Please wait and try again.');
+    }
+    throw new Error(errMsg);
   }
   const d = await r.json();
   return d.choices?.[0]?.message?.content || 'No response generated.';
@@ -359,7 +412,13 @@ For non-IOC queries: use clear headers, bullet points, be concise and actionable
   });
   if (!r.ok) {
     const e = await r.json().catch(()=>({}));
-    throw new Error(e.error?.message || `Claude API error ${r.status}`);
+    const errMsg = e.error?.message || `Claude API error ${r.status}`;
+    if (r.status === 401 || r.status === 403) {
+      throw new Error(`Claude x-api-key invalid or unauthorized. Check your Anthropic API key in Settings. (${r.status})`);
+    } else if (r.status === 429) {
+      throw new Error('Claude rate limit or quota exceeded. Please wait and try again.');
+    }
+    throw new Error(errMsg);
   }
   const d = await r.json();
   return d.content?.[0]?.text || 'No response generated.';
