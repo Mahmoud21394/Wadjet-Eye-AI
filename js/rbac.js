@@ -100,8 +100,7 @@ function renderRBACAdmin() {
     ? ARGUS_DATA.tenants
     : [{ name: 'Default' }];
 
-  // Log debug info so we can verify data is flowing
-  console.info('[RBAC] renderRBACAdmin() — users:', _users.length, '| roles:', RBAC_STORE.roles.length, '| tenants:', _tenants.length);
+
 
   const canManage = (typeof CURRENT_USER !== 'undefined') &&
     (CURRENT_USER?.role === 'SUPER_ADMIN' || CURRENT_USER?.role === 'ADMIN' ||
@@ -660,10 +659,8 @@ async function loadRBACRolesFromAPI() {
         isSystem:    r.isSystem || r.is_system || false,
         level:       r.level || 5,
       }));
-      console.info('[RBAC] Loaded', RBAC_STORE.roles.length, 'roles from API');
     }
   } catch (_) {
-    console.info('[RBAC] Using local role store (API unavailable)');
   }
 }
 
@@ -684,10 +681,8 @@ async function loadRBACUsersFromAPI() {
         status:     u.status || (u.is_active ? 'active' : 'inactive'),
         last_login: u.last_login_at ? new Date(u.last_login_at).toLocaleString() : 'Never',
       }));
-      console.info('[RBAC] Loaded', ARGUS_DATA.users.length, 'users from API');
     }
   } catch (_) {
-    console.info('[RBAC] Using local user data (API unavailable)');
   }
 }
 
@@ -732,7 +727,6 @@ async function loadRBACAuditLogFromAPI() {
           severity: l.severity || 'info',
         };
       });
-      console.info('[RBAC] Loaded', RBAC_STORE.audit_log.length, 'audit events from API');
     }
   } catch (_) {}
 }
@@ -907,7 +901,7 @@ async function renderRBACAdminWithAPI() {
       <span style="color:var(--text-muted);font-size:13px;">Loading RBAC data from backend…</span>
     </div>`;
 
-  console.info('[RBAC] renderRBACAdminWithAPI() — fetching API data...');
+
 
   // Step 1: Try public health endpoint first (no auth required) to confirm
   // API is reachable before attempting auth-gated endpoints.
@@ -923,7 +917,7 @@ async function renderRBACAdminWithAPI() {
     if (healthResp.ok) {
       const hd = await healthResp.json();
       apiReachable = true;
-      console.info('[RBAC] API health check ✅ —', (hd.roleCount || hd.roles?.length), 'default roles,', (hd.permissionCount || hd.permissions?.length), 'permissions');
+
     }
   } catch (e) {
     console.warn('[RBAC] API health check failed — will use local data:', e.message);
@@ -948,13 +942,7 @@ async function renderRBACAdminWithAPI() {
       if (auditR?.status === 'rejected') console.warn('[RBAC] Audit log API failed:', auditR.reason?.message);
     }
   } else {
-    console.info('[RBAC] Using local store data (API unreachable)');
   }
-
-  console.info('[RBAC] Rendering with',
-    RBAC_STORE.roles.length, 'roles,',
-    (typeof ARGUS_DATA !== 'undefined' ? ARGUS_DATA.users?.length : 0), 'users,',
-    RBAC_STORE.audit_log.length, 'audit events');
 
   // Call the SAVED synchronous reference — NOT window.renderRBACAdmin,
   // which now points to this async function (infinite recursion prevention).

@@ -489,7 +489,6 @@ async function renderGeoThreatMap() {
   }, GEO_REFRESH_MS);
 
   _geoInitialized = true;
-  console.info('[GeoMap] Initialized with', _geoAttacks.length, 'active attack vectors');
 }
 
 function stopGeoMap() {
@@ -512,5 +511,3 @@ window.addEventListener('resize', () => {
 window.renderGeoThreatMap = renderGeoThreatMap;
 window.renderGeoThreats   = renderGeoThreatMap;
 window.stopGeoMap         = stopGeoMap;
-
-console.info('[GeoMap] Module loaded — Wadjet-Eye AI Geo Threat Map v2.0');

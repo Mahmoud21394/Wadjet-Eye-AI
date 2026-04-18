@@ -299,7 +299,6 @@
     window._socMemoryAddLesson = function() { _toast('📝 Lesson form would open — add institutional knowledge', 'info'); };
   };
 
-
   /* ══════════════════════════════════════════════════════════════════
      MODULE B: THREAT INTELLIGENCE GRAPH BRAIN
      "Visualize the web of threats — every entity, relationship, cluster"
@@ -502,7 +501,6 @@
     };
   };
 
-
   /* ══════════════════════════════════════════════════════════════════
      MODULE C: DIGITAL RISK PROTECTION (DRP)
      "Monitor your brand, domains, employees across the entire internet"
@@ -632,7 +630,6 @@
       </div>
     `;
   };
-
 
   /* ══════════════════════════════════════════════════════════════════
      MODULE D: ATTACK STORYLINE GENERATOR
@@ -861,8 +858,6 @@
     window._generateNewStoryline = function() { _toast('🎬 AI generating new storyline from recent incidents…', 'info'); };
   };
 
-
   /* ── Register all differentiator module render functions ── */
-  console.log('[DifferentiatorModules v1.0] SOC Memory · Threat Graph · Digital Risk · Attack Storyline — initialized');
 
 })();

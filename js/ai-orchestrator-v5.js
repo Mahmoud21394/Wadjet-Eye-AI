@@ -776,7 +776,6 @@ async function _orchInit() {
   if (window.StateSync) {
     try {
       const authState = await window.StateSync.authReady;
-      console.log('[AIOrch] Auth ready — authenticated:', authState?.isAuthenticated ?? 'unknown');
 
       // ROOT-CAUSE FIX v5.1: Only kick off the provider status fetch if the
       // user is actually authenticated. If unauthenticated, defer the provider
@@ -787,7 +786,6 @@ async function _orchInit() {
           _startProviderBgRecheck();
         });
       } else {
-        console.info('[AIOrch] User not authenticated — deferring provider status check until login');
         // Set demo mode status immediately so UI renders without errors
         const demoStatus = { degradedMode: true, demoMode: true, providers: {}, _source: 'pre-login' };
         window.StateSync?.markProviderReady(demoStatus);
@@ -1420,7 +1418,6 @@ function _renderEnrichCard(data, value, type) {
 
   </div>`;
 }
-
 
 /* ═══════════════════════════════════════════════════════
    MESSAGE RENDERING

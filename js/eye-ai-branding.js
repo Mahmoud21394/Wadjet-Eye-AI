@@ -46,7 +46,6 @@ function initEyeAIBranding() {
   _applyTopbarBranding();
   _injectFooterBar();
   _applyPageTitleBranding();
-  console.info('[Wadjet-Eye AI Branding] ✅ Applied globally');
 }
 
 /* ─────────────────────────────────────────────

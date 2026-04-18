@@ -119,7 +119,6 @@
     // is only triggered on genuine failures, not on a clean timeout.
     if (_activeController) {
       _activeController.abort();
-      console.info('[CyberNews] Cancelled previous in-flight request');
     }
     const controller = new AbortController();
     _activeController = controller;
@@ -153,7 +152,6 @@
       const headers = { 'Content-Type': 'application/json' };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      console.info(`[CyberNews] Fetching from ${baseUrl}/api/news?limit=100`);
       const resp = await fetch(`${baseUrl}/api/news?limit=100`, {
         headers,
         signal: controller.signal,
@@ -182,8 +180,6 @@
         const catCounts = {};
         _articles.forEach(a => { catCounts[a.category] = (catCounts[a.category] || 0) + 1; });
         const catSummary = Object.entries(catCounts).map(([c,n])=>`${c}:${n}`).join(' | ');
-        console.info(`[CyberNews] ✅ Loaded ${_articles.length} articles from API`);
-        console.info(`[CyberNews] Category distribution: ${catSummary}`);
 
         // Validate: warn if any expected category has 0 articles
         Object.keys(CAT_META).filter(c => c !== 'all').forEach(cat => {
@@ -208,7 +204,6 @@
       if (err.name === 'AbortError') {
         if (controller.signal.aborted && _activeController !== controller) {
           // This controller was superseded by a newer request — do nothing
-          console.info('[CyberNews] Request superseded by newer request — ignoring AbortError');
           return;
         }
         // Timeout abort
@@ -287,7 +282,6 @@
     if (_articles.length === 0) {
       _articles  = FALLBACK_ARTICLES;
       _lastFetch = new Date();
-      console.info('[CyberNews] Using fallback articles');
     }
   }
 
@@ -330,7 +324,6 @@
         _activeCategory = btn.dataset.cat || 'all';
         _applyFilters(true);   // reset to page 1 on tab switch
         // ROOT-CAUSE DEBUG: log tab switch with before/after article counts
-        console.info(`[CyberNews] Tab switch: '${prevCat}' → '${_activeCategory}' | filtered: ${_filtered.length} / total: ${_articles.length}`);
         _renderGrid();
       });
     });
@@ -943,11 +936,10 @@
 
     console.group('[CyberNews] 🔍 Debug Report');
     console.table(Object.entries(catCounts).map(([cat, count]) => ({ category: cat, count })));
-    console.log('Full state:', report);
     Object.entries(tabBreakdown).forEach(([cat, data]) => {
       if (data.count > 0) {
         console.group(`📂 ${cat} (${data.count} articles)`);
-        data.samples.forEach(s => console.log('  •', s));
+
         console.groupEnd();
       } else {
         console.warn(`📂 ${cat} — ⚠️ EMPTY (0 articles)`);
@@ -960,13 +952,11 @@
 
   // Also expose a force-refresh function for debugging
   window.cyberNewsForceRefresh = async function() {
-    console.info('[CyberNews] Force refresh triggered from debug console');
     _articles = [];
     _loading  = false;
     await _loadArticles();
     _applyFilters();
     _renderGrid();
-    console.info('[CyberNews] Force refresh complete');
     return window.cyberNewsDebug();
   };
 

@@ -154,7 +154,6 @@ async function _doRefresh() {
           Object.assign(window.CURRENT_USER, body.user);
         }
       }
-      console.info('[Auth] Token refreshed successfully');
 
       // Push new token to any active WebSocket connection so it stays authenticated
       if (typeof WS !== 'undefined' && WS.updateAuth) WS.updateAuth();
@@ -183,7 +182,6 @@ async function _doRefresh() {
 async function apiRequest(method, path, body = null, opts = {}) {
   // ── 1. Pre-flight token refresh if expiring soon ──────────
   if (!TokenStore.isValid() && TokenStore.canRefresh()) {
-    console.info('[Auth] Token expired or expiring — attempting silent refresh…');
     await refreshAccessToken();
   }
 
@@ -213,7 +211,6 @@ async function apiRequest(method, path, body = null, opts = {}) {
   // ── 2. Handle 401 → auto-refresh → one retry ─────────────
   if (response.status === 401) {
     if (TokenStore.canRefresh()) {
-      console.info('[Auth] 401 received — attempting token refresh…');
       const refreshed = await refreshAccessToken();
 
       if (refreshed) {
@@ -291,22 +288,18 @@ async function restoreSession() {
   const user = TokenStore.getUser();
 
   if (TokenStore.isValid() && user) {
-    console.info('[Auth] Session valid — restoring as', user.email);
     return user;
   }
 
   if (TokenStore.canRefresh()) {
-    console.info('[Auth] Access token expired — attempting silent refresh…');
     const refreshed = await refreshAccessToken();
 
     if (refreshed) {
       const updatedUser = TokenStore.getUser();
-      console.info('[Auth] Session restored for', updatedUser?.email);
       return updatedUser;
     }
   }
 
-  console.info('[Auth] No valid session found');
   return null;
 }
 
@@ -610,13 +603,11 @@ const WS = {
       TokenStore.get()
     );
     if (!hasToken) {
-      console.info('[WS] No auth token after sync — skipping WebSocket connect');
       return null;
     }
 
     // ── Step 3: Pre-refresh if token is expiring ──────────────────────────
     if (!TokenStore.isValid() && TokenStore.canRefresh()) {
-      console.info('[WS] Token expired — refreshing before WebSocket connect…');
       await refreshAccessToken();
     }
 
@@ -648,14 +639,12 @@ const WS = {
     });
 
     _socket.on('connect', () => {
-      console.log('[WS] ✅ Connected');
       _wsAuthRetries = 0;   // Reset retry counter on successful connect
       window.StateSync?.markWsConnected(token);
       window.dispatchEvent(new CustomEvent('ws:connected'));
     });
 
     _socket.on('disconnect', (reason) => {
-      console.log('[WS] Disconnected:', reason);
       window.StateSync?.markWsDisconnected(reason);
       window.dispatchEvent(new CustomEvent('ws:disconnected', { detail: { reason } }));
     });
@@ -676,7 +665,7 @@ const WS = {
       const backoffMs = WS_AUTH_BACKOFF_MS[Math.min(_wsAuthRetries, WS_AUTH_BACKOFF_MS.length - 1)];
       _wsAuthRetries++;
 
-      console.info(`[WS] Auth error (attempt ${_wsAuthRetries}) — refreshing token in ${backoffMs}ms…`);
+
       await new Promise(r => setTimeout(r, backoffMs));
 
       // Attempt token refresh
@@ -694,7 +683,6 @@ const WS = {
 
         // Push new token to socket — Socket.IO will use it on next reconnect
         _socket.auth = { token: newToken };
-        console.info('[WS] Token refreshed — Socket.IO will reconnect with new token');
         // Do NOT call _socket.connect() manually — Socket.IO's reconnection handles it
       } else {
         console.warn('[WS] Token refresh failed during WS auth retry');
@@ -731,7 +719,6 @@ const WS = {
 
     if (_socket) {
       _socket.auth = { token };
-      console.info('[WS] Auth token updated on socket');
     }
 
     // Also keep TokenStore in sync
@@ -781,10 +768,8 @@ async function _tryRestore() {
     try {
       const authState = await window.StateSync.authReady;
       if (!authState?.isAuthenticated) {
-        console.info('[ApiClient] Auth sync complete — user not authenticated, skipping session restore');
         return;
       }
-      console.info('[ApiClient] Auth sync complete — restoring session for', authState.user?.email || 'user');
     } catch (e) {
       console.warn('[ApiClient] StateSync.authReady error:', e);
     }
@@ -1052,7 +1037,6 @@ window.loadIOCs          = (p) => API.iocs.list(p).then(r => r?.data || []).catc
   window._showToast = function(msg, type = 'info', duration = 3500) {
     if (typeof showToast === 'function') { showToast(msg, type, duration); return; }
     if (type === 'error') console.error('[Toast]', msg);
-    else console.log('[Toast]', msg);
   };
 })();
 

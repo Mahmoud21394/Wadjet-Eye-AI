@@ -569,5 +569,3 @@ window._sysmonInvestigateAI = () => {
 ───────────────────────────────────────────── */
 window.renderSysmonAnalyzer = renderSysmonAnalyzer;
 window.renderSysmon         = renderSysmonAnalyzer;
-
-console.info('[Sysmon] Module loaded — Wadjet-Eye AI Sysmon Analyzer v2.0');

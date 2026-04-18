@@ -449,7 +449,6 @@ let _csocAutoCorrelateTimer = null;
 function _csocAutoCorrelate() {
   clearTimeout(_csocAutoCorrelateTimer);
   _csocAutoCorrelateTimer = setTimeout(async () => {
-    console.log('[CampaignsSOC] 0 campaigns found → checking correlation engine…');
     if (typeof window.CorrelationEngine?.check === 'function') {
       await window.CorrelationEngine.check();
       await _csocLoadCampaigns();
@@ -1344,7 +1343,6 @@ window.renderCampaigns = function(opts) {
         if (_graph.animFrame) { cancelAnimationFrame(_graph.animFrame); _graph.animFrame = null; }
       };
       CampaignSOC._patchDone = true;
-      console.log('[CampaignsSOC v3.0] PAGE_CONFIG[campaigns] patched ✅');
     } else {
       if (_attempts < 40) setTimeout(_tryPatch, 150);
       else console.warn('[CampaignsSOC] PAGE_CONFIG not found after 6s — using window.renderCampaigns override');
@@ -1363,11 +1361,8 @@ window.renderCampaigns = function(opts) {
   window.addEventListener(evt, () => {
     const activePage = document.querySelector('.page.active');
     if (activePage && activePage.id === 'page-campaigns') {
-      console.log('[CampaignsSOC] Auth event → re-rendering campaign page');
       CampaignSOC.loading = false;
       setTimeout(() => renderCampaignsSOC(), 300);
     }
   });
 });
-
-console.log('[CampaignsSOC v3.0] campaigns-soc.js loaded ✅');

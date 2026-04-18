@@ -83,7 +83,6 @@
 
       // ── Check if still the current render ─────────────────────
       if (generation !== _renderGeneration) {
-        console.log('[Router] Stale render cancelled for:', pageId);
         return;
       }
 
@@ -100,8 +99,6 @@
       if (window.history && !options.noHistory) {
         window.history.pushState({ page: pageId }, '', `#${pageId}`);
       }
-
-      console.log(`[Router] ✅ Navigated to: ${pageId}`);
 
     } catch (err) {
       console.error(`[Router] ❌ Navigation error for ${pageId}:`, err.message);

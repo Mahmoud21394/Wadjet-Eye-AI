@@ -103,7 +103,6 @@
         if (user)         localStorage.setItem(STORAGE_KEYS.USER_PROFILE,  JSON.stringify(user));
         localStorage.setItem(STORAGE_KEYS.OFFLINE_MODE, offline ? '1' : '0');
         localStorage.setItem(STORAGE_KEYS.LAST_ACTIVITY, Date.now().toString());
-        console.log('[PersistentAuth] ✅ Session saved to localStorage');
       } catch (e) {
         console.warn('[PersistentAuth] localStorage save failed:', e.message);
       }
@@ -177,13 +176,11 @@
         (expiresIn ? new Date(Date.now() + expiresIn * 1000).toISOString() : null);
       if (exp) localStorage.setItem(STORAGE_KEYS.EXPIRES_AT, exp);
 
-      console.log('[PersistentAuth] ✅ Tokens rotated and saved');
     },
 
     /** Clear all session data (logout) */
     clear() {
       Object.values(STORAGE_KEYS).forEach(k => localStorage.removeItem(k));
-      console.log('[PersistentAuth] 🗑️  Session cleared from localStorage');
     },
 
     /** Check if we have a usable session at all */
@@ -206,7 +203,6 @@
     async refresh(backendUrl) {
       // Prevent concurrent refreshes
       if (_refreshLock && _refreshPromise) {
-        console.log('[PersistentAuth] Refresh already in progress — waiting...');
         return _refreshPromise;
       }
 
@@ -236,14 +232,12 @@
           'offline_' + Date.now().toString(36),
           newExpiry
         );
-        console.log('[PersistentAuth] 🔌 Offline mode: session extended locally');
         return true;
       }
 
       const url = (backendUrl || '').replace(/\/$/, '');
 
       try {
-        console.log('[PersistentAuth] 🔄 Refreshing access token...');
 
         const res = await fetch(`${url}/api/auth/refresh`, {
           method:  'POST',
@@ -289,7 +283,6 @@
         // Reschedule watchdog
         this.scheduleRefresh(backendUrl);
 
-        console.log('[PersistentAuth] ✅ Token refreshed successfully');
         _dispatchEvent('auth:token-refreshed', { expiresAt: data.expiresAt });
 
         return data.token || true;
@@ -325,7 +318,7 @@
 
       // Refresh at REFRESH_THRESHOLD_RATIO of remaining TTL
       const delay = Math.max(5000, msLeft * REFRESH_THRESHOLD_RATIO);
-      console.log(`[PersistentAuth] ⏱️  Next token refresh in ${Math.round(delay / 60000)} min`);
+
 
       _watchdogTimer = setTimeout(() => {
         if (PersistentTokenStore.hasSession()) {
@@ -381,10 +374,8 @@
   const SessionRestoreGate = {
 
     async restore(backendUrl, retryCount = 0) {
-      console.log('[PersistentAuth] 🔍 Checking for stored session...');
 
       if (!PersistentTokenStore.hasSession()) {
-        console.log('[PersistentAuth] No stored session — showing login screen');
         _dispatchEvent('auth:no-session');
         _authReadyResolve(true);
         return false;
@@ -392,7 +383,6 @@
 
       const user = PersistentTokenStore.getUser();
       if (!user) {
-        console.log('[PersistentAuth] Session found but no user profile — clearing');
         PersistentTokenStore.clear();
         _dispatchEvent('auth:no-session');
         return false;
@@ -400,27 +390,23 @@
 
       // If offline mode, restore immediately without network call
       if (PersistentTokenStore.isOffline()) {
-        console.log('[PersistentAuth] 🔌 Restoring offline session...');
         _dispatchEvent('auth:restored', { user, offline: true });
         return true;
       }
 
       // Check if token is still valid
       if (!PersistentTokenStore.isExpired()) {
-        console.log('[PersistentAuth] ✅ Token is valid — restoring session');
         _dispatchEvent('auth:restored', { user, offline: false });
         SmartRefresh.scheduleRefresh(backendUrl);
         return true;
       }
 
       // Token expired — try to refresh
-      console.log('[PersistentAuth] Token expired — attempting silent refresh...');
 
       const refreshed = await SmartRefresh.refresh(backendUrl);
 
       if (refreshed) {
         const updatedUser = PersistentTokenStore.getUser() || user;
-        console.log('[PersistentAuth] ✅ Silent refresh succeeded — session restored');
         _dispatchEvent('auth:restored', { user: updatedUser, offline: false });
         return true;
       }
@@ -552,7 +538,6 @@
         _dispatchEvent('auth:idle-warning');
       });
 
-      console.log('[PersistentAuth] ✅ Login recorded, persistent session active');
     },
 
     /** Called on logout */
@@ -560,7 +545,6 @@
       SmartRefresh.stop();
       ActivityTracker.stop();
       PersistentTokenStore.clear();
-      console.log('[PersistentAuth] 👋 Logged out');
     },
 
     /** Attempt emergency offline login */
@@ -628,7 +612,6 @@
     // On DOMContentLoaded, kick off session restoration
     const init = () => {
       const backendUrl = (window.CONFIG?.BACKEND_URL || 'https://wadjet-eye-ai.onrender.com');
-      console.log('[PersistentAuth] Initializing v5.1... backend:', backendUrl);
       PersistentAuth.restoreSession(backendUrl);
     };
 
@@ -644,7 +627,6 @@
       if (document.visibilityState === 'visible') {
         const backendUrl = window.CONFIG?.BACKEND_URL || 'https://wadjet-eye-ai.onrender.com';
         if (PersistentTokenStore.hasSession() && PersistentTokenStore.isExpired()) {
-          console.log('[PersistentAuth] Tab became visible with expired token — refreshing');
           SmartRefresh.refresh(backendUrl);
         }
       }
@@ -652,7 +634,6 @@
 
     // Handle online/offline events
     window.addEventListener('online', () => {
-      console.log('[PersistentAuth] Network restored — checking session...');
       const backendUrl = window.CONFIG?.BACKEND_URL || 'https://wadjet-eye-ai.onrender.com';
       if (PersistentTokenStore.hasSession()) {
         SmartRefresh.refresh(backendUrl);

@@ -60,7 +60,6 @@ function _corLog(msg, level='info') {
   CorrelationEngine.logs.unshift(entry);
   if (CorrelationEngine.logs.length > 300) CorrelationEngine.logs.length = 300;
   const icon = { info:'ℹ️', warn:'⚠️', error:'❌', success:'✅' }[level] || '•';
-  console.log(`[CorrelationEngine v3.0] ${icon} ${msg}`);
 
   // Broadcast status to Campaign page
   window.dispatchEvent(new CustomEvent('correlation:log', { detail: entry }));
@@ -480,5 +479,3 @@ window.startCorrelationScheduler = startCorrelationScheduler;
     setTimeout(_run, 1500);
   }
 })();
-
-console.log('[CorrelationEngine v3.0] campaign-correlation.js loaded ✅');

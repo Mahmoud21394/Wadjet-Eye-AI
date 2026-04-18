@@ -99,7 +99,6 @@
     _state.user           = user || null;
     _state.tenantId       = tenantId || null;
 
-    console.log(`[StateSync] ✅ Auth ready — authenticated=${_state.isAuthenticated} user=${user?.email || 'none'}`);
     _resolveAuth({ isAuthenticated: _state.isAuthenticated, user, tenantId });
     _emit('auth:ready', { isAuthenticated: _state.isAuthenticated, user, tenantId });
   }
@@ -128,7 +127,6 @@
   function _markSessionReady({ sessionId } = {}) {
     if (_state.sessionDone) return;
     _state.sessionDone = true;
-    console.log(`[StateSync] ✅ Session ready — sessionId=${sessionId || 'none'}`);
     _resolveSession({ sessionId });
     _emit('session:ready', { sessionId });
   }
@@ -151,7 +149,6 @@
     if (!_state.providerDone) {
       _state.providerDone = true;
       _resolveProvider(status);
-      console.log('[StateSync] ✅ Provider status ready:', JSON.stringify(status));
     }
     _emit('provider:status', status);
   }
@@ -272,7 +269,5 @@
   });
 
   Object.freeze(window.StateSync);
-
-  console.log('[StateSync] ✅ Loaded — AuthReadyPromise initialized. Waiting for auth-interceptor…');
 
 })();

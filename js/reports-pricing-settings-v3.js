@@ -341,7 +341,6 @@ window._rptQuickExport = async function(type, format) {
 window._rptScheduleAll = function() { _toast('Schedule configuration — coming in v19.1', 'info'); };
 window._rptCustomReport = function() { _toast('Custom report builder — coming in v19.1', 'info'); };
 
-
 /* ══════════════════════════════════════════════════════
    ████████╗ PRICING MODULE
 ══════════════════════════════════════════════════════ */
@@ -606,7 +605,6 @@ window._pricingSaveEdit = function(btn) {
   _toast('Prices updated', 'success');
   window.renderPricing();
 };
-
 
 /* ══════════════════════════════════════════════════════
    ███████╗ SETTINGS MODULE v3.0 — HTTP 400 FIX

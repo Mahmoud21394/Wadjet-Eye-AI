@@ -198,7 +198,6 @@ function _paginator(total, current, onPage, domId) {
 async function renderCommandCenterLive() {
   // Guard against concurrent calls — e.g. initApp + initLivePages firing simultaneously
   if (renderCommandCenterLive._running) {
-    console.info('[LivePages] renderCommandCenterLive already in progress — skipping duplicate call');
     return;
   }
   renderCommandCenterLive._running = true;
@@ -270,7 +269,7 @@ async function _loadKPIs() {
       window._iocDistChart.update();
     }
 
-    console.info('[LivePages] KPIs refreshed @', new Date().toLocaleTimeString());
+
   } catch (err) {
     console.warn('[LivePages] KPI error:', err.message);
     if (typeof showToast==='function') showToast('Dashboard data unavailable — check backend', 'warning');
@@ -1129,7 +1128,6 @@ async function _collLoad() {
 }
 
 // _collSync is defined in the SYNC / INGEST HELPERS section below — no legacy stub needed here
-
 
 // NOTE: _collSyncAll is defined later in this file using POST (section: SYNC / INGEST HELPERS)
 // This placeholder is overridden — left as stub for legacy references
@@ -3077,7 +3075,6 @@ function _initAutoRefresh() {
       await _loadKPIs();
       _loadMiniFeedStatus();
     });
-    console.info('[LivePages] KPI subscriber registered in AutoRefresh');
     return;
   }
   // Fallback own timer
@@ -3089,14 +3086,14 @@ function _initAutoRefresh() {
     subscribe(){}
   };
   window.AutoRefresh=AR; AR.start();
-  console.info('[LivePages] AutoRefresh fallback started ('+LP_REFRESH_MS/1000+'s)');
+
 }
 
 /* ─────────────────────────────────────────────
    INIT  — called from main.js initApp()
 ───────────────────────────────────────────── */
 async function initLivePages() {
-  console.info('[LivePages] v5.0 (Wadjet-Eye AI) initialising…');
+
 
   // Guard: main.js already calls renderCommandCenter() which is overridden to
   // renderCommandCenterLive(). Calling it again here would trigger a duplicate
@@ -3107,7 +3104,6 @@ async function initLivePages() {
   if (!alreadyLoaded) {
     await renderCommandCenterLive();
   } else {
-    console.info('[LivePages] Command center already loaded — skipping duplicate render');
   }
   _updateCollectorCount();
 
@@ -3121,7 +3117,6 @@ async function initLivePages() {
     if (typeof orig === 'function') orig();
   };
 
-  console.info('[LivePages] Ready — Wadjet-Eye AI CTI Platform');
 }
 
 /* ─────────────────────────────────────────────

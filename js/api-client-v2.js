@@ -163,7 +163,6 @@ async function silentRefresh() {
         window.TokenStore.save(newToken, null, newRefresh);
       }
 
-      console.info('[WadjetAPI] ✓ Token refreshed successfully');
       return true;
     } catch (err) {
       console.error('[WadjetAPI] Refresh error:', err.message);
@@ -366,6 +365,6 @@ window.PersistentAuth_silentRefresh = silentRefresh;
 // This fixes the 401 without modifying ioc-intelligence.js
 const _origFetch = window._apiGet;
 
-console.log('[WadjetAPI v5.2] Initialized — token found:', !!getAuthToken());
+
 
 })(window);

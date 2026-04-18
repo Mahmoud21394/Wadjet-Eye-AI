@@ -448,7 +448,6 @@
       });
     });
 
-    console.log('[AI Orchestrator] ✓ Initialized');
   }
 
   // ── Public API ────────────────────────────────────────
