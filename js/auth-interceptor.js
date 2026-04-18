@@ -269,6 +269,17 @@ async function _doTokenRefresh(attempt = 0) {
     }
 
     const data      = await res.json();
+
+    // ── requires_reauth: backend couldn't issue a new access token ────────
+    // (e.g. admin.createSession unavailable + no JWT_SECRET configured)
+    // In this case a re-login is needed. Dispatch auth:expired and return false.
+    if (data.requires_reauth) {
+      console.warn('[AuthInterceptor] Backend requires re-authentication — triggering re-login');
+      _dispatchAuthEvent('auth:session-expired', { reason: 'requires_reauth' });
+      window.StateSync?.handleAuthExpiry({ reason: 'requires_reauth' });
+      return false;
+    }
+
     const newToken  = data.token || data.access_token;
     if (!newToken) {
       console.warn('[AuthInterceptor] Refresh response missing token field');
@@ -425,7 +436,12 @@ async function authFetch(path, opts = {}) {
   }
 
   const token   = UnifiedTokenStore.getToken();
-  const fullUrl = path.startsWith('http') ? path : `${base}/api${path}`;
+  // CRITICAL FIX: Don't double-prefix /api — if path already starts with /api, don't prepend again
+  const fullUrl = path.startsWith('http')
+    ? path
+    : path.startsWith('/api')
+      ? `${base}${path}`
+      : `${base}/api${path}`;
 
   const headers = {
     'Content-Type': 'application/json',

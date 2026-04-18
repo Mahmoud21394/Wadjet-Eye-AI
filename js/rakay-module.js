@@ -1316,11 +1316,28 @@
 
       // Token rejected — re-auth before reconnecting
       if (code === 4001 || code === 4003) {
-        log.warn('[WS] Auth rejected (code', code, ') — clearing token and re-authing before reconnect');
-        _lsDel(LS_RAKAY_TOKEN);
-        _lsDel(LS_RAKAY_TOKEN_EXP);
-        RAKAY.authToken = null;
-        _ensureAuth().then(() => _scheduleWsReconnect());
+        log.warn('[WS] Auth rejected (code', code, ') — attempting token refresh before re-auth');
+        // CRITICAL FIX: Try silentRefresh on the platform JWT FIRST.
+        // Only if that fails do we fall back to clearing the demo token.
+        const tryRefresh = async () => {
+          if (typeof window.silentRefresh === 'function') {
+            const refreshed = await window.silentRefresh().catch(() => false);
+            if (refreshed) {
+              // Updated platform token — re-read and reconnect
+              RAKAY.authToken = _resolveToken();
+              log.info('[WS] Platform JWT refreshed — reconnecting');
+              _scheduleWsReconnect();
+              return;
+            }
+          }
+          // Refresh failed or not available — clear demo token and re-auth
+          log.warn('[WS] Token refresh failed — clearing demo token and re-authing');
+          _lsDel(LS_RAKAY_TOKEN);
+          _lsDel(LS_RAKAY_TOKEN_EXP);
+          RAKAY.authToken = null;
+          _ensureAuth().then(() => _scheduleWsReconnect());
+        };
+        tryRefresh();
         return;
       }
 

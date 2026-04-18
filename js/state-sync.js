@@ -213,7 +213,12 @@
   /* ══════════════════════════════════════════════════════════════════════
      EXPORT — window.StateSync
   ══════════════════════════════════════════════════════════════════════ */
-  window.StateSync = Object.freeze({
+  /* ══════════════════════════════════════════════════════════════════════
+     EXPORT — window.StateSync
+     NOTE: Object.freeze() prevents adding properties post-creation,
+     so we use a plain object with getters for live state access.
+  ══════════════════════════════════════════════════════════════════════ */
+  window.StateSync = {
     // Promises
     authReady,
     sessionReady,
@@ -244,13 +249,29 @@
     emit: _emit,
 
     // State read-only snapshot
-    getState: () => ({ ..._state }),
-    isAuthDone:    () => _state.authDone,
+    getState:        () => ({ ..._state }),
+    isAuthDone:      () => _state.authDone,
     isAuthenticated: () => _state.isAuthenticated,
-    getUser:       () => _state.user,
-    getTenantId:   () => _state.tenantId,
-    isWsConnected: () => _state.wsConnected,
+    getUser:         () => _state.user,
+    getTenantId:     () => _state.tenantId,
+    isWsConnected:   () => _state.wsConnected,
+  };
+
+  // Add live getter properties so modules can read StateSync.providerStatus,
+  // StateSync.isAuthenticated (as boolean property), etc. without calling methods.
+  // These are defined AFTER the object is created so we can use defineProperty.
+  Object.defineProperty(window.StateSync, 'providerStatus', {
+    get: () => _state.providerStatus,
+    enumerable: true,
+    configurable: true,
   });
+  Object.defineProperty(window.StateSync, 'authState', {
+    get: () => ({ isAuthenticated: _state.isAuthenticated, user: _state.user, tenantId: _state.tenantId }),
+    enumerable: true,
+    configurable: true,
+  });
+
+  Object.freeze(window.StateSync);
 
   console.log('[StateSync] ✅ Loaded — AuthReadyPromise initialized. Waiting for auth-interceptor…');
 
