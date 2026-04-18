@@ -37,34 +37,65 @@
   }
 
   // ── Token store interface ───────────────────────────────────────
-  // Reads from the authStore if available, else from sessionStorage/localStorage.
-  // NEVER reads raw API provider keys.
+  // Reads from the UnifiedTokenStore (auth-interceptor.js) if available,
+  // then AuthStore, then falls back to storage directly.
+  //
+  // ROOT-CAUSE FIX: The old fallback read localStorage.getItem('wadjet_token')
+  // but auth-interceptor.js writes to 'wadjet_access_token'. This mismatch
+  // caused every page-reload to produce a null token → 401 → refresh storm.
+  // Fixed: all keys now match auth-interceptor.js UNIFIED_KEYS.
+  //
+  // KEY HIERARCHY (read priority):
+  //   1. window.UnifiedTokenStore — canonical source (auth-interceptor.js)
+  //   2. window.AuthStore — phase-2 typed store
+  //   3. localStorage/sessionStorage direct fallback using correct keys
   function _getToken() {
-    if (typeof window !== 'undefined') {
-      if (window.AuthStore?.getAccessToken) return window.AuthStore.getAccessToken();
-      return sessionStorage.getItem('wadjet_access_token') ||
-             localStorage.getItem('wadjet_token');
-    }
-    return null;
+    if (typeof window === 'undefined') return null;
+    // 1. UnifiedTokenStore (auth-interceptor.js) — authoritative
+    if (window.UnifiedTokenStore?.getToken) return window.UnifiedTokenStore.getToken();
+    // 2. AuthStore (js/api-client/auth-store.js)
+    if (window.AuthStore?.getAccessToken) return window.AuthStore.getAccessToken();
+    // 3. Direct storage — keys MUST match what auth-interceptor.js writes
+    return sessionStorage.getItem('wadjet_access_token')
+        || localStorage.getItem('wadjet_access_token')   // ← FIXED: was 'wadjet_token'
+        || localStorage.getItem('we_access_token')        // legacy alias
+        || null;
   }
 
   function _getRefreshToken() {
-    if (typeof window !== 'undefined') {
-      if (window.AuthStore?.getRefreshToken) return window.AuthStore.getRefreshToken();
-      return sessionStorage.getItem('wadjet_refresh_token') ||
-             localStorage.getItem('wadjet_refresh_token');
-    }
-    return null;
+    if (typeof window === 'undefined') return null;
+    // 1. UnifiedTokenStore — authoritative (always writes refresh to localStorage)
+    if (window.UnifiedTokenStore?.getRefresh) return window.UnifiedTokenStore.getRefresh();
+    // 2. AuthStore
+    if (window.AuthStore?.getRefreshToken) return window.AuthStore.getRefreshToken();
+    // 3. Direct storage — refresh token is ALWAYS in localStorage per interceptor design
+    return localStorage.getItem('wadjet_refresh_token')
+        || localStorage.getItem('we_refresh_token')       // legacy alias
+        || sessionStorage.getItem('wadjet_refresh_token') // sessionStorage fallback
+        || null;
   }
 
   function _setToken(accessToken, refreshToken) {
     if (typeof window === 'undefined') return;
+    // Prefer UnifiedTokenStore so interceptor's proactive-refresh schedule
+    // stays in sync with whatever this client writes.
+    if (window.UnifiedTokenStore?.updateTokens) {
+      window.UnifiedTokenStore.updateTokens({ token: accessToken, refreshToken });
+      return;
+    }
     if (window.AuthStore?.setTokens) {
       window.AuthStore.setTokens(accessToken, refreshToken);
       return;
     }
-    if (accessToken)  sessionStorage.setItem('wadjet_access_token', accessToken);
-    if (refreshToken) sessionStorage.setItem('wadjet_refresh_token', refreshToken);
+    // Fallback: write to both storages using the canonical keys
+    if (accessToken) {
+      sessionStorage.setItem('wadjet_access_token', accessToken);
+      localStorage.setItem('wadjet_access_token', accessToken);
+    }
+    if (refreshToken) {
+      // Refresh MUST be in localStorage so it survives page reloads
+      localStorage.setItem('wadjet_refresh_token', refreshToken);
+    }
   }
 
   // ── Unique request ID generator ─────────────────────────────────
