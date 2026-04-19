@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Wadjet-Eye AI — Complete Setup Guide v5.0</title>
+<style>
+  :root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--border:#30363d;--accent:#58a6ff;--green:#3fb950;--orange:#d29922;--red:#f85149;--purple:#bc8cff;--text:#e6edf3;--muted:#8b949e;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;line-height:1.7;}
+  a{color:var(--accent);text-decoration:none;}a:hover{text-decoration:underline;}
+  .page{max-width:980px;margin:0 auto;padding:32px 20px;}
+  h1{font-size:26px;font-weight:700;color:var(--text);margin-bottom:6px;}
+  h2{font-size:18px;font-weight:600;color:var(--accent);margin:32px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--border);}
+  h3{font-size:14px;font-weight:600;color:var(--text);margin:16px 0 6px;}
+  p{margin-bottom:10px;color:var(--text);}
+  code{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-family:'Cascadia Code','Fira Code',monospace;font-size:12px;color:#79c0ff;}
+  pre{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:16px;overflow-x:auto;margin:10px 0;position:relative;}
+  pre code{background:none;border:none;padding:0;font-size:12px;color:#e6edf3;line-height:1.6;}
+  .copy-btn{position:absolute;top:8px;right:8px;background:var(--bg2);border:1px solid var(--border);color:var(--muted);padding:3px 10px;border-radius:4px;cursor:pointer;font-size:11px;}
+  .copy-btn:hover{color:var(--text);border-color:var(--accent);}
+  .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;}
+  .badge-red{background:#f8514922;color:var(--red);}
+  .badge-green{background:#3fb95022;color:var(--green);}
+  .badge-orange{background:#d2992222;color:var(--orange);}
+  .badge-blue{background:#58a6ff22;color:var(--accent);}
+  .callout{border-left:3px solid;border-radius:0 8px 8px 0;padding:12px 16px;margin:14px 0;}
+  .callout-danger{border-color:var(--red);background:#f8514910;}
+  .callout-success{border-color:var(--green);background:#3fb95010;}
+  .callout-info{border-color:var(--accent);background:#58a6ff10;}
+  .callout-warn{border-color:var(--orange);background:#d2992210;}
+  table{width:100%;border-collapse:collapse;margin:12px 0;}
+  th{background:var(--bg3);color:var(--muted);text-align:left;padding:8px 12px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;border:1px solid var(--border);}
+  td{padding:8px 12px;border:1px solid var(--border);vertical-align:top;font-size:13px;}
+  tr:nth-child(even) td{background:#161b2280;}
+  .step-grid{display:grid;gap:16px;margin:16px 0;}
+  .step-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:20px;position:relative;}
+  .step-card.active{border-color:var(--accent);}
+  .step-num{position:absolute;top:-12px;left:20px;background:var(--accent);color:#000;font-weight:700;font-size:12px;padding:3px 10px;border-radius:10px;}
+  .step-num.done{background:var(--green);}
+  .step-num.warn{background:var(--orange);}
+  .header-bar{background:linear-gradient(135deg,#1a3a5c 0%,#0d2137 100%);border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:28px;}
+  .logo-row{display:flex;align-items:center;gap:16px;margin-bottom:8px;}
+  .progress-bar{background:var(--bg3);border-radius:10px;height:8px;margin:12px 0 4px;}
+  .progress-fill{background:linear-gradient(90deg,var(--accent),var(--green));height:8px;border-radius:10px;transition:width .5s ease;}
+  .cmd-box{background:#0a0f1a;border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin:10px 0;display:flex;align-items:flex-start;gap:12px;}
+  .cmd-box .prompt{color:var(--green);font-family:monospace;font-size:13px;white-space:nowrap;padding-top:1px;}
+  .cmd-box code{background:none;border:none;padding:0;color:#e6edf3;font-size:13px;}
+  .check-list{list-style:none;padding:0;}
+  .check-list li{padding:6px 0;border-bottom:1px solid var(--border);}
+  .check-list li:last-child{border:none;}
+  .check-list li::before{content:'☐ ';color:var(--muted);}
+  .check-list li.done::before{content:'✅ ';color:var(--green);}
+  .error-row{background:#f8514910;border-left:3px solid var(--red);padding:10px 14px;border-radius:0 6px 6px 0;margin:8px 0;}
+  .fix-row{background:#3fb95010;border-left:3px solid var(--green);padding:10px 14px;border-radius:0 6px 6px 0;margin:4px 0 16px;}
+  .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  @media(max-width:680px){.two-col{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- HEADER -->
+  <div class="header-bar">
+    <div class="logo-row">
+      <span style="font-size:36px;">🛡️</span>
+      <div>
+        <h1>Wadjet-Eye AI — Complete Setup Guide</h1>
+        <div style="color:var(--muted);font-size:13px;">v5.0 — Database + Seeding + Auth Fix</div>
+      </div>
+    </div>
+    <p style="color:var(--muted);margin-bottom:8px;">
+      Follow these steps <strong>in order</strong> to fix the seed error and get all features working.
+    </p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <span class="badge badge-red">Fixes: seed error "Tenant or user not found"</span>
+      <span class="badge badge-green">Fixes: Session expired logout</span>
+      <span class="badge badge-blue">Fixes: Profile not found 403</span>
+    </div>
+  </div>
+
+  <!-- ROOT CAUSE BOX -->
+  <h2>🔍 Root Cause of the Seed Error</h2>
+  <div class="error-row">
+    <strong>❌ Error:</strong> <code>SEED ERROR: Tenant or user not found</code>
+  </div>
+
+  <table>
+    <tr><th>Bug</th><th>Old Code</th><th>Fixed Code</th></tr>
+    <tr>
+      <td><span class="badge badge-red">BUG 1</span> Wrong database driver</td>
+      <td><code>require('pg')</code> + <code>DATABASE_URL</code></td>
+      <td><code>@supabase/supabase-js</code> + <code>SUPABASE_SERVICE_KEY</code></td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-red">BUG 2</span> Wrong column name</td>
+      <td><code>tenants.slug</code></td>
+      <td><code>tenants.short_name</code></td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-red">BUG 3</span> Wrong status column</td>
+      <td><code>users.is_active = true</code></td>
+      <td><code>users.status = 'active'</code></td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-red">BUG 4</span> Table doesn't exist</td>
+      <td><code>user_profiles</code> table used</td>
+      <td>Profiles are in <code>users</code> table directly</td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-red">BUG 5</span> Missing tables</td>
+      <td><code>refresh_tokens</code>, <code>login_activity</code> missing</td>
+      <td>Added in <code>migration-v5.0-auth-tables.sql</code></td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-red">BUG 6</span> Missing env var</td>
+      <td>Script looks for <code>DATABASE_URL</code></td>
+      <td>Only <code>SUPABASE_URL</code> + <code>SUPABASE_SERVICE_KEY</code> needed</td>
+    </tr>
+  </table>
+
+  <!-- STEP BY STEP -->
+  <h2>📋 Steps to Fix (Do These in Order)</h2>
+
+  <div class="step-grid">
+
+    <!-- STEP 1 -->
+    <div class="step-card active">
+      <div class="step-num">STEP 1</div>
+      <h3>🗄️ Run the Base Schema in Supabase</h3>
+      <p>If you haven't already, run <code>backend/database/schema.sql</code> first.</p>
+      <div class="callout callout-info">
+        <strong>How:</strong> Go to <a href="https://supabase.com/dashboard" target="_blank">Supabase Dashboard</a> →
+        Your Project → SQL Editor → New Query → Paste the file → Run
+      </div>
+      <p>File: <code>backend/database/schema.sql</code></p>
+      <ul class="check-list">
+        <li>Open Supabase Dashboard → SQL Editor</li>
+        <li>Paste contents of <code>backend/database/schema.sql</code></li>
+        <li>Click Run — should show "Success. No rows returned"</li>
+      </ul>
+    </div>
+
+    <!-- STEP 2 -->
+    <div class="step-card">
+      <div class="step-num">STEP 2</div>
+      <h3>🔧 Run the Missing Tables Migration</h3>
+      <p>This adds <code>refresh_tokens</code>, <code>login_activity</code>, <code>sysmon_sessions</code>,
+      <code>vulnerabilities</code>, <code>cti_actors</code>, and other tables required by the backend.</p>
+      <p>File: <code>backend/database/migration-v5.0-auth-tables.sql</code> <span class="badge badge-green">NEW</span></p>
+      <ul class="check-list">
+        <li>SQL Editor → New Query</li>
+        <li>Paste contents of <code>migration-v5.0-auth-tables.sql</code></li>
+        <li>Click Run — should show table list at the end</li>
+      </ul>
+      <div class="callout callout-warn">
+        <strong>Note:</strong> If you get "already exists" errors, that's fine — safe to re-run.
+      </div>
+    </div>
+
+    <!-- STEP 3 -->
+    <div class="step-card">
+      <div class="step-num">STEP 3</div>
+      <h3>📦 Verify backend/.env is correct</h3>
+      <p>Open <code>backend/.env</code> and confirm these values are set:</p>
+      <pre><code>SUPABASE_URL=https://miywxnplaltduuscjfmq.supabase.co
+SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...</code></pre>
+      <div class="callout callout-danger">
+        <strong>Do NOT add DATABASE_URL</strong> — this project uses Supabase SDK, not raw PostgreSQL.
+        The old seed script was looking for DATABASE_URL which doesn't exist in this .env.
+      </div>
+      <p>Get your keys from:
+        <a href="https://supabase.com/dashboard/project/miywxnplaltduuscjfmq/settings/api" target="_blank">
+          Supabase → Settings → API
+        </a>
+      </p>
+    </div>
+
+    <!-- STEP 4 -->
+    <div class="step-card active">
+      <div class="step-num">STEP 4 ← RUN THIS</div>
+      <h3>🌱 Run the Fixed Seed Script</h3>
+      <p>The seed script has been completely rewritten. Run it from your project root:</p>
+      <div class="cmd-box">
+        <span class="prompt">PS C:\...Wadjet AI Final V3.4&gt;</span>
+        <code>node backend/scripts/seed-mahmoud.js</code>
+      </div>
+      <p>Expected output:</p>
+      <pre><code>╔══════════════════════════════════════════════════════╗
+║   Wadjet-Eye AI — Seed Script v5.0 (FIXED)          ║
+╚══════════════════════════════════════════════════════╝
+
+════════════════ STEP 1: Verifying Supabase Connection ══
+  ✅ Supabase connection: OK
+  ✅ Tenant seeded: MSSP Global Operations — ID: 00000000-...
+  ✅ Auth user created: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+  ✅ Profile upserted: yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy
+  ✅ Alerts: 5/5 inserted
+  ✅ IOCs: 5/5 upserted
+  ✅ Cases: 2/2 inserted
+  ✅ Playbooks: 2/2 inserted
+
+✅ SEED COMPLETE — LOGIN CREDENTIALS
+  │  mahmoud@mssp.com          Password: Admin@2024Wadjet!
+  │  mahmoud.osman@wadjet.ai   Password: Admin@2024Wadjet!
+  │  analyst@mssp.com          Password: Analyst@Secure2024!</code></pre>
+    </div>
+
+    <!-- STEP 5 -->
+    <div class="step-card">
+      <div class="step-num">STEP 5</div>
+      <h3>🔐 Test Login</h3>
+      <p>Open the app and login with the seeded credentials:</p>
+      <table>
+        <tr><th>Email</th><th>Password</th><th>Role</th></tr>
+        <tr><td><code>mahmoud@mssp.com</code></td><td><code>Admin@2024Wadjet!</code></td><td>SUPER_ADMIN</td></tr>
+        <tr><td><code>mahmoud.osman@wadjet.ai</code></td><td><code>Admin@2024Wadjet!</code></td><td>SUPER_ADMIN</td></tr>
+        <tr><td><code>analyst@mssp.com</code></td><td><code>Analyst@Secure2024!</code></td><td>ANALYST</td></tr>
+      </table>
+      <div class="callout callout-success">
+        <strong>Expected:</strong> Login succeeds → Dashboard shows → Session persists on F5 reload.
+      </div>
+    </div>
+
+  </div><!-- /step-grid -->
+
+  <!-- TROUBLESHOOTING -->
+  <h2>🔧 Troubleshooting Common Errors</h2>
+
+  <div class="error-row">
+    <strong>Error:</strong> <code>❌ SEED ERROR: Missing required environment variables: SUPABASE_URL, SUPABASE_SERVICE_KEY</code>
+  </div>
+  <div class="fix-row">
+    <strong>Fix:</strong> Your <code>backend/.env</code> file is missing or has wrong variable names.
+    Check the file exists at <code>backend/.env</code> (not <code>.env.example</code>).
+    Run: <code>cat backend/.env</code> and verify both keys are present.
+  </div>
+
+  <div class="error-row">
+    <strong>Error:</strong> <code>Cannot find module '@supabase/supabase-js'</code>
+  </div>
+  <div class="fix-row">
+    <strong>Fix:</strong> Dependencies not installed.
+    <div class="cmd-box"><span class="prompt">PS&gt;</span><code>cd backend && npm install</code></div>
+  </div>
+
+  <div class="error-row">
+    <strong>Error:</strong> <code>Table "tenants" does not exist</code>
+  </div>
+  <div class="fix-row">
+    <strong>Fix:</strong> Schema not applied to Supabase yet. Go to Supabase SQL Editor and run
+    <code>backend/database/schema.sql</code> first (Step 1 above).
+  </div>
+
+  <div class="error-row">
+    <strong>Error:</strong> <code>Auth creation failed: User already registered</code>
+  </div>
+  <div class="fix-row">
+    <strong>Fix:</strong> The Supabase Auth user already exists — this is fine. The script will
+    update the password and link the profile. The seed is safe to re-run.
+  </div>
+
+  <div class="error-row">
+    <strong>Error:</strong> <code>❌ User profile not found. Contact your administrator.</code> (when logging in)
+  </div>
+  <div class="fix-row">
+    <strong>Fix:</strong> The Supabase Auth user was created but the <code>users</code> profile row
+    was not inserted (or <code>auth_id</code> column is NULL).
+    <ol style="margin:6px 0 0 16px;">
+      <li>Re-run the seed: <code>node backend/scripts/seed-mahmoud.js</code></li>
+      <li>Check Supabase → Table Editor → <code>users</code> table — look for the row with your email</li>
+      <li>If the row exists but <code>auth_id</code> is NULL — run the SQL fix below</li>
+    </ol>
+    <pre><code>-- Run in Supabase SQL Editor to link auth_id manually
+UPDATE public.users
+SET auth_id = (
+  SELECT id FROM auth.users WHERE email = 'mahmoud@mssp.com' LIMIT 1
+)
+WHERE email = 'mahmoud@mssp.com' AND auth_id IS NULL;</code></pre>
+  </div>
+
+  <div class="error-row">
+    <strong>Error:</strong> <code>relation "refresh_tokens" does not exist</code> (backend crash)
+  </div>
+  <div class="fix-row">
+    <strong>Fix:</strong> Run <code>migration-v5.0-auth-tables.sql</code> in Supabase SQL Editor (Step 2 above).
+  </div>
+
+  <div class="error-row">
+    <strong>Error:</strong> <code>duplicate key value violates unique constraint</code> (during seed)
+  </div>
+  <div class="fix-row">
+    <strong>Fix:</strong> Normal — data already exists. The seed uses <code>upsert</code> and
+    <code>ON CONFLICT DO NOTHING</code>, so this is safe. No action needed.
+  </div>
+
+  <!-- MANUAL SQL FIX -->
+  <h2>🆘 Emergency Manual SQL Fix (Supabase SQL Editor)</h2>
+  <p>If the seed script still fails, run this SQL directly in Supabase SQL Editor to create the super admin manually:</p>
+
+  <pre><code>-- STEP A: Ensure tenant exists
+INSERT INTO public.tenants (id, name, short_name, domain, plan, risk_level, active)
+VALUES (
+  '00000000-0000-0000-0000-000000000001',
+  'MSSP Global Operations',
+  'mssp-global',
+  'mssp.wadjet.ai',
+  'enterprise',
+  'high',
+  true
+) ON CONFLICT (id) DO UPDATE SET
+  short_name = 'mssp-global',
+  active = true,
+  updated_at = NOW();
+
+-- STEP B: Check what auth users exist (get the UUID)
+SELECT id, email, created_at FROM auth.users
+WHERE email IN ('mahmoud@mssp.com', 'mahmoud.osman@wadjet.ai')
+ORDER BY created_at;
+
+-- STEP C: Insert profile row (replace AUTH_USER_UUID with the id from step B)
+-- NOTE: If no auth user exists, create one in Supabase Dashboard → Auth → Users → Add User first
+INSERT INTO public.users (auth_id, tenant_id, name, email, role, avatar, permissions, status)
+VALUES (
+  'AUTH_USER_UUID_HERE',  -- ← Replace with UUID from step B
+  '00000000-0000-0000-0000-000000000001',
+  'Mahmoud Osman',
+  'mahmoud@mssp.com',
+  'SUPER_ADMIN',
+  'MO',
+  ARRAY['read','write','admin','super_admin','manage_tenants','manage_users',
+        'manage_billing','manage_integrations','view_audit_logs',
+        'delete_records','export_data','configure_platform'],
+  'active'
+) ON CONFLICT (email) DO UPDATE SET
+  auth_id     = EXCLUDED.auth_id,
+  role        = 'SUPER_ADMIN',
+  status      = 'active',
+  permissions = EXCLUDED.permissions,
+  updated_at  = NOW();
+
+-- STEP D: Verify
+SELECT u.id, u.email, u.role, u.status,
+       u.auth_id IS NOT NULL AS has_auth_link,
+       t.short_name AS tenant
+FROM public.users u
+JOIN public.tenants t ON t.id = u.tenant_id
+WHERE u.email IN ('mahmoud@mssp.com', 'mahmoud.osman@wadjet.ai');</code></pre>
+
+  <!-- FILES CHANGED TABLE -->
+  <h2>📁 Files Changed in This Fix</h2>
+  <table>
+    <tr><th>Action</th><th>File</th><th>Why</th></tr>
+    <tr>
+      <td><span class="badge badge-orange">REWRITTEN</span></td>
+      <td><code>backend/scripts/seed-mahmoud.js</code></td>
+      <td>Complete rewrite: uses Supabase SDK (not pg), correct column names, error handling, colorized output</td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-green">CREATED</span></td>
+      <td><code>backend/database/migration-v5.0-auth-tables.sql</code></td>
+      <td>Adds 11 missing tables: refresh_tokens, login_activity, sysmon_sessions, vulnerabilities, cti_actors, etc.</td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-green">CREATED</span></td>
+      <td><code>js/auth-persistent.js</code></td>
+      <td>Persistent session engine — fixes "session expired" logout on F5</td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-orange">MODIFIED</span></td>
+      <td><code>js/main.js</code></td>
+      <td>3 edits: persist login/logout/emergency sessions via PersistentAuth</td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-orange">MODIFIED</span></td>
+      <td><code>index.html</code></td>
+      <td>Load auth-persistent.js, new auth:restored handler</td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-green">CREATED</span></td>
+      <td><code>SESSION-FIX-GUIDE.html</code></td>
+      <td>Detailed documentation for session expiry root causes</td>
+    </tr>
+  </table>
+
+  <!-- NEXT STEPS -->
+  <h2>🚀 Next Steps After Seeding</h2>
+  <div class="two-col">
+    <div>
+      <h3>Immediate</h3>
+      <ul class="check-list">
+        <li>Change passwords after first login</li>
+        <li>Set <code>FRONTEND_URL</code> in backend/.env to your Vercel URL</li>
+        <li>Deploy updated frontend files to Vercel</li>
+        <li>Test all 6 SOC module tabs</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Production Hardening</h3>
+      <ul class="check-list">
+        <li>Enable Render health check (<code>/health</code> path) to prevent cold starts</li>
+        <li>Remove <code>_EMERGENCY_ACCOUNTS</code> from main.js</li>
+        <li>Enable MFA for super admin accounts</li>
+        <li>Move refresh token to HTTP-Only cookie</li>
+      </ul>
+    </div>
+  </div>
+
+  <hr style="border:none;border-top:1px solid var(--border);margin:32px 0 16px;"/>
+  <p style="color:var(--muted);font-size:12px;text-align:center;">
+    Wadjet-Eye AI — Setup Guide v5.0 &nbsp;|&nbsp;
+    Supabase: <code>miywxnplaltduuscjfmq.supabase.co</code> &nbsp;|&nbsp;
+    Backend: <code>https://wadjet-eye-ai.onrender.com</code>
+  </p>
+
+</div>
+
+<script>
+// Copy button functionality
+document.querySelectorAll('pre').forEach(pre => {
+  const btn = document.createElement('button');
+  btn.className = 'copy-btn';
+  btn.textContent = 'Copy';
+  btn.onclick = () => {
+    navigator.clipboard.writeText(pre.querySelector('code')?.textContent || pre.textContent)
+      .then(() => { btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy', 2000); });
+  };
+  pre.appendChild(btn);
+});
+</script>
+</body>
+</html>

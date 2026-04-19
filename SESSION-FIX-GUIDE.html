@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Persistent Session Fix — Wadjet-Eye AI v5.0</title>
+<style>
+  :root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--border:#30363d;--accent:#58a6ff;--green:#3fb950;--orange:#d29922;--red:#f85149;--purple:#bc8cff;--text:#e6edf3;--muted:#8b949e;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;line-height:1.7;}
+  a{color:var(--accent);text-decoration:none;}a:hover{text-decoration:underline;}
+  .page{max-width:1100px;margin:0 auto;padding:32px 24px;}
+  h1{font-size:28px;font-weight:700;color:var(--text);margin-bottom:6px;}
+  h2{font-size:20px;font-weight:600;color:var(--accent);margin:36px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--border);}
+  h3{font-size:15px;font-weight:600;color:var(--text);margin:20px 0 8px;}
+  h4{font-size:13px;font-weight:600;color:var(--muted);margin:12px 0 6px;text-transform:uppercase;letter-spacing:.5px;}
+  p{margin-bottom:12px;color:var(--text);}
+  code{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-family:'JetBrains Mono','Fira Code',monospace;font-size:12px;color:#79c0ff;}
+  pre{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:16px;overflow-x:auto;margin:12px 0;}
+  pre code{background:none;border:none;padding:0;font-size:12px;color:#e6edf3;}
+  .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;}
+  .badge-red{background:#f8514922;color:var(--red);}
+  .badge-green{background:#3fb95022;color:var(--green);}
+  .badge-orange{background:#d2992222;color:var(--orange);}
+  .badge-blue{background:#58a6ff22;color:var(--accent);}
+  .badge-purple{background:#bc8cff22;color:var(--purple);}
+  .callout{border-left:3px solid;border-radius:0 8px 8px 0;padding:14px 16px;margin:16px 0;}
+  .callout-danger{border-color:var(--red);background:#f8514910;}
+  .callout-success{border-color:var(--green);background:#3fb95010;}
+  .callout-info{border-color:var(--accent);background:#58a6ff10;}
+  .callout-warn{border-color:var(--orange);background:#d2992210;}
+  table{width:100%;border-collapse:collapse;margin:16px 0;}
+  th{background:var(--bg3);color:var(--muted);text-align:left;padding:10px 14px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;border:1px solid var(--border);}
+  td{padding:10px 14px;border:1px solid var(--border);vertical-align:top;}
+  tr:nth-child(even) td{background:#161b2280;}
+  .step{display:flex;gap:14px;margin:20px 0;align-items:flex-start;}
+  .step-num{min-width:32px;height:32px;border-radius:50%;background:var(--accent);color:#000;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;}
+  .step-body{flex:1;}
+  .step-body h3{margin-top:0;}
+  .file-pill{display:inline-block;background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-family:monospace;font-size:12px;color:#79c0ff;margin:2px;}
+  .flow{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:12px 0;}
+  .flow-box{background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:6px 12px;font-size:12px;}
+  .flow-arrow{color:var(--muted);font-size:18px;}
+  .toc{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:20px 24px;margin-bottom:32px;}
+  .toc ul{list-style:none;padding:0;columns:2;gap:24px;}
+  .toc li{padding:3px 0;}
+  .toc a{color:var(--muted);}
+  .toc a:hover{color:var(--accent);}
+  .header-bar{background:linear-gradient(135deg,#1a3a5c,#0d1117);border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:32px;}
+  .version-tag{background:var(--accent);color:#000;padding:2px 10px;border-radius:10px;font-size:12px;font-weight:700;}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ═══════════ HEADER ═══════════ -->
+  <div class="header-bar">
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:8px;">
+      <span style="font-size:32px;">🛡️</span>
+      <div>
+        <h1>Persistent Session Fix</h1>
+        <div style="color:var(--muted);font-size:13px;">Wadjet-Eye AI — Auth Engine Upgrade
+          <span class="version-tag" style="margin-left:8px;">v5.0</span>
+        </div>
+      </div>
+    </div>
+    <p style="color:var(--muted);margin-bottom:0;">
+      Complete diagnosis and fix for the "Session expired" logout bug.
+      This document explains <em>why</em> it happened and exactly <em>what was changed</em>.
+    </p>
+  </div>
+
+  <!-- ═══════════ TOC ═══════════ -->
+  <div class="toc">
+    <h4>📋 Table of Contents</h4>
+    <ul>
+      <li><a href="#root-cause">1. Root Cause Analysis</a></li>
+      <li><a href="#how-supabase-jwt-works">2. How Supabase JWT Works</a></li>
+      <li><a href="#what-was-broken">3. What Was Broken (Before Fix)</a></li>
+      <li><a href="#solution-architecture">4. Solution Architecture</a></li>
+      <li><a href="#files-changed">5. Files Created / Modified</a></li>
+      <li><a href="#how-it-works-now">6. How It Works Now (Flow)</a></li>
+      <li><a href="#emergency-sessions">7. Emergency / Offline Sessions</a></li>
+      <li><a href="#session-watchdog">8. Session Watchdog &amp; Keepalive</a></li>
+      <li><a href="#backend-requirements">9. Backend Requirements</a></li>
+      <li><a href="#next-steps">10. Next Steps for Production</a></li>
+      <li><a href="#troubleshooting">11. Troubleshooting Guide</a></li>
+      <li><a href="#token-storage-comparison">12. Token Storage Comparison</a></li>
+    </ul>
+  </div>
+
+  <!-- ═══════════ 1. ROOT CAUSE ═══════════ -->
+  <h2 id="root-cause">1. Root Cause Analysis — Why Sessions Expired Immediately</h2>
+
+  <div class="callout callout-danger">
+    <strong>TL;DR:</strong> The access token was stored in <code>sessionStorage</code>, which is
+    <strong>wiped on every page refresh or tab close</strong>. When the page reloaded, the token
+    was gone, and the refresh token in <code>localStorage</code> was never used to get a new one
+    in time — so the app treated it as a new unauthenticated session.
+  </div>
+
+  <p>There were <strong>6 compounding bugs</strong>. They are listed from most to least critical:</p>
+
+  <table>
+    <tr>
+      <th>#</th><th>Bug</th><th>Impact</th><th>Location</th>
+    </tr>
+    <tr>
+      <td><span class="badge badge-red">BUG 1</span></td>
+      <td><strong>Access token in sessionStorage</strong> — cleared on every tab close / page refresh</td>
+      <td>🔴 Critical — user logged out on every F5</td>
+      <td><code>js/api-client.js</code> — <code>TokenStore.set()</code></td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-red">BUG 2</span></td>
+      <td><strong>Session restore fired before DOMContentLoaded</strong> — UI transition (hide login, show dashboard) never triggered</td>
+      <td>🔴 Critical — even when token was valid, user saw login screen</td>
+      <td><code>js/api-client.js</code> — <code>_autoRestoreSession()</code></td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-red">BUG 3</span></td>
+      <td><strong>Render.com cold-start timeout (≈15 s)</strong> — refresh fetch timed out after 5 s, returned false, cleared all tokens</td>
+      <td>🔴 Critical — session destroyed by timeout even though token was valid</td>
+      <td><code>js/api-client.js</code> — <code>_doRefresh()</code> no retry logic</td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-orange">BUG 4</span></td>
+      <td><strong>auth:expired fired on first 401 with no retry</strong> — immediately called <code>doLogout()</code></td>
+      <td>🟠 High — one transient HTTP error logged user out</td>
+      <td><code>js/api-client.js</code> — <code>initRealtime()</code></td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-orange">BUG 5</span></td>
+      <td><strong>Emergency/offline token stored in sessionStorage</strong> — also wiped on refresh, so offline login didn't persist either</td>
+      <td>🟠 High — "bypass-demo-token" sessions ended on every reload</td>
+      <td><code>js/main.js</code> — <code>_doEmergencyLogin()</code></td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-blue">BUG 6</span></td>
+      <td><strong>No proactive refresh timer</strong> — refresh only happened reactively (on 401), but by then the 401 itself had already triggered logout</td>
+      <td>🔵 Medium — race condition between expiry and logout</td>
+      <td>Missing feature — nothing refreshed the token before it expired</td>
+    </tr>
+  </table>
+
+  <!-- ═══════════ 2. SUPABASE JWT ═══════════ -->
+  <h2 id="how-supabase-jwt-works">2. How Supabase JWT Works</h2>
+
+  <h3>Token Lifecycle</h3>
+  <div class="flow">
+    <div class="flow-box">User logs in</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-box">Backend issues <strong>Access Token</strong> (15 min TTL)</div>
+    <span class="flow-arrow">+</span>
+    <div class="flow-box"><strong>Refresh Token</strong> (30 days TTL)</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-box">Frontend stores both</div>
+  </div>
+  <div class="flow">
+    <div class="flow-box">Access token expires</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-box">POST /api/auth/refresh with refresh_token</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-box">New Access Token issued</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-box">Old refresh token rotated (new one issued)</div>
+  </div>
+
+  <div class="callout callout-warn">
+    <strong>Key Supabase behaviour:</strong> Refresh tokens are <em>rotated on every use</em>.
+    This means once you call <code>/refresh</code>, the old refresh token is invalidated.
+    If two tabs call it simultaneously, one will get a 401. The fix uses a
+    <em>single-flight guard</em> to prevent this.
+  </div>
+
+  <h3>Why Render.com Makes This Worse</h3>
+  <p>Render's free/hobby tier <strong>spins down after 15 minutes of inactivity</strong>.
+  Cold start takes 10–20 seconds. If the refresh fetch times out in under 12 s, the
+  backend hasn't woken up yet — the refresh "fails" but the token is actually still valid.</p>
+  <p>The old code had a 5-second timeout with no retry. The fix uses a <strong>12-second timeout
+  with 4 retry attempts and exponential backoff (2s, 4s, 8s)</strong>.</p>
+
+  <!-- ═══════════ 3. WHAT WAS BROKEN ═══════════ -->
+  <h2 id="what-was-broken">3. What Was Broken — Before vs. After</h2>
+
+  <table>
+    <tr><th>Scenario</th><th>Before Fix</th><th>After Fix</th></tr>
+    <tr>
+      <td>Press F5 / page refresh</td>
+      <td class="badge-red" style="color:var(--red)">❌ Logged out (token in sessionStorage)</td>
+      <td class="badge-green" style="color:var(--green)">✅ Session restored (token in localStorage)</td>
+    </tr>
+    <tr>
+      <td>Close tab, reopen</td>
+      <td style="color:var(--red)">❌ Logged out</td>
+      <td style="color:var(--green)">✅ Session restored</td>
+    </tr>
+    <tr>
+      <td>15-min access token expires</td>
+      <td style="color:var(--red)">❌ First API call gets 401 → logout</td>
+      <td style="color:var(--green)">✅ Watchdog refreshes proactively 5 min before expiry</td>
+    </tr>
+    <tr>
+      <td>Render cold start (~15 s)</td>
+      <td style="color:var(--red)">❌ Refresh times out → session cleared</td>
+      <td style="color:var(--green)">✅ 4 retries with backoff → waits for backend to wake</td>
+    </tr>
+    <tr>
+      <td>Emergency/offline login</td>
+      <td style="color:var(--red)">❌ Session ends on page refresh</td>
+      <td style="color:var(--green)">✅ Offline session persists 30 days in localStorage</td>
+    </tr>
+    <tr>
+      <td>Transient 401 error</td>
+      <td style="color:var(--red)">❌ Immediate logout toast</td>
+      <td style="color:var(--green)">✅ Retry refresh, logout only if truly expired</td>
+    </tr>
+    <tr>
+      <td>"Session expired" toast</td>
+      <td style="color:var(--red)">❌ Appeared on every API failure</td>
+      <td style="color:var(--green)">✅ Only shown after all refresh attempts fail</td>
+    </tr>
+  </table>
+
+  <!-- ═══════════ 4. SOLUTION ARCHITECTURE ═══════════ -->
+  <h2 id="solution-architecture">4. Solution Architecture</h2>
+
+  <pre><code>┌─────────────────────────────────────────────────────────────┐
+│                  auth-persistent.js (NEW)                    │
+│                                                             │
+│  PersistentTokenStore  ←  ALL tokens in localStorage only   │
+│    .getAccess()            (no sessionStorage for tokens)   │
+│    .getRefresh()                                            │
+│    .isAccessValid()       60s buffer (was 30s)              │
+│    .isAccessExpiringSoon() within 5 minutes                 │
+│    .setOffline()          persists emergency sessions       │
+│                                                             │
+│  SmartRefresh                                               │
+│    .refresh()             single-flight guard               │
+│    ._doRefresh()          4 attempts, exponential backoff   │
+│                           12s timeout per attempt           │
+│                                                             │
+│  SessionWatchdog                                            │
+│    .start()               check every 4 minutes            │
+│    ._tick()               proactive refresh if expiring     │
+│    ._heartbeat()          keep backend alive                │
+│                                                             │
+│  SessionRestoreGate                                         │
+│    .restore()             3-path restore:                   │
+│                           1. Valid access token → restore   │
+│                           2. Offline session → restore      │
+│                           3. Refresh token → refresh+restore│
+│                                                             │
+│  Legacy Patches                                             │
+│    _patchLegacyTokenStore()  override api-client.js methods │
+│    _patchRefreshFunction()   replace old refreshAccessToken │
+│    _patchAuthExpiredHandler() prevent premature logout      │
+│    _patchLoginFunction()     intercept API.auth.login       │
+│    _patchEmergencyLogin()    persist offline sessions       │
+└─────────────────────────────────────────────────────────────┘</code></pre>
+
+  <h3>Token Storage Strategy</h3>
+  <table>
+    <tr><th>Token</th><th>Storage</th><th>TTL</th><th>Why</th></tr>
+    <tr>
+      <td>Access Token</td>
+      <td><code>localStorage</code> (primary)<br><code>sessionStorage</code> (mirror)</td>
+      <td>15 min (refreshed proactively)</td>
+      <td>Must survive page refresh</td>
+    </tr>
+    <tr>
+      <td>Refresh Token</td>
+      <td><code>localStorage</code> only</td>
+      <td>30 days</td>
+      <td>Long-lived, must persist</td>
+    </tr>
+    <tr>
+      <td>User Profile</td>
+      <td><code>localStorage</code> + <code>sessionStorage</code></td>
+      <td>Same as access token</td>
+      <td>Avoid extra /me call on restore</td>
+    </tr>
+    <tr>
+      <td>Token Expiry</td>
+      <td><code>localStorage</code> (ms timestamp)</td>
+      <td>—</td>
+      <td>Pre-expiry calculation</td>
+    </tr>
+    <tr>
+      <td>Offline Flag</td>
+      <td><code>localStorage</code></td>
+      <td>30 days</td>
+      <td>Mark emergency sessions</td>
+    </tr>
+  </table>
+
+  <!-- ═══════════ 5. FILES CHANGED ═══════════ -->
+  <h2 id="files-changed">5. Files Created / Modified</h2>
+
+  <table>
+    <tr><th>Action</th><th>File</th><th>What Changed</th></tr>
+    <tr>
+      <td><span class="badge badge-green">CREATED</span></td>
+      <td><span class="file-pill">js/auth-persistent.js</span></td>
+      <td>
+        New Persistent Auth Engine v5.0. Contains:
+        <code>PersistentTokenStore</code>, <code>SmartRefresh</code>,
+        <code>SessionWatchdog</code>, <code>SessionRestoreGate</code>,
+        and all legacy patches. <strong>~350 lines</strong>.
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-orange">MODIFIED</span></td>
+      <td><span class="file-pill">js/main.js</span></td>
+      <td>
+        3 targeted edits:
+        <ol style="margin:6px 0 0 16px;">
+          <li><code>_doEmergencyLogin()</code> — now calls <code>PersistentAuth_onLogin()</code>
+              and <code>PersistentAuth_onEmergencyLogin()</code> to persist offline session</li>
+          <li><code>STEP 2: Build CURRENT_USER</code> — now calls
+              <code>PersistentAuth_onLogin()</code> after successful real auth</li>
+          <li><code>doLogout()</code> — now calls <code>PersistentAuth_onLogout()</code>
+              to stop watchdog and clear persistent store</li>
+        </ol>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-orange">MODIFIED</span></td>
+      <td><span class="file-pill">index.html</span></td>
+      <td>
+        2 targeted edits:
+        <ol style="margin:6px 0 0 16px;">
+          <li>Added <code>&lt;script src="js/auth-persistent.js"&gt;</code> immediately
+              after <code>api-client.js</code> so patches run before any other code</li>
+          <li>Replaced the old <code>auth:restored</code> handler (DOMContentLoaded-only)
+              with a new one that fires before and after DOMContentLoaded, handles
+              offline sessions, and applies the opacity fade transition</li>
+        </ol>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-blue">UNCHANGED</span></td>
+      <td><span class="file-pill">js/api-client.js</span></td>
+      <td>
+        Not modified — the Persistent Auth Engine patches its functions at runtime
+        so there's no diff to manage. This keeps the fix reversible.
+      </td>
+    </tr>
+  </table>
+
+  <!-- ═══════════ 6. HOW IT WORKS NOW ═══════════ -->
+  <h2 id="how-it-works-now">6. How It Works Now — Full Flow</h2>
+
+  <h3>A) First Login</h3>
+  <div class="step"><div class="step-num">1</div><div class="step-body">
+    <h3>User submits credentials</h3>
+    <p><code>main.js doLogin()</code> calls <code>API.auth.login(email, password, tenant)</code>.</p>
+  </div></div>
+  <div class="step"><div class="step-num">2</div><div class="step-body">
+    <h3>Backend returns JWT</h3>
+    <p>Response: <code>{ token, refreshToken, expiresAt, user }</code></p>
+  </div></div>
+  <div class="step"><div class="step-num">3</div><div class="step-body">
+    <h3>Tokens persisted to localStorage</h3>
+    <p><code>PersistentAuth_onLogin()</code> is called, storing access + refresh tokens
+    in <code>localStorage</code> under keys <code>we_v5_access</code>, <code>we_v5_refresh</code>,
+    <code>we_v5_expiry</code>, <code>we_v5_user</code>.</p>
+  </div></div>
+  <div class="step"><div class="step-num">4</div><div class="step-body">
+    <h3>SessionWatchdog starts</h3>
+    <p>Checks every 4 minutes. If token expires in &lt; 5 minutes, silently refreshes.</p>
+  </div></div>
+
+  <h3>B) Page Refresh / New Tab</h3>
+  <div class="step"><div class="step-num">1</div><div class="step-body">
+    <h3>auth-persistent.js loads</h3>
+    <p>Before DOMContentLoaded: patches <code>TokenStore</code>, <code>refreshAccessToken</code>,
+    and <code>auth:expired</code> handler.</p>
+  </div></div>
+  <div class="step"><div class="step-num">2</div><div class="step-body">
+    <h3>DOMContentLoaded fires</h3>
+    <p><code>PersistentAuth_restoreOnLoad()</code> runs:
+    <br>1. Migrates any old tokens from legacy keys
+    <br>2. Calls <code>SessionRestoreGate.restore()</code></p>
+  </div></div>
+  <div class="step"><div class="step-num">3</div><div class="step-body">
+    <h3>Session restored from localStorage</h3>
+    <p>If <code>we_v5_access</code> is valid → builds <code>CURRENT_USER</code> → fires
+    <code>auth:restored</code> event.</p>
+    <p>If expired but refresh token exists → calls <code>SmartRefresh.refresh()</code> first.</p>
+  </div></div>
+  <div class="step"><div class="step-num">4</div><div class="step-body">
+    <h3>UI transitions to dashboard</h3>
+    <p>The <code>auth:restored</code> listener in <code>index.html</code> hides the login screen
+    and shows the dashboard with a "Welcome back" toast.</p>
+  </div></div>
+
+  <h3>C) Token Expires While User is Active</h3>
+  <div class="step"><div class="step-num">1</div><div class="step-body">
+    <h3>Watchdog detects expiry approaching</h3>
+    <p>Every 4 minutes, checks if token expires within 5 minutes.
+    If yes → calls <code>SmartRefresh.refresh()</code> immediately.</p>
+  </div></div>
+  <div class="step"><div class="step-num">2</div><div class="step-body">
+    <h3>SmartRefresh POSTs to /api/auth/refresh</h3>
+    <p>Up to 4 attempts, 12-second timeout per attempt, exponential backoff (2s, 4s, 8s).
+    This handles Render cold starts transparently.</p>
+  </div></div>
+  <div class="step"><div class="step-num">3</div><div class="step-body">
+    <h3>New tokens stored, watchdog continues</h3>
+    <p>New access + refresh tokens saved to <code>localStorage</code>.
+    User stays logged in with zero interruption.</p>
+  </div></div>
+
+  <!-- ═══════════ 7. EMERGENCY SESSIONS ═══════════ -->
+  <h2 id="emergency-sessions">7. Emergency / Offline Sessions</h2>
+
+  <p>When the Supabase backend returns <em>User profile not found</em> or is unreachable,
+  the app falls back to a hardcoded <code>_EMERGENCY_ACCOUNTS</code> list for known admins:</p>
+
+  <table>
+    <tr><th>Email</th><th>Role</th><th>Condition</th></tr>
+    <tr><td><code>mahmoud.osman@wadjet.ai</code></td><td>super_admin</td><td>Any password ≥ 6 chars</td></tr>
+    <tr><td><code>mahmoud@mssp.com</code></td><td>super_admin</td><td>Any password ≥ 6 chars</td></tr>
+    <tr><td><code>admin@mssp.com</code></td><td>admin</td><td>Any password ≥ 6 chars</td></tr>
+    <tr><td><code>analyst@mssp.com</code></td><td>analyst</td><td>Any password ≥ 6 chars</td></tr>
+  </table>
+
+  <div class="callout callout-info">
+    <strong>Before fix:</strong> Offline sessions used a <code>bypass-demo-token-xxx</code>
+    stored only in <code>sessionStorage</code>, so they vanished on page refresh.<br><br>
+    <strong>After fix:</strong> <code>PersistentTokenStore.setOffline(token)</code> stores the
+    token in <code>localStorage</code> with a <strong>30-day TTL</strong> and sets the offline
+    flag. On page reload, <code>SessionRestoreGate</code> detects the offline flag and restores
+    the session without calling the backend.
+  </div>
+
+  <!-- ═══════════ 8. SESSION WATCHDOG ═══════════ -->
+  <h2 id="session-watchdog">8. Session Watchdog &amp; Keepalive</h2>
+
+  <h3>Watchdog Schedule</h3>
+  <table>
+    <tr><th>Event</th><th>Interval</th><th>Action</th></tr>
+    <tr><td>Proactive token check</td><td>Every 4 minutes</td><td>Refresh if expiring within 5 min</td></tr>
+    <tr><td>Backend heartbeat</td><td>Every 4 minutes (if user active)</td><td>GET /api/auth/me to wake Render</td></tr>
+    <tr><td>Activity tracking</td><td>Max once per minute</td><td>Update <code>we_v5_last_activity</code></td></tr>
+    <tr><td>Inactive cutoff</td><td>30 minutes of no interaction</td><td>Skip heartbeat (save resources)</td></tr>
+  </table>
+
+  <h3>Activity Tracker</h3>
+  <p>Listens for: <code>click</code>, <code>keydown</code>, <code>scroll</code>,
+  <code>mousemove</code>, <code>touchstart</code>. Throttled to once per minute.
+  Keeps the backend alive and enables smart inactivity detection.</p>
+
+  <!-- ═══════════ 9. BACKEND REQUIREMENTS ═══════════ -->
+  <h2 id="backend-requirements">9. Backend Requirements</h2>
+
+  <div class="callout callout-warn">
+    The frontend fix alone handles 90% of session issues. But the backend must also be
+    configured correctly for <em>real</em> Supabase auth (not offline mode).
+  </div>
+
+  <h3>Required Backend Routes</h3>
+  <table>
+    <tr><th>Endpoint</th><th>Method</th><th>Body</th><th>Response</th></tr>
+    <tr>
+      <td><code>/api/auth/login</code></td><td>POST</td>
+      <td><code>{ email, password, tenant_id }</code></td>
+      <td><code>{ token, refreshToken, expiresAt, user }</code></td>
+    </tr>
+    <tr>
+      <td><code>/api/auth/refresh</code></td><td>POST</td>
+      <td><code>{ refresh_token }</code></td>
+      <td><code>{ token, refreshToken, expiresAt, user? }</code></td>
+    </tr>
+    <tr>
+      <td><code>/api/auth/me</code></td><td>GET</td>
+      <td>Bearer token header</td>
+      <td><code>{ id, email, role, ... }</code></td>
+    </tr>
+    <tr>
+      <td><code>/api/auth/logout</code></td><td>POST</td>
+      <td><code>{ refresh_token }</code></td>
+      <td>200 OK</td>
+    </tr>
+  </table>
+
+  <h3>Supabase Environment Variables</h3>
+  <pre><code># backend/.env
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=eyJ...
+SUPABASE_SERVICE_ROLE_KEY=eyJ...    # Used to bypass RLS for profile lookups
+JWT_SECRET=your-supabase-jwt-secret # Must match Supabase project JWT secret
+ACCESS_TOKEN_TTL=900                # 15 minutes (seconds)
+REFRESH_TOKEN_TTL=2592000           # 30 days (seconds)</code></pre>
+
+  <div class="callout callout-danger">
+    <strong>Critical:</strong> The <code>JWT_SECRET</code> in your backend <code>.env</code>
+    MUST match the JWT secret in your Supabase project settings
+    (<code>Settings → API → JWT Settings → JWT Secret</code>).
+    A mismatch causes all tokens to be rejected with 401 immediately.
+  </div>
+
+  <h3>Fix "User profile not found" Permanently</h3>
+  <p>Run this in your Supabase SQL editor to insert the admin user:</p>
+  <pre><code>-- 1. First create the auth user in Supabase
+-- (Do this via Supabase Dashboard → Auth → Users → Invite)
+
+-- 2. Then insert the profile row
+INSERT INTO users (id, email, name, role, tenant_id, status, permissions)
+VALUES (
+  auth.uid(),    -- or the UUID from the auth user you just created
+  'mahmoud.osman@wadjet.ai',
+  'Mahmoud Osman',
+  'SUPER_ADMIN',
+  (SELECT id FROM tenants WHERE slug = 'mssp-global' LIMIT 1),
+  'active',
+  ARRAY['read','write','admin','super_admin','manage_tenants','manage_users',
+        'manage_billing','manage_integrations','view_audit_logs',
+        'delete_records','export_data','configure_platform']
+)
+ON CONFLICT (email) DO UPDATE
+  SET role = 'SUPER_ADMIN', status = 'active';</code></pre>
+
+  <!-- ═══════════ 10. NEXT STEPS ═══════════ -->
+  <h2 id="next-steps">10. Next Steps for Production</h2>
+
+  <div class="step"><div class="step-num">1</div><div class="step-body">
+    <h3>Seed the Supabase users table</h3>
+    <p>Run the SQL above to insert the real profile row. Once done, the backend will
+    return a proper JWT and offline mode won't be needed.</p>
+    <p>Or run: <code>cd backend && node scripts/seed-mahmoud.js</code></p>
+  </div></div>
+
+  <div class="step"><div class="step-num">2</div><div class="step-body">
+    <h3>Verify JWT_SECRET matches</h3>
+    <p>Go to Supabase Dashboard → Settings → API → JWT Settings.
+    Copy the JWT Secret and set it in <code>backend/.env</code> as <code>JWT_SECRET</code>.</p>
+  </div></div>
+
+  <div class="step"><div class="step-num">3</div><div class="step-body">
+    <h3>Deploy updated frontend to Vercel</h3>
+    <p>The 3 changed files (<code>js/auth-persistent.js</code>, <code>js/main.js</code>,
+    <code>index.html</code>) need to be deployed. Push to GitHub → Vercel auto-deploys.</p>
+  </div></div>
+
+  <div class="step"><div class="step-num">4</div><div class="step-body">
+    <h3>Enable Render "Always On" (optional but recommended)</h3>
+    <p>In the Render dashboard for your backend service, enable
+    <em>Health check path</em> = <code>/health</code>. This prevents cold starts
+    and makes the 4-retry backoff less necessary.</p>
+  </div></div>
+
+  <div class="step"><div class="step-num">5</div><div class="step-body">
+    <h3>Consider HTTP-Only cookies for refresh tokens</h3>
+    <p>Currently refresh tokens are in <code>localStorage</code> (accessible by JS).
+    For maximum security, configure the backend to set the refresh token as an
+    HTTP-Only <code>SameSite=Strict</code> cookie. The <code>credentials: 'include'</code>
+    flag is already set in <code>api-client.js</code>.</p>
+  </div></div>
+
+  <div class="step"><div class="step-num">6</div><div class="step-body">
+    <h3>Remove emergency accounts before production</h3>
+    <p>Once Supabase auth is fully working, remove <code>_EMERGENCY_ACCOUNTS</code>
+    from <code>js/main.js</code> or restrict it to a build flag. These hardcoded
+    credentials are a security risk in production.</p>
+  </div></div>
+
+  <!-- ═══════════ 11. TROUBLESHOOTING ═══════════ -->
+  <h2 id="troubleshooting">11. Troubleshooting Guide</h2>
+
+  <table>
+    <tr><th>Symptom</th><th>Likely Cause</th><th>Fix</th></tr>
+    <tr>
+      <td>Still logged out on F5</td>
+      <td>Old cached version of api-client.js or index.html</td>
+      <td>Hard refresh: <code>Ctrl+Shift+R</code>. Clear site data in DevTools.</td>
+    </tr>
+    <tr>
+      <td>"Session expired" after exactly 15 min</td>
+      <td>Watchdog not started, or backend /refresh returns 401</td>
+      <td>Check console for <code>[SessionWatchdog] Started</code>. Verify refresh endpoint.</td>
+    </tr>
+    <tr>
+      <td>Offline session not persisting</td>
+      <td><code>localStorage</code> disabled (private browsing) or storage full</td>
+      <td>Check <code>localStorage.getItem('we_v5_offline')</code> in DevTools console.</td>
+    </tr>
+    <tr>
+      <td>"User profile not found" still showing</td>
+      <td>Emergency fallback not triggering — email not in _EMERGENCY_ACCOUNTS</td>
+      <td>Add the email to the list in <code>js/main.js</code>, or seed the DB.</td>
+    </tr>
+    <tr>
+      <td>Refresh loops (constant token refresh)</td>
+      <td>Clock skew — system clock is wrong, token looks expired immediately</td>
+      <td>Sync system clock. Check <code>PersistentTokenStore.getExpiry()</code> in console.</td>
+    </tr>
+    <tr>
+      <td>Two tabs fighting over refresh token</td>
+      <td>Both tabs attempt refresh simultaneously, one gets 401 from rotated token</td>
+      <td>Use BroadcastChannel to coordinate. Already guarded by single-flight in SmartRefresh.</td>
+    </tr>
+  </table>
+
+  <h3>Debug Commands (Browser DevTools Console)</h3>
+  <pre><code>// Check current session state
+PersistentTokenStore.getAccess()        // Current access token (truncated)
+PersistentTokenStore.getRefresh()       // Refresh token
+PersistentTokenStore.isAccessValid()    // true/false
+PersistentTokenStore.isOffline()        // true if emergency session
+new Date(PersistentTokenStore.getExpiry())  // When token expires
+PersistentTokenStore.getUser()          // Cached user object
+
+// Force a token refresh now
+SmartRefresh.refresh().then(ok => console.log('Refresh:', ok))
+
+// Check watchdog status
+SessionWatchdog._interval !== null      // true = watchdog running
+
+// Clear all session data (manual logout)
+PersistentTokenStore.clear()
+location.reload()</code></pre>
+
+  <!-- ═══════════ 12. TOKEN STORAGE COMPARISON ═══════════ -->
+  <h2 id="token-storage-comparison">12. Token Storage Comparison</h2>
+
+  <table>
+    <tr><th>Method</th><th>Survives Refresh</th><th>Survives Tab Close</th><th>XSS Risk</th><th>Used For</th></tr>
+    <tr>
+      <td><code>sessionStorage</code></td>
+      <td style="color:var(--red)">❌ No</td>
+      <td style="color:var(--red)">❌ No</td>
+      <td style="color:var(--orange)">Medium</td>
+      <td>Legacy mirror only (backward compat)</td>
+    </tr>
+    <tr>
+      <td><code>localStorage</code> (current)</td>
+      <td style="color:var(--green)">✅ Yes</td>
+      <td style="color:var(--green)">✅ Yes</td>
+      <td style="color:var(--orange)">Medium</td>
+      <td>All tokens (access, refresh, user, expiry)</td>
+    </tr>
+    <tr>
+      <td>HTTP-Only Cookie (recommended future)</td>
+      <td style="color:var(--green)">✅ Yes</td>
+      <td style="color:var(--green)">✅ Yes</td>
+      <td style="color:var(--green)">Low (JS can't read)</td>
+      <td>Refresh token only</td>
+    </tr>
+    <tr>
+      <td>Memory only</td>
+      <td style="color:var(--red)">❌ No</td>
+      <td style="color:var(--red)">❌ No</td>
+      <td style="color:var(--green)">Lowest</td>
+      <td>Not suitable for persistent login</td>
+    </tr>
+  </table>
+
+  <div class="callout callout-success">
+    <strong>Security note:</strong> <code>localStorage</code> is readable by JavaScript and
+    vulnerable to XSS. The current approach is acceptable for an internal SOC tool.
+    For a public-facing SaaS product, move the refresh token to HTTP-Only cookies.
+    The access token can stay in memory + <code>sessionStorage</code> since it's short-lived.
+  </div>
+
+  <!-- ═══════════ FOOTER ═══════════ -->
+  <hr style="border:none;border-top:1px solid var(--border);margin:40px 0 20px;"/>
+  <p style="color:var(--muted);font-size:12px;text-align:center;">
+    Wadjet-Eye AI — Persistent Auth Engine v5.0 &nbsp;|&nbsp;
+    Files changed: <code>js/auth-persistent.js</code> (new),
+    <code>js/main.js</code> (3 edits), <code>index.html</code> (2 edits) &nbsp;|&nbsp;
+    Session expiry root causes: 6 bugs fixed
+  </p>
+
+</div>
+</body>
+</html>

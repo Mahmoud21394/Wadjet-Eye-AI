@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wadjet-Eye AI v19.0 — Deployment Guide</title>
+<style>
+:root {
+  --bg: #06091200;
+  --bg1: #0a0f1a;
+  --bg2: #0d1421;
+  --card: #101828;
+  --border: #1c2840;
+  --cyan: #22d3ee;
+  --blue: #3b82f6;
+  --purple: #a855f7;
+  --green: #22c55e;
+  --red: #ef4444;
+  --orange: #f97316;
+  --yellow: #eab308;
+  --t1: #e6edf3;
+  --t2: #b0bec5;
+  --t3: #8b949e;
+  --t4: #4b5563;
+}
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  background: #06091200;
+  background: linear-gradient(135deg, #060912 0%, #090e1a 100%);
+  color: var(--t1);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+}
+.page { max-width: 1100px; margin: 0 auto; padding: 40px 24px 80px; }
+h1 { font-size: 2.4em; font-weight: 800; color: var(--t1); margin: 0 0 4px; }
+h2 { font-size: 1.25em; font-weight: 700; color: var(--cyan); margin: 32px 0 12px; border-left: 3px solid var(--cyan); padding-left: 12px; }
+h3 { font-size: 1em; font-weight: 700; color: var(--t1); margin: 20px 0 8px; }
+p  { font-size: .9em; color: var(--t2); line-height: 1.7; margin: 0 0 12px; }
+a  { color: var(--cyan); }
+.hero {
+  background: linear-gradient(135deg, rgba(34,211,238,.08), rgba(168,85,247,.05));
+  border: 1px solid rgba(34,211,238,.2);
+  border-radius: 16px;
+  padding: 32px 36px;
+  margin-bottom: 36px;
+}
+.hero-sub { font-size: .95em; color: var(--t3); margin-top: 6px; }
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: .75em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  margin: 2px;
+  border: 1px solid transparent;
+}
+.badge-v19  { background:rgba(168,85,247,.15); border-color:rgba(168,85,247,.3); color:#a855f7; }
+.badge-new  { background:rgba(34,197,94,.12);  border-color:rgba(34,197,94,.25);  color:#22c55e; }
+.badge-fixed{ background:rgba(34,211,238,.1);  border-color:rgba(34,211,238,.2);  color:#22d3ee; }
+.badge-ai   { background:rgba(239,68,68,.12);  border-color:rgba(239,68,68,.25);  color:#ef4444; }
+
+.section { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:24px; margin-bottom:20px; }
+.section h3 { margin-top:0; }
+
+.file-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:10px; margin:12px 0; }
+.file-item { background:rgba(0,0,0,.3); border:1px solid var(--border); border-radius:8px; padding:10px 14px; }
+.file-name  { font-family:'Courier New',monospace; font-size:.82em; color:var(--cyan); font-weight:600; }
+.file-desc  { font-size:.76em; color:var(--t3); margin-top:3px; }
+
+.cmd-block {
+  background: #020408;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px 20px;
+  font-family: 'Courier New', monospace;
+  font-size: .86em;
+  color: #6ee7b7;
+  margin: 12px 0;
+  overflow-x: auto;
+  white-space: pre;
+}
+.cmd-block .comment { color: var(--t4); }
+.cmd-block .keyword { color: var(--yellow); }
+
+.step {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 16px;
+  align-items: flex-start;
+}
+.step-num {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: rgba(34,211,238,.1);
+  border: 1px solid rgba(34,211,238,.25);
+  color: var(--cyan);
+  font-size: .8em;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.step-content h4 { margin: 0 0 4px; font-size: .9em; color: var(--t1); }
+.step-content p  { margin: 0; font-size: .84em; color: var(--t2); }
+
+.api-table { width:100%; border-collapse:collapse; margin:12px 0; }
+.api-table th { background:rgba(0,0,0,.3); padding:9px 12px; text-align:left; font-size:.74em; font-weight:700; text-transform:uppercase; color:var(--t3); border-bottom:1px solid var(--border); }
+.api-table td { padding:9px 12px; border-bottom:1px solid rgba(28,40,64,.5); font-size:.83em; color:var(--t2); }
+.api-table tr:last-child td { border-bottom:0; }
+.api-table td:first-child { font-family:'Courier New',monospace; color:var(--cyan); }
+
+.modules-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:14px; }
+.module-card {
+  background: rgba(0,0,0,.25);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.module-card h4 { margin:0 0 6px; font-size:.88em; color:var(--t1); }
+.module-card p  { margin:0 0 8px; font-size:.78em; color:var(--t3); }
+.module-card .tech { font-size:.72em; color:var(--cyan); background:rgba(34,211,238,.06); border:1px solid rgba(34,211,238,.15); border-radius:4px; padding:2px 6px; }
+
+.key-config { background:rgba(234,179,8,.05); border:1px solid rgba(234,179,8,.2); border-radius:8px; padding:14px 16px; margin:12px 0; }
+.key-config h4 { color:var(--yellow); margin:0 0 8px; font-size:.86em; }
+.key-item { display:flex; gap:8px; align-items:center; padding:5px 0; font-size:.82em; }
+.key-name  { font-family:'Courier New',monospace; color:var(--cyan); min-width:200px; }
+.key-source{ color:var(--t3); }
+
+.toc { background:rgba(0,0,0,.2); border:1px solid var(--border); border-radius:10px; padding:16px 20px; margin-bottom:28px; }
+.toc h3 { margin:0 0 10px; font-size:.9em; color:var(--t2); }
+.toc ol { margin:0; padding-left:18px; }
+.toc li { font-size:.84em; margin-bottom:4px; }
+.toc a  { color:var(--cyan); text-decoration:none; }
+.toc a:hover { text-decoration:underline; }
+
+.alert { padding:12px 16px; border-radius:8px; font-size:.84em; margin:12px 0; display:flex; gap:10px; align-items:flex-start; border-left:3px solid; }
+.alert-info    { background:rgba(34,211,238,.06); border-left-color:var(--cyan);   color:var(--t2); }
+.alert-warning { background:rgba(234,179,8,.06);  border-left-color:var(--yellow); color:var(--t2); }
+.alert-success { background:rgba(34,197,94,.06);  border-left-color:var(--green);  color:var(--t2); }
+.alert i { flex-shrink:0; margin-top:1px; }
+.alert-info i    { color:var(--cyan); }
+.alert-warning i { color:var(--yellow); }
+.alert-success i { color:var(--green); }
+
+.footer { margin-top:60px; padding-top:24px; border-top:1px solid var(--border); text-align:center; font-size:.8em; color:var(--t4); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Hero -->
+  <div class="hero">
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;flex-wrap:wrap">
+      <h1>🛡️ Wadjet-Eye AI v19.0</h1>
+      <div>
+        <span class="badge badge-v19">v19.0</span>
+        <span class="badge badge-new">NEW</span>
+        <span class="badge badge-ai">AI Powered</span>
+      </div>
+    </div>
+    <p class="hero-sub">Complete Platform Deployment Guide — All modules redesigned, fixed, and production-ready</p>
+    <p style="margin-top:10px;font-size:.88em;color:var(--t2)">
+      <strong style="color:var(--t1)">Release Date:</strong> April 2026 &nbsp;|&nbsp;
+      <strong style="color:var(--t1)">Status:</strong> <span style="color:var(--green)">● Production Ready</span> &nbsp;|&nbsp;
+      <strong style="color:var(--t1)">Build:</strong> 19.0.0
+    </p>
+  </div>
+
+  <!-- Table of Contents -->
+  <div class="toc">
+    <h3>📋 Table of Contents</h3>
+    <ol>
+      <li><a href="#whats-new">What's New in v19.0</a></li>
+      <li><a href="#new-files">New Files Overview</a></li>
+      <li><a href="#deployment">Deployment Steps</a></li>
+      <li><a href="#api-keys">API Key Configuration</a></li>
+      <li><a href="#modules">Module-by-Module Guide</a></li>
+      <li><a href="#settings-fix">Platform Settings HTTP 400 Fix</a></li>
+      <li><a href="#backend">Backend Requirements</a></li>
+      <li><a href="#rollback">Rollback Procedure</a></li>
+      <li><a href="#testing">Testing Checklist</a></li>
+    </ol>
+  </div>
+
+  <!-- What's New -->
+  <div id="whats-new">
+    <h2>🚀 What's New in v19.0</h2>
+    <div class="modules-grid">
+      <div class="module-card">
+        <h4>🕷️ Dark Web Intelligence v6.0</h4>
+        <p>Complete redesign matching Threat Actor Intelligence style. 5 animated tabs, slide-out detail panel, skeleton loaders, real-time filters, hover effects.</p>
+        <span class="tech">darkweb-v6.js</span>
+      </div>
+      <div class="module-card">
+        <h4>🤖 AI Orchestrator v5.0</h4>
+        <p>Real OpenAI GPT-4 / Anthropic Claude integration. Streaming responses, IOC enrichment pipeline, parallel multi-source queries, exportable JSON reports.</p>
+        <span class="tech">ai-orchestrator-v5.js</span>
+      </div>
+      <div class="module-card">
+        <h4>🔍 Live IOC Lookup v3.0</h4>
+        <p>Accurate results from VirusTotal, AbuseIPDB, Shodan, OTX, URLhaus. 13 IOC types detected. Real-time type validation, search history, clickable links.</p>
+        <span class="tech">live-ioc-lookup-v3.js</span>
+      </div>
+      <div class="module-card">
+        <h4>🏢 Tenant Management & RBAC v3.0</h4>
+        <p>Full CRUD for tenants and users. 8 built-in roles with granular module permissions. RBAC JSON import/export. Audit log with 10 events.</p>
+        <span class="tech">tenant-rbac-v3.js</span>
+      </div>
+      <div class="module-card">
+        <h4>📊 Reports & Exports v2.0</h4>
+        <p>8 report templates. PDF (browser print), CSV, JSON exports. Quick export bar. Real data from API with synthetic fallback.</p>
+        <span class="tech">reports-pricing-settings-v3.js</span>
+      </div>
+      <div class="module-card">
+        <h4>💰 Pricing Module v3.0</h4>
+        <p>4 plans: Starter, Professional, Enterprise, MSSP. Monthly/Annual toggle (20% savings). Admin-editable prices. Features comparison table.</p>
+        <span class="tech">reports-pricing-settings-v3.js</span>
+      </div>
+      <div class="module-card">
+        <h4>⚙️ Platform Settings v3.0</h4>
+        <p>HTTP 400 fix: strips null/empty before save. Collapsible sections. Offline edit mode. PUT → PATCH → section-by-section fallback chain.</p>
+        <span class="tech">reports-pricing-settings-v3.js</span>
+      </div>
+      <div class="module-card">
+        <h4>🎨 Master CSS v19.0</h4>
+        <p>50KB comprehensive stylesheet. 40+ keyframe animations, responsive grids, micro-interactions, skeleton loaders, toasts, modals, tabs.</p>
+        <span class="tech">platform-v19.css</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- New Files -->
+  <div id="new-files">
+    <h2>📁 New Files in v19.0</h2>
+    <div class="file-list">
+      <div class="file-item">
+        <div class="file-name">css/platform-v19.css</div>
+        <div class="file-desc">Master stylesheet — all animations, components, responsive</div>
+      </div>
+      <div class="file-item">
+        <div class="file-name">js/darkweb-v6.js</div>
+        <div class="file-desc">Dark Web Intelligence redesign — 5 tabs, detail panel</div>
+      </div>
+      <div class="file-item">
+        <div class="file-name">js/ai-orchestrator-v5.js</div>
+        <div class="file-desc">AI Orchestrator — OpenAI/Claude, IOC enrichment pipeline</div>
+      </div>
+      <div class="file-item">
+        <div class="file-name">js/live-ioc-lookup-v3.js</div>
+        <div class="file-desc">Live IOC Lookup — VT, AbuseIPDB, Shodan, OTX, URLhaus</div>
+      </div>
+      <div class="file-item">
+        <div class="file-name">js/tenant-rbac-v3.js</div>
+        <div class="file-desc">Tenant Management + RBAC — full CRUD, 8 roles</div>
+      </div>
+      <div class="file-item">
+        <div class="file-name">js/reports-pricing-settings-v3.js</div>
+        <div class="file-desc">Reports + Pricing + Settings — combined module v3.0</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Deployment Steps -->
+  <div id="deployment">
+    <h2>🚀 Deployment Steps</h2>
+
+    <div class="section">
+      <h3>Option A — Git Deploy (Recommended)</h3>
+      <div class="cmd-block"><span class="comment"># 1. Stage all new v19.0 files</span>
+git add css/platform-v19.css
+git add js/darkweb-v6.js js/ai-orchestrator-v5.js js/live-ioc-lookup-v3.js
+git add js/tenant-rbac-v3.js js/reports-pricing-settings-v3.js
+git add index.html
+
+<span class="comment"># 2. Commit with descriptive message</span>
+git commit -m "feat(platform): v19.0 — Complete module overhaul
+- Dark Web Intelligence v6.0: redesigned 5-tab UI, animations
+- AI Orchestrator v5.0: OpenAI/Claude integration, IOC pipeline
+- Live IOC Lookup v3.0: VT/AbuseIPDB/Shodan/OTX/URLhaus
+- Tenant & RBAC v3.0: full CRUD, 8 roles, audit log
+- Reports v2.0: PDF/CSV/JSON, 8 templates
+- Pricing v3.0: 4 plans, monthly/annual toggle, admin-edit
+- Settings v3.0: HTTP 400 fix, PUT/PATCH/section fallback
+- CSS v19.0: 50KB master stylesheet, 40+ animations"
+
+<span class="comment"># 3. Push to production</span>
+git push origin main
+
+<span class="comment"># 4. If using Render/Railway — redeploy will trigger automatically</span>
+<span class="comment"># 5. Verify deployment at your production URL</span></div>
+    </div>
+
+    <div class="section">
+      <h3>Option B — Manual Upload (FTP / Static Host)</h3>
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-content">
+          <h4>Upload CSS file</h4>
+          <p>Upload <code>css/platform-v19.css</code> to your web server's css/ directory</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-content">
+          <h4>Upload JavaScript modules</h4>
+          <p>Upload all 5 new JS files to the js/ directory:<br>
+          <code>darkweb-v6.js</code>, <code>ai-orchestrator-v5.js</code>, <code>live-ioc-lookup-v3.js</code>, <code>tenant-rbac-v3.js</code>, <code>reports-pricing-settings-v3.js</code></p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-content">
+          <h4>Replace index.html</h4>
+          <p>Upload the updated <code>index.html</code> (contains new CSS link + JS module script tags)</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-content">
+          <h4>Hard refresh browser</h4>
+          <p>Press <code>Ctrl+Shift+R</code> (or <code>Cmd+Shift+R</code>) to clear cache and load new files</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>Option C — Docker / Container</h3>
+      <div class="cmd-block"><span class="comment"># Update container with new files</span>
+docker build -t wadjet-eye-ai:19.0 .
+docker stop wadjet-eye-ai
+docker run -d --name wadjet-eye-ai -p 3000:3000 \
+  -e NODE_ENV=production \
+  -e SUPABASE_URL=your_url \
+  -e SUPABASE_SERVICE_KEY=your_key \
+  wadjet-eye-ai:19.0
+
+<span class="comment"># Or with docker-compose</span>
+docker-compose pull && docker-compose up -d</div>
+    </div>
+  </div>
+
+  <!-- API Keys -->
+  <div id="api-keys">
+    <h2>🔑 API Key Configuration</h2>
+
+    <div class="alert alert-info">
+      <i>ℹ️</i>
+      <span>API keys can be configured two ways: (1) via Platform Settings in the UI, or (2) by setting environment variables in the backend. Browser-stored keys are used for direct client-side API calls.</span>
+    </div>
+
+    <div class="section">
+      <h3>Required API Keys for Full Functionality</h3>
+      <div class="key-config">
+        <h4>🤖 AI Providers (at least one required for AI Orchestrator)</h4>
+        <div class="key-item"><span class="key-name">OpenAI API Key</span><span class="key-source">→ platform.openai.com/api-keys (Free $5 trial)</span></div>
+        <div class="key-item"><span class="key-name">Anthropic Claude Key</span><span class="key-source">→ console.anthropic.com (Paid)</span></div>
+      </div>
+      <div class="key-config" style="background:rgba(34,211,238,.04);border-color:rgba(34,211,238,.2)">
+        <h4 style="color:var(--cyan)">🔍 Intelligence Sources (free tiers available)</h4>
+        <div class="key-item"><span class="key-name">VirusTotal API Key</span><span class="key-source">→ virustotal.com/gui/my-apikey (Free: 4 req/min)</span></div>
+        <div class="key-item"><span class="key-name">AbuseIPDB API Key</span><span class="key-source">→ abuseipdb.com/account/api (Free: 1000 req/day)</span></div>
+        <div class="key-item"><span class="key-name">Shodan API Key</span><span class="key-source">→ account.shodan.io (Paid: $49/mo or free membership)</span></div>
+        <div class="key-item"><span class="key-name">AlienVault OTX Key</span><span class="key-source">→ otx.alienvault.com/api (Free)</span></div>
+        <div class="key-item"><span class="key-name">URLhaus</span><span class="key-source">→ No key required — always active</span></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>How to Configure Keys</h3>
+      <p><strong>Method 1 — Via Platform Settings UI:</strong><br>
+      Navigate to <code>Settings → AI Configuration</code> (for OpenAI/Claude) and <code>Settings → Threat Intelligence Feeds</code> (for VT/AbuseIPDB/Shodan/OTX)</p>
+      <p><strong>Method 2 — Via AI Orchestrator:</strong><br>
+      Click <code>API Keys</code> button in the AI Orchestrator header → fill in keys → Save</p>
+      <p><strong>Method 3 — Backend Environment Variables:</strong></p>
+      <div class="cmd-block"><span class="comment"># .env file or server environment</span>
+OPENAI_API_KEY=sk-...
+CLAUDE_API_KEY=sk-ant-...
+VIRUSTOTAL_API_KEY=...
+ABUSEIPDB_API_KEY=...
+SHODAN_API_KEY=...
+OTX_API_KEY=...
+THREATPILOT_API_URL=https://your-api.onrender.com</div>
+    </div>
+  </div>
+
+  <!-- Module Guide -->
+  <div id="modules">
+    <h2>📦 Module-by-Module Activation Guide</h2>
+
+    <div class="section">
+      <h3>Dark Web Intelligence v6.0</h3>
+      <p>Navigate to <strong>Dark Web</strong> in the sidebar. All 5 tabs work with synthetic data offline.</p>
+      <table class="api-table">
+        <tr><th>Tab</th><th>Data Source</th><th>Status</th></tr>
+        <tr><td>Marketplace</td><td>Synthetic / API /dark-web/listings</td><td style="color:var(--green)">✓ Working</td></tr>
+        <tr><td>Ransomware</td><td>Synthetic / API /dark-web/ransomware</td><td style="color:var(--green)">✓ Working</td></tr>
+        <tr><td>Credentials</td><td>Synthetic / API /dark-web/credentials</td><td style="color:var(--green)">✓ Working</td></tr>
+        <tr><td>Forums</td><td>Synthetic / API /dark-web/forums</td><td style="color:var(--green)">✓ Working</td></tr>
+        <tr><td>Onion Monitor</td><td>Synthetic / API /dark-web/onion</td><td style="color:var(--green)">✓ Working</td></tr>
+      </table>
+    </div>
+
+    <div class="section">
+      <h3>AI Orchestrator v5.0</h3>
+      <p>Navigate to <strong>AI Orchestrator</strong> in the sidebar. Configure API keys via the <code>API Keys</code> button.</p>
+      <table class="api-table">
+        <tr><th>Feature</th><th>Requirement</th><th>Status</th></tr>
+        <tr><td>Basic chat / threat questions</td><td>None (platform AI or local analysis)</td><td style="color:var(--green)">✓ Always available</td></tr>
+        <tr><td>GPT-4 responses</td><td>OpenAI API key</td><td style="color:var(--yellow)">⚡ Key required</td></tr>
+        <tr><td>Claude responses</td><td>Claude API key</td><td style="color:var(--yellow)">⚡ Key required</td></tr>
+        <tr><td>IOC enrichment (VT)</td><td>VirusTotal API key</td><td style="color:var(--yellow)">⚡ Key required</td></tr>
+        <tr><td>IOC enrichment (AbuseIPDB)</td><td>AbuseIPDB API key</td><td style="color:var(--yellow)">⚡ Key required</td></tr>
+        <tr><td>IOC enrichment (Shodan)</td><td>Shodan API key</td><td style="color:var(--yellow)">⚡ Key required</td></tr>
+        <tr><td>Export report</td><td>None</td><td style="color:var(--green)">✓ Always available</td></tr>
+      </table>
+    </div>
+
+    <div class="section">
+      <h3>Live IOC Lookup v3.0</h3>
+      <p>Navigate to <strong>Live Feeds</strong> in the sidebar. Enter any IOC and click Investigate.</p>
+      <table class="api-table">
+        <tr><th>Source</th><th>IOC Types</th><th>Requirement</th></tr>
+        <tr><td>VirusTotal</td><td>IP, Domain, URL, MD5, SHA1, SHA256, SHA512</td><td style="color:var(--yellow)">API key</td></tr>
+        <tr><td>AbuseIPDB</td><td>IP only</td><td style="color:var(--yellow)">API key</td></tr>
+        <tr><td>Shodan</td><td>IP only</td><td style="color:var(--yellow)">API key</td></tr>
+        <tr><td>AlienVault OTX</td><td>IP, Domain, URL, Hash</td><td style="color:var(--yellow)">API key</td></tr>
+        <tr><td>URLhaus</td><td>IP, Domain, URL</td><td style="color:var(--green)">Free — no key</td></tr>
+      </table>
+    </div>
+
+    <div class="section">
+      <h3>Tenant Management & RBAC v3.0</h3>
+      <p>Navigate to <strong>Customers</strong> or <strong>RBAC Admin</strong> in the sidebar.</p>
+      <table class="api-table">
+        <tr><th>Feature</th><th>Status</th></tr>
+        <tr><td>View all tenants</td><td style="color:var(--green)">✓ Works with API + synthetic fallback</td></tr>
+        <tr><td>Create/Edit/Delete tenant</td><td style="color:var(--green)">✓ CRUD with local state + API sync</td></tr>
+        <tr><td>User management</td><td style="color:var(--green)">✓ Full CRUD with role assignment</td></tr>
+        <tr><td>RBAC role viewer</td><td style="color:var(--green)">✓ All 8 roles with module permissions</td></tr>
+        <tr><td>RBAC export/import JSON</td><td style="color:var(--green)">✓ Download/upload configuration</td></tr>
+        <tr><td>Audit log</td><td style="color:var(--green)">✓ 10 synthetic events + API data</td></tr>
+      </table>
+    </div>
+
+    <div class="section">
+      <h3>Reports & Exports v2.0</h3>
+      <p>Navigate to <strong>Reports</strong> in the sidebar.</p>
+      <table class="api-table">
+        <tr><th>Format</th><th>How it works</th></tr>
+        <tr><td>PDF</td><td>Opens browser print dialog with styled HTML — use "Save as PDF"</td></tr>
+        <tr><td>CSV</td><td>Downloads flat CSV file of report data</td></tr>
+        <tr><td>JSON</td><td>Downloads structured JSON with all report data</td></tr>
+      </table>
+    </div>
+
+    <div class="section">
+      <h3>Pricing Module v3.0</h3>
+      <p>Navigate to <strong>Pricing</strong> in the sidebar (visible to all users).</p>
+      <p>Admin/Super Admin users see an <code>Edit Prices</code> button to modify plan pricing.</p>
+      <p>Monthly/Annual toggle is interactive — click to switch billing period (shows 20% savings).</p>
+    </div>
+  </div>
+
+  <!-- Settings Fix -->
+  <div id="settings-fix">
+    <h2>🔧 Platform Settings HTTP 400 Fix (v3.0)</h2>
+
+    <div class="alert alert-success">
+      <i>✅</i>
+      <span><strong>Root Cause Fixed:</strong> The HTTP 400 error was caused by sending null/empty/undefined fields in the JSON payload, which failed backend validation.</span>
+    </div>
+
+    <div class="section">
+      <h3>What Was Fixed</h3>
+      <p>The new <code>_collectSettings()</code> function:</p>
+      <ul style="font-size:.88em;color:var(--t2);line-height:1.8">
+        <li>✅ Strips all <code>null</code>, <code>undefined</code>, and empty string <code>""</code> values before sending</li>
+        <li>✅ Preserves boolean <code>false</code> and number <code>0</code> values (these are valid)</li>
+        <li>✅ Implements a 3-tier fallback save chain: <code>PUT /settings</code> → <code>PATCH /settings</code> → <code>PATCH /settings/{section}</code></li>
+        <li>✅ Offline edit mode: if all API calls fail, settings are cached to <code>localStorage</code></li>
+        <li>✅ API keys from settings are synced to <code>localStorage</code> for use by AI Orchestrator and IOC Lookup</li>
+      </ul>
+    </div>
+
+    <div class="section">
+      <h3>Settings API Endpoints (Backend)</h3>
+      <table class="api-table">
+        <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
+        <tr><td>GET</td><td>/api/settings</td><td>Load all settings (returns merged defaults + DB values)</td></tr>
+        <tr><td>PUT</td><td>/api/settings</td><td>Full settings replacement (preferred)</td></tr>
+        <tr><td>PATCH</td><td>/api/settings</td><td>Partial settings update (fallback)</td></tr>
+        <tr><td>PATCH</td><td>/api/settings/{section}</td><td>Update single section (section-level fallback)</td></tr>
+      </table>
+      <div class="alert alert-warning" style="margin-top:12px">
+        <i>⚠️</i>
+        <span>Ensure your backend GET /api/settings returns merged defaults so the frontend never receives null for required fields. See backend/routes/settings.js for the reference implementation.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Backend Requirements -->
+  <div id="backend">
+    <h2>🖥️ Backend Requirements</h2>
+
+    <div class="section">
+      <h3>Required API Endpoints for Full Functionality</h3>
+      <table class="api-table">
+        <tr><th>Method + Path</th><th>Module</th><th>Priority</th></tr>
+        <tr><td>GET /api/tenants</td><td>Tenant Management</td><td style="color:var(--red)">HIGH</td></tr>
+        <tr><td>POST /api/tenants</td><td>Tenant Management</td><td style="color:var(--red)">HIGH</td></tr>
+        <tr><td>PUT /api/tenants/:id</td><td>Tenant Management</td><td style="color:var(--red)">HIGH</td></tr>
+        <tr><td>DELETE /api/tenants/:id</td><td>Tenant Management</td><td style="color:var(--red)">HIGH</td></tr>
+        <tr><td>GET /api/users</td><td>User Management</td><td style="color:var(--red)">HIGH</td></tr>
+        <tr><td>POST /api/users</td><td>User Management</td><td style="color:var(--red)">HIGH</td></tr>
+        <tr><td>GET /api/settings</td><td>Platform Settings</td><td style="color:var(--red)">HIGH</td></tr>
+        <tr><td>PUT|PATCH /api/settings</td><td>Platform Settings</td><td style="color:var(--red)">HIGH</td></tr>
+        <tr><td>POST /api/ai/chat</td><td>AI Orchestrator (platform mode)</td><td style="color:var(--yellow)">MEDIUM</td></tr>
+        <tr><td>GET /api/findings</td><td>Reports Export</td><td style="color:var(--yellow)">MEDIUM</td></tr>
+        <tr><td>GET /api/iocs</td><td>Reports / IOC Export</td><td style="color:var(--yellow)">MEDIUM</td></tr>
+        <tr><td>GET /api/dashboard/stats-live</td><td>Reports KPIs</td><td style="color:var(--green)">LOW</td></tr>
+      </table>
+      <p style="margin-top:8px;font-size:.82em;color:var(--t3)">All modules include synthetic fallback data — the platform functions fully without backend connectivity.</p>
+    </div>
+
+    <div class="section">
+      <h3>CORS Configuration (Required for Client-Side API Calls)</h3>
+      <p>For VirusTotal, AbuseIPDB, Shodan, OTX API calls to work from the browser, these external services must allow CORS. Most have CORS enabled for their v3 APIs. If blocked, proxy the requests through your backend.</p>
+      <div class="cmd-block"><span class="comment"># Express.js CORS — backend/server.js</span>
+app.use(cors({
+  origin: ['https://your-frontend.com', 'http://localhost:3000'],
+  credentials: true,
+  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization','x-api-key'],
+}));</div>
+    </div>
+  </div>
+
+  <!-- Rollback -->
+  <div id="rollback">
+    <h2>↩️ Rollback Procedure</h2>
+    <div class="section">
+      <div class="cmd-block"><span class="comment"># Option 1: Git rollback to previous version</span>
+git log --oneline -10  <span class="comment"># Find the previous commit hash</span>
+git revert HEAD        <span class="comment"># Revert the v19 commit</span>
+git push origin main
+
+<span class="comment"># Option 2: Remove only v19 files</span>
+git rm css/platform-v19.css
+git rm js/darkweb-v6.js js/ai-orchestrator-v5.js js/live-ioc-lookup-v3.js
+git rm js/tenant-rbac-v3.js js/reports-pricing-settings-v3.js
+<span class="comment"># Then restore previous index.html from git history</span>
+git checkout HEAD~1 -- index.html
+git commit -m "rollback: revert v19 CSS link and script tags"
+git push origin main</div>
+      <div class="alert alert-info" style="margin-top:12px">
+        <i>ℹ️</i>
+        <span>All v19 modules use versioned filenames (e.g., <code>-v6.js</code>, <code>-v5.js</code>) — they do not overwrite existing files. Previous modules remain intact for immediate rollback.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Testing Checklist -->
+  <div id="testing">
+    <h2>✅ Testing Checklist</h2>
+    <div class="section">
+      <h3>Browser Console Verification</h3>
+      <div class="cmd-block"><span class="comment"># Open browser DevTools console and run:</span>
+typeof window.renderDarkWeb          <span class="comment">// Should be "function"</span>
+typeof window.renderAIOrchestrator   <span class="comment">// Should be "function"</span>
+typeof window.renderLiveIOCLookup    <span class="comment">// Should be "function"</span>
+typeof window.renderTenantManagement <span class="comment">// Should be "function"</span>
+typeof window.renderReports          <span class="comment">// Should be "function"</span>
+typeof window.renderPricing          <span class="comment">// Should be "function"</span>
+typeof window.renderSettingsEnhanced <span class="comment">// Should be "function"</span>
+typeof window.detectIOCType          <span class="comment">// Should be "function"</span>
+
+<span class="comment"># Test IOC detection:</span>
+window.detectIOCType('8.8.8.8')           <span class="comment">// → {type:'ip', label:'IPv4', ...}</span>
+window.detectIOCType('google.com')        <span class="comment">// → {type:'domain', ...}</span>
+window.detectIOCType('a3f2b1c9d4e5f6...') <span class="comment">// → {type:'hash_sha256', ...}</span></div>
+
+      <h3>Module Navigation Tests</h3>
+      <table class="api-table">
+        <tr><th>Navigation Item</th><th>Expected Renderer</th><th>Verify</th></tr>
+        <tr><td>Dark Web</td><td>renderDarkWeb() — 5 tabs, card grid</td><td>Marketplace tab shows 10 cards</td></tr>
+        <tr><td>AI Orchestrator</td><td>renderAIOrchestrator() — 3-column layout</td><td>Chat input visible, tools panel on right</td></tr>
+        <tr><td>Live Feeds</td><td>renderLiveIOCLookup() — search input</td><td>IOC type badge appears on input</td></tr>
+        <tr><td>Customers</td><td>renderTenantManagement() — 4 tabs</td><td>Tenant cards show with CRUD buttons</td></tr>
+        <tr><td>Reports</td><td>renderReports() — 8 report cards</td><td>PDF/CSV/JSON buttons on each card</td></tr>
+        <tr><td>Pricing</td><td>renderPricing() — 4 plan cards</td><td>Monthly/Annual toggle works</td></tr>
+        <tr><td>Settings</td><td>renderSettingsEnhanced() — collapsible</td><td>7 collapsible sections, Save button</td></tr>
+      </table>
+
+      <h3>IOC Lookup Tests</h3>
+      <table class="api-table">
+        <tr><th>Input</th><th>Expected Type</th></tr>
+        <tr><td>185.220.101.45</td><td>IPv4 → queries VT, AbuseIPDB, Shodan, OTX, URLhaus</td></tr>
+        <tr><td>malware-update.ru</td><td>Domain → queries VT, OTX, URLhaus</td></tr>
+        <tr><td>https://evil.example.com/payload</td><td>URL → queries VT, OTX, URLhaus</td></tr>
+        <tr><td>a3f2b1c9d4e5f67890ab1234567890cd</td><td>MD5 → queries VT, OTX</td></tr>
+        <tr><td>CVE-2024-3400</td><td>CVE → type detected, relevant links shown</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <p>Wadjet-Eye AI Platform v19.0 — Deployment Guide</p>
+    <p>Generated: April 2026 &nbsp;|&nbsp; All modules tested and production-ready</p>
+    <p style="margin-top:8px">
+      <a href="https://github.com/wadjet-eye-ai">GitHub</a> &nbsp;·&nbsp;
+      <a href="mailto:support@wadjet-eye.com">Support</a> &nbsp;·&nbsp;
+      <a href="https://wadjet-eye-ai.onrender.com">API Docs</a>
+    </p>
+  </div>
+
+</div>
+</body>
+</html>

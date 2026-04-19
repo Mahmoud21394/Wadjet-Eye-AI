@@ -1,0 +1,23 @@
+Contact: mailto:security@wadjet.ai
+Contact: https://wadjet.ai/security/report
+Expires: 2027-04-01T00:00:00.000Z
+Encryption: https://wadjet.ai/security/pgp-key.asc
+Preferred-Languages: en
+Canonical: https://wadjet-eye-ai.vercel.app/.well-known/security.txt
+Policy: https://wadjet.ai/security/responsible-disclosure
+Acknowledgments: https://wadjet.ai/security/hall-of-fame
+
+# Wadjet-Eye AI — Cyber Threat Intelligence Platform
+# Security contact for responsible disclosure of vulnerabilities
+#
+# Please include:
+# - Description of the vulnerability
+# - Steps to reproduce
+# - Potential impact
+# - Your contact information
+#
+# We commit to:
+# - Acknowledge reports within 48 hours
+# - Provide regular status updates
+# - Credit researchers (with permission)
+# - Not pursue legal action for good-faith research

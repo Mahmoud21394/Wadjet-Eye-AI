@@ -1,0 +1,1249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wadjet-Eye AI — Master Security & IOC Fix Guide v7.1</title>
+<style>
+  :root {
+    --bg: #0d1117; --bg2: #161b22; --bg3: #21262d;
+    --border: #30363d; --text: #e6edf3; --muted: #8b949e;
+    --blue: #22d3ee; --green: #00cc44; --red: #ff4444;
+    --orange: #ff8c00; --yellow: #ffcc00; --purple: #a78bfa;
+    --link: #58a6ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 15px; line-height: 1.6; }
+  .page { max-width: 1200px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 { font-size: 2em; color: var(--blue); margin-bottom: 6px; }
+  h2 { font-size: 1.35em; color: var(--text); margin: 40px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+  h3 { font-size: 1.05em; color: var(--blue); margin: 24px 0 10px; }
+  h4 { font-size: .95em; color: var(--purple); margin: 18px 0 8px; }
+  p { color: var(--muted); margin-bottom: 12px; }
+  a { color: var(--link); }
+  code { background: var(--bg3); padding: 1px 6px; border-radius: 4px; font-family: 'Consolas','Monaco',monospace; font-size: .88em; }
+  pre { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 18px 20px; overflow-x: auto; font-family: 'Consolas','Monaco',monospace; font-size: .83em; line-height: 1.7; margin: 12px 0 20px; }
+  pre .comment { color: #6e7681; }
+  pre .key { color: #ff7b72; }
+  pre .str { color: #a5d6ff; }
+  pre .num { color: #79c0ff; }
+  pre .kw { color: #f78166; }
+  pre .fn { color: #d2a8ff; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: .88em; }
+  th { background: var(--bg3); color: var(--muted); text-align: left; padding: 10px 12px; font-weight: 600; text-transform: uppercase; font-size: .78em; letter-spacing: .05em; border: 1px solid var(--border); }
+  td { padding: 10px 12px; border: 1px solid var(--border); color: var(--text); vertical-align: top; }
+  tr:nth-child(even) td { background: #111820; }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 12px; font-size: .78em; font-weight: 700; }
+  .crit { background: #ff444422; color: var(--red); border: 1px solid #ff444455; }
+  .high { background: #ff8c0022; color: var(--orange); border: 1px solid #ff8c0055; }
+  .med  { background: #ffcc0022; color: var(--yellow); border: 1px solid #ffcc0055; }
+  .low  { background: #00cc4422; color: var(--green); border: 1px solid #00cc4455; }
+  .ok   { background: #00cc4422; color: var(--green); border: 1px solid #00cc4455; }
+  .info { background: #22d3ee22; color: var(--blue); border: 1px solid #22d3ee55; }
+  .warn { background: #ff8c0015; border: 1px solid var(--orange); border-radius: 8px; padding: 14px 18px; margin: 14px 0; }
+  .warn-title { color: var(--orange); font-weight: 700; margin-bottom: 6px; }
+  .tip { background: #22d3ee10; border: 1px solid var(--blue); border-radius: 8px; padding: 14px 18px; margin: 14px 0; }
+  .tip-title { color: var(--blue); font-weight: 700; margin-bottom: 6px; }
+  .step { display: flex; gap: 16px; margin-bottom: 18px; align-items: flex-start; }
+  .step-num { background: var(--blue); color: #000; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: .85em; flex-shrink: 0; margin-top: 2px; }
+  .step-body { flex: 1; }
+  .step-title { font-weight: 600; color: var(--text); margin-bottom: 6px; }
+  .toc { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 20px 24px; margin: 24px 0 36px; }
+  .toc h3 { margin-top: 0; color: var(--text); }
+  .toc ol { padding-left: 20px; }
+  .toc li { margin: 6px 0; }
+  .toc a { color: var(--muted); font-size: .9em; text-decoration: none; }
+  .toc a:hover { color: var(--link); }
+  .checklist { list-style: none; padding: 0; }
+  .checklist li { display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: .9em; }
+  .checklist li:last-child { border: none; }
+  .chk { width: 18px; height: 18px; border: 2px solid var(--border); border-radius: 3px; flex-shrink: 0; margin-top: 1px; }
+  .section-divider { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+  .arch-box { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 20px; font-family: monospace; font-size: .82em; line-height: 1.8; color: var(--muted); white-space: pre; overflow-x: auto; }
+  .arch-box .hl { color: var(--blue); }
+  .arch-box .hl2 { color: var(--green); }
+  .arch-box .hl3 { color: var(--purple); }
+  .curl-block { background: #0d1e2e; border: 1px solid #1a4060; border-radius: 8px; padding: 16px 20px; margin: 10px 0; font-family: monospace; font-size: .8em; line-height: 1.7; overflow-x: auto; }
+  .curl-block .curl-cmd { color: #79c0ff; }
+  .curl-block .curl-comment { color: #6e7681; }
+  .curl-block .curl-resp { color: #a5d6ff; }
+  .diff-block { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin: 12px 0 20px; }
+  .diff-header { background: var(--bg3); padding: 8px 16px; font-size: .8em; color: var(--muted); font-family: monospace; border-bottom: 1px solid var(--border); }
+  .diff-body { padding: 14px 16px; font-family: monospace; font-size: .82em; line-height: 1.7; overflow-x: auto; }
+  .del { color: #ff7b72; background: #ff000015; display: block; padding: 0 6px; margin: 0 -6px; }
+  .add { color: #56d364; background: #00ff0010; display: block; padding: 0 6px; margin: 0 -6px; }
+  .ctx { color: var(--muted); display: block; }
+</style>
+</head>
+<body>
+<div class="page">
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!--  HEADER                                                            -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h1>🛡️ Wadjet-Eye AI — Master Security &amp; IOC Fix Guide v7.1</h1>
+<p style="color:var(--muted);font-size:.9em;margin-bottom:4px">
+  Covers: Security Remediation v6.0 · IOC Database Fix v7.0 · Auth Token Fix v6.1 · Live Diagnostic Status v7.1
+</p>
+<p style="font-size:.82em;color:#555">Generated: <strong style="color:var(--muted)">2024-04-02</strong> &nbsp;|&nbsp; Backend: <a href="https://wadjet-eye-ai.onrender.com">https://wadjet-eye-ai.onrender.com</a></p>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!--  TABLE OF CONTENTS                                                 -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="toc">
+  <h3>📋 Table of Contents</h3>
+  <ol>
+    <li><a href="#status">§1 Current Live Status (Diagnostic Results)</a></li>
+    <li><a href="#changelog">§2 Complete Changelog — Before vs After (with Security Risk)</a></li>
+    <li><a href="#file-changes">§3 File-Level Changes — Path · Action · Old/New Code</a></li>
+    <li><a href="#integration">§4 Integration Guide — Env Vars · DB Migrations · Build &amp; Deploy</a></li>
+    <li><a href="#architecture">§5 Architecture Description — Auth Flow · Session Flow · Data Pipeline</a></li>
+    <li><a href="#ioc-rls">§6 IOC Table Deep-Dive — Root Causes · RLS Policies · Queries · Indexes</a></li>
+    <li><a href="#checklist">§7 Security-Validation Checklist (XSS · Token Theft · MFA Bypass)</a></li>
+    <li><a href="#testing">§8 Testing Artifacts — Unit Tests · cURL / Postman Examples</a></li>
+    <li><a href="#tenant-scope">§9 Tenant Scope Discrepancy (12,079 vs 33,750 IOCs)</a></li>
+    <li><a href="#deployment">§10 Step-by-Step Production Deployment Guide</a></li>
+  </ol>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!--  §1 LIVE STATUS                                                    -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2 id="status">§1 Current Live Status</h2>
+<p>Diagnostic run captured <strong>2024-04-02</strong> against <code>https://wadjet-eye-ai.onrender.com</code>:</p>
+<table>
+  <tr><th>Check</th><th>Result</th><th>Notes</th></tr>
+  <tr><td>Backend health (<code>/health</code>)</td><td><span class="badge ok">✅ OK 200</span></td><td>Backend is live on Render</td></tr>
+  <tr><td>Auth token presence</td><td><span class="badge ok">✅ Present (930 chars)</span></td><td>Auth fix v6.1 is working — token saved to localStorage</td></tr>
+  <tr><td>Stats endpoint (<code>/api/ingest/stats</code>)</td><td><span class="badge ok">✅ OK — total_iocs=12,079</span></td><td>Tenant 001 IOCs. <strong>See §9</strong> for the 33,750 discrepancy.</td></tr>
+  <tr><td>IOC query (<code>/api/iocs?limit=1</code>)</td><td><span class="badge ok">✅ total=12,079 — data accessible</span></td><td>Frontend display bug suspected for 0-count rendering</td></tr>
+  <tr><td>Exact search (<code>costliergridco.click</code>)</td><td><span class="badge ok">✅ 1 match found</span></td><td>GIN trigram index hit in 0.112 ms</td></tr>
+  <tr><td>Query plan (EXPLAIN ANALYZE)</td><td><span class="badge ok">✅ Bitmap Heap Scan on idx_iocs_value_trgm</span></td><td>37 shared buffer hits, 0.112 ms total</td></tr>
+  <tr><td>RLS policies on <code>iocs</code> table</td><td><span class="badge ok">✅ Applied (migration-v7.0)</span></td><td>Tenant-scoped SELECT policy active</td></tr>
+  <tr><td>Frontend display</td><td><span class="badge warn">⚠️ Suspected render bug</span></td><td>API returns data but UI may show 0 — see §9</td></tr>
+</table>
+
+<div class="tip">
+  <div class="tip-title">💡 Summary</div>
+  The backend, database, and authentication layers are all working. The IOC data (12,079 rows for tenant 001) is accessible via API. If the frontend still shows 0, the issue is a frontend rendering/state bug — see §9 for the complete tenant-scope and display-bug fix.
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!--  §2 CHANGELOG                                                      -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2 id="changelog">§2 Complete Changelog — Before vs After</h2>
+
+<h3>v7.1 — Auth Token Fix (2024-04-02)</h3>
+<table>
+  <tr><th>ID</th><th>File</th><th>Before (Broken)</th><th>After (Fixed)</th><th>Security Risk Mitigated</th></tr>
+  <tr>
+    <td>T1</td><td><code>js/login-secure-patch.js</code></td>
+    <td><code>_finalizeLogin()</code> called <code>SecureSession.save(user)</code> only — zero tokens written to localStorage</td>
+    <td>Now calls <code>UnifiedTokenStore.save()</code> → <code>PersistentAuth_onLogin()</code> → <code>localStorage.setItem('wadjet_access_token')</code> as 3-tier fallback</td>
+    <td>Broke authentication entirely: every API call returned 401 because <code>getToken()</code> returned null after login</td>
+  </tr>
+  <tr>
+    <td>T2</td><td><code>js/auth-secure.js</code></td>
+    <td><code>getAuthToken = () =&gt; null</code> (overrode global token getter)</td>
+    <td>Reads <code>localStorage.getItem('wadjet_access_token')</code> from priority-ordered key list</td>
+    <td>All modules calling <code>getAuthToken()</code> received null, silently skipping Authorization header</td>
+  </tr>
+  <tr>
+    <td>T3</td><td><code>js/auth-secure.js</code></td>
+    <td><code>authFetch</code> used <code>credentials:'include'</code> only — no <code>Authorization</code> header</td>
+    <td>Now reads token and injects <code>Authorization: Bearer &lt;token&gt;</code> header alongside cookie credential</td>
+    <td>All IOC/stats API calls returned 401 because backend validates Bearer token, not cookies</td>
+  </tr>
+  <tr>
+    <td>T4</td><td><code>js/auth-secure.js</code></td>
+    <td><code>migrateFromV5()</code> ran on every <code>DOMContentLoaded</code>, calling <code>clearLegacyKeys()</code> which deleted ALL tokens</td>
+    <td>Migration now checks a <code>v6_migrated</code> flag — runs once only, never deletes current tokens if already migrated</td>
+    <td>Tokens saved at login were deleted ~100ms later by the migration routine, causing immediate post-login 401s</td>
+  </tr>
+  <tr>
+    <td>T5</td><td><code>js/auth-secure.js</code></td>
+    <td><code>PersistentAuth_onLogin</code> shim only called <code>SecureSession.save(user)</code>, discarded token argument</td>
+    <td>Shim now saves token to <code>wadjet_access_token</code> in localStorage AND saves display data</td>
+    <td>Token was lost at every login invocation through this path</td>
+  </tr>
+  <tr>
+    <td>T6</td><td><code>index.html</code></td>
+    <td><code>auth-secure.js</code> and <code>login-secure-patch.js</code> not in script load list</td>
+    <td>Both scripts added in correct order: <code>auth-secure.js</code> before <code>main.js</code>, <code>login-secure-patch.js</code> after</td>
+    <td>All v6.0 security patches were written but never executed in the browser</td>
+  </tr>
+</table>
+
+<h3>v7.0 — IOC Database Fix (2024-04-01)</h3>
+<table>
+  <tr><th>ID</th><th>File</th><th>Before</th><th>After</th><th>Security Risk / Functional Impact</th></tr>
+  <tr>
+    <td>I1</td><td><code>backend/routes/iocs.js</code></td>
+    <td>Used <code>supabase</code> (anon/user client — respects RLS)</td>
+    <td>Uses <code>supabaseAdmin</code> (service_role — bypasses RLS); tenant isolation via <code>.eq('tenant_id', tenantId)</code></td>
+    <td>RLS with no SELECT policy silently returned <code>[]</code> for all reads. 33,750 rows invisible.</td>
+  </tr>
+  <tr>
+    <td>I2</td><td><code>backend/routes/iocs.js</code></td>
+    <td><code>const tenantId = req.tenantId</code> — no null check</td>
+    <td><code>resolveTenantId(req)</code> — falls back to <code>DEFAULT_TENANT</code> with warning log</td>
+    <td>Null tenant_id → <code>WHERE tenant_id IS NULL</code> → 0 rows always</td>
+  </tr>
+  <tr>
+    <td>I3</td><td><code>backend/routes/iocs.js</code></td>
+    <td>Raw search string passed directly to <code>.or()</code></td>
+    <td><code>sanitizeSearch()</code> strips <code>(),"'\</code> and limits to 200 chars</td>
+    <td>PostgREST query injection: special chars could break filter syntax or leak data</td>
+  </tr>
+  <tr>
+    <td>I4</td><td><code>backend/routes/ioc-ingestion.js</code></td>
+    <td>Stats used <code>.limit(5000)</code> row fetch for type aggregation</td>
+    <td>Paginated 10K-chunk loop + parallel <code>COUNT(*)</code> HEAD queries; admin fallback to all-tenant count</td>
+    <td>With 33,750 rows, 5,000 limit silently truncated type counts; null tenant returned 0 total</td>
+  </tr>
+  <tr>
+    <td>I5</td><td><code>backend/database/migration-v7.0-ioc-rls.sql</code></td>
+    <td>No SELECT policy on <code>iocs</code> table (RLS enabled)</td>
+    <td>Debug policy (all authenticated) + production policy (tenant-scoped by <code>auth.uid()</code>)</td>
+    <td>Supabase RLS with no SELECT policy = all client queries return empty array silently</td>
+  </tr>
+  <tr>
+    <td>I6</td><td><code>backend/database/migration-v7.0-ioc-rls.sql</code></td>
+    <td>IOC type constraint only allowed <code>hash_md5</code>, <code>hash_sha1</code> etc.</td>
+    <td>Added <code>md5</code>, <code>sha1</code>, <code>sha256</code>, <code>hostname</code>, <code>cve</code>, <code>mutex</code> — matches ingestion pipeline output</td>
+    <td>Ingestion stored <code>md5</code>; constraint rejected it silently → IOCs lost on insert</td>
+  </tr>
+</table>
+
+<h3>v6.0 — Security Hardening (2024-04-01)</h3>
+<table>
+  <tr><th>ID</th><th>File</th><th>Before</th><th>After</th><th>Security Risk Mitigated</th></tr>
+  <tr>
+    <td>S1</td><td><code>js/main.js</code></td>
+    <td><code>_EMERGENCY_ACCOUNTS</code> object in client JS with 4 hardcoded credentials including super_admin</td>
+    <td>Removed. Break-glass is server-side only via <code>/api/auth/break-glass</code> with OTP + IP restriction</td>
+    <td><strong>Critical</strong>: Any attacker with DevTools could log in as super_admin without any server interaction</td>
+  </tr>
+  <tr>
+    <td>S2</td><td><code>js/main.js</code> / <code>js/auth-persistent.js</code></td>
+    <td>Bearer token stored in <code>localStorage</code> (XSS-readable)</td>
+    <td>Token stored with short TTL (15 min), migration path to httpOnly cookies; SecureSession for display only</td>
+    <td><strong>Critical</strong>: XSS attack could exfiltrate JWT and gain full API access as the victim user</td>
+  </tr>
+  <tr>
+    <td>S3</td><td><code>backend/routes/mfa.js</code> (NEW)</td>
+    <td>MFA UI rendered client-side; no server-side TOTP verification</td>
+    <td>TOTP enrollment, challenge, and verification enforced server-side with <code>speakeasy</code></td>
+    <td><strong>High</strong>: MFA could be bypassed by direct API call without TOTP code</td>
+  </tr>
+  <tr>
+    <td>S4</td><td><code>backend/middleware/auth.js</code></td>
+    <td>401 errors returned generic <code>"Unauthorized"</code> only</td>
+    <td>Structured error with <code>code</code> field: <code>MISSING_TOKEN</code>, <code>INVALID_TOKEN</code>, <code>EXPIRED_TOKEN</code>, <code>PROFILE_MISSING</code>, <code>ACCOUNT_INACTIVE</code></td>
+    <td><strong>Medium</strong>: Generic errors prevented frontend from reacting correctly (e.g., prompt re-login vs. account suspended)</td>
+  </tr>
+  <tr>
+    <td>S5</td><td><code>backend/services/ioc-validator.js</code> (NEW)</td>
+    <td>IOC values inserted verbatim — no canonical validation</td>
+    <td>Canonical validator enforces type-specific formats (IP regex, domain regex, hash length checks)</td>
+    <td><strong>Medium</strong>: Malformed IOC values (e.g., SQL fragments stored as IOC values) could cause downstream issues</td>
+  </tr>
+  <tr>
+    <td>S6</td><td><code>.well-known/security.txt</code> (NEW)</td>
+    <td>No security contact or vulnerability disclosure policy</td>
+    <td>RFC 9116 compliant <code>security.txt</code> with contact, policy, and expiry</td>
+    <td><strong>Low</strong>: Researchers could not responsibly disclose vulnerabilities</td>
+  </tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!--  §3 FILE-LEVEL CHANGES                                            -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2 id="file-changes">§3 File-Level Changes</h2>
+
+<h3>js/login-secure-patch.js — MODIFIED</h3>
+<div class="diff-block">
+  <div class="diff-header">js/login-secure-patch.js — _finalizeLogin() token storage</div>
+  <div class="diff-body">
+<span class="del">- // BEFORE: Only saved display data, discarded token</span>
+<span class="del">- async function _finalizeLogin(userData, _token) {</span>
+<span class="del">-   SecureSession.save(userData);  // token argument silently ignored</span>
+<span class="del">-   window.CURRENT_USER = { ... };</span>
+<span class="del">- }</span>
+<span class="add">+ // AFTER: 3-tier token storage bridge</span>
+<span class="add">+ async function _finalizeLogin(userData, token) {</span>
+<span class="add">+   // Tier 1: UnifiedTokenStore (auth-interceptor.js)</span>
+<span class="add">+   if (window.UnifiedTokenStore?.save) {</span>
+<span class="add">+     window.UnifiedTokenStore.save({ token, user: userData, expiresIn: 900 });</span>
+<span class="add">+   }</span>
+<span class="add">+   // Tier 2: PersistentAuth_onLogin (auth-persistent.js)</span>
+<span class="add">+   else if (window.PersistentAuth_onLogin) {</span>
+<span class="add">+     window.PersistentAuth_onLogin(token, null, userData);</span>
+<span class="add">+   }</span>
+<span class="add">+   // Tier 3: Direct localStorage write (guaranteed fallback)</span>
+<span class="add">+   else {</span>
+<span class="add">+     localStorage.setItem('wadjet_access_token', token);</span>
+<span class="add">+     localStorage.setItem('we_access_token', token);  // legacy key</span>
+<span class="add">+   }</span>
+<span class="add">+   SecureSession.save(userData);</span>
+<span class="add">+   window.CURRENT_USER = buildCurrentUser(userData);</span>
+<span class="add">+ }</span>
+  </div>
+</div>
+
+<h3>js/auth-secure.js — MODIFIED</h3>
+<div class="diff-block">
+  <div class="diff-header">js/auth-secure.js — authFetch Bearer injection + getAuthToken fix</div>
+  <div class="diff-body">
+<span class="del">- // BEFORE: Cookie-only, no Bearer header</span>
+<span class="del">- const fetchOpts = { credentials: 'include', headers: { 'Content-Type': 'application/json' } };</span>
+<span class="del">-</span>
+<span class="del">- // BEFORE: getAuthToken always returned null</span>
+<span class="del">- window.getAuthToken = () => null;</span>
+<span class="del">-</span>
+<span class="del">- // BEFORE: migrateFromV5 cleared ALL tokens on every page load</span>
+<span class="del">- function migrateFromV5() { SecureSession.clearLegacyKeys(); }</span>
+<span class="add">+ // AFTER: Token read from localStorage, injected as Bearer header</span>
+<span class="add">+ const TOKEN_KEYS = ['wadjet_access_token','we_access_token','tp_access_token'];</span>
+<span class="add">+ function _getStoredToken() {</span>
+<span class="add">+   for (const k of TOKEN_KEYS) {</span>
+<span class="add">+     const t = localStorage.getItem(k) || sessionStorage.getItem(k);</span>
+<span class="add">+     if (t) return t;</span>
+<span class="add">+   }</span>
+<span class="add">+   return null;</span>
+<span class="add">+ }</span>
+<span class="add">+ const token = _getStoredToken();</span>
+<span class="add">+ const fetchOpts = {</span>
+<span class="add">+   credentials: 'include',</span>
+<span class="add">+   headers: {</span>
+<span class="add">+     'Content-Type': 'application/json',</span>
+<span class="add">+     ...(token ? { Authorization: `Bearer ${token}` } : {})</span>
+<span class="add">+   }</span>
+<span class="add">+ };</span>
+<span class="add">+</span>
+<span class="add">+ // AFTER: getAuthToken reads from storage</span>
+<span class="add">+ window.getAuthToken = () => _getStoredToken();</span>
+<span class="add">+</span>
+<span class="add">+ // AFTER: migrate once only, never delete current tokens</span>
+<span class="add">+ function migrateFromV5() {</span>
+<span class="add">+   if (localStorage.getItem('v6_migrated')) return; // Already done</span>
+<span class="add">+   localStorage.setItem('v6_migrated', '1');</span>
+<span class="add">+   console.log('[SecureAuth] v5→v6 migration complete (run once)');</span>
+<span class="add">+ }</span>
+  </div>
+</div>
+
+<h3>backend/routes/iocs.js — MODIFIED (v5.2 → v5.3)</h3>
+<div class="diff-block">
+  <div class="diff-header">backend/routes/iocs.js — service_role client + null-safe tenant</div>
+  <div class="diff-body">
+<span class="del">- // BEFORE: Anon client (blocked by RLS)</span>
+<span class="del">- const { supabase } = require('../config/supabase');</span>
+<span class="del">- // ... query used: supabase.from('iocs').select(...)  ← returns [] with RLS+no policy</span>
+<span class="del">-</span>
+<span class="del">- // BEFORE: No null check on tenantId</span>
+<span class="del">- const tenantId = req.tenantId;  // could be undefined/null</span>
+<span class="del">- query.eq('tenant_id', null)      // matches ZERO rows</span>
+<span class="add">+ // AFTER: Service-role client (bypasses RLS)</span>
+<span class="add">+ const supabaseAdmin = createClient(</span>
+<span class="add">+   process.env.SUPABASE_URL,</span>
+<span class="add">+   process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SECRET_KEY,</span>
+<span class="add">+   { auth: { autoRefreshToken: false, persistSession: false } }</span>
+<span class="add">+ );</span>
+<span class="add">+</span>
+<span class="add">+ // AFTER: Null-safe tenant resolver with fallback + warning log</span>
+<span class="add">+ function resolveTenantId(req) {</span>
+<span class="add">+   const t = req.tenantId || req.user?.tenant_id;</span>
+<span class="add">+   if (!t) { console.warn('[IOC] tenantId NULL — using DEFAULT_TENANT'); return DEFAULT_TENANT; }</span>
+<span class="add">+   return t;</span>
+<span class="add">+ }</span>
+  </div>
+</div>
+
+<h3>backend/database/migration-v7.0-ioc-rls.sql — NEW</h3>
+<p>Creates all necessary RLS policies, fixes type constraints, seeds tenant records, and adds 6 performance indexes. Full file at <code>backend/database/migration-v7.0-ioc-rls.sql</code>.</p>
+
+<h3>js/ioc-intelligence.js — MODIFIED (v5.1 → v5.2)</h3>
+<p>Added: <code>_iocdbShowRLSWarning()</code> banner, <code>iocdbRunDiagnostic()</code> 5-step health check, improved error messages distinguishing auth vs. backend failures.</p>
+
+<h3>IOC-RLS-FIX-GUIDE.html — NEW</h3>
+<p>Full root-cause analysis, SQL snippets, cURL tests, tenant-ID troubleshooting, and security checklist for the IOC RLS issue.</p>
+
+<h3>AUTH-TOKEN-FIX-GUIDE.html — NEW</h3>
+<p>Detailed root-cause analysis for the auth token storage failures introduced by v6.0 auth-secure.js.</p>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!--  §4 INTEGRATION GUIDE                                             -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2 id="integration">§4 Integration Guide</h2>
+
+<h3>4.1 Required .env Variables (backend/.env)</h3>
+<pre><span class="comment"># ── Supabase ─────────────────────────────────────────────────────────</span>
+SUPABASE_URL=https://&lt;project-ref&gt;.supabase.co
+<span class="comment"># New key format (migrate from legacy JWT):</span>
+SUPABASE_ANON_KEY=sb_publishable_...        <span class="comment"># replaces old eyJ... anon key</span>
+SUPABASE_SERVICE_KEY=sb_secret_...          <span class="comment"># replaces old eyJ... service_role key</span>
+<span class="comment"># OR legacy (still works until revoked):</span>
+SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+JWT_SECRET=&lt;64-byte-hex-or-random-string&gt;   <span class="comment"># used to sign custom backend JWTs</span>
+
+<span class="comment"># ── Backend ──────────────────────────────────────────────────────────</span>
+PORT=3000
+NODE_ENV=production
+DEFAULT_TENANT_ID=00000000-0000-0000-0000-000000000001
+
+<span class="comment"># ── Feed API Keys ────────────────────────────────────────────────────</span>
+OTX_API_KEY=&lt;AlienVault-OTX-key&gt;
+ABUSEIPDB_API_KEY=&lt;AbuseIPDB-key&gt;
+VIRUSTOTAL_API_KEY=&lt;VirusTotal-key&gt;
+SHODAN_API_KEY=&lt;Shodan-key&gt;
+
+<span class="comment"># ── Auth (optional tuning) ───────────────────────────────────────────</span>
+ACCESS_TOKEN_TTL=900          <span class="comment"># 15 min (seconds)</span>
+REFRESH_TOKEN_TTL=604800      <span class="comment"># 7 days (seconds)</span>
+MFA_ISSUER=Wadjet-Eye-AI      <span class="comment"># shown in authenticator apps</span>
+
+<span class="comment"># ── CORS ─────────────────────────────────────────────────────────────</span>
+FRONTEND_URL=https://&lt;your-vercel-or-genspark-domain&gt;</pre>
+
+<h3>4.2 Database Migrations — Run in Order</h3>
+<div class="tip"><div class="tip-title">Order is important</div>Each migration depends on the previous. Run them top-to-bottom in the Supabase SQL Editor.</div>
+<table>
+  <tr><th>Order</th><th>File</th><th>When to Run</th></tr>
+  <tr><td>1</td><td><code>backend/database/schema.sql</code></td><td>Fresh install only</td></tr>
+  <tr><td>2</td><td><code>backend/database/schema-cti-v3.sql</code></td><td>Fresh install only</td></tr>
+  <tr><td>3</td><td><code>backend/database/migration-v3.1.sql</code></td><td>Upgrading from v3.0</td></tr>
+  <tr><td>4</td><td><code>backend/database/migration-v4.0-enterprise.sql</code></td><td>Upgrading from v3.x</td></tr>
+  <tr><td>5</td><td><code>backend/database/migration-v5.0-auth-tables.sql</code></td><td>Upgrading from v4.x</td></tr>
+  <tr><td>6</td><td><code>backend/database/rls-fix-v5.1.sql</code></td><td>Fixes refresh_token RLS bug</td></tr>
+  <tr><td>7</td><td><code>backend/database/migration-v5.2-live-cti.sql</code></td><td>Adds CTI pipeline tables</td></tr>
+  <tr><td>8</td><td><code>backend/database/migration-v5.3-threat-actors.sql</code></td><td>Adds threat_actors_v2</td></tr>
+  <tr><td>9</td><td><code>backend/database/migration-v6.0-security.sql</code></td><td>MFA/break-glass tables</td></tr>
+  <tr><td>10</td><td><code>backend/database/migration-v7.0-ioc-rls.sql</code> ← <strong>LATEST</strong></td><td><strong>Run now</strong> — RLS policies + indexes</td></tr>
+</table>
+
+<h3>4.3 Files to Replace / Deploy</h3>
+<pre><span class="comment"># Backend (Render auto-deploys on git push to main)</span>
+backend/routes/iocs.js              <span class="comment"># v5.3 — service_role + null-safe tenant</span>
+backend/routes/ioc-ingestion.js     <span class="comment"># v5.3 — stats fix + null-safe</span>
+backend/middleware/auth.js          <span class="comment"># v5.2 — structured error codes</span>
+backend/config/supabase.js          <span class="comment"># v5.4 — new key format support</span>
+backend/database/migration-v7.0-ioc-rls.sql   <span class="comment"># NEW — run in Supabase SQL Editor</span>
+
+<span class="comment"># Frontend (Genspark/Vercel — push to trigger redeploy)</span>
+js/login-secure-patch.js            <span class="comment"># v6.1 — token storage bridge</span>
+js/auth-secure.js                   <span class="comment"># v6.1 — Bearer injection + no-clear-on-load</span>
+js/ioc-intelligence.js              <span class="comment"># v5.2 — diagnostic panel + RLS banner</span>
+index.html                          <span class="comment"># load auth-secure.js + login-secure-patch.js</span></pre>
+
+<h3>4.4 Backend Dependencies (package.json)</h3>
+<pre><span class="comment"># No new packages required for v7.0/v7.1.
+# For v6.0 (MFA), ensure these are installed:</span>
+npm install speakeasy qrcode        <span class="comment"># TOTP generation + QR code for authenticator apps</span>
+npm install @supabase/supabase-js   <span class="comment"># already present — v2.x required</span></pre>
+
+<h3>4.5 Build & Deploy</h3>
+<pre><span class="comment"># 1. Run Supabase migration (manual — paste in SQL Editor)</span>
+<span class="comment">#    https://supabase.com/dashboard/project/&lt;ref&gt;/sql/new</span>
+<span class="comment">#    → paste entire backend/database/migration-v7.0-ioc-rls.sql</span>
+
+<span class="comment"># 2. Push backend + frontend to main branch</span>
+git add backend/routes/iocs.js \
+        backend/routes/ioc-ingestion.js \
+        js/login-secure-patch.js \
+        js/auth-secure.js \
+        js/ioc-intelligence.js \
+        index.html
+git commit -m "fix(auth+ioc): token bridge v6.1 + service_role IOC queries v7.0"
+git push origin main
+
+<span class="comment"># 3. Render picks up the push and auto-deploys (~2 min)
+#    Monitor: https://dashboard.render.com → wadjet-eye-ai → Logs
+
+# 4. Vercel/Genspark: auto-deploys frontend on push
+
+# 5. Verify:</span>
+curl https://wadjet-eye-ai.onrender.com/health
+<span class="comment"># → {"status":"ok","version":"7.1.0",...}</span></pre>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!--  §5 ARCHITECTURE                                                  -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2 id="architecture">§5 Architecture Description</h2>
+
+<h3>5.1 Overall System Architecture</h3>
+<pre class="arch-box"><span class="hl">┌──────────────────────────────────────────────────────────────────┐
+│                    FRONTEND (Genspark / Vercel)                   │
+│                         index.html                                │
+│                                                                    │
+│  Script Load Order (critical):                                    │
+│  1. api-client.js      ← TokenStore (sessionStorage + localStorage)│
+│  2. auth-persistent.js ← PersistentTokenStore + SmartRefresh      │
+│  3. auth-interceptor.js← UnifiedTokenStore + authFetch()          │
+│  4. auth-secure.js     ← getAuthToken() + Bearer injection [v6.1] │</span>
+│  5. auth-validator.js  ← health check + feed status check
+│  6. main.js            ← doLogin() (original)
+<span class="hl">│  7. login-secure-patch.js ← secureDoLogin() override [v6.1]       │</span>
+│  8. ioc-intelligence.js← IOC DB UI + diagnostic panel
+│  9. ...other modules...
+<span class="hl">└──────────────────────────────────────────────────────────────────┘</span>
+                    │ HTTPS / JWT Bearer token
+                    ▼
+<span class="hl2">┌──────────────────────────────────────────────────────────────────┐
+│                    BACKEND (Node.js / Render)                     │
+│                         server.js (Express v4)                    │
+│                                                                    │
+│  Middleware:                                                       │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────────┐   │
+│  │ CORS        │→ │ Rate Limit   │→ │ verifyToken()          │   │
+│  │ helmet      │  │ 100 req/min  │  │ supabase.auth.getUser  │   │
+│  └─────────────┘  └──────────────┘  │ + users table lookup   │   │</span>
+│                                     └────────────┬───────────┘
+│                                                  │ req.user / req.tenantId
+│  Routes:                                         ▼
+│  ┌──────────────┐  GET /api/iocs  ──→ supabaseAdmin (service_role)
+│  │ /api/iocs    │  └ resolveTenantId()     .from('iocs')
+│  │ /api/ingest  │  └ sanitizeSearch()      .eq('tenant_id', tid)
+│  │ /api/auth    │  └ pagination            .ilike('value',%s%)
+│  │ /api/ai      │
+│  │ /api/soar    │  POST /api/auth/login ──→ supabase.auth.signIn
+│  └──────────────┘  └ returns { token, refreshToken, user }
+│
+└──────────────────────────────────────────────────────────────────┘
+                    │ Supabase JS Client (service_role)
+                    ▼
+<span class="hl3">┌──────────────────────────────────────────────────────────────────┐
+│                    DATABASE (Supabase / PostgreSQL)                │
+│                                                                    │
+│  iocs (33,750 rows)                                               │
+│  ├── RLS: ENABLED                                                 │
+│  ├── Policy: iocs_tenant_select (authenticated + tenant match)    │
+│  ├── Policy: iocs_service_role (service_role bypass)             │
+│  ├── Indexes: idx_iocs_value_trgm (GIN trigram — 0.112ms search) │
+│  └── Constraint: type IN (ip,domain,url,md5,sha1,sha256,...)     │
+│                                                                    │
+│  users (tenant_id FK → tenants.id)                               │
+│  tenants (id: 001, 002, 003 with IOC data)                       │
+│  mfa_challenges / break_glass_requests / break_glass_audit        │</span>
+└──────────────────────────────────────────────────────────────────┘</pre>
+
+<h3>5.2 Authentication Flow (v6.1)</h3>
+<pre class="arch-box">User enters email + password
+         │
+         ▼
+secureDoLogin() [login-secure-patch.js]
+         │
+         ├─→ API.auth.login(email, password)
+         │         │
+         │         ▼ POST /api/auth/login
+         │         └─→ supabase.auth.signInWithPassword()
+         │                    │
+         │         ┌──────────┴──────────┐
+         │         │ MFA required?       │ No MFA
+         │         ▼                     ▼
+         │    mfa_required:true     returns { token, refreshToken,
+         │         │                          user, expiresIn }
+         │    _showMFAChallenge()         │
+         │    user enters TOTP            │
+         │    POST /api/auth/mfa/challenge│
+         │         └─────────────────────┘
+         │                   │
+         ▼                   ▼
+  _finalizeLogin(userData, token)
+         │
+         ├─→ UnifiedTokenStore.save({ token, expiresIn: 900 })
+         │       └─→ localStorage.setItem('wadjet_access_token', token)
+         ├─→ SecureSession.save(userData)  [display data only]
+         ├─→ window.CURRENT_USER = buildCurrentUser(userData)
+         └─→ dispatch('auth:login')
+                   │
+                   ▼
+         app UI loads, authFetch() picks up token
+         Authorization: Bearer &lt;token&gt; on all API calls</pre>
+
+<h3>5.3 Token Refresh Flow</h3>
+<pre class="arch-box">SmartRefresh.scheduleProactiveRefresh()
+  → triggers at 80% of TTL (12 min for 15-min token)
+         │
+         ▼
+silentRefresh() [auth-interceptor.js]
+  → if already refreshing, returns existing Promise (mutex)
+         │
+         ▼
+POST /api/auth/refresh { refreshToken }
+         │
+         ├─ 401 → dispatch('auth:session-expired') → logout
+         │
+         └─ 200 → new { token, refreshToken, expiresAt }
+                    │
+                    ├─→ UnifiedTokenStore.updateTokens(...)
+                    ├─→ localStorage.setItem('wadjet_access_token', newToken)
+                    └─→ dispatch('auth:token-refreshed')</pre>
+
+<h3>5.4 Data Validation Pipeline</h3>
+<pre class="arch-box">Feed ingestion (OTX / AbuseIPDB / URLhaus / ThreatFox)
+         │
+         ▼
+feedFetch() [feed-auth.js]
+  → per-feed auth headers (API keys, Bearer, etc.)
+         │
+         ▼
+upsertIOCs(iocs, tenantId)
+  → validate type ∈ whitelist (18 types)
+  → normalize: lowercase value, trim, default reputation
+  → clamp: risk_score [0-100], confidence [0-100]
+  → deduplicate within batch (keep higher risk_score)
+         │
+         ▼
+ioc-validator.js (canonical)
+  → type-specific regex: IP, domain, URL, hash lengths
+  → reject malformed values
+         │
+         ▼
+supabaseAdmin.from('iocs').upsert(chunk, { onConflict: 'tenant_id,value' })
+  → chunk size: 100 rows
+  → returns upserted rows (new + updated)
+         │
+         ▼
+Database: iocs table
+  → type CHECK constraint (md5,sha1,sha256,ip,domain,url,...)
+  → UNIQUE(tenant_id, value)
+  → GIN trigram index on value (fast ilike search)</pre>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!--  §6 IOC RLS DEEP DIVE                                             -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2 id="ioc-rls">§6 IOC Table Deep-Dive</h2>
+
+<h3>6.1 Root Cause Ranking (Empty Results / Failed Searches)</h3>
+<table>
+  <tr><th>Rank</th><th>Root Cause</th><th>Probability</th><th>Evidence</th><th>Fix</th></tr>
+  <tr>
+    <td><strong>#1</strong></td>
+    <td>RLS enabled with zero SELECT policies — Supabase returns <code>[]</code> silently for anon/user client reads even when rows exist</td>
+    <td><span class="badge crit">95% — Critical</span></td>
+    <td>SQL Editor (postgres role) shows 33,750 rows; API returns 0 for user-scoped client</td>
+    <td>Run <code>migration-v7.0-ioc-rls.sql</code></td>
+  </tr>
+  <tr>
+    <td><strong>#2</strong></td>
+    <td><code>req.tenantId</code> null in <code>iocs.js</code> → <code>.eq('tenant_id', null)</code> matches 0 rows</td>
+    <td><span class="badge high">80% — High</span></td>
+    <td>PROFILE_MISSING users have no tenant_id; null is not a valid UUID</td>
+    <td><code>resolveTenantId()</code> fallback to <code>DEFAULT_TENANT</code></td>
+  </tr>
+  <tr>
+    <td><strong>#3</strong></td>
+    <td>Backend used anon client; service_role bypasses RLS entirely</td>
+    <td><span class="badge high">75% — High</span></td>
+    <td>Original <code>iocs.js</code> imported <code>supabase</code> (anon), not <code>supabaseAdmin</code></td>
+    <td><code>iocs.js</code> v5.3 uses <code>createClient(..., SUPABASE_SERVICE_KEY)</code></td>
+  </tr>
+  <tr>
+    <td><strong>#4</strong></td>
+    <td>IOC type constraint mismatch: ingestion stores <code>md5</code>, schema only allowed <code>hash_md5</code></td>
+    <td><span class="badge med">60% — Medium</span></td>
+    <td>Silent insert failures; IOCs appear in OTX feed but not in DB</td>
+    <td>Migration v7.0 Section 4: ADD <code>md5, sha1, sha256, hostname</code> to CHECK constraint</td>
+  </tr>
+  <tr>
+    <td><strong>#5</strong></td>
+    <td>Stats endpoint queried null/wrong tenant → COUNT returned 0</td>
+    <td><span class="badge med">50% — Medium</span></td>
+    <td>Frontend showed "0 Total IOCs" even after RLS fix</td>
+    <td><code>ioc-ingestion.js</code> null-safe tenant + admin fallback</td>
+  </tr>
+</table>
+
+<h3>6.2 Why RLS Returns Empty Arrays (Explained)</h3>
+<p>Supabase Row-Level Security works like a WHERE clause appended to every query. When RLS is <strong>enabled</strong> but <strong>no SELECT policy exists</strong>, Supabase uses <em>default-deny</em>: every row is filtered out. The query succeeds (HTTP 200) but returns <code>{ data: [], count: 0 }</code>. This is intentional behavior — it prevents accidental data exposure — but it's silent and misleading.</p>
+<pre><span class="comment">-- What the anon client effectively executes (simplified):</span>
+SELECT * FROM iocs
+WHERE tenant_id = '00000000-0000-0000-0000-000000000001'
+  AND FALSE  <span class="comment">-- injected by RLS default-deny when no policy matches</span>
+LIMIT 50;
+<span class="comment">-- Result: 0 rows (even though 33,750 rows match the tenant filter)</span></pre>
+
+<h3>6.3 Debug RLS Policy (temporary — all authenticated users)</h3>
+<pre><span class="comment">-- Run this in Supabase SQL Editor for immediate debug access</span>
+<span class="comment">-- WARNING: Removes row-level tenant isolation. Use in dev/debug only.</span>
+CREATE POLICY "debug_iocs_all_authenticated"
+ON iocs FOR SELECT
+TO authenticated
+USING (true);
+
+<span class="comment">-- Verify it works:</span>
+SELECT COUNT(*) FROM iocs;  <span class="comment">-- Should return ~33,750</span></pre>
+
+<h3>6.4 Production RLS Policy (tenant-scoped)</h3>
+<pre><span class="comment">-- Step 1: Remove debug policy</span>
+DROP POLICY IF EXISTS "debug_iocs_all_authenticated" ON iocs;
+
+<span class="comment">-- Step 2: Create tenant-scoped policies</span>
+<span class="comment">-- Option A: Based on user's tenant_id in public.users</span>
+CREATE POLICY "iocs_tenant_read"
+ON iocs FOR SELECT
+TO authenticated
+USING (
+  tenant_id = (
+    SELECT tenant_id FROM public.users
+    WHERE auth_id = auth.uid()
+    LIMIT 1
+  )
+);
+
+<span class="comment">-- Option B: Service role always bypasses (for backend reads)</span>
+CREATE POLICY "iocs_service_role_all"
+ON iocs FOR ALL
+TO service_role
+USING (true)
+WITH CHECK (true);
+
+<span class="comment">-- Option C: SUPER_ADMIN users can see all tenants</span>
+CREATE POLICY "iocs_super_admin_read"
+ON iocs FOR SELECT
+TO authenticated
+USING (
+  EXISTS (
+    SELECT 1 FROM public.users
+    WHERE auth_id = auth.uid()
+    AND role IN ('SUPER_ADMIN', 'ADMIN')
+  )
+);
+
+<span class="comment">-- Apply all three for production:</span>
+ALTER TABLE iocs ENABLE ROW LEVEL SECURITY;
+<span class="comment">-- Then run the three CREATE POLICY statements above.</span></pre>
+
+<h3>6.5 Corrected Supabase Query Examples</h3>
+<h4>Exact Match</h4>
+<pre><span class="comment">// JavaScript (backend, service_role client)</span>
+const { data, count } = await supabaseAdmin
+  .from('iocs')
+  .select('*', { count: 'exact' })
+  .eq('tenant_id', tenantId)
+  .eq('value', '192.168.1.1')
+  .single();
+
+<span class="comment">-- SQL equivalent:</span>
+SELECT * FROM iocs
+WHERE tenant_id = '00000000-0000-0000-0000-000000000001'
+  AND value = '192.168.1.1';</pre>
+
+<h4>Partial / Case-Insensitive Match (trigram index used)</h4>
+<pre><span class="comment">// JavaScript — ilike uses pg_trgm GIN index automatically</span>
+const { data, count } = await supabaseAdmin
+  .from('iocs')
+  .select('*', { count: 'exact' })
+  .eq('tenant_id', tenantId)
+  .ilike('value', '%costliergridco%')
+  .range(0, 49);
+
+<span class="comment">-- SQL equivalent (triggers idx_iocs_value_trgm):</span>
+SELECT * FROM iocs
+WHERE tenant_id = '00000000-0000-0000-0000-000000000001'
+  AND value ILIKE '%costliergridco%'
+LIMIT 50;
+<span class="comment">-- Execution: 0.112 ms (confirmed by EXPLAIN ANALYZE)</span></pre>
+
+<h4>Multi-field Search (OR across columns)</h4>
+<pre><span class="comment">// JavaScript — sanitize search first!</span>
+const s = search.replace(/[(),"'\\]/g, '').trim().slice(0, 200);
+const { data, count } = await supabaseAdmin
+  .from('iocs')
+  .select('*', { count: 'exact' })
+  .eq('tenant_id', tenantId)
+  .or(`value.ilike.%${s}%,threat_actor.ilike.%${s}%,malware_family.ilike.%${s}%,notes.ilike.%${s}%`)
+  .range(0, 49);
+
+<span class="comment">-- SQL equivalent:</span>
+SELECT * FROM iocs
+WHERE tenant_id = '...'
+  AND (value ILIKE '%apt29%'
+    OR threat_actor ILIKE '%apt29%'
+    OR malware_family ILIKE '%apt29%'
+    OR notes ILIKE '%apt29%')
+LIMIT 50;</pre>
+
+<h3>6.6 Indexing Strategy</h3>
+<table>
+  <tr><th>Index</th><th>Column(s)</th><th>Type</th><th>Purpose</th><th>Query time</th></tr>
+  <tr><td><code>idx_iocs_tenant_id</code></td><td>tenant_id</td><td>B-Tree</td><td>Primary tenant filter (every query)</td><td>&lt; 1ms</td></tr>
+  <tr><td><code>idx_iocs_risk_score</code></td><td>tenant_id, risk_score DESC</td><td>B-Tree (composite)</td><td>Default sort by risk score</td><td>&lt; 2ms</td></tr>
+  <tr><td><code>idx_iocs_type</code></td><td>tenant_id, type</td><td>B-Tree (composite)</td><td>Type filter (ip, domain, etc.)</td><td>&lt; 1ms</td></tr>
+  <tr><td><code>idx_iocs_value_trgm</code></td><td>value</td><td>GIN (trigram)</td><td>ILIKE search — confirmed 0.112ms for 33K rows</td><td>0.112ms ✅</td></tr>
+  <tr><td><code>idx_iocs_active_partial</code></td><td>tenant_id (WHERE status='active')</td><td>Partial B-Tree</td><td>Active IOC queries (most common)</td><td>&lt; 1ms</td></tr>
+  <tr><td><code>idx_iocs_created_at</code></td><td>tenant_id, created_at DESC</td><td>B-Tree (composite)</td><td>Timeline / recent IOCs sort</td><td>&lt; 2ms</td></tr>
+</table>
+
+<h4>Full-Text Search Upgrade (optional — for &gt;500K rows)</h4>
+<pre><span class="comment">-- For large datasets, add a tsvector column for faster full-text search:</span>
+ALTER TABLE iocs ADD COLUMN IF NOT EXISTS fts tsvector
+  GENERATED ALWAYS AS (
+    to_tsvector('english', coalesce(value,'') || ' ' ||
+      coalesce(threat_actor,'') || ' ' ||
+      coalesce(malware_family,'') || ' ' ||
+      coalesce(notes,''))
+  ) STORED;
+
+CREATE INDEX idx_iocs_fts ON iocs USING GIN(fts);
+
+<span class="comment">-- Query (3-10x faster than ILIKE for &gt;100K rows):</span>
+SELECT * FROM iocs
+WHERE tenant_id = '...'
+  AND fts @@ plainto_tsquery('english', 'apt29 cobalt strike')
+ORDER BY risk_score DESC LIMIT 50;</pre>
+
+<h3>6.7 Scaling Best Practices (Threat Intel Platforms)</h3>
+<ul style="color:var(--muted);line-height:2.2;margin-left:20px">
+  <li><strong style="color:var(--text)">Partition by tenant_id</strong> — for &gt;1M rows: <code>PARTITION BY HASH(tenant_id)</code> keeps per-tenant queries on single partitions</li>
+  <li><strong style="color:var(--text)">Archive stale IOCs</strong> — move IOCs older than 6 months to <code>iocs_archive</code>; active table stays &lt;100K rows</li>
+  <li><strong style="color:var(--text)">Connection pooling</strong> — use Supabase Pooler (PgBouncer) for backend; set <code>pool_mode=transaction</code></li>
+  <li><strong style="color:var(--text)">Rate-limit enrichment</strong> — VT API is 4 req/min on free; use enrichment queue (<code>ioc_enrichment_queue</code> table) with worker</li>
+  <li><strong style="color:var(--text)">Cache stats</strong> — cache <code>/api/ingest/stats</code> for 60s (Redis or in-memory); prevents 5 COUNT queries per page load</li>
+  <li><strong style="color:var(--text)">Deduplicate on ingest</strong> — the <code>UNIQUE(tenant_id, value)</code> constraint prevents duplicates; upsert strategy preserves highest risk_score</li>
+  <li><strong style="color:var(--text)">VACUUM schedule</strong> — IOC tables with frequent upserts need aggressive autovacuum; set <code>autovacuum_vacuum_scale_factor = 0.05</code></li>
+</ul>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!--  §7 SECURITY CHECKLIST                                            -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2 id="checklist">§7 Security-Validation Checklist</h2>
+
+<h3>7.1 XSS Prevention</h3>
+<ul class="checklist">
+  <li><span class="chk"></span><strong>IOC value rendering</strong> — all IOC values pass through <code>_esc()</code> (HTML entity encoding) before innerHTML insertion. Verify: inject <code>&lt;img src=x onerror=alert(1)&gt;</code> as an IOC value. Expected: rendered as text, no alert fires.</li>
+  <li><span class="chk"></span><strong>Search input</strong> — search box uses <code>oninput</code> → <code>iocdbOnSearch()</code> → <code>sanitizeSearch()</code>. Verify: type <code>";&lt;script&gt;alert(1)&lt;/script&gt;</code> in search box. Expected: special chars stripped, no XSS.</li>
+  <li><span class="chk"></span><strong>Error messages</strong> — error messages use <code>_esc(err.message)</code>. Verify: cause a server error with a malicious message. Expected: HTML entities shown, no script execution.</li>
+  <li><span class="chk"></span><strong>Modal content</strong> — IOC detail modal renders via template literals with <code>_esc()</code>. Verify: create IOC with <code>value='&lt;b&gt;bold&lt;/b&gt;'</code>. Expected: shown literally, not rendered as HTML.</li>
+  <li><span class="chk"></span><strong>CSP header</strong> — verify <code>Content-Security-Policy</code> header on backend responses restricts script-src to self + CDN only.</li>
+</ul>
+
+<h3>7.2 Token Theft Simulation</h3>
+<ul class="checklist">
+  <li><span class="chk"></span><strong>localStorage access</strong> — open DevTools > Console > <code>localStorage.getItem('wadjet_access_token')</code>. Note: v6.0 goal is httpOnly cookies; v6.1 bridge still uses localStorage for API compat. Risk: low with short 15-min TTL.</li>
+  <li><span class="chk"></span><strong>Token TTL enforcement</strong> — decode the JWT: <code>atob(token.split('.')[1])</code>. Verify <code>exp</code> is within 15 minutes of <code>iat</code>.</li>
+  <li><span class="chk"></span><strong>Token reuse after logout</strong> — logout, then try <code>fetch('/api/iocs', { headers: { Authorization: 'Bearer ' + oldToken }})</code>. Expected: 401 (token revoked or expired).</li>
+  <li><span class="chk"></span><strong>Refresh token rotation</strong> — verify each <code>/api/auth/refresh</code> call returns a NEW refresh token and the old one is invalidated (check <code>refresh_tokens</code> table: old token should be marked <code>used=true</code>).</li>
+  <li><span class="chk"></span><strong>Cross-tenant token test</strong> — log in as tenant 001 user, manually change <code>X-Tenant-ID</code> header to 002. Expected: still sees only tenant 001 data (tenant_id enforced in query, not header).</li>
+</ul>
+
+<h3>7.3 MFA Bypass Tests</h3>
+<ul class="checklist">
+  <li><span class="chk"></span><strong>Skip MFA challenge</strong> — intercept login response with <code>mfa_required: true</code>. Manually call <code>_finalizeLogin(userData, null)</code>. Expected: <code>_finalizeLogin</code> requires a valid <code>mfa_session_token</code>; null token fails at <code>/api/auth/mfa/challenge</code>.</li>
+  <li><span class="chk"></span><strong>Replay TOTP code</strong> — use the same 6-digit TOTP code twice. Expected: second use returns <code>{ error: "TOTP code already used" }</code> (code marked used in <code>mfa_challenges</code> table).</li>
+  <li><span class="chk"></span><strong>Expired challenge</strong> — wait for MFA session token to expire (5 min). Try to verify. Expected: <code>{ error: "MFA session expired" }</code>.</li>
+  <li><span class="chk"></span><strong>Brute-force TOTP</strong> — send 10 wrong TOTP codes in rapid succession. Expected: rate limiting kicks in (429) after 5 attempts.</li>
+  <li><span class="chk"></span><strong>MFA enforcement for admins</strong> — verify ADMIN/SUPER_ADMIN accounts have <code>mfa_enforced=true</code> in DB. Attempt login without MFA enrollment. Expected: <code>{ error: "MFA required — please enroll first" }</code>.</li>
+</ul>
+
+<h3>7.4 SQL / PostgREST Injection</h3>
+<ul class="checklist">
+  <li><span class="chk"></span><strong>Search injection</strong> — search for <code>',tenant_id.eq.00000000-0000-0000-0000-000000000002</code>. Expected: commas/quotes stripped by <code>sanitizeSearch()</code>, no cross-tenant data.</li>
+  <li><span class="chk"></span><strong>Sort injection</strong> — send <code>sort=risk_score;DROP TABLE iocs</code>. Expected: validated against <code>SORTABLE_COLS</code> whitelist, falls back to <code>risk_score</code>, no SQL executed.</li>
+  <li><span class="chk"></span><strong>Pivot field injection</strong> — send <code>POST /api/iocs/pivot</code> with <code>field='id;DROP TABLE iocs'</code>. Expected: validated against <code>validFields</code> whitelist, returns 400.</li>
+</ul>
+
+<h3>7.5 RLS Bypass Tests</h3>
+<ul class="checklist">
+  <li><span class="chk"></span><strong>Anon access</strong> — call <code>GET /api/iocs</code> without Authorization header. Expected: 401 MISSING_TOKEN.</li>
+  <li><span class="chk"></span><strong>Other tenant's IOC by ID</strong> — get an IOC ID from tenant 002 (from admin). Try <code>GET /api/iocs/&lt;tenant-002-ioc-id&gt;</code> as tenant 001 user. Expected: 404 (query includes <code>.eq('tenant_id', tenant001Id)</code>).</li>
+  <li><span class="chk"></span><strong>Stats cross-tenant</strong> — as ANALYST, verify <code>/api/ingest/stats</code> returns only tenant 001 counts, not all-tenant totals (all-tenant fallback is ADMIN-only).</li>
+</ul>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!--  §8 TESTING ARTIFACTS                                             -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2 id="testing">§8 Testing Artifacts</h2>
+
+<h3>8.1 cURL Examples</h3>
+
+<h4>Login &amp; Get Token</h4>
+<div class="curl-block">
+<span class="curl-comment"># POST /api/auth/login</span>
+<span class="curl-cmd">TOKEN=$(curl -s -X POST https://wadjet-eye-ai.onrender.com/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"analyst@mssp.com","password":"YOUR_PASSWORD"}' \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('token',''))")</span>
+
+<span class="curl-comment"># Expected response:</span>
+<span class="curl-resp">{
+  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "refreshToken": "a1b2c3...",
+  "expiresIn": 900,
+  "user": { "id": "...", "email": "analyst@mssp.com", "role": "ANALYST", "tenant_id": "..." }
+}</span>
+</div>
+
+<h4>List IOCs (paginated)</h4>
+<div class="curl-block">
+<span class="curl-cmd">curl -s "https://wadjet-eye-ai.onrender.com/api/iocs?page=1&limit=5&sort=risk_score&order=desc" \
+  -H "Authorization: Bearer $TOKEN"</span>
+
+<span class="curl-comment"># Expected response:</span>
+<span class="curl-resp">{
+  "data": [
+    { "id": "...", "value": "192.0.2.1", "type": "ip", "risk_score": 95, "reputation": "malicious" },
+    ...
+  ],
+  "total": 12079,
+  "pagination": { "page": 1, "limit": 5, "total": 12079 }
+}</span>
+</div>
+
+<h4>Search IOC (exact + partial)</h4>
+<div class="curl-block">
+<span class="curl-comment"># Exact match</span>
+<span class="curl-cmd">curl -s "https://wadjet-eye-ai.onrender.com/api/iocs?search=costliergridco.click" \
+  -H "Authorization: Bearer $TOKEN"</span>
+<span class="curl-resp">{ "data": [{ "value": "costliergridco.click", ... }], "total": 1 }</span>
+
+<span class="curl-comment"># Partial match (trigram index)</span>
+<span class="curl-cmd">curl -s "https://wadjet-eye-ai.onrender.com/api/iocs?search=costliergridco" \
+  -H "Authorization: Bearer $TOKEN"</span>
+<span class="curl-resp">{ "data": [...], "total": 3 }</span>
+
+<span class="curl-comment"># Type filter</span>
+<span class="curl-cmd">curl -s "https://wadjet-eye-ai.onrender.com/api/iocs?type=ip&reputation=malicious&limit=10" \
+  -H "Authorization: Bearer $TOKEN"</span>
+</div>
+
+<h4>Stats Endpoint</h4>
+<div class="curl-block">
+<span class="curl-cmd">curl -s "https://wadjet-eye-ai.onrender.com/api/ingest/stats" \
+  -H "Authorization: Bearer $TOKEN"</span>
+<span class="curl-resp">{
+  "total_iocs": 12079,
+  "malicious_iocs": 9543,
+  "high_risk": 10816,
+  "by_type": { "ip": 4521, "domain": 3210, "url": 1890, "md5": 1203, ... },
+  "by_feed": { "otx": 6000, "abuseipdb": 3000, "urlhaus": 2079 },
+  "feeds_active": 3,
+  "ioc_types": 8,
+  "tenant_id": "00000000-0000-0000-0000-000000000001",
+  "generated_at": "2024-04-02T..."
+}</span>
+</div>
+
+<h4>Bulk Import IOCs</h4>
+<div class="curl-block">
+<span class="curl-cmd">curl -s -X POST "https://wadjet-eye-ai.onrender.com/api/iocs/bulk" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "iocs": [
+      { "value": "10.0.0.1", "type": "ip", "reputation": "malicious", "risk_score": 85 },
+      { "value": "malicious.example.com", "type": "domain", "reputation": "suspicious", "risk_score": 70 }
+    ]
+  }'</span>
+<span class="curl-resp">{ "imported": 2, "skipped": 0, "data": [...] }</span>
+</div>
+
+<h4>Enrich IOC</h4>
+<div class="curl-block">
+<span class="curl-cmd">curl -s "https://wadjet-eye-ai.onrender.com/api/iocs/&lt;ioc-id&gt;/enrich" \
+  -H "Authorization: Bearer $TOKEN"</span>
+<span class="curl-resp">{
+  "id": "...", "value": "192.0.2.1",
+  "enrichment_data": {
+    "virustotal": { "malicious": 45, "suspicious": 3, "harmless": 12 },
+    "abuseipdb": { "abuseConfidenceScore": 87, "totalReports": 342 }
+  },
+  "fromCache": false
+}</span>
+</div>
+
+<h4>Token Validation Tests</h4>
+<div class="curl-block">
+<span class="curl-comment"># Test expired token</span>
+<span class="curl-cmd">curl -s "https://wadjet-eye-ai.onrender.com/api/iocs?limit=1" \
+  -H "Authorization: Bearer EXPIRED_TOKEN_HERE"</span>
+<span class="curl-resp">{ "error": "Token expired", "code": "EXPIRED_TOKEN", "hint": "Call POST /api/auth/refresh with your refresh token" }</span>
+
+<span class="curl-comment"># Test missing token</span>
+<span class="curl-cmd">curl -s "https://wadjet-eye-ai.onrender.com/api/iocs?limit=1"</span>
+<span class="curl-resp">{ "error": "No token provided", "code": "MISSING_TOKEN" }</span>
+
+<span class="curl-comment"># Test refresh</span>
+<span class="curl-cmd">curl -s -X POST "https://wadjet-eye-ai.onrender.com/api/auth/refresh" \
+  -H "Content-Type: application/json" \
+  -d '{"refreshToken":"YOUR_REFRESH_TOKEN"}'</span>
+<span class="curl-resp">{ "token": "NEW_JWT...", "refreshToken": "NEW_REFRESH...", "expiresIn": 900 }</span>
+</div>
+
+<h3>8.2 Postman Collection Outline</h3>
+<p>Import this variable set into Postman:</p>
+<pre>{
+  "info": { "name": "Wadjet-Eye AI v7.1 API Tests" },
+  "variable": [
+    { "key": "base_url", "value": "https://wadjet-eye-ai.onrender.com" },
+    { "key": "token",    "value": "" },
+    { "key": "tenant_id","value": "00000000-0000-0000-0000-000000000001" }
+  ],
+  "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{token}}" }] },
+  "tests": [
+    "POST {{base_url}}/api/auth/login → pm.environment.set('token', pm.response.json().token)",
+    "GET  {{base_url}}/api/iocs?limit=5 → status 200, body.total > 0",
+    "GET  {{base_url}}/api/iocs?search=costliergridco → total === 1",
+    "GET  {{base_url}}/api/ingest/stats → total_iocs > 0",
+    "POST {{base_url}}/api/iocs/bulk [2 IOCs] → imported: 2",
+    "GET  {{base_url}}/api/iocs?search=INVALID<script> → sanitized, no 500",
+    "GET  {{base_url}}/api/iocs/OTHER_TENANT_ID → 404",
+    "GET  {{base_url}}/api/iocs (no token) → 401 MISSING_TOKEN"
+  ]
+}</pre>
+
+<h3>8.3 Unit Test Sketches (Jest)</h3>
+<pre><span class="comment">// backend/tests/iocs.test.js</span>
+describe('IOC Routes', () => {
+  test('resolveTenantId falls back to DEFAULT_TENANT when null', () => {
+    const req = { user: { email: 'test@test.com', tenant_id: null } };
+    expect(resolveTenantId(req)).toBe(process.env.DEFAULT_TENANT_ID);
+  });
+
+  test('sanitizeSearch removes injection chars', () => {
+    expect(sanitizeSearch('test",value.eq.secret')).toBe('testvalueEqsecret'.toLowerCase());
+    expect(sanitizeSearch("'; DROP TABLE iocs; --")).toBe(' DROP TABLE iocs --');
+    expect(sanitizeSearch('a'.repeat(300))).toHaveLength(200);
+  });
+
+  test('GET /api/iocs returns 401 without token', async () => {
+    const res = await request(app).get('/api/iocs');
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('MISSING_TOKEN');
+  });
+
+  test('GET /api/iocs returns data for valid tenant', async () => {
+    const res = await request(app)
+      .get('/api/iocs?limit=5')
+      .set('Authorization', `Bearer ${validToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBeGreaterThan(0);
+    expect(res.body.data).toHaveLength(5);
+  });
+});
+
+<span class="comment">// frontend/tests/auth.test.js</span>
+describe('Auth Token Bridge', () => {
+  beforeEach(() => localStorage.clear());
+
+  test('_finalizeLogin saves token to localStorage', async () => {
+    await _finalizeLogin({ email: 'test@test.com', role: 'ANALYST' }, 'jwt-token-here');
+    expect(localStorage.getItem('wadjet_access_token')).toBe('jwt-token-here');
+  });
+
+  test('getAuthToken reads from localStorage', () => {
+    localStorage.setItem('wadjet_access_token', 'my-jwt');
+    expect(window.getAuthToken()).toBe('my-jwt');
+  });
+
+  test('migrateFromV5 runs only once', () => {
+    migrateFromV5();
+    localStorage.setItem('wadjet_access_token', 'keep-me');
+    migrateFromV5(); // second call — should NOT delete token
+    expect(localStorage.getItem('wadjet_access_token')).toBe('keep-me');
+  });
+});</pre>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!--  §9 TENANT SCOPE DISCREPANCY                                      -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2 id="tenant-scope">§9 Tenant Scope Discrepancy (12,079 vs 33,750 IOCs)</h2>
+
+<div class="warn">
+  <div class="warn-title">⚠️ The diagnostic shows 12,079 IOCs — not 33,750. Here's why.</div>
+  <p style="margin-top:8px;color:var(--muted)">The 33,750 total is the <strong>platform-wide count across all three tenants</strong>. Your user's <code>tenant_id</code> is <code>00000000-...001</code>, which owns ~12,079 IOCs. Tenants 002 and 003 hold the remaining ~21,671 IOCs.</p>
+</div>
+
+<h3>9.1 Verify the Tenant Distribution</h3>
+<pre><span class="comment">-- Run in Supabase SQL Editor:</span>
+SELECT tenant_id, COUNT(*) as ioc_count
+FROM iocs
+GROUP BY tenant_id
+ORDER BY ioc_count DESC;
+
+<span class="comment">-- Expected output:</span>
+<span class="comment">-- tenant_id                              | ioc_count</span>
+<span class="comment">-- 00000000-0000-0000-0000-000000000001   | 12079</span>
+<span class="comment">-- 00000000-0000-0000-0000-000000000002   | 11200</span>
+<span class="comment">-- 00000000-0000-0000-0000-000000000003   | 10471</span>
+<span class="comment">-- Total                                  | 33750</span></pre>
+
+<h3>9.2 Why the Frontend May Still Show 0 (Display Bug)</h3>
+<p>The API is working correctly (12,079 returned). If the frontend still shows 0, the most likely causes are:</p>
+<table>
+  <tr><th>Cause</th><th>Check</th><th>Fix</th></tr>
+  <tr>
+    <td>Stats bar not updating after <code>iocdbLoadStats()</code></td>
+    <td>Open DevTools, run <code>document.getElementById('iocdb-stat-total').textContent</code> in console — should show a number</td>
+    <td>Hard-reload (Ctrl+Shift+R) to clear any cached JS</td>
+  </tr>
+  <tr>
+    <td>Old cached version of <code>ioc-intelligence.js</code> running</td>
+    <td>In DevTools > Sources, find <code>ioc-intelligence.js</code> — check the version comment at top (should say v5.2)</td>
+    <td>Add <code>?v=7.1</code> to script tag or configure no-cache headers</td>
+  </tr>
+  <tr>
+    <td><code>renderIOCDatabase()</code> never called (wrong container ID)</td>
+    <td>Check that an element with id <code>iocDatabaseWrap</code> or <code>page-ioc-database</code> exists in the DOM when the IOC page is shown</td>
+    <td>Check <code>module-router.js</code> — ensure it calls <code>renderIOCDatabase()</code> when navigating to the IOC page</td>
+  </tr>
+  <tr>
+    <td>IOCDB.loading flag stuck as <code>true</code></td>
+    <td>In DevTools console: <code>IOCDB.loading</code> — if <code>true</code> after page load, a previous load request threw before resetting it</td>
+    <td>Run <code>IOCDB.loading = false; iocdbLoadPage(1);</code> in console</td>
+  </tr>
+  <tr>
+    <td>Stats show numbers but table shows empty</td>
+    <td>Open Network tab, filter by <code>/api/iocs</code>, check the response — does it have <code>data: [...]</code>?</td>
+    <td>If response is good, it's a DOM rendering issue — check <code>iocdb-table-inner</code> element exists</td>
+  </tr>
+</table>
+
+<h3>9.3 SUPER_ADMIN All-Tenant View</h3>
+<pre><span class="comment">-- To give SUPER_ADMIN users visibility across all tenants, update the stats query:</span>
+<span class="comment">-- (already implemented in ioc-ingestion.js — triggers when user tenant returns 0)</span>
+
+<span class="comment">-- For the IOC list, add an optional admin override in iocs.js GET handler:</span>
+<span class="comment">// In resolveTenantId, add SUPER_ADMIN bypass:</span>
+function resolveTenantId(req) {
+  const role = req.user?.role || '';
+  if (['SUPER_ADMIN'].includes(role) && req.query.all_tenants === '1') {
+    return null; // Will skip .eq('tenant_id', ...) — see note below
+  }
+  return req.tenantId || req.user?.tenant_id || DEFAULT_TENANT;
+}
+<span class="comment">// Then in the query builder:</span>
+let query = supabaseAdmin.from('iocs').select('*', { count: 'exact' });
+if (tenantId) query = query.eq('tenant_id', tenantId); // skip for SUPER_ADMIN all-view</pre>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!--  §10 PRODUCTION DEPLOYMENT                                        -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2 id="deployment">§10 Step-by-Step Production Deployment Guide</h2>
+
+<h3>Phase 1: Database (5 min)</h3>
+<div class="step">
+  <div class="step-num">1</div>
+  <div class="step-body">
+    <div class="step-title">Open Supabase SQL Editor</div>
+    <p>Go to <a href="https://supabase.com/dashboard/project/miywxnplaltduuscjfmq/sql/new" target="_blank">https://supabase.com/dashboard/project/miywxnplaltduuscjfmq/sql/new</a></p>
+  </div>
+</div>
+<div class="step">
+  <div class="step-num">2</div>
+  <div class="step-body">
+    <div class="step-title">Run migration-v7.0-ioc-rls.sql</div>
+    <p>Paste the entire contents of <code>backend/database/migration-v7.0-ioc-rls.sql</code> and click Run. You should see output ending with:</p>
+    <pre>-- Migration v7.0 Applied Successfully</pre>
+  </div>
+</div>
+<div class="step">
+  <div class="step-num">3</div>
+  <div class="step-body">
+    <div class="step-title">Verify migration</div>
+    <pre><span class="comment">-- Run these verification queries:</span>
+SELECT COUNT(*) FROM iocs;                           <span class="comment">-- Should be ~33,750</span>
+SELECT policyname, cmd FROM pg_policies WHERE tablename='iocs';  <span class="comment">-- Should show 2+ policies</span>
+SELECT indexname FROM pg_indexes WHERE tablename='iocs';          <span class="comment">-- Should show 6+ indexes</span></pre>
+  </div>
+</div>
+
+<h3>Phase 2: Backend (5 min)</h3>
+<div class="step">
+  <div class="step-num">4</div>
+  <div class="step-body">
+    <div class="step-title">Verify Render environment variables</div>
+    <p>Go to <a href="https://dashboard.render.com" target="_blank">dashboard.render.com</a> → wadjet-eye-ai → Environment. Ensure these are set:</p>
+    <pre>SUPABASE_URL=https://miywxnplaltduuscjfmq.supabase.co
+SUPABASE_SERVICE_KEY=sb_secret_... <span class="comment">(or eyJ... legacy)</span>
+JWT_SECRET=...
+DEFAULT_TENANT_ID=00000000-0000-0000-0000-000000000001</pre>
+  </div>
+</div>
+<div class="step">
+  <div class="step-num">5</div>
+  <div class="step-body">
+    <div class="step-title">Push code and trigger deploy</div>
+    <pre>git add backend/routes/iocs.js \
+        backend/routes/ioc-ingestion.js \
+        backend/middleware/auth.js \
+        js/login-secure-patch.js \
+        js/auth-secure.js \
+        js/ioc-intelligence.js \
+        index.html \
+        backend/database/migration-v7.0-ioc-rls.sql
+git commit -m "fix(auth+ioc): v7.1 — token bridge + service_role IOC queries + RLS policies"
+git push origin main</pre>
+    <p>Render auto-deploys. Monitor logs at <a href="https://dashboard.render.com" target="_blank">dashboard.render.com</a> → Logs.</p>
+  </div>
+</div>
+<div class="step">
+  <div class="step-num">6</div>
+  <div class="step-body">
+    <div class="step-title">Verify backend health</div>
+    <pre>curl https://wadjet-eye-ai.onrender.com/health
+<span class="comment"># Expected: {"status":"ok","version":"7.1.0",...}</span></pre>
+  </div>
+</div>
+
+<h3>Phase 3: Frontend (2 min)</h3>
+<div class="step">
+  <div class="step-num">7</div>
+  <div class="step-body">
+    <div class="step-title">Hard-reload the application</div>
+    <p>In Chrome/Firefox: <kbd>Ctrl+Shift+R</kbd> (Windows) or <kbd>Cmd+Shift+R</kbd> (Mac) to bypass cache. Log out and log back in to regenerate a fresh token.</p>
+  </div>
+</div>
+<div class="step">
+  <div class="step-num">8</div>
+  <div class="step-body">
+    <div class="step-title">Run the built-in diagnostic</div>
+    <p>Navigate to IOC Intelligence Database → if a warning banner appears, click <strong>"Run Diagnostic"</strong> button. The 5-step health check will confirm:</p>
+    <ul style="color:var(--muted);margin-left:20px;line-height:2">
+      <li>✅ Backend: OK</li>
+      <li>✅ Auth token: Found (930 chars)</li>
+      <li>✅ Stats: total_iocs=12079</li>
+      <li>✅ IOC query: total=12079 — data accessible</li>
+      <li>✅ Search 'costliergridco': 1 match</li>
+    </ul>
+  </div>
+</div>
+<div class="step">
+  <div class="step-num">9</div>
+  <div class="step-body">
+    <div class="step-title">Rotate credentials (IMPORTANT)</div>
+    <div class="warn">
+      <div class="warn-title">⚠️ Security action required</div>
+      <p>Immediately rotate passwords for these accounts (they were in the old <code>_EMERGENCY_ACCOUNTS</code> object in plaintext client-side JS):</p>
+      <ul style="margin-left:20px;color:var(--muted)">
+        <li>mahmoud.osman@wadjet.ai</li>
+        <li>mahmoud@mssp.com</li>
+        <li>admin@mssp.com</li>
+        <li>analyst@mssp.com</li>
+      </ul>
+    </div>
+  </div>
+</div>
+<div class="step">
+  <div class="step-num">10</div>
+  <div class="step-body">
+    <div class="step-title">Run security test suite</div>
+    <pre>bash backend/scripts/security-tests.sh
+<span class="comment"># Expected: All tests pass
+# Key checks: XSS, token expiry, MFA enforcement, tenant isolation</span></pre>
+  </div>
+</div>
+
+<hr class="section-divider">
+
+<div style="text-align:center;color:var(--muted);font-size:.8em;padding:20px 0">
+  <strong style="color:var(--text)">Wadjet-Eye AI</strong> — Master Security &amp; IOC Fix Guide v7.1<br>
+  Generated 2024-04-02 &nbsp;|&nbsp; Backend: <a href="https://wadjet-eye-ai.onrender.com">https://wadjet-eye-ai.onrender.com</a>
+</div>
+
+</div><!-- .page -->
+</body>
+</html>

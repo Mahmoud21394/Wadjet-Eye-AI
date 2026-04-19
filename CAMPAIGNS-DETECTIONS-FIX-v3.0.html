@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wadjet-Eye AI — Active Campaigns & Live Detections Fix Guide v3.0</title>
+<style>
+  :root {
+    --bg: #080c14; --card: #0d1117; --surface: #161b22;
+    --border: #1e2d3d; --text: #e6edf3; --muted: #8b949e;
+    --dim: #4b5563; --blue: #22d3ee; --purple: #a78bfa;
+    --red: #f43f5e; --orange: #fb923c; --green: #34d399; --yellow: #fbbf24;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; font-size: 14px; line-height: 1.65; padding: 0; }
+
+  .hero { background: linear-gradient(135deg, #0a0f1e, #0d1117); border-bottom: 1px solid var(--border); padding: 48px 40px 36px; }
+  .hero h1 { font-size: 2em; font-weight: 800; color: #fff; margin-bottom: 10px; }
+  .hero h1 span { color: var(--blue); }
+  .hero .subtitle { color: var(--muted); font-size: 1.05em; max-width: 640px; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: .72em; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; margin-right: 6px; }
+  .badge-red    { background: rgba(244,63,94,.15);  border: 1px solid rgba(244,63,94,.3);  color: var(--red); }
+  .badge-blue   { background: rgba(34,211,238,.12); border: 1px solid rgba(34,211,238,.25);color: var(--blue); }
+  .badge-green  { background: rgba(52,211,153,.12); border: 1px solid rgba(52,211,153,.25);color: var(--green); }
+  .badge-purple { background: rgba(167,139,250,.12);border: 1px solid rgba(167,139,250,.25);color: var(--purple); }
+
+  main { max-width: 960px; margin: 0 auto; padding: 40px 24px 80px; }
+
+  h2 { font-size: 1.25em; font-weight: 800; color: #fff; margin: 32px 0 14px; padding-bottom: 10px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+  h2 .n { width: 26px; height: 26px; background: linear-gradient(135deg,#1d4ed8,#3b82f6); color: #fff; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; font-size: .75em; font-weight: 800; flex-shrink: 0; }
+  h3 { font-size: 1em; font-weight: 700; color: var(--blue); margin: 18px 0 8px; }
+
+  p { color: var(--muted); margin-bottom: 10px; }
+  p strong { color: var(--text); }
+
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px 22px; margin-bottom: 16px; }
+  .card.green { border-left: 3px solid var(--green); }
+  .card.red   { border-left: 3px solid var(--red); }
+  .card.blue  { border-left: 3px solid var(--blue); }
+  .card.purple{ border-left: 3px solid var(--purple); }
+  .card.orange{ border-left: 3px solid var(--orange); }
+
+  .card-title { font-size: .95em; font-weight: 700; color: var(--text); margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+
+  pre, code { font-family: 'JetBrains Mono', 'Consolas', monospace; }
+  pre { background: #060a10; border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; overflow-x: auto; font-size: .82em; color: #c9d1d9; margin: 10px 0; line-height: 1.5; }
+  code { background: rgba(255,255,255,.06); padding: 1px 6px; border-radius: 4px; font-size: .88em; color: var(--blue); }
+
+  .step { display: flex; gap: 14px; margin-bottom: 20px; }
+  .step-num { width: 28px; height: 28px; background: linear-gradient(135deg,#1d4ed8,#3b82f6); color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: .78em; font-weight: 800; flex-shrink: 0; margin-top: 2px; }
+  .step-body { flex: 1; }
+  .step-title { font-weight: 700; color: var(--text); margin-bottom: 4px; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px; }
+  @media(max-width:640px){ .grid2 { grid-template-columns: 1fr; } }
+
+  .file-pill { display: inline-flex; align-items: center; gap: 5px; background: rgba(167,139,250,.1); border: 1px solid rgba(167,139,250,.2); color: var(--purple); padding: 3px 10px; border-radius: 20px; font-family: monospace; font-size: .8em; margin: 2px; }
+  .file-pill.changed { background: rgba(34,211,238,.1); border-color: rgba(34,211,238,.2); color: var(--blue); }
+
+  table { width: 100%; border-collapse: collapse; font-size: .86em; }
+  th { padding: 9px 12px; text-align: left; background: #060a10; border-bottom: 1px solid var(--border); color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: .72em; letter-spacing: .04em; }
+  td { padding: 9px 12px; border-bottom: 1px solid #161b22; color: var(--muted); vertical-align: top; }
+  td strong { color: var(--text); }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,.02); }
+
+  .check { color: var(--green); }
+  .warn  { color: var(--yellow); }
+  .err   { color: var(--red); }
+
+  .cmd { background: #060a10; border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; font-family: monospace; font-size: .84em; color: var(--green); margin: 8px 0; position: relative; }
+  .cmd::before { content: '$ '; color: var(--dim); }
+
+  .tip { background: rgba(34,211,238,.06); border: 1px solid rgba(34,211,238,.2); border-radius: 8px; padding: 12px 16px; margin: 12px 0; color: var(--muted); font-size: .88em; }
+  .tip strong { color: var(--blue); }
+
+  .warn-box { background: rgba(251,191,36,.06); border: 1px solid rgba(251,191,36,.2); border-radius: 8px; padding: 12px 16px; margin: 12px 0; color: var(--muted); font-size: .88em; }
+  .warn-box strong { color: var(--yellow); }
+
+  .toc { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 22px; margin-bottom: 28px; }
+  .toc h3 { color: var(--muted); font-size: .82em; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px; }
+  .toc a { color: var(--blue); text-decoration: none; display: block; padding: 4px 0; font-size: .88em; border-bottom: 1px solid #161b22; }
+  .toc a:last-child { border-bottom: none; }
+  .toc a:hover { color: #c4b5fd; }
+
+  footer { text-align: center; padding: 40px; color: var(--dim); font-size: .82em; border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div style="max-width:960px;margin:0 auto">
+    <div style="margin-bottom:12px">
+      <span class="badge badge-blue">v3.0</span>
+      <span class="badge badge-red">Critical Fix</span>
+      <span class="badge badge-green">2026-04-02</span>
+    </div>
+    <h1>Active Campaigns &amp; Live Detections<br><span>Fix &amp; SOC Dashboard Guide</span></h1>
+    <p class="subtitle">
+      Complete fix for Active Campaigns showing "No Active Campaigns" and Live Detections
+      showing empty feed, plus full SOC dashboard with campaign correlation engine.
+    </p>
+  </div>
+</div>
+
+<main>
+
+  <div class="toc">
+    <h3>Contents</h3>
+    <a href="#root-causes">1. Root Cause Analysis — Why Campaigns &amp; Detections Were Blank</a>
+    <a href="#files-changed">2. Files Changed</a>
+    <a href="#fixes">3. Detailed Bug Fixes Applied</a>
+    <a href="#architecture">4. SOC Dashboard Architecture</a>
+    <a href="#deploy">5. Deployment Steps (Git + Render)</a>
+    <a href="#backend">6. Backend Requirements (Render)</a>
+    <a href="#verify">7. Verification Checklist</a>
+    <a href="#sql">8. Supabase SQL: Migration &amp; RLS Policies</a>
+    <a href="#troubleshoot">9. Troubleshooting</a>
+  </div>
+
+  <!-- ─── 1. ROOT CAUSE ─── -->
+  <h2 id="root-causes"><span class="n">1</span> Root Cause Analysis</h2>
+
+  <div class="card red">
+    <div class="card-title"><span style="color:var(--red)">🔴</span> Bug #1 — PAGE_CONFIG Race Condition (Critical)</div>
+    <p><strong>File:</strong> <code>js/campaigns-soc.js</code> (v2.0), <code>js/live-detections-soc.js</code> (v2.0)</p>
+    <p>
+      The SOC modules patched <code>PAGE_CONFIG['campaigns']</code> inside a single
+      <code>setTimeout(fn, 150)</code>. If <code>main.js</code> executed its navigation
+      before that timer fired, the original <code>renderCampaigns()</code> from <code>pages.js</code>
+      (which uses <code>ARGUS_DATA</code> mock data) ran instead of the SOC module.
+    </p>
+    <p><strong>Fix:</strong> Both modules now install overrides at parse time (immediately) AND
+    run a 40-attempt retry loop (every 150ms = 6 seconds total) to patch
+    <code>PAGE_CONFIG</code> as soon as it's available. <code>main.js</code> itself was also
+    updated to call <code>renderCampaignsSOC()</code> and <code>renderLiveDetectionsSOC()</code>
+    directly if those functions are available.</p>
+  </div>
+
+  <div class="card red">
+    <div class="card-title"><span style="color:var(--red)">🔴</span> Bug #2 — Mock Data Override Not Taking Effect</div>
+    <p><strong>File:</strong> <code>js/pages.js</code> line 124 defines <code>function renderCampaigns()</code> as a
+    hoisted function using <code>ARGUS_DATA.campaigns</code> (mock data). Because this is a regular
+    function declaration, <code>main.js</code>'s <code>PAGE_CONFIG['campaigns'].onEnter</code>
+    called the local scope version, not the global one.</p>
+    <p><strong>Fix:</strong> <code>window.renderCampaigns</code> is now overridden
+    <em>immediately at module parse time</em> in <code>campaigns-soc.js</code>, and
+    <code>main.js PAGE_CONFIG</code> now explicitly checks
+    <code>window.renderCampaignsSOC</code> first.</p>
+  </div>
+
+  <div class="card red">
+    <div class="card-title"><span style="color:var(--red)">🔴</span> Bug #3 — Double /api Prefix in API Calls</div>
+    <p><strong>File:</strong> <code>js/campaigns-soc.js</code>, <code>js/live-detections-soc.js</code>,
+    <code>js/campaign-correlation.js</code> (all v2.0)</p>
+    <p>
+      The <code>_apiGet(path)</code> helper called
+      <code>window.authFetch('/api' + path)</code> while <code>authFetch</code> in
+      <code>auth-interceptor.js</code> already prepends <code>base + '/api'</code>.
+      Result: every API call hit <code>https://wadjet-eye-ai.onrender.com/api/api/cti/campaigns</code>
+      → <strong>404 on every request</strong>.
+    </p>
+    <p><strong>Fix:</strong> All three files now pass <code>path</code> directly to
+    <code>window.authFetch(path)</code> without the <code>/api</code> prefix.
+    The direct <code>fetch()</code> fallback still manually adds <code>/api</code>.</p>
+  </div>
+
+  <div class="card orange">
+    <div class="card-title"><span style="color:var(--orange)">🟠</span> Bug #4 — No Campaigns in Database (Auto-Correlation Not Running)</div>
+    <p>Even after the URL was fixed, the response returned an empty array because
+    no campaigns had been created yet. The correlation engine was never triggered.</p>
+    <p><strong>Fix:</strong> When the campaigns API returns 0 rows, the module now
+    automatically invokes <code>CorrelationEngine.check()</code> after 3 seconds,
+    which triggers ingestion + client-side IOC clustering to auto-create campaigns.</p>
+  </div>
+
+  <div class="card orange">
+    <div class="card-title"><span style="color:var(--orange)">🟠</span> Bug #5 — stopDetections() ReferenceError on Page Leave</div>
+    <p>The <code>onLeave</code> for <code>'detections'</code> called the local <code>stopDetections()</code>
+    from <code>live-pages.js</code> which could be overridden or undefined.</p>
+    <p><strong>Fix:</strong> <code>live-detections-soc.js</code> now overrides
+    <code>window.stopDetections</code> with a safe wrapper, and <code>main.js</code>
+    checks <code>window.stopDetections</code> first.</p>
+  </div>
+
+  <!-- ─── 2. FILES CHANGED ─── -->
+  <h2 id="files-changed"><span class="n">2</span> Files Changed</h2>
+
+  <div class="grid2">
+    <div class="card blue">
+      <div class="card-title">Modified Files</div>
+      <div><span class="file-pill changed">js/campaigns-soc.js</span></div>
+      <div><span class="file-pill changed">js/live-detections-soc.js</span></div>
+      <div><span class="file-pill changed">js/campaign-correlation.js</span></div>
+      <div><span class="file-pill changed">js/main.js</span></div>
+      <div><span class="file-pill changed">css/soc-campaigns.css</span></div>
+      <div><span class="file-pill changed">index.html</span></div>
+    </div>
+    <div class="card green">
+      <div class="card-title">Version Bump</div>
+      <table>
+        <tr><td>campaigns-soc.js</td><td style="color:var(--green)">v2.0 → v3.0</td></tr>
+        <tr><td>live-detections-soc.js</td><td style="color:var(--green)">v2.0 → v3.0</td></tr>
+        <tr><td>campaign-correlation.js</td><td style="color:var(--green)">v2.0 → v3.0</td></tr>
+        <tr><td>css/soc-campaigns.css</td><td style="color:var(--green)">v2.0 → v3.0</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- ─── 3. FIXES ─── -->
+  <h2 id="fixes"><span class="n">3</span> Detailed Bug Fixes Applied</h2>
+
+  <h3>3.1 js/campaigns-soc.js — v3.0 Changes</h3>
+  <div class="card">
+    <table>
+      <tr><th>Change</th><th>Before</th><th>After</th></tr>
+      <tr><td><strong>window.renderCampaigns</strong> override</td><td>Set inside setTimeout callback</td><td>Set <em>immediately</em> at module parse time</td></tr>
+      <tr><td><strong>PAGE_CONFIG patch</strong></td><td>Single setTimeout(fn, 150)</td><td>40-attempt retry loop @ 150ms + DOMContentLoaded listener</td></tr>
+      <tr><td><strong>_apiGet() URL</strong></td><td><code>authFetch('/api' + path)</code> → double /api</td><td><code>authFetch(path)</code> → correct URL</td></tr>
+      <tr><td><strong>Empty state</strong></td><td>Shows static "No Campaigns" message</td><td>Auto-triggers <code>CorrelationEngine.check()</code> after 3s</td></tr>
+      <tr><td><strong>window._csocStopPolling</strong></td><td>Not exported</td><td>Exported to window for main.js onLeave</td></tr>
+      <tr><td><strong>Auth events</strong></td><td>Not handled</td><td>Listens for auth:restored/login/token-refreshed to re-render</td></tr>
+    </table>
+  </div>
+
+  <h3>3.2 js/live-detections-soc.js — v3.0 Changes</h3>
+  <div class="card">
+    <table>
+      <tr><th>Change</th><th>Before</th><th>After</th></tr>
+      <tr><td><strong>window.renderDetections</strong> override</td><td>Not set at parse time</td><td>Set immediately at parse time</td></tr>
+      <tr><td><strong>window.stopDetections</strong> override</td><td>Not overridden</td><td>Overrides with safe <code>_dsocStopPolling()</code></td></tr>
+      <tr><td><strong>PAGE_CONFIG patch</strong></td><td>Single setTimeout</td><td>40-attempt retry loop</td></tr>
+      <tr><td><strong>_dApiGet() URL</strong></td><td>Double /api</td><td>Correct single /api via authFetch</td></tr>
+      <tr><td><strong>Feed table</strong></td><td>Shimmer then empty</td><td>Real /cti/detections data with severity counters</td></tr>
+    </table>
+  </div>
+
+  <h3>3.3 js/main.js — PAGE_CONFIG entries patched</h3>
+  <pre><code>// BEFORE (v2.x)
+'campaigns': { onEnter:(opts)=>renderCampaigns(opts), onLeave:()=>{} },
+'detections':{ onEnter:()=>renderDetections(), onLeave:()=>stopDetections() },
+
+// AFTER (v3.0) — checks window.renderCampaignsSOC first
+'campaigns': {
+  onEnter:(opts)=>{
+    if (typeof window.renderCampaignsSOC === 'function') {
+      window.renderCampaignsSOC().catch(e => console.error('[Campaigns]', e));
+    } else if (typeof window.renderCampaigns === 'function') {
+      window.renderCampaigns(opts);
+    }
+  },
+  onLeave:()=>{ window._csocStopPolling?.(); window._csocCloseDetail?.(); }
+},</code></pre>
+
+  <h3>3.4 js/campaign-correlation.js — v3.0 Changes</h3>
+  <div class="card">
+    <table>
+      <tr><th>Change</th><th>Description</th></tr>
+      <tr><td><strong>_corApi URL fix</strong></td><td>authFetch paths no longer double /api</td></tr>
+      <tr><td><strong>Per-feed health check</strong></td><td>Validates CISA, MITRE, OTX, AbuseIPDB, MISP, URLhaus individually</td></tr>
+      <tr><td><strong>Dedup protection</strong></td><td>Fetches existing campaign names before creating new ones</td></tr>
+      <tr><td><strong>UI status update</strong></td><td>Updates #csoc-pipeline-status element on campaign page</td></tr>
+      <tr><td><strong>CustomEvent broadcast</strong></td><td>Fires correlation:log and correlation:status events</td></tr>
+      <tr><td><strong>Exponential backoff</strong></td><td>Scheduler backs off on repeated errors</td></tr>
+    </table>
+  </div>
+
+  <!-- ─── 4. ARCHITECTURE ─── -->
+  <h2 id="architecture"><span class="n">4</span> SOC Dashboard Architecture</h2>
+
+  <div class="card blue">
+    <div class="card-title">Module Load Order (must be preserved)</div>
+    <pre style="margin:0">index.html script tags (bottom of body):
+  1. js/main.js               → defines PAGE_CONFIG['campaigns'], PAGE_CONFIG['detections']
+  2. js/live-pages-patch.js   → patches renderCampaignsLive (old override)
+  3. js/campaign-correlation.js → window.CorrelationEngine
+  4. js/campaigns-soc.js      → window.renderCampaigns, window.renderCampaignsSOC (overrides #1)
+  5. js/live-detections-soc.js → window.renderDetections, window.stopDetections (overrides #1)</pre>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Data Flow: IOC → Campaign → Detection → Case</div>
+    <pre style="margin:0">Ingestion pipeline runs (CISA / OTX / AbuseIPDB / MISP)
+  ↓ POST /api/ingest/run
+  ↓ IOCs saved to iocs table with tenant_id, threat_actor, tags
+
+Correlation engine runs (every 5 min)
+  ↓ GET /api/iocs?limit=500&sort=risk_score&order=desc
+  ↓ Clusters IOCs by: actor / malware_family / tags[0] / country+ASN
+  ↓ POST /api/cti/campaigns for each cluster ≥ 3 IOCs
+
+Campaigns page loads
+  ↓ renderCampaignsSOC() called by PAGE_CONFIG['campaigns'].onEnter
+  ↓ GET /api/cti/campaigns?page=1&limit=20
+  ↓ Renders KPI cards + campaign table + IOC graph
+
+Live detections page
+  ↓ renderLiveDetectionsSOC() called by PAGE_CONFIG['detections'].onEnter
+  ↓ GET /api/cti/detections + WebSocket /ws/detections
+  ↓ Each event shows: severity, type, IOC, MITRE technique, campaign link</pre>
+  </div>
+
+  <!-- ─── 5. DEPLOYMENT ─── -->
+  <h2 id="deploy"><span class="n">5</span> Deployment Steps</h2>
+
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-body">
+      <div class="step-title">Commit &amp; Push to GitHub</div>
+      <div class="cmd">git add js/campaigns-soc.js js/live-detections-soc.js js/campaign-correlation.js js/main.js css/soc-campaigns.css index.html</div>
+      <div class="cmd">git commit -m "fix(campaigns): v3.0 — resolve PAGE_CONFIG race, double /api URL, auto-correlation"</div>
+      <div class="cmd">git push origin main</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-body">
+      <div class="step-title">Verify Render deploys automatically</div>
+      <p>Render auto-deploys from <code>main</code> branch within ~2 minutes. Visit your Render dashboard to confirm the deploy is green.</p>
+      <p>URL: <a href="https://wadjet-eye-ai.onrender.com" style="color:var(--blue)" target="_blank">https://wadjet-eye-ai.onrender.com</a></p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-body">
+      <div class="step-title">Run Supabase RLS Migration (if not done)</div>
+      <p>Open the <a href="https://app.supabase.com" style="color:var(--blue)" target="_blank">Supabase SQL Editor</a> and run:</p>
+      <pre>-- Execute: backend/database/migration-v7.0-ioc-rls.sql
+-- OR manually:
+ALTER TABLE iocs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "tenant_select_iocs" ON iocs
+FOR SELECT USING (
+  tenant_id = auth.jwt() ->> 'tenant_id'
+  OR
+  auth.jwt() ->> 'role' IN ('SUPER_ADMIN', 'service_role')
+);
+
+CREATE POLICY "service_all_iocs" ON iocs
+FOR ALL USING (
+  auth.jwt() ->> 'role' = 'service_role'
+  OR
+  current_user = 'service_role'
+);</pre>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">4</div>
+    <div class="step-body">
+      <div class="step-title">Hard-Reload the Frontend</div>
+      <p>Clear browser cache or use DevTools → Network → "Disable cache" then reload:</p>
+      <div class="cmd">Ctrl+Shift+R (Windows/Linux) or Cmd+Shift+R (Mac)</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">5</div>
+    <div class="step-body">
+      <div class="step-title">Trigger Ingestion + Correlation</div>
+      <p>After logging in, navigate to <strong>Active Campaigns</strong> and click:</p>
+      <ol style="color:var(--muted);padding-left:20px;margin-top:6px">
+        <li>🔄 <strong>Trigger Ingestion</strong> — starts the feed pipeline</li>
+        <li>🧠 <strong>Run Correlation</strong> — clusters IOCs into campaigns (~30s)</li>
+      </ol>
+      <p style="margin-top:8px">Or via browser console:</p>
+      <pre>window.CorrelationEngine.check();      // health check + auto-trigger
+window.CorrelationEngine.run({force:true}); // force correlation run</pre>
+    </div>
+  </div>
+
+  <!-- ─── 6. BACKEND ─── -->
+  <h2 id="backend"><span class="n">6</span> Backend Requirements</h2>
+
+  <div class="card">
+    <div class="card-title">Required Backend Endpoints</div>
+    <table>
+      <tr><th>Endpoint</th><th>Method</th><th>Purpose</th><th>Status</th></tr>
+      <tr><td><code>/api/cti/campaigns</code></td><td>GET/POST</td><td>List &amp; create campaigns</td><td><span class="check">✅ Required</span></td></tr>
+      <tr><td><code>/api/cti/campaigns/:id</code></td><td>GET/PUT</td><td>Campaign detail &amp; update</td><td><span class="check">✅ Required</span></td></tr>
+      <tr><td><code>/api/cti/campaigns/:id/iocs</code></td><td>GET</td><td>Campaign-linked IOCs</td><td><span class="warn">⚠️ Optional</span></td></tr>
+      <tr><td><code>/api/cti/detections</code></td><td>GET</td><td>Live detection events</td><td><span class="check">✅ Required</span></td></tr>
+      <tr><td><code>/api/ingest/stats</code></td><td>GET</td><td>IOC counts, feed status</td><td><span class="check">✅ Required</span></td></tr>
+      <tr><td><code>/api/ingest/run</code></td><td>POST</td><td>Trigger ingestion pipeline</td><td><span class="check">✅ Required</span></td></tr>
+      <tr><td><code>/api/ingest/correlate</code></td><td>POST</td><td>Run server-side correlation</td><td><span class="warn">⚠️ Optional (client fallback)</span></td></tr>
+      <tr><td><code>/api/iocs</code></td><td>GET</td><td>IOC search for correlation</td><td><span class="check">✅ Required</span></td></tr>
+      <tr><td><code>/ws/detections</code></td><td>WebSocket</td><td>Real-time detection stream</td><td><span class="warn">⚠️ Optional (polling fallback)</span></td></tr>
+    </table>
+  </div>
+
+  <div class="card orange">
+    <div class="card-title">backend/routes/iocs.js — Service Role Fix</div>
+    <p>Ensure <code>iocs.js</code> uses the Supabase service-role client for server-side queries,
+    bypassing RLS for the backend process:</p>
+    <pre>// backend/routes/iocs.js — top of file
+const { createClient } = require('@supabase/supabase-js');
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY   // ← must be SERVICE_ROLE, not ANON
+);
+
+// In the GET /iocs handler:
+const { tenant_id } = req.user || {};
+let query = supabaseAdmin.from('iocs').select('*', { count: 'exact' });
+
+// Only filter by tenant if NOT a super_admin
+if (req.user?.role !== 'SUPER_ADMIN' && tenant_id) {
+  query = query.eq('tenant_id', tenant_id);
+}</pre>
+    <div class="tip"><strong>Tip:</strong> After updating <code>iocs.js</code>, redeploy on Render via the Render dashboard → Manual Deploy → Deploy Latest Commit.</div>
+  </div>
+
+  <!-- ─── 7. VERIFY ─── -->
+  <h2 id="verify"><span class="n">7</span> Verification Checklist</h2>
+
+  <div class="card">
+    <table>
+      <tr><th>Check</th><th>How to Verify</th><th>Expected Result</th></tr>
+      <tr>
+        <td><strong>campaigns-soc.js v3.0 loaded</strong></td>
+        <td><code>window.CampaignSOC</code> in console</td>
+        <td><span class="check">Object with {page, data, loading, …}</span></td>
+      </tr>
+      <tr>
+        <td><strong>PAGE_CONFIG patched</strong></td>
+        <td><code>window.PAGE_CONFIG['campaigns']._patchDone ?? window.CampaignSOC._patchDone</code></td>
+        <td><span class="check">true</span></td>
+      </tr>
+      <tr>
+        <td><strong>API URL correct</strong></td>
+        <td>Network tab → filter <code>/api/cti/campaigns</code></td>
+        <td><span class="check">Single /api (not /api/api)</span></td>
+      </tr>
+      <tr>
+        <td><strong>Campaigns load</strong></td>
+        <td>Navigate to Active Campaigns</td>
+        <td><span class="check">KPI cards animate, table populates</span></td>
+      </tr>
+      <tr>
+        <td><strong>Detections load</strong></td>
+        <td>Navigate to Live Detections</td>
+        <td><span class="check">Severity counters update, feed rows appear</span></td>
+      </tr>
+      <tr>
+        <td><strong>Correlation engine active</strong></td>
+        <td><code>window.CorrelationEngine.interval !== null</code></td>
+        <td><span class="check">true (scheduler running)</span></td>
+      </tr>
+      <tr>
+        <td><strong>IOC count non-zero</strong></td>
+        <td><code>window.CorrelationEngine.check()</code> in console</td>
+        <td><span class="check">Logs: "Total IOCs: 12099"</span></td>
+      </tr>
+      <tr>
+        <td><strong>RLS migration applied</strong></td>
+        <td>Supabase → Authentication → Policies → iocs table</td>
+        <td><span class="check">At least 1 SELECT policy visible</span></td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="tip">
+    <strong>Quick Console Diagnostic:</strong> Run this in the browser DevTools console while on any page:
+    <pre style="margin-top:8px">
+// Full diagnostic
+(async () => {
+  console.log('CampaignSOC:', window.CampaignSOC);
+  console.log('CorrelationEngine:', window.CorrelationEngine);
+  console.log('PAGE_CONFIG campaigns:', window.PAGE_CONFIG?.campaigns);
+  const r = await window.CorrelationEngine?.check();
+  console.log('Pipeline health:', r);
+})();</pre>
+  </div>
+
+  <!-- ─── 8. SQL ─── -->
+  <h2 id="sql"><span class="n">8</span> Supabase SQL: Migration &amp; RLS</h2>
+
+  <h3>Full migration-v7.0-ioc-rls.sql</h3>
+  <pre>-- ══════════════════════════════════════════════════════════
+-- Wadjet-Eye AI — migration-v7.0-ioc-rls.sql
+-- Run in Supabase SQL Editor
+-- ══════════════════════════════════════════════════════════
+
+-- 1. Enable RLS on iocs table
+ALTER TABLE public.iocs ENABLE ROW LEVEL SECURITY;
+
+-- 2. Drop old policies if they exist
+DROP POLICY IF EXISTS "Enable read for authenticated users" ON public.iocs;
+DROP POLICY IF EXISTS "tenant_select_iocs"   ON public.iocs;
+DROP POLICY IF EXISTS "service_all_iocs"     ON public.iocs;
+DROP POLICY IF EXISTS "super_admin_all_iocs" ON public.iocs;
+
+-- 3. Tenant SELECT policy — users see only their tenant's IOCs
+CREATE POLICY "tenant_select_iocs" ON public.iocs
+FOR SELECT TO authenticated
+USING (
+  tenant_id = (auth.jwt() ->> 'tenant_id')
+  OR (auth.jwt() ->> 'tenant_id') IS NULL  -- allow null tenant (legacy)
+);
+
+-- 4. SUPER_ADMIN sees all IOCs across all tenants
+CREATE POLICY "super_admin_all_iocs" ON public.iocs
+FOR ALL TO authenticated
+USING (
+  (auth.jwt() ->> 'role') IN ('SUPER_ADMIN', 'PLATFORM_ADMIN')
+);
+
+-- 5. Service role bypass (for backend iocs.js supabaseAdmin client)
+CREATE POLICY "service_role_bypass" ON public.iocs
+FOR ALL TO service_role
+USING (true)
+WITH CHECK (true);
+
+-- 6. Ensure campaigns table has RLS + tenant policy
+ALTER TABLE public.campaigns ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "tenant_campaigns" ON public.campaigns;
+CREATE POLICY "tenant_campaigns" ON public.campaigns
+FOR SELECT TO authenticated
+USING (
+  tenant_id = (auth.jwt() ->> 'tenant_id')
+  OR (auth.jwt() ->> 'role') IN ('SUPER_ADMIN', 'PLATFORM_ADMIN')
+);
+
+-- 7. Verify
+SELECT tablename, policyname, cmd, qual
+FROM pg_policies
+WHERE tablename IN ('iocs', 'campaigns')
+ORDER BY tablename, policyname;</pre>
+
+  <!-- ─── 9. TROUBLESHOOT ─── -->
+  <h2 id="troubleshoot"><span class="n">9</span> Troubleshooting</h2>
+
+  <div class="card">
+    <table>
+      <tr><th>Symptom</th><th>Diagnosis</th><th>Fix</th></tr>
+      <tr>
+        <td><strong>Still shows 0 campaigns after fix</strong></td>
+        <td>No campaigns in DB yet, or RLS blocking service role</td>
+        <td>Run <code>window.CorrelationEngine.run({force:true})</code> in console; verify RLS migration was run</td>
+      </tr>
+      <tr>
+        <td><strong>Network requests go to /api/api/…</strong></td>
+        <td>Old cached JS still loading</td>
+        <td>Hard-reload (Ctrl+Shift+R). Check Render deployed latest commit.</td>
+      </tr>
+      <tr>
+        <td><strong>401 on /api/cti/campaigns</strong></td>
+        <td>JWT token missing or expired</td>
+        <td>Log out + log back in. Check <code>localStorage.getItem('wadjet_access_token')</code></td>
+      </tr>
+      <tr>
+        <td><strong>Correlation creates 0 campaigns</strong></td>
+        <td>IOCs have no threat_actor, tags, or country+asn fields</td>
+        <td>Check IOC schema; re-run ingestion with enrichment enabled</td>
+      </tr>
+      <tr>
+        <td><strong>Live detections empty</strong></td>
+        <td>No data in cti/detections table</td>
+        <td>Click "Trigger Ingest" button; check backend /api/cti/detections directly</td>
+      </tr>
+      <tr>
+        <td><strong>PAGE_CONFIG._patchDone = false</strong></td>
+        <td>SOC module loaded but PAGE_CONFIG not found in 6s</td>
+        <td>Check console for JS errors before campaign-correlation.js loads. Verify load order in index.html.</td>
+      </tr>
+      <tr>
+        <td><strong>IOC graph shows demo nodes</strong></td>
+        <td>Campaign data loaded but ioc_ids not set</td>
+        <td>Normal — demo graph shows until real IOC relationships are available</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="warn-box">
+    <strong>⚠️ Note on Render Cold Starts:</strong> The backend on Render's free tier may take
+    10–30 seconds to wake up after inactivity. If the first API call fails, wait 30 seconds and
+    reload. The correlation engine has automatic retry logic for this scenario.
+  </div>
+
+</main>
+
+<footer>
+  Wadjet-Eye AI — Active Campaigns &amp; Live Detections Fix Guide v3.0 — 2026-04-02<br>
+  <span style="color:var(--blue)">Files changed: js/campaigns-soc.js · js/live-detections-soc.js · js/campaign-correlation.js · js/main.js · css/soc-campaigns.css · index.html</span>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,1565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Wadjet-Eye AI — Security Remediation Guide v6.0</title>
+<style>
+:root{
+  --bg:#0a0d13;--surface:#111520;--surface2:#181e2e;--surface3:#1e2538;
+  --border:#252d42;--border2:#2e3a54;
+  --accent:#4f8ef7;--accent2:#22c55e;--warn:#f59e0b;--danger:#ef4444;
+  --purple:#a78bfa;--cyan:#22d3ee;--pink:#f472b6;
+  --text:#e2e8f0;--muted:#8892a4;--muted2:#5a6478;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;line-height:1.65;font-size:14px}
+
+/* ── HEADER ── */
+.hero{
+  background:linear-gradient(135deg,#0a0d13 0%,#0f1728 40%,#1a0a2e 100%);
+  border-bottom:1px solid var(--border);
+  padding:48px 24px 36px;text-align:center;position:relative;overflow:hidden;
+}
+.hero::before{
+  content:'';position:absolute;inset:0;
+  background:radial-gradient(ellipse 80% 50% at 50% 0%,rgba(79,142,247,.12) 0%,transparent 70%);
+}
+.hero-eyebrow{
+  display:inline-flex;align-items:center;gap:8px;
+  background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);
+  border-radius:20px;padding:5px 14px;font-size:12px;color:#ef4444;
+  font-weight:700;letter-spacing:.5px;margin-bottom:18px;text-transform:uppercase;
+}
+.hero h1{font-size:clamp(24px,4vw,42px);font-weight:800;color:#fff;margin-bottom:10px;letter-spacing:-.5px}
+.hero p{color:var(--muted);font-size:15px;max-width:720px;margin:0 auto 20px}
+.hero-meta{display:flex;justify-content:center;gap:24px;flex-wrap:wrap;font-size:12px;color:var(--muted2)}
+.hero-meta span{display:flex;align-items:center;gap:5px}
+
+/* ── LAYOUT ── */
+.wrapper{display:grid;grid-template-columns:280px 1fr;min-height:100vh}
+@media(max-width:900px){.wrapper{grid-template-columns:1fr}}
+.sidebar{
+  background:var(--surface);border-right:1px solid var(--border);
+  padding:24px 0;position:sticky;top:0;height:100vh;overflow-y:auto;
+}
+@media(max-width:900px){.sidebar{display:none}}
+.sidebar-section{padding:0 16px;margin-bottom:8px}
+.sidebar-title{font-size:10px;font-weight:700;color:var(--muted2);text-transform:uppercase;
+  letter-spacing:1px;padding:12px 8px 6px;border-top:1px solid var(--border);margin-top:8px}
+.sidebar-title:first-child{border-top:none;margin-top:0}
+.nav-item{
+  display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:6px;
+  color:var(--muted);font-size:13px;text-decoration:none;transition:all .15s;cursor:pointer;
+}
+.nav-item:hover{background:var(--surface2);color:var(--text)}
+.nav-item.active{background:rgba(79,142,247,.15);color:var(--accent);border-left:2px solid var(--accent)}
+.nav-badge{margin-left:auto;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px}
+.nb-crit{background:rgba(239,68,68,.2);color:#ef4444}
+.nb-high{background:rgba(245,158,11,.2);color:#f59e0b}
+.nb-med{background:rgba(79,142,247,.2);color:var(--accent)}
+.nb-ok{background:rgba(34,197,94,.2);color:#22c55e}
+
+/* ── MAIN CONTENT ── */
+.main{padding:32px 28px;max-width:900px}
+@media(max-width:900px){.main{padding:20px 14px;max-width:100%}}
+
+/* ── SECTION ── */
+.section{margin-bottom:52px}
+.section-header{
+  display:flex;align-items:flex-start;gap:14px;margin-bottom:24px;
+  padding-bottom:14px;border-bottom:1px solid var(--border);
+}
+.section-icon{
+  width:44px;height:44px;border-radius:10px;display:flex;align-items:center;
+  justify-content:center;font-size:20px;flex-shrink:0;
+}
+.si-red{background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.3)}
+.si-orange{background:rgba(245,158,11,.15);border:1px solid rgba(245,158,11,.3)}
+.si-blue{background:rgba(79,142,247,.15);border:1px solid rgba(79,142,247,.3)}
+.si-green{background:rgba(34,197,94,.15);border:1px solid rgba(34,197,94,.3)}
+.si-purple{background:rgba(167,139,250,.15);border:1px solid rgba(167,139,250,.3)}
+.si-cyan{background:rgba(34,211,238,.15);border:1px solid rgba(34,211,238,.3)}
+.section-title{font-size:20px;font-weight:700;color:#fff;margin-bottom:4px}
+.section-sub{font-size:13px;color:var(--muted)}
+
+/* ── SEVERITY BADGES ── */
+.sev{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;
+  padding:3px 10px;border-radius:12px;text-transform:uppercase;letter-spacing:.4px}
+.sev-crit{background:rgba(239,68,68,.2);color:#ef4444;border:1px solid rgba(239,68,68,.4)}
+.sev-high{background:rgba(245,158,11,.2);color:#f59e0b;border:1px solid rgba(245,158,11,.4)}
+.sev-med{background:rgba(79,142,247,.2);color:var(--accent);border:1px solid rgba(79,142,247,.4)}
+.sev-low{background:rgba(34,197,94,.2);color:#22c55e;border:1px solid rgba(34,197,94,.4)}
+
+/* ── FINDING CARDS ── */
+.finding-card{
+  background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  margin-bottom:16px;overflow:hidden;
+}
+.finding-header{
+  display:flex;align-items:center;gap:12px;padding:14px 18px;cursor:pointer;
+  transition:background .15s;
+}
+.finding-header:hover{background:var(--surface2)}
+.finding-num{
+  width:28px;height:28px;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;font-size:12px;font-weight:800;flex-shrink:0;
+}
+.finding-info{flex:1}
+.finding-title{font-size:14px;font-weight:700;color:#fff;margin-bottom:2px}
+.finding-loc{font-size:12px;color:var(--muted);font-family:monospace}
+.finding-arrow{color:var(--muted);transition:transform .2s;font-size:12px}
+.finding-card.open .finding-arrow{transform:rotate(90deg)}
+.finding-body{padding:0 18px 18px;border-top:1px solid var(--border)}
+
+/* ── DIFF BLOCKS ── */
+.diff{background:#080c14;border:1px solid var(--border);border-radius:8px;
+  overflow:hidden;margin:12px 0;font-family:'Courier New',monospace;font-size:12px}
+.diff-head{background:var(--surface2);padding:6px 14px;font-size:11px;
+  color:var(--muted);border-bottom:1px solid var(--border);display:flex;
+  justify-content:space-between;align-items:center}
+.diff-line{padding:2px 14px;line-height:1.7}
+.d-del{background:rgba(239,68,68,.08);color:#fca5a5}
+.d-del::before{content:'- ';color:#ef4444}
+.d-add{background:rgba(34,197,94,.08);color:#86efac}
+.d-add::before{content:'+ ';color:#22c55e}
+.d-ctx{color:var(--muted2)}
+.d-ctx::before{content:'  '}
+
+/* ── CODE BLOCKS ── */
+.code{
+  background:#060a10;border:1px solid var(--border);border-radius:8px;
+  padding:16px 18px;font-family:'Courier New',monospace;font-size:12.5px;
+  line-height:1.75;overflow-x:auto;position:relative;margin:10px 0;
+}
+.code pre{white-space:pre-wrap;word-break:break-word}
+.code .c{color:#4a5568}
+.code .k{color:#79c0ff}
+.code .s{color:#a5d6ff}
+.code .v{color:#7ee787}
+.code .w{color:#f97316}
+.code .r{color:#ef4444}
+.copy-btn{
+  position:absolute;top:10px;right:10px;background:var(--surface2);
+  border:1px solid var(--border);border-radius:5px;color:var(--muted);
+  font-size:11px;padding:3px 9px;cursor:pointer;transition:all .15s;
+}
+.copy-btn:hover{background:var(--accent);color:#000;border-color:var(--accent)}
+.copy-btn.ok{background:var(--accent2);color:#000;border-color:var(--accent2)}
+
+/* ── ALERT BOXES ── */
+.alert{border-radius:8px;padding:14px 18px;margin:12px 0;display:flex;gap:12px;align-items:flex-start;border-left:3px solid}
+.alert-icon{font-size:18px;flex-shrink:0;margin-top:1px}
+.alert h4{font-size:13px;font-weight:700;margin-bottom:4px}
+.alert p,.alert li{font-size:13px;color:var(--muted)}
+.alert ul{padding-left:16px;margin-top:4px}
+.a-crit{background:rgba(239,68,68,.06);border-color:#ef4444}
+.a-crit h4{color:#ef4444}
+.a-warn{background:rgba(245,158,11,.06);border-color:#f59e0b}
+.a-warn h4{color:#f59e0b}
+.a-info{background:rgba(79,142,247,.06);border-color:var(--accent)}
+.a-info h4{color:var(--accent)}
+.a-ok{background:rgba(34,197,94,.06);border-color:#22c55e}
+.a-ok h4{color:#22c55e}
+
+/* ── STEP FLOW ── */
+.steps{counter-reset:step;display:flex;flex-direction:column;gap:14px;margin:14px 0}
+.step{
+  display:flex;gap:14px;background:var(--surface);border:1px solid var(--border);
+  border-radius:8px;padding:14px 16px;position:relative;
+}
+.step::before{
+  counter-increment:step;content:counter(step);
+  width:26px;height:26px;border-radius:50%;background:var(--accent);color:#000;
+  font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;
+}
+.step-content{flex:1}
+.step-title{font-weight:700;font-size:14px;color:#fff;margin-bottom:4px}
+.step-desc{font-size:13px;color:var(--muted)}
+
+/* ── TABLES ── */
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+th{background:var(--surface2);color:var(--muted);text-align:left;padding:9px 13px;
+  font-weight:600;border:1px solid var(--border);font-size:12px;text-transform:uppercase;letter-spacing:.3px}
+td{padding:9px 13px;border:1px solid var(--border);vertical-align:top}
+tr:nth-child(even) td{background:rgba(255,255,255,.015)}
+.mono{font-family:monospace;font-size:11px;color:var(--cyan)}
+
+/* ── ARCH DIAGRAM ── */
+.arch{
+  background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  padding:20px;margin:14px 0;font-family:monospace;font-size:12px;
+  line-height:1.9;overflow-x:auto;
+}
+.arch .box{color:var(--cyan)}
+.arch .arrow{color:var(--muted2)}
+.arch .label{color:#f59e0b}
+.arch .secure{color:#22c55e}
+.arch .insecure{color:#ef4444}
+.arch .note{color:var(--muted)}
+
+/* ── CHECKLIST ── */
+.checklist{list-style:none;padding:0;display:flex;flex-direction:column;gap:8px}
+.checklist li{
+  display:flex;align-items:flex-start;gap:10px;padding:10px 14px;
+  background:var(--surface);border:1px solid var(--border);border-radius:7px;
+  font-size:13px;
+}
+.checklist input[type=checkbox]{width:15px;height:15px;accent-color:var(--accent2);
+  flex-shrink:0;margin-top:2px;cursor:pointer}
+.checklist label{cursor:pointer;color:var(--muted);flex:1}
+.checklist li:has(input:checked){opacity:.55}
+.cli-crit{border-left:3px solid #ef4444}
+.cli-high{border-left:3px solid #f59e0b}
+.cli-med{border-left:3px solid var(--accent)}
+
+/* ── TOC OVERVIEW ── */
+.overview-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin:18px 0}
+.ov-card{
+  background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  padding:16px;cursor:pointer;transition:border-color .2s,background .2s;text-decoration:none;
+}
+.ov-card:hover{border-color:var(--border2);background:var(--surface2)}
+.ov-card-icon{font-size:24px;margin-bottom:8px}
+.ov-card-title{font-size:14px;font-weight:700;color:#fff;margin-bottom:4px}
+.ov-card-desc{font-size:12px;color:var(--muted)}
+.ov-card-sev{margin-top:8px}
+
+/* ── TIMELINE ── */
+.timeline{position:relative;padding-left:28px;margin:14px 0}
+.timeline::before{content:'';position:absolute;left:7px;top:0;bottom:0;width:2px;background:var(--border)}
+.tl-item{position:relative;margin-bottom:14px}
+.tl-dot{position:absolute;left:-25px;top:5px;width:12px;height:12px;border-radius:50%;border:2px solid var(--bg)}
+.tl-crit{background:#ef4444}
+.tl-high{background:#f59e0b}
+.tl-ok{background:#22c55e}
+.tl-blue{background:var(--accent)}
+.tl-title{font-size:13px;font-weight:700;color:#fff;margin-bottom:2px}
+.tl-desc{font-size:12px;color:var(--muted)}
+
+kbd{background:var(--surface2);border:1px solid var(--border);border-radius:4px;
+  padding:1px 7px;font-family:monospace;font-size:11px}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+hr{border:none;border-top:1px solid var(--border);margin:28px 0}
+p{color:var(--muted);font-size:13px;margin:8px 0}
+h3{color:#fff;font-size:15px;font-weight:700;margin:18px 0 8px}
+h4{color:var(--text);font-size:13px;font-weight:700;margin:12px 0 6px}
+ul,ol{padding-left:20px;color:var(--muted);font-size:13px}
+li{margin-bottom:5px}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="hero-eyebrow">🔴 Principal Security Architect Review</div>
+  <h1>Wadjet-Eye AI — Security Remediation Guide</h1>
+  <p>Complete deep-remediation plan for authentication architecture, session management, data integrity, and operational maturity. Six critical findings. Full implementation code.</p>
+  <div class="hero-meta">
+    <span>📅 2026-04-01</span>
+    <span>🏷️ v6.0 Secure Architecture</span>
+    <span>🔴 2 Critical &nbsp;|&nbsp; 🟡 2 High &nbsp;|&nbsp; 🔵 2 Medium</span>
+    <span>📁 12 Files Modified</span>
+  </div>
+</div>
+
+<div class="wrapper">
+<!-- SIDEBAR -->
+<nav class="sidebar">
+  <div class="sidebar-title">Critical Findings</div>
+  <a class="nav-item active" href="#f1">F1 · Client-Side Emergency Accounts <span class="nav-badge nb-crit">CRITICAL</span></a>
+  <a class="nav-item" href="#f2">F2 · localStorage Token Exposure <span class="nav-badge nb-crit">CRITICAL</span></a>
+  <div class="sidebar-title">High Severity</div>
+  <a class="nav-item" href="#f3">F3 · MFA Theatre Not Enforced <span class="nav-badge nb-high">HIGH</span></a>
+  <a class="nav-item" href="#f4">F4 · Route Contract Mismatch <span class="nav-badge nb-high">HIGH</span></a>
+  <div class="sidebar-title">Medium Severity</div>
+  <a class="nav-item" href="#f5">F5 · IOC Schema Drift <span class="nav-badge nb-med">MED</span></a>
+  <a class="nav-item" href="#f6">F6 · Operational Maturity Gaps <span class="nav-badge nb-med">MED</span></a>
+  <div class="sidebar-title">Implementation</div>
+  <a class="nav-item" href="#arch">Architecture Redesign</a>
+  <a class="nav-item" href="#files">All File Changes</a>
+  <a class="nav-item" href="#deploy">Deployment Steps</a>
+  <a class="nav-item" href="#tests">Test Suite</a>
+  <a class="nav-item" href="#checklist">Final Checklist</a>
+</nav>
+
+<!-- MAIN -->
+<div class="main">
+
+<!-- OVERVIEW -->
+<div class="section" id="overview">
+  <div class="section-header">
+    <div class="section-icon si-red">🔐</div>
+    <div>
+      <div class="section-title">Executive Summary</div>
+      <div class="section-sub">6 findings across 4 security domains. Immediate action required on F1 and F2.</div>
+    </div>
+  </div>
+
+  <div class="overview-grid">
+    <a class="ov-card" href="#f1">
+      <div class="ov-card-icon">🚨</div>
+      <div class="ov-card-title">F1 · Emergency Accounts in Browser</div>
+      <div class="ov-card-desc">Super-admin email + password allowlist shipped inside public JS. Discoverable by any user via DevTools.</div>
+      <div class="ov-card-sev"><span class="sev sev-crit">Critical</span></div>
+    </a>
+    <a class="ov-card" href="#f2">
+      <div class="ov-card-icon">🍪</div>
+      <div class="ov-card-title">F2 · Tokens in localStorage</div>
+      <div class="ov-card-desc">Bearer tokens &amp; full user profile stored in XSS-readable localStorage for all roles including SUPER_ADMIN.</div>
+      <div class="ov-card-sev"><span class="sev sev-crit">Critical</span></div>
+    </a>
+    <a class="ov-card" href="#f3">
+      <div class="ov-card-icon">🎭</div>
+      <div class="ov-card-title">F3 · MFA Theatre</div>
+      <div class="ov-card-desc">Login UI shows MFA toggle but backend returns mfa_enabled:false. No TOTP enforcement at auth layer.</div>
+      <div class="ov-card-sev"><span class="sev sev-high">High</span></div>
+    </a>
+    <a class="ov-card" href="#f4">
+      <div class="ov-card-icon">🔀</div>
+      <div class="ov-card-title">F4 · Route Contract Mismatch</div>
+      <div class="ov-card-desc">Frontend calls GET /dashboard (404) while real endpoint is /api/dashboard/stats-live. Silent fallbacks mask errors.</div>
+      <div class="ov-card-sev"><span class="sev sev-high">High</span></div>
+    </a>
+    <a class="ov-card" href="#f5">
+      <div class="ov-card-icon">🧬</div>
+      <div class="ov-card-title">F5 · IOC Schema Drift</div>
+      <div class="ov-card-desc">Hash-like values typed as IP. No canonical validation on ingest. Poisons enrichment, scoring, and automation.</div>
+      <div class="ov-card-sev"><span class="sev sev-med">Medium</span></div>
+    </a>
+    <a class="ov-card" href="#f6">
+      <div class="ov-card-icon">🏥</div>
+      <div class="ov-card-title">F6 · Operational Gaps</div>
+      <div class="ov-card-desc">No public /health endpoint, no security.txt, auth required on root URL, missing social/SEO metadata.</div>
+      <div class="ov-card-sev"><span class="sev sev-med">Medium</span></div>
+    </a>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- FINDING 1 -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="f1">
+  <div class="section-header">
+    <div class="section-icon si-red">🚨</div>
+    <div>
+      <div class="section-title">F1 · Client-Side Emergency Account Allowlist</div>
+      <div class="section-sub"><span class="sev sev-crit">Critical</span> &nbsp; File: <code>js/main.js</code> lines 58–96</div>
+    </div>
+  </div>
+
+  <div class="alert a-crit">
+    <span class="alert-icon">🔴</span>
+    <div>
+      <h4>CVSS 9.8 — Authentication Bypass via Client-Side Logic</h4>
+      <p>Super-admin email addresses, IDs, role assignments, and a password length-only check are compiled into the public JavaScript bundle. Any visitor can open DevTools → Sources, read <code>_EMERGENCY_ACCOUNTS</code>, and understand exactly which emails have super_admin role with all permissions. The offline token is generated entirely client-side with no server validation. This is an authentication bypass, not a fallback.</p>
+    </div>
+  </div>
+
+  <h3>Vulnerable Code (js/main.js:58–96)</h3>
+  <div class="diff">
+    <div class="diff-head"><span>js/main.js — REMOVE ENTIRELY</span><span class="sev sev-crit">Delete</span></div>
+    <div class="diff-line d-del">const _EMERGENCY_ACCOUNTS = {</div>
+    <div class="diff-line d-del">  'mahmoud.osman@wadjet.ai': { id:'super-admin-mo', role:'super_admin', permissions:[...all...] },</div>
+    <div class="diff-line d-del">  'mahmoud@mssp.com':        { id:'super-admin-mo', role:'super_admin', permissions:[...all...] },</div>
+    <div class="diff-line d-del">  'admin@mssp.com':          { id:'admin-001',      role:'admin', ... },</div>
+    <div class="diff-line d-del">  'analyst@mssp.com':        { id:'analyst-001',    role:'analyst', ... },</div>
+    <div class="diff-line d-del">};</div>
+    <div class="diff-line d-del">function _doEmergencyLogin(profile, reason) {</div>
+    <div class="diff-line d-del">  const offlineToken = 'offline_emergency_' + Date.now().toString(36); // ← trivially guessable</div>
+    <div class="diff-line d-del">  CURRENT_USER = { ...profile, _offline: true, is_super_admin: true }; // ← no server verification</div>
+    <div class="diff-line d-del">}</div>
+    <div class="diff-line d-del">if (needsFallback &amp;&amp; emergencyProfile &amp;&amp; password.length >= 6) { // ← any 6-char password works</div>
+    <div class="diff-line d-del">  _doEmergencyLogin(emergencyProfile, 'network');</div>
+    <div class="diff-line d-del">}</div>
+  </div>
+
+  <h3>Secure Replacement Architecture</h3>
+  <p>All break-glass / emergency access must be server-side, IP-restricted, time-limited, and audit-logged. The frontend should only show a clear offline error — never grant access.</p>
+
+  <div class="diff">
+    <div class="diff-head"><span>js/main.js — SECURE LOGIN (full replacement)</span><span class="sev sev-ok">Secure</span></div>
+    <div class="diff-line d-add">async function doLogin() {</div>
+    <div class="diff-line d-add">  const email    = document.getElementById('loginEmail')?.value?.trim()?.toLowerCase();</div>
+    <div class="diff-line d-add">  const password = document.getElementById('loginPassword')?.value;</div>
+    <div class="diff-line d-add">  const tenant   = document.getElementById('loginTenant')?.value || 'mssp-global';</div>
+    <div class="diff-line d-add">  const errEl    = document.getElementById('loginError');</div>
+    <div class="diff-line d-add">  const btn      = document.querySelector('.login-btn');</div>
+    <div class="diff-line d-add">  if (!email || !password) { showFieldError(errEl, 'Email and password are required.'); return; }</div>
+    <div class="diff-line d-add">  setBtnLoading(btn, true);</div>
+    <div class="diff-line d-add">  clearError(errEl);</div>
+    <div class="diff-line d-add">  try {</div>
+    <div class="diff-line d-add">    // ONLY path: real backend auth — no client-side fallback, ever</div>
+    <div class="diff-line d-add">    const data = await API.auth.login(email, password, tenant);</div>
+    <div class="diff-line d-add">    if (!data?.user) throw new Error('Invalid response from authentication server.');</div>
+    <div class="diff-line d-add">    // Check MFA requirement returned by server</div>
+    <div class="diff-line d-add">    if (data.mfa_required) { showMFAChallenge(data.mfa_session_token); return; }</div>
+    <div class="diff-line d-add">    await _finalizeLogin(data);</div>
+    <div class="diff-line d-add">  } catch (err) {</div>
+    <div class="diff-line d-add">    setBtnLoading(btn, false);</div>
+    <div class="diff-line d-add">    showFieldError(errEl, _mapLoginError(err.message));</div>
+    <div class="diff-line d-add">    // NO fallback to offline/emergency mode — if backend is down, user cannot log in</div>
+    <div class="diff-line d-add">  }</div>
+    <div class="diff-line d-add">}</div>
+  </div>
+
+  <h3>Backend Break-Glass Service (NEW FILE)</h3>
+  <p>Emergency access lives server-side in <code>backend/services/break-glass.js</code>. It requires: IP allowlist, time-limited OTP (not password), explicit approval workflow, and immutable audit trail.</p>
+
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c">/**
+ * backend/services/break-glass.js
+ * Server-side only emergency access — never exposed to browser
+ * Requires: IP allowlist + TOTP OTP + dual approval + audit log
+ */</span>
+<span class="k">const</span> crypto = require(<span class="s">'crypto'</span>);
+<span class="k">const</span> { supabase } = require(<span class="s">'../config/supabase'</span>);
+
+<span class="c">// Only these IPs may request a break-glass session</span>
+<span class="k">const</span> ALLOWED_IPS = (process.env.BREAK_GLASS_ALLOWED_IPS || <span class="s">''</span>)
+  .split(<span class="s">','</span>).map(ip => ip.trim()).filter(Boolean);
+
+<span class="c">// Break-glass OTP TTL: 10 minutes</span>
+<span class="k">const</span> OTP_TTL_MS = <span class="v">10 * 60 * 1000</span>;
+
+<span class="k">async function</span> requestBreakGlass(req, adminEmail) {
+  <span class="c">// 1. IP allowlist check</span>
+  <span class="k">const</span> clientIP = req.ip || req.connection?.remoteAddress;
+  <span class="k">if</span> (ALLOWED_IPS.length > <span class="v">0</span> && !ALLOWED_IPS.includes(clientIP)) {
+    <span class="k">await</span> auditBreakGlass(<span class="s">'REJECTED_IP'</span>, adminEmail, clientIP);
+    <span class="k">throw new</span> Error(<span class="s">'Break-glass access denied: IP not in allowlist'</span>);
+  }
+
+  <span class="c">// 2. Generate cryptographically random OTP (sent via out-of-band channel)</span>
+  <span class="k">const</span> otp = crypto.randomInt(<span class="v">100000</span>, <span class="v">999999</span>).toString();
+  <span class="k">const</span> otpHash = crypto.createHash(<span class="s">'sha256'</span>).update(otp).digest(<span class="s">'hex'</span>);
+  <span class="k">const</span> expiresAt = <span class="k">new</span> Date(Date.now() + OTP_TTL_MS).toISOString();
+
+  <span class="c">// 3. Store OTP hash (never the plaintext)</span>
+  <span class="k">await</span> supabase.from(<span class="s">'break_glass_requests'</span>).insert({
+    admin_email: adminEmail, otp_hash: otpHash,
+    expires_at: expiresAt, ip_address: clientIP,
+    status: <span class="s">'PENDING'</span>
+  });
+
+  <span class="c">// 4. Audit log — every request, success or failure</span>
+  <span class="k">await</span> auditBreakGlass(<span class="s">'OTP_REQUESTED'</span>, adminEmail, clientIP);
+
+  <span class="c">// 5. Send OTP via out-of-band (email/SMS/Slack) — NOT returned to caller</span>
+  <span class="k">await</span> sendOTPOutOfBand(adminEmail, otp);
+
+  <span class="k">return</span> { message: <span class="s">'OTP sent via secure channel. Valid for 10 minutes.'</span> };
+}
+
+<span class="k">async function</span> validateBreakGlass(req, adminEmail, otp) {
+  <span class="k">const</span> otpHash = crypto.createHash(<span class="s">'sha256'</span>).update(otp).digest(<span class="s">'hex'</span>);
+  <span class="k">const</span> clientIP = req.ip;
+
+  <span class="k">const</span> { data: request } = <span class="k">await</span> supabase
+    .from(<span class="s">'break_glass_requests'</span>)
+    .select(<span class="s">'*'</span>)
+    .eq(<span class="s">'admin_email'</span>, adminEmail)
+    .eq(<span class="s">'otp_hash'</span>, otpHash)
+    .eq(<span class="s">'status'</span>, <span class="s">'PENDING'</span>)
+    .gt(<span class="s">'expires_at'</span>, <span class="k">new</span> Date().toISOString())
+    .single();
+
+  <span class="k">if</span> (!request) {
+    <span class="k">await</span> auditBreakGlass(<span class="s">'INVALID_OTP'</span>, adminEmail, clientIP);
+    <span class="k">throw new</span> Error(<span class="s">'Invalid or expired OTP'</span>);
+  }
+
+  <span class="c">// Mark used (single-use)</span>
+  <span class="k">await</span> supabase.from(<span class="s">'break_glass_requests'</span>)
+    .update({ status: <span class="s">'USED'</span>, used_at: <span class="k">new</span> Date().toISOString() })
+    .eq(<span class="s">'id'</span>, request.id);
+
+  <span class="c">// Issue time-limited (1 hour) session with full audit trail</span>
+  <span class="k">const</span> sessionToken = crypto.randomBytes(<span class="v">48</span>).toString(<span class="s">'hex'</span>);
+  <span class="k">await</span> supabase.from(<span class="s">'break_glass_sessions'</span>).insert({
+    admin_email: adminEmail, session_token_hash: crypto.createHash(<span class="s">'sha256'</span>).update(sessionToken).digest(<span class="s">'hex'</span>),
+    ip_address: clientIP, expires_at: <span class="k">new</span> Date(Date.now() + <span class="v">3600000</span>).toISOString()
+  });
+
+  <span class="k">await</span> auditBreakGlass(<span class="s">'SESSION_GRANTED'</span>, adminEmail, clientIP);
+  <span class="k">return</span> { session_token: sessionToken, expires_in: <span class="v">3600</span> };
+}
+
+<span class="k">async function</span> auditBreakGlass(event, email, ip) {
+  <span class="k">await</span> supabase.from(<span class="s">'break_glass_audit'</span>).insert({
+    event, email, ip_address: ip, timestamp: <span class="k">new</span> Date().toISOString()
+  });
+}
+
+module.exports = { requestBreakGlass, validateBreakGlass };</pre>
+  </div>
+
+  <div class="alert a-ok">
+    <span class="alert-icon">✅</span>
+    <div>
+      <h4>Immediate Action (Do Right Now)</h4>
+      <ul>
+        <li>Rotate ALL credentials listed in <code>_EMERGENCY_ACCOUNTS</code> immediately — treat them as compromised</li>
+        <li>Change passwords for <code>mahmoud.osman@wadjet.ai</code>, <code>mahmoud@mssp.com</code>, <code>admin@mssp.com</code>, <code>analyst@mssp.com</code></li>
+        <li>Revoke and regenerate any API keys / service tokens those accounts had access to</li>
+        <li>Add <code>BREAK_GLASS_ALLOWED_IPS=your.office.ip</code> to Render env vars</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- FINDING 2 -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="f2">
+  <div class="section-header">
+    <div class="section-icon si-red">🍪</div>
+    <div>
+      <div class="section-title">F2 · Bearer Tokens &amp; Profiles in localStorage</div>
+      <div class="section-sub"><span class="sev sev-crit">Critical</span> &nbsp; Files: <code>js/auth-persistent.js</code>, <code>js/auth-interceptor.js</code></div>
+    </div>
+  </div>
+
+  <div class="alert a-crit">
+    <span class="alert-icon">🔴</span>
+    <div>
+      <h4>XSS-Readable Token Storage — OWASP A07:2021</h4>
+      <p>Every JS payload that achieves XSS on this origin can call <code>localStorage.getItem('wadjet_access_token')</code> and get a bearer token valid for 15 minutes — or the refresh token valid for 30 days. The full user profile (role, permissions, tenant_id) is also stored in plaintext under <code>wadjet_user_profile</code>. For an admin on a shared workstation, the token persists after the session ends.</p>
+    </div>
+  </div>
+
+  <h3>Threat Model</h3>
+  <table>
+    <tr><th>Attack Vector</th><th>Exploits</th><th>Impact</th></tr>
+    <tr><td>XSS via any dependency / user input</td><td><code>localStorage.getItem('wadjet_access_token')</code></td><td>Full API access as victim for 15 min</td></tr>
+    <tr><td>Malicious browser extension</td><td>All localStorage keys readable by extension</td><td>Persistent token exfil + replay</td></tr>
+    <tr><td>Shared workstation</td><td>Token persists after tab close (localStorage design)</td><td>Next user inherits session</td></tr>
+    <tr><td>Insider threat / debug mode</td><td>DevTools → Application → Storage</td><td>Token visible to any user at keyboard</td></tr>
+    <tr><td>30-day refresh token</td><td><code>wadjet_refresh_token</code> in localStorage</td><td>Long-term persistent access</td></tr>
+  </table>
+
+  <h3>Secure Design: httpOnly Cookie + BFF Pattern</h3>
+  <div class="arch">
+<span class="c">── BEFORE (Insecure) ────────────────────────────────────────────────────────</span>
+
+<span class="insecure">Browser JS  →  POST /api/auth/login  →  Backend returns { token, refresh_token }</span>
+<span class="insecure">               ↓ JS stores in localStorage (XSS-readable) ↓</span>
+<span class="insecure">localStorage['wadjet_access_token'] = 'eyJhbGci...'   ← readable by ANY JS on origin</span>
+<span class="insecure">localStorage['wadjet_refresh_token'] = 'abc123...'    ← 30-day persistent exposure</span>
+<span class="insecure">localStorage['wadjet_user_profile']  = '{role:super_admin,...}'</span>
+
+<span class="c">── AFTER (Secure — httpOnly Cookies) ────────────────────────────────────────</span>
+
+<span class="secure">Browser JS  →  POST /api/auth/login  →  Backend sets httpOnly cookies:</span>
+<span class="secure">               Set-Cookie: waj_session=&lt;token&gt;; HttpOnly; Secure; SameSite=Strict; Path=/api</span>
+<span class="secure">               Set-Cookie: waj_refresh=&lt;refresh&gt;; HttpOnly; Secure; SameSite=Strict; Path=/api/auth/refresh</span>
+<span class="secure">               Returns ONLY: { user: { name, role, tenant_name } }  ← no tokens in body</span>
+<span class="secure">               ↓ Cookies sent automatically by browser on same-origin requests ↓</span>
+<span class="secure">               JS cannot read waj_session — XSS cannot steal it</span>
+<span class="secure">               Tab close clears session cookie (not refresh — refresh is path-scoped)</span>
+  </div>
+
+  <h3>Backend: Secure Cookie Login (backend/routes/auth.js — patch)</h3>
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c">// backend/routes/auth.js — POST /api/auth/login (secure cookie version)</span>
+router.post(<span class="s">'/login'</span>, authLimiter, asyncHandler(<span class="k">async</span> (req, res) => {
+  <span class="k">const</span> { email, password, tenant } = req.body;
+
+  <span class="c">// ... existing Supabase auth + profile fetch logic ...</span>
+
+  <span class="c">// Generate tokens</span>
+  <span class="k">const</span> accessToken  = data.session.access_token;
+  <span class="k">const</span> refreshToken = <span class="k">await</span> generateAndStoreRefreshToken(profile.id, profile.tenant_id, req);
+
+  <span class="c">// ── SET httpOnly COOKIES (not returned in body) ──────────</span>
+  <span class="k">const</span> isProd = process.env.NODE_ENV === <span class="s">'production'</span>;
+  <span class="k">const</span> cookieOpts = {
+    httpOnly:  <span class="v">true</span>,   <span class="c">// JS cannot read this cookie</span>
+    secure:    isProd,  <span class="c">// HTTPS only in prod</span>
+    sameSite:  <span class="s">'Strict'</span>, <span class="c">// CSRF protection</span>
+    domain:    process.env.COOKIE_DOMAIN || <span class="v">undefined</span>,
+  };
+
+  res.cookie(<span class="s">'waj_session'</span>, accessToken, {
+    ...cookieOpts,
+    path:    <span class="s">'/api'</span>,
+    maxAge:  ACCESS_TOKEN_EXPIRY_SEC * <span class="v">1000</span>,
+  });
+
+  res.cookie(<span class="s">'waj_refresh'</span>, refreshToken, {
+    ...cookieOpts,
+    path:    <span class="s">'/api/auth/refresh'</span>, <span class="c">// Only sent to refresh endpoint</span>
+    maxAge:  REFRESH_TOKEN_EXPIRY_DAYS * <span class="v">86400000</span>,
+  });
+
+  <span class="c">// Return ONLY non-sensitive user data — NO tokens in body</span>
+  res.json({
+    user: {
+      id:          profile.id,
+      name:        profile.name,
+      email:       profile.email,
+      role:        profile.role,
+      tenant_id:   profile.tenant_id,
+      tenant_name: tenant?.name,
+      avatar:      profile.avatar,
+      permissions: profile.permissions,
+      mfa_enabled: profile.mfa_enabled,
+    },
+    mfa_required: profile.mfa_enabled && !req.body.mfa_code,
+    session_id:   sessionId,
+    <span class="c">// No token, no refresh_token — cookies only</span>
+  });
+}));</pre>
+  </div>
+
+  <h3>Backend: Cookie-Reading Auth Middleware (backend/middleware/auth.js — patch)</h3>
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c">// backend/middleware/auth.js — extractToken with cookie support</span>
+<span class="k">function</span> extractToken(req) {
+  <span class="c">// 1. httpOnly cookie (preferred — XSS-safe)</span>
+  <span class="k">if</span> (req.cookies?.waj_session) {
+    <span class="k">return</span> { token: req.cookies.waj_session, source: <span class="s">'httpOnly-cookie'</span> };
+  }
+  <span class="c">// 2. Authorization header (for API clients, mobile apps, Postman)</span>
+  <span class="k">const</span> authHeader = req.headers[<span class="s">'authorization'</span>];
+  <span class="k">if</span> (authHeader?.startsWith(<span class="s">'Bearer '</span>)) {
+    <span class="k">return</span> { token: authHeader.slice(<span class="v">7</span>), source: <span class="s">'bearer-header'</span> };
+  }
+  <span class="c">// 3. X-Access-Token (legacy — deprecate in v7.0)</span>
+  <span class="k">if</span> (req.headers[<span class="s">'x-access-token'</span>]) {
+    <span class="k">return</span> { token: req.headers[<span class="s">'x-access-token'</span>], source: <span class="s">'x-access-token'</span> };
+  }
+  <span class="k">return</span> { token: <span class="v">null</span>, source: <span class="v">null</span> };
+}</pre>
+  </div>
+
+  <h3>Frontend: Minimal Secure Storage (js/auth-secure.js — NEW)</h3>
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c">/**
+ * js/auth-secure.js — Replaces auth-persistent.js + auth-interceptor.js
+ * Secure session model: NO tokens in localStorage/sessionStorage
+ * Tokens live in httpOnly cookies (server-managed)
+ * Frontend only stores: non-sensitive display data (name, role label, avatar)
+ */</span>
+(<span class="k">function</span>(global) {
+  <span class="k">const</span> DISPLAY_KEY = <span class="s">'waj_display'</span>; <span class="c">// NON-sensitive only</span>
+
+  <span class="c">// ── What we store client-side (no token, no permissions object) ──</span>
+  <span class="k">const</span> SecureSession = {
+    save(user) {
+      <span class="c">// ONLY store display-safe fields — role is a label, not an auth claim</span>
+      sessionStorage.setItem(DISPLAY_KEY, JSON.stringify({
+        name:        user.name,
+        email:       user.email,
+        role_label:  user.role,        <span class="c">// UI display only</span>
+        tenant_name: user.tenant_name,
+        avatar:      user.avatar,
+        session_id:  user.session_id,  <span class="c">// for display/revocation UI only</span>
+      }));
+      <span class="c">// Intentionally NOT stored: token, refresh_token, permissions array</span>
+    },
+    get() {
+      <span class="k">try</span> { <span class="k">return</span> JSON.parse(sessionStorage.getItem(DISPLAY_KEY) || <span class="s">'null'</span>); }
+      <span class="k">catch</span> { <span class="k">return</span> <span class="v">null</span>; }
+    },
+    clear() {
+      sessionStorage.removeItem(DISPLAY_KEY);
+      <span class="c">// Also clear any legacy localStorage keys from old versions</span>
+      [<span class="s">'wadjet_access_token'</span>,<span class="s">'wadjet_refresh_token'</span>,<span class="s">'wadjet_user_profile'</span>,
+       <span class="s">'we_access_token'</span>,<span class="s">'we_refresh_token'</span>,<span class="s">'we_user'</span>,
+       <span class="s">'tp_access_token'</span>,<span class="s">'wadjet_token_expires_at'</span>]
+        .forEach(k => { localStorage.removeItem(k); sessionStorage.removeItem(k); });
+    },
+    exists() { <span class="k">return</span> !!this.get(); }
+  };
+
+  <span class="c">// ── authFetch — cookies sent automatically, no manual token injection ──</span>
+  <span class="k">async function</span> authFetch(pathOrUrl, opts = {}) {
+    <span class="k">const</span> url = pathOrUrl.startsWith(<span class="s">'http'</span>) ? pathOrUrl
+      : <span class="s">`${API_BASE()}/api${pathOrUrl}`</span>;
+
+    <span class="k">const</span> response = <span class="k">await</span> fetch(url, {
+      ...opts,
+      credentials: <span class="s">'include'</span>, <span class="c">// ← sends httpOnly cookies automatically</span>
+      headers: { <span class="s">'Content-Type'</span>: <span class="s">'application/json'</span>, ...(opts.headers || {}) },
+    });
+
+    <span class="k">if</span> (response.status === <span class="v">401</span>) {
+      <span class="c">// Try silent refresh (cookie-based)</span>
+      <span class="k">const</span> refreshed = <span class="k">await</span> _silentRefresh();
+      <span class="k">if</span> (refreshed) {
+        <span class="k">return</span> fetch(url, { ...opts, credentials: <span class="s">'include'</span>,
+          headers: { <span class="s">'Content-Type'</span>: <span class="s">'application/json'</span>, ...(opts.headers||{}) }
+        });
+      }
+      SecureSession.clear();
+      showSessionExpiredBanner();
+      <span class="k">throw new</span> Error(<span class="s">'Session expired'</span>);
+    }
+    <span class="k">if</span> (!response.ok) <span class="k">throw new</span> Error(<span class="s">`HTTP ${response.status}`</span>);
+    <span class="k">return</span> response.json();
+  }
+
+  <span class="k">async function</span> _silentRefresh() {
+    <span class="k">try</span> {
+      <span class="c">// Cookie is sent automatically — no token in body needed</span>
+      <span class="k">const</span> r = <span class="k">await</span> fetch(<span class="s">`${API_BASE()}/api/auth/refresh`</span>, {
+        method: <span class="s">'POST'</span>, credentials: <span class="s">'include'</span>,
+        headers: { <span class="s">'Content-Type'</span>: <span class="s">'application/json'</span> }
+      });
+      <span class="k">return</span> r.ok;
+    } <span class="k">catch</span> { <span class="k">return</span> <span class="v">false</span>; }
+  }
+
+  global.SecureSession = SecureSession;
+  global.authFetch     = authFetch;
+})(window);</pre>
+  </div>
+
+  <div class="alert a-warn">
+    <span class="alert-icon">⚠️</span>
+    <div>
+      <h4>Migration Note: CORS + Credentials</h4>
+      <p>When switching to <code>credentials: 'include'</code>, your backend CORS config <strong>must</strong> set <code>credentials: true</code> AND use an explicit origin (not <code>*</code>). Update <code>backend/server.js</code>:</p>
+    </div>
+  </div>
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c">// backend/server.js — CORS must be explicit when using credentials</span>
+app.use(cors({
+  origin: (origin, callback) => {
+    <span class="k">const</span> allowed = (process.env.ALLOWED_ORIGINS || <span class="s">''</span>).split(<span class="s">','</span>).map(o => o.trim());
+    <span class="k">if</span> (!origin || allowed.includes(origin)) <span class="k">return</span> callback(<span class="v">null</span>, <span class="v">true</span>);
+    callback(<span class="k">new</span> Error(<span class="s">`CORS blocked: ${origin}`</span>));
+  },
+  credentials: <span class="v">true</span>,  <span class="c">// Required for cookies with credentials:include</span>
+  methods: [<span class="s">'GET'</span>,<span class="s">'POST'</span>,<span class="s">'PUT'</span>,<span class="s">'PATCH'</span>,<span class="s">'DELETE'</span>],
+  allowedHeaders: [<span class="s">'Content-Type'</span>,<span class="s">'Authorization'</span>,<span class="s">'X-Access-Token'</span>],
+}));
+
+<span class="c">// Add cookie-parser middleware</span>
+<span class="k">const</span> cookieParser = require(<span class="s">'cookie-parser'</span>);
+app.use(cookieParser());</pre>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- FINDING 3 -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="f3">
+  <div class="section-header">
+    <div class="section-icon si-orange">🎭</div>
+    <div>
+      <div class="section-title">F3 · MFA Theatre — UI Signal Without Backend Enforcement</div>
+      <div class="section-sub"><span class="sev sev-high">High</span> &nbsp; Files: <code>js/main.js</code>, <code>backend/routes/auth.js</code></div>
+    </div>
+  </div>
+
+  <div class="alert a-warn">
+    <span class="alert-icon">⚠️</span>
+    <div>
+      <h4>Login returns <code>mfa_enabled: false</code> while UI shows MFA toggle as protective</h4>
+      <p>The frontend login screen displays "Enable MFA (TOTP)" as if it's active protection. The backend profile response contains <code>mfa_enabled: false</code>. There is no TOTP enrollment flow, no challenge step, and no enforcement gate in the auth middleware. Users believe they are protected; they are not.</p>
+    </div>
+  </div>
+
+  <h3>Secure MFA Architecture — TOTP Backend Enforcement</h3>
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c">// backend/routes/auth.js — MFA-enforced login (add after profile fetch)</span>
+
+<span class="c">// Step 1: Check if MFA is required for this user/role</span>
+<span class="k">const</span> mfaRequired = profile.mfa_enabled ||
+  [<span class="s">'SUPER_ADMIN'</span>, <span class="s">'ADMIN'</span>].includes(profile.role); <span class="c">// Force MFA for privileged roles</span>
+
+<span class="k">if</span> (mfaRequired && !req.body.totp_code) {
+  <span class="c">// Issue a temporary pre-auth token (not a session token)</span>
+  <span class="k">const</span> preAuthToken = crypto.randomBytes(<span class="v">32</span>).toString(<span class="s">'hex'</span>);
+  <span class="k">await</span> supabase.from(<span class="s">'mfa_challenges'</span>).insert({
+    user_id: profile.id, pre_auth_token: hashToken(preAuthToken),
+    expires_at: <span class="k">new</span> Date(Date.now() + <span class="v">300000</span>).toISOString(), <span class="c">// 5 min</span>
+  });
+  <span class="k">return</span> res.status(<span class="v">200</span>).json({
+    mfa_required: <span class="v">true</span>,
+    mfa_session_token: preAuthToken, <span class="c">// Used only to submit TOTP code</span>
+  });
+}
+
+<span class="k">if</span> (mfaRequired && req.body.totp_code) {
+  <span class="c">// Verify TOTP code using speakeasy or @otplib/preset-default</span>
+  <span class="k">const</span> totpSecret = profile.totp_secret; <span class="c">// stored encrypted in DB</span>
+  <span class="k">const</span> isValid = verifyTOTP(totpSecret, req.body.totp_code);
+  <span class="k">if</span> (!isValid) {
+    <span class="k">await</span> logActivity(profile.id, profile.tenant_id, <span class="s">'MFA_FAILED'</span>, req, { email });
+    <span class="k">return</span> res.status(<span class="v">401</span>).json({ error: <span class="s">'Invalid MFA code'</span>, code: <span class="s">'MFA_INVALID'</span> });
+  }
+  <span class="c">// MFA verified — proceed to full session issuance below</span>
+}
+
+<span class="c">// backend/routes/mfa.js — NEW ROUTES</span>
+<span class="c">// POST /api/auth/mfa/enroll  → returns TOTP secret + QR code URI</span>
+<span class="c">// POST /api/auth/mfa/verify  → verifies first TOTP code to activate enrollment</span>
+<span class="c">// POST /api/auth/mfa/disable → requires current TOTP + admin approval for SUPER_ADMIN</span>
+<span class="c">// GET  /api/auth/mfa/status  → returns current MFA enrollment state</span></pre>
+  </div>
+
+  <h3>Frontend MFA Challenge UI (js/main.js — add after login success)</h3>
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c">// js/main.js — MFA challenge screen handler</span>
+<span class="k">function</span> showMFAChallenge(mfaSessionToken) {
+  <span class="c">// Hide login form, show TOTP entry</span>
+  document.getElementById(<span class="s">'loginForm'</span>)?.classList.add(<span class="s">'hidden'</span>);
+  <span class="k">const</span> mfaDiv = document.getElementById(<span class="s">'mfaChallenge'</span>);
+  <span class="k">if</span> (mfaDiv) mfaDiv.classList.remove(<span class="s">'hidden'</span>);
+
+  document.getElementById(<span class="s">'submitMFA'</span>)?.addEventListener(<span class="s">'click'</span>, <span class="k">async</span> () => {
+    <span class="k">const</span> code = document.getElementById(<span class="s">'totpCode'</span>)?.value?.trim();
+    <span class="k">if</span> (!code || code.length !== <span class="v">6</span>) { showError(<span class="s">'Enter the 6-digit code from your authenticator app.'</span>); <span class="k">return</span>; }
+    <span class="k">try</span> {
+      <span class="k">const</span> data = <span class="k">await</span> fetch(<span class="s">`${API_BASE}/api/auth/mfa/challenge`</span>, {
+        method: <span class="s">'POST'</span>, credentials: <span class="s">'include'</span>,
+        headers: { <span class="s">'Content-Type'</span>: <span class="s">'application/json'</span> },
+        body: JSON.stringify({ mfa_session_token: mfaSessionToken, totp_code: code })
+      }).then(r => r.json());
+      <span class="k">if</span> (data.user) <span class="k">await</span> _finalizeLogin(data);
+      <span class="k">else</span> showError(<span class="s">'Invalid code. Try again.'</span>);
+    } <span class="k">catch</span>(e) { showError(e.message); }
+  });
+}</pre>
+  </div>
+
+  <h3>Required DB Migration</h3>
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c">-- backend/database/migration-v6.0-mfa.sql</span>
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT;      <span class="c">-- encrypted with app key</span>
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enrolled_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enforced BOOLEAN DEFAULT FALSE;
+
+CREATE TABLE IF NOT EXISTS mfa_challenges (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      UUID REFERENCES users(id),
+  pre_auth_token TEXT NOT NULL,  <span class="c">-- stored as SHA-256 hash</span>
+  expires_at   TIMESTAMPTZ NOT NULL,
+  used         BOOLEAN DEFAULT FALSE,
+  created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+<span class="c">-- Force MFA enrollment for all admin/super_admin roles</span>
+UPDATE users SET mfa_enforced = TRUE
+WHERE role IN ('ADMIN','SUPER_ADMIN','super_admin','admin');</pre>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- FINDING 4 -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="f4">
+  <div class="section-header">
+    <div class="section-icon si-orange">🔀</div>
+    <div>
+      <div class="section-title">F4 · Route Contract Mismatches</div>
+      <div class="section-sub"><span class="sev sev-high">High</span> &nbsp; Files: <code>js/api-client.js</code>, <code>backend/routes/dashboard.js</code></div>
+    </div>
+  </div>
+
+  <table>
+    <tr><th>Frontend Calls</th><th>Actual Backend Route</th><th>Result</th><th>Fix</th></tr>
+    <tr><td class="mono">GET /dashboard</td><td class="mono">GET /api/dashboard/stats-live</td><td><span class="sev sev-crit">404</span></td><td>Add alias route</td></tr>
+    <tr><td class="mono">GET /health</td><td>Auth-protected</td><td><span class="sev sev-crit">401</span></td><td>Make public</td></tr>
+    <tr><td class="mono">GET /</td><td>Redirects / auth gate</td><td><span class="sev sev-high">Blocked</span></td><td>Public root</td></tr>
+    <tr><td class="mono">GET /api/iocs?sort=risk</td><td>Missing sort handler</td><td><span class="sev sev-high">Ignored</span></td><td>Add sort param</td></tr>
+  </table>
+
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c">// backend/routes/dashboard.js — add backwards-compatible alias</span>
+<span class="c">// GET /api/dashboard  →  proxy to stats-live</span>
+router.get(<span class="s">'/'</span>, verifyToken, asyncHandler(<span class="k">async</span> (req, res) => {
+  <span class="c">// Alias: serve same data as stats-live for API contract compatibility</span>
+  req.url = <span class="s">'/stats-live'</span>;
+  <span class="k">return</span> router.handle(req, res);
+}));
+
+<span class="c">// backend/server.js — public health endpoint (NO auth required)</span>
+app.get(<span class="s">'/health'</span>, (req, res) => res.json({
+  status:    <span class="s">'healthy'</span>,
+  version:   process.env.npm_package_version || <span class="s">'6.0.0'</span>,
+  timestamp: <span class="k">new</span> Date().toISOString(),
+  uptime:    Math.floor(process.uptime()),
+  env:       process.env.NODE_ENV,
+}));
+
+app.get(<span class="s">'/ready'</span>, <span class="k">async</span> (req, res) => {
+  <span class="k">try</span> {
+    <span class="k">await</span> supabase.from(<span class="s">'users'</span>).select(<span class="s">'id'</span>).limit(<span class="v">1</span>);
+    res.json({ ready: <span class="v">true</span>, db: <span class="s">'connected'</span> });
+  } <span class="k">catch</span> { res.status(<span class="v">503</span>).json({ ready: <span class="v">false</span>, db: <span class="s">'unreachable'</span> }); }
+});</pre>
+  </div>
+
+  <h3>API Contract Versioning (add to all routes)</h3>
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c">// backend/server.js — versioned API prefix</span>
+<span class="c">// All new routes: /api/v1/...</span>
+<span class="c">// Legacy routes:  /api/... (keep for backward compat, add deprecation header)</span>
+app.use((<span class="k">req</span>, res, next) => {
+  <span class="k">if</span> (req.path.startsWith(<span class="s">'/api/'</span>) && !req.path.startsWith(<span class="s">'/api/v'</span>)) {
+    res.setHeader(<span class="s">'X-API-Version'</span>, <span class="s">'legacy'</span>);
+    res.setHeader(<span class="s">'Deprecation'</span>, <span class="s">'true'</span>);
+    res.setHeader(<span class="s">'Sunset'</span>, <span class="s">'2026-12-31'</span>);
+  }
+  next();
+});</pre>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- FINDING 5 -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="f5">
+  <div class="section-header">
+    <div class="section-icon si-blue">🧬</div>
+    <div>
+      <div class="section-title">F5 · IOC Schema Drift &amp; Missing Canonicalization</div>
+      <div class="section-sub"><span class="sev sev-med">Medium</span> &nbsp; Files: <code>backend/routes/iocs.js</code>, <code>backend/services/ingestion/</code></div>
+    </div>
+  </div>
+
+  <div class="alert a-info">
+    <span class="alert-icon">🔵</span>
+    <div>
+      <h4>Hash-like values typed as IP — poisons every downstream system</h4>
+      <p>Sampled IOC data shows entries where the <code>value</code> field contains what appears to be a SHA-256 hash while <code>type</code> is <code>ip</code>. This means enrichment lookups call IP reputation APIs with hash strings (returning noise), confidence scoring runs on wrong entity type, ATT&amp;CK technique linkage fails, and SOAR playbook triggers fire with wrong context. A strict canonical validator at ingest time is non-negotiable for a trusted CTI platform.</p>
+    </div>
+  </div>
+
+  <h3>IOC Canonicalization Engine (NEW: backend/services/ioc-validator.js)</h3>
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c">/**
+ * backend/services/ioc-validator.js
+ * Strict IOC canonical validation — called on every ingest and upsert
+ */</span>
+<span class="k">const</span> net = require(<span class="s">'net'</span>);
+
+<span class="c">// ── Canonical type detection ───────────────────────────────────────</span>
+<span class="k">const</span> PATTERNS = {
+  ipv4:    /^(\d{1,3}\.){3}\d{1,3}$/,
+  ipv6:    /^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$/,
+  domain:  /^(?!-)[a-zA-Z0-9\-]{1,63}(?:\.[a-zA-Z0-9\-]{1,63})+(?<!-)$/,
+  url:     /^https?:\/\/.{4,}/,
+  md5:     /^[a-fA-F0-9]{32}$/,
+  sha1:    /^[a-fA-F0-9]{40}$/,
+  sha256:  /^[a-fA-F0-9]{64}$/,
+  sha512:  /^[a-fA-F0-9]{128}$/,
+  email:   /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+  cve:     /^CVE-\d{4}-\d{4,}$/i,
+  bitcoin: /^(1|3|bc1)[a-zA-HJ-NP-Z0-9]{25,39}$/,
+};
+
+<span class="k">function</span> detectType(value) {
+  <span class="k">if</span> (!value || <span class="k">typeof</span> value !== <span class="s">'string'</span>) <span class="k">return</span> { type: <span class="v">null</span>, canonical: <span class="v">null</span>, error: <span class="s">'Empty value'</span> };
+  <span class="k">const</span> v = value.trim();
+
+  <span class="k">if</span> (PATTERNS.ipv4.test(v) && net.isIPv4(v))   <span class="k">return</span> { type: <span class="s">'ip'</span>, subtype: <span class="s">'ipv4'</span>, canonical: v };
+  <span class="k">if</span> (PATTERNS.ipv6.test(v) && net.isIPv6(v))   <span class="k">return</span> { type: <span class="s">'ip'</span>, subtype: <span class="s">'ipv6'</span>, canonical: v.toLowerCase() };
+  <span class="k">if</span> (PATTERNS.sha256.test(v))                  <span class="k">return</span> { type: <span class="s">'hash'</span>, subtype: <span class="s">'sha256'</span>, canonical: v.toLowerCase() };
+  <span class="k">if</span> (PATTERNS.sha1.test(v))                    <span class="k">return</span> { type: <span class="s">'hash'</span>, subtype: <span class="s">'sha1'</span>, canonical: v.toLowerCase() };
+  <span class="k">if</span> (PATTERNS.md5.test(v))                     <span class="k">return</span> { type: <span class="s">'hash'</span>, subtype: <span class="s">'md5'</span>, canonical: v.toLowerCase() };
+  <span class="k">if</span> (PATTERNS.url.test(v))                     <span class="k">return</span> { type: <span class="s">'url'</span>, canonical: v };
+  <span class="k">if</span> (PATTERNS.cve.test(v))                     <span class="k">return</span> { type: <span class="s">'cve'</span>, canonical: v.toUpperCase() };
+  <span class="k">if</span> (PATTERNS.email.test(v))                   <span class="k">return</span> { type: <span class="s">'email'</span>, canonical: v.toLowerCase() };
+  <span class="k">if</span> (PATTERNS.domain.test(v))                  <span class="k">return</span> { type: <span class="s">'domain'</span>, canonical: v.toLowerCase() };
+  <span class="k">return</span> { type: <span class="s">'unknown'</span>, canonical: v };
+}
+
+<span class="k">function</span> validateIOC(ioc) {
+  <span class="k">const</span> errors = [];
+  <span class="k">if</span> (!ioc.value)                errors.push(<span class="s">'value is required'</span>);
+  <span class="k">if</span> (!ioc.type)                 errors.push(<span class="s">'type is required'</span>);
+  <span class="k">if</span> (ioc.confidence !== <span class="v">undefined</span> && (ioc.confidence < <span class="v">0</span> || ioc.confidence > <span class="v">100</span>))
+    errors.push(<span class="s">'confidence must be 0-100'</span>);
+  <span class="k">if</span> (ioc.risk_score !== <span class="v">undefined</span> && (ioc.risk_score < <span class="v">0</span> || ioc.risk_score > <span class="v">100</span>))
+    errors.push(<span class="s">'risk_score must be 0-100'</span>);
+  <span class="k">if</span> (errors.length) <span class="k">return</span> { valid: <span class="v">false</span>, errors };
+
+  <span class="c">// Type vs value consistency check</span>
+  <span class="k">const</span> detected = detectType(ioc.value);
+  <span class="k">if</span> (detected.type && detected.type !== ioc.type && ioc.type !== <span class="s">'unknown'</span>) {
+    <span class="k">return</span> {
+      valid: <span class="v">false</span>,
+      errors: [<span class="s">`Type mismatch: value looks like '${detected.type}' but declared as '${ioc.type}'`</span>],
+      detected
+    };
+  }
+  <span class="k">return</span> { valid: <span class="v">true</span>, canonical: detected.canonical || ioc.value, detected };
+}
+
+<span class="k">function</span> canonicalizeIOC(ioc) {
+  <span class="k">const</span> result = validateIOC(ioc);
+  <span class="k">if</span> (!result.valid) <span class="k">throw new</span> Error(<span class="s">`IOC validation failed: ${result.errors.join(', ')}`</span>);
+  <span class="k">return</span> {
+    ...ioc,
+    value:        result.canonical,
+    type:         result.detected?.type || ioc.type,
+    type_subtype: result.detected?.subtype || <span class="v">null</span>,
+    normalized_at: <span class="k">new</span> Date().toISOString(),
+  };
+}
+
+module.exports = { detectType, validateIOC, canonicalizeIOC };</pre>
+  </div>
+
+  <h3>Wire Validator into Ingest Pipeline</h3>
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c">// backend/routes/ioc-ingestion.js — add at top of upsertIOCs()</span>
+<span class="k">const</span> { canonicalizeIOC, validateIOC } = require(<span class="s">'../services/ioc-validator'</span>);
+
+<span class="k">async function</span> upsertIOCs(iocs, feedName) {
+  <span class="k">const</span> valid = [], invalid = [];
+
+  <span class="k">for</span> (<span class="k">const</span> raw <span class="k">of</span> iocs) {
+    <span class="k">try</span> {
+      valid.push(canonicalizeIOC(raw));
+    } <span class="k">catch</span>(e) {
+      invalid.push({ raw, error: e.message });
+      console.warn(<span class="s">`[IOC] Rejected from ${feedName}: ${e.message} — value: ${raw.value}`</span>);
+    }
+  }
+
+  <span class="k">if</span> (invalid.length) {
+    <span class="k">await</span> supabase.from(<span class="s">'ioc_validation_errors'</span>).insert(
+      invalid.map(i => ({ feed: feedName, raw_value: i.raw.value, error: i.error,
+        raw_type: i.raw.type, occurred_at: <span class="k">new</span> Date().toISOString() }))
+    );
+  }
+  <span class="c">// Continue with valid[] only ...</span>
+}</pre>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- FINDING 6 -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="f6">
+  <div class="section-header">
+    <div class="section-icon si-cyan">🏥</div>
+    <div>
+      <div class="section-title">F6 · Operational Maturity Gaps</div>
+      <div class="section-sub"><span class="sev sev-med">Medium</span> &nbsp; Files: <code>backend/server.js</code>, <code>.well-known/security.txt</code></div>
+    </div>
+  </div>
+
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c"># .well-known/security.txt — security contact disclosure (RFC 9116)</span>
+Contact: mailto:security@wadjet.ai
+Contact: https://wadjet.ai/security
+Expires: 2027-04-01T00:00:00.000Z
+Encryption: https://wadjet.ai/pgp-key.asc
+Preferred-Languages: en
+Canonical: https://wadjet-eye-ai.vercel.app/.well-known/security.txt
+Policy: https://wadjet.ai/responsible-disclosure
+Acknowledgments: https://wadjet.ai/security/hall-of-fame</pre>
+  </div>
+
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c">// backend/server.js — public operational endpoints</span>
+
+<span class="c">// Liveness probe (Render/k8s health check)</span>
+app.get([<span class="s">'/health'</span>, <span class="s">'/api/health'</span>], (req, res) => res.json({
+  status: <span class="s">'healthy'</span>, version: <span class="s">'6.0.0'</span>,
+  timestamp: <span class="k">new</span> Date().toISOString(), uptime: process.uptime()
+}));
+
+<span class="c">// Readiness probe (checks DB connection)</span>
+app.get(<span class="s">'/ready'</span>, <span class="k">async</span> (req, res) => {
+  <span class="k">const</span> { error } = <span class="k">await</span> supabase.from(<span class="s">'users'</span>).select(<span class="s">'id'</span>).limit(<span class="v">1</span>);
+  error ? res.status(<span class="v">503</span>).json({ ready: <span class="v">false</span> }) : res.json({ ready: <span class="v">true</span> });
+});
+
+<span class="c">// Meta tags in index.html — add to &lt;head&gt;</span></pre>
+  </div>
+
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c">&lt;!-- index.html &lt;head&gt; — SEO + Social meta --&gt;</span>
+&lt;meta name="description" content="Wadjet-Eye AI — Enterprise Cyber Threat Intelligence Platform"&gt;
+&lt;meta property="og:title" content="Wadjet-Eye AI CTI Platform"&gt;
+&lt;meta property="og:description" content="Real-time threat intelligence, IOC enrichment, and AI-driven SOC automation."&gt;
+&lt;meta property="og:image" content="https://wadjet-eye-ai.vercel.app/images/og-preview.png"&gt;
+&lt;meta property="og:url" content="https://wadjet-eye-ai.vercel.app"&gt;
+&lt;meta name="twitter:card" content="summary_large_image"&gt;
+&lt;meta name="robots" content="noindex, nofollow"&gt; <span class="c">&lt;!-- Private platform --&gt;</span></pre>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- ARCHITECTURE -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="arch">
+  <div class="section-header">
+    <div class="section-icon si-purple">🏗️</div>
+    <div>
+      <div class="section-title">Updated Security Architecture</div>
+      <div class="section-sub">Auth flow, session model, data validation pipeline — before &amp; after</div>
+    </div>
+  </div>
+
+  <h3>Authentication Flow (After Remediation)</h3>
+  <div class="arch">
+<span class="label">AUTHENTICATION FLOW v6.0 — Secure</span>
+
+<span class="box">┌─────────────────────────────────────────────────────────────┐</span>
+<span class="box">│  BROWSER                                                    │</span>
+<span class="box">│  ─────────────────────────────────────────────────────────  │</span>
+<span class="box">│  1. User enters email + password → POST /api/auth/login     │</span>
+<span class="box">│     credentials:'include' (sends cookies, reads none)       │</span>
+<span class="box">│                                                             │</span>
+<span class="box">│  2a. Server returns mfa_required:true                       │</span>
+<span class="secure">│      → Show TOTP challenge screen (6-digit code)            │</span>
+<span class="secure">│      → POST /api/auth/mfa/challenge with totp_code          │</span>
+<span class="box">│                                                             │</span>
+<span class="box">│  2b. Auth success:                                          │</span>
+<span class="secure">│      Set-Cookie: waj_session=eyJ...; HttpOnly; Secure       │</span>
+<span class="secure">│      Set-Cookie: waj_refresh=abc..; HttpOnly; Path=/refresh │</span>
+<span class="secure">│      Body: { user: { name, role_label, tenant_name } }      │</span>
+<span class="secure">│      ← NO TOKEN IN BODY, NO localStorage write              │</span>
+<span class="box">│                                                             │</span>
+<span class="box">│  3. All API calls: fetch(url, { credentials:'include' })    │</span>
+<span class="secure">│     Cookie sent automatically by browser                    │</span>
+<span class="secure">│     JS cannot read cookie (httpOnly)                        │</span>
+<span class="box">│                                                             │</span>
+<span class="box">│  4. Token expiry → POST /api/auth/refresh                   │</span>
+<span class="secure">│     waj_refresh cookie sent, new waj_session cookie set     │</span>
+<span class="secure">│     Zero JS involvement in token rotation                   │</span>
+<span class="box">└─────────────────────────────────────────────────────────────┘</span>
+
+<span class="box">┌─────────────────────────────────────────────────────────────┐</span>
+<span class="box">│  BACKEND (Express on Render)                                │</span>
+<span class="secure">│  extractToken: cookies first → header → x-access-token     │</span>
+<span class="secure">│  verifyToken: supabase.auth.getUser(token)                  │</span>
+<span class="secure">│  MFA gate: role in [ADMIN,SUPER_ADMIN] → totp required      │</span>
+<span class="secure">│  Step-up auth: destructive actions require re-auth          │</span>
+<span class="box">└─────────────────────────────────────────────────────────────┘</span>
+
+<span class="box">┌─────────────────────────────────────────────────────────────┐</span>
+<span class="box">│  IOC DATA PIPELINE v6.0                                     │</span>
+<span class="box">│  Feed Ingest → canonicalizeIOC() → validateIOC()            │</span>
+<span class="secure">│  type/value consistency check → reject mismatches           │</span>
+<span class="secure">│  deduplication by (value_canonical, tenant_id)              │</span>
+<span class="secure">│  confidence scoring by source reliability                   │</span>
+<span class="secure">│  ATT&CK linkage validation → store ioc_validation_errors    │</span>
+<span class="box">└─────────────────────────────────────────────────────────────┘</span>
+
+<span class="insecure">REMOVED (v6.0):</span>
+<span class="insecure">  ✗ _EMERGENCY_ACCOUNTS object in browser JS</span>
+<span class="insecure">  ✗ localStorage.setItem('wadjet_access_token', ...)</span>
+<span class="insecure">  ✗ client-side offline token generation</span>
+<span class="insecure">  ✗ password.length >= 6 auth check</span>
+<span class="insecure">  ✗ MFA toggle with no backend enforcement</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- FILE MANIFEST -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="files">
+  <div class="section-header">
+    <div class="section-icon si-green">📁</div>
+    <div>
+      <div class="section-title">Complete File Change Manifest</div>
+      <div class="section-sub">Every file modified, created, or deleted</div>
+    </div>
+  </div>
+
+  <table>
+    <tr>
+      <th>File</th><th>Action</th><th>Finding</th><th>Change Summary</th>
+    </tr>
+    <tr>
+      <td class="mono">js/main.js</td>
+      <td><span class="sev sev-crit">Modify</span></td>
+      <td>F1</td>
+      <td>Remove <code>_EMERGENCY_ACCOUNTS</code>, <code>_doEmergencyLogin</code>, password-length gate. Replace with server-only auth + MFA challenge flow.</td>
+    </tr>
+    <tr>
+      <td class="mono">js/auth-persistent.js</td>
+      <td><span class="sev sev-crit">Delete/Replace</span></td>
+      <td>F2</td>
+      <td>Delete file. Replaced by <code>js/auth-secure.js</code>. All token storage moves to httpOnly cookies.</td>
+    </tr>
+    <tr>
+      <td class="mono">js/auth-interceptor.js</td>
+      <td><span class="sev sev-crit">Modify</span></td>
+      <td>F2</td>
+      <td>Remove token read from localStorage. <code>authFetch</code> uses <code>credentials:'include'</code> only. Remove UNIFIED_KEYS localStorage writes.</td>
+    </tr>
+    <tr>
+      <td class="mono">js/auth-secure.js</td>
+      <td><span class="sev sev-ok">Create NEW</span></td>
+      <td>F2</td>
+      <td>Secure session manager. sessionStorage for display-only data. authFetch with cookie credentials. Legacy key cleanup on load.</td>
+    </tr>
+    <tr>
+      <td class="mono">backend/routes/auth.js</td>
+      <td><span class="sev sev-high">Modify</span></td>
+      <td>F2, F3</td>
+      <td>Login sets httpOnly cookies. Refresh reads cookie. MFA challenge step. TOTP verification. No tokens in response body.</td>
+    </tr>
+    <tr>
+      <td class="mono">backend/middleware/auth.js</td>
+      <td><span class="sev sev-high">Modify</span></td>
+      <td>F2</td>
+      <td>extractToken reads cookie first. Step-up auth middleware. MFA enforcement check.</td>
+    </tr>
+    <tr>
+      <td class="mono">backend/routes/mfa.js</td>
+      <td><span class="sev sev-ok">Create NEW</span></td>
+      <td>F3</td>
+      <td>TOTP enrollment, verification, challenge, disable routes. Uses otplib. Enforces MFA for ADMIN/SUPER_ADMIN.</td>
+    </tr>
+    <tr>
+      <td class="mono">backend/services/break-glass.js</td>
+      <td><span class="sev sev-ok">Create NEW</span></td>
+      <td>F1</td>
+      <td>Server-side only emergency access. IP allowlist, OTP, audit log. Never exposes accounts in browser.</td>
+    </tr>
+    <tr>
+      <td class="mono">backend/services/ioc-validator.js</td>
+      <td><span class="sev sev-ok">Create NEW</span></td>
+      <td>F5</td>
+      <td>IOC canonical validation. Type vs value consistency. Deduplication key generation. Error table logging.</td>
+    </tr>
+    <tr>
+      <td class="mono">backend/routes/ioc-ingestion.js</td>
+      <td><span class="sev sev-high">Modify</span></td>
+      <td>F5</td>
+      <td>Wire <code>canonicalizeIOC()</code> into <code>upsertIOCs()</code>. Log validation errors. Reject type-mismatched IOCs.</td>
+    </tr>
+    <tr>
+      <td class="mono">backend/server.js</td>
+      <td><span class="sev sev-high">Modify</span></td>
+      <td>F4, F6</td>
+      <td>Public /health and /ready endpoints. cookie-parser middleware. CORS credentials:true. API version headers.</td>
+    </tr>
+    <tr>
+      <td class="mono">.well-known/security.txt</td>
+      <td><span class="sev sev-ok">Create NEW</span></td>
+      <td>F6</td>
+      <td>RFC 9116 security contact disclosure. Responsible disclosure policy link.</td>
+    </tr>
+    <tr>
+      <td class="mono">backend/database/migration-v6.0-mfa.sql</td>
+      <td><span class="sev sev-ok">Create NEW</span></td>
+      <td>F3, F5</td>
+      <td>mfa_challenges table, totp_secret column, break_glass tables, ioc_validation_errors table.</td>
+    </tr>
+    <tr>
+      <td class="mono">backend/.env / Render env vars</td>
+      <td><span class="sev sev-high">Modify</span></td>
+      <td>F1, F2</td>
+      <td>Add BREAK_GLASS_ALLOWED_IPS, COOKIE_DOMAIN, TOTP_ENCRYPTION_KEY. Remove any hardcoded admin emails.</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- DEPLOYMENT STEPS -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="deploy">
+  <div class="section-header">
+    <div class="section-icon si-green">🚀</div>
+    <div>
+      <div class="section-title">Step-by-Step Deployment Guide</div>
+      <div class="section-sub">Exact sequence — do not skip steps</div>
+    </div>
+  </div>
+
+  <div class="alert a-crit">
+    <span class="alert-icon">🔴</span>
+    <div><h4>Do Step 0 NOW — Before any code changes</h4>
+    <p>Rotate all credentials listed in <code>_EMERGENCY_ACCOUNTS</code>. Those emails and their associated passwords should be treated as publicly known from this moment.</p></div>
+  </div>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-content">
+        <div class="step-title">Install new backend dependencies</div>
+        <div class="step-desc">
+          <div class="code" style="margin-top:8px"><pre>cd backend
+npm install cookie-parser otplib qrcode jsonwebtoken
+npm install --save-dev @types/cookie-parser</pre></div>
+        </div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-content">
+        <div class="step-title">Add new environment variables to Render Dashboard</div>
+        <div class="step-desc">
+          <div class="code" style="margin-top:8px"><pre>COOKIE_DOMAIN=wadjet-eye-ai.onrender.com
+COOKIE_SECURE=true
+BREAK_GLASS_ALLOWED_IPS=your.office.ip.here
+TOTP_ENCRYPTION_KEY=32-byte-random-hex-string  # openssl rand -hex 32
+SESSION_COOKIE_NAME=waj_session
+REFRESH_COOKIE_NAME=waj_refresh</pre></div>
+        </div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-content">
+        <div class="step-title">Run DB migration in Supabase SQL Editor</div>
+        <div class="step-desc">Open Supabase Dashboard → SQL Editor → paste and run <code>backend/database/migration-v6.0-mfa.sql</code></div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-content">
+        <div class="step-title">Update backend files</div>
+        <div class="step-desc">Replace/create: <code>backend/middleware/auth.js</code>, <code>backend/routes/auth.js</code>, <code>backend/routes/mfa.js</code>, <code>backend/services/break-glass.js</code>, <code>backend/services/ioc-validator.js</code>, <code>backend/server.js</code></div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-content">
+        <div class="step-title">Update frontend files</div>
+        <div class="step-desc">Create <code>js/auth-secure.js</code>, modify <code>js/main.js</code> (remove emergency accounts), modify <code>js/auth-interceptor.js</code> (add <code>credentials:'include'</code>), update <code>index.html</code> script order.</div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-content">
+        <div class="step-title">Create .well-known/security.txt</div>
+        <div class="step-desc">Create the file at <code>.well-known/security.txt</code> in the frontend project root. Accessible at <code>/.well-known/security.txt</code>.</div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-content">
+        <div class="step-title">Deploy backend to Render</div>
+        <div class="step-desc"><div class="code" style="margin-top:8px"><pre>git add backend/ .well-known/
+git commit -m "security: v6.0 auth hardening — remove client-side emergency accounts, httpOnly cookies, MFA enforcement"
+git push origin main</pre></div></div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-content">
+        <div class="step-title">Verify deployment logs on Render</div>
+        <div class="step-desc">Should see: <code>[Auth] httpOnly cookie mode enabled</code>, <code>[MFA] TOTP enforcement active for ADMIN/SUPER_ADMIN</code>, <code>[Supabase] ✅ Connection OK</code></div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-content">
+        <div class="step-title">Enroll all admin users in TOTP MFA</div>
+        <div class="step-desc">Log in as each admin user → navigate to Settings → Security → click "Enroll MFA" → scan QR code with Google Authenticator / Authy → confirm enrollment.</div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-content">
+        <div class="step-title">Deploy frontend to Vercel</div>
+        <div class="step-desc">Push updated <code>js/</code> files and <code>index.html</code>. Verify no <code>localStorage.setItem('wadjet_access_token'</code> calls remain using browser DevTools.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- TESTS -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="tests">
+  <div class="section-header">
+    <div class="section-icon si-cyan">🧪</div>
+    <div>
+      <div class="section-title">Security Validation Test Suite</div>
+      <div class="section-sub">Run these after deployment to verify each fix</div>
+    </div>
+  </div>
+
+  <h3>T1 — Verify Emergency Accounts Are Gone</h3>
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c"># DevTools console — run on deployed frontend</span>
+<span class="c"># Expected: no results → emergency accounts removed</span>
+fetch('/js/main.js').then(r=>r.text()).then(t=>{
+  const found = t.includes('_EMERGENCY_ACCOUNTS') || t.includes('mahmoud.osman@wadjet.ai');
+  console.log(found ? '❌ FAIL: Emergency accounts still in JS' : '✅ PASS: No emergency accounts in JS');
+});</pre>
+  </div>
+
+  <h3>T2 — Verify No Tokens in localStorage</h3>
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c"># DevTools console — run after logging in</span>
+const tokenKeys = ['wadjet_access_token','we_access_token','tp_access_token',
+                   'wadjet_refresh_token','wadjet_user_profile'];
+const found = tokenKeys.filter(k => localStorage.getItem(k));
+console.log(found.length === 0
+  ? '✅ PASS: No tokens in localStorage'
+  : `❌ FAIL: Found tokens in localStorage: ${found.join(', ')}`);</pre>
+  </div>
+
+  <h3>T3 — Verify httpOnly Cookies Set</h3>
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c"># DevTools → Application → Cookies — after login you should see:</span>
+<span class="c"># waj_session: value visible in DevTools (server-set), httpOnly=true, Secure=true</span>
+<span class="c"># Verify JS cannot read it:</span>
+console.log(document.cookie.includes('waj_session')
+  ? '❌ FAIL: Cookie is JS-readable (not httpOnly)'
+  : '✅ PASS: Cookie is httpOnly (not readable by JS)');</pre>
+  </div>
+
+  <h3>T4 — Verify MFA is Required for Admin Login</h3>
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c"># cURL — login as admin without TOTP should return mfa_required:true</span>
+curl -s -X POST https://wadjet-eye-ai.onrender.com/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@mssp.com","password":"YOUR_PASSWORD","tenant":"mssp-global"}' \
+  | python3 -m json.tool
+
+<span class="c"># Expected output:</span>
+<span class="c"># { "mfa_required": true, "mfa_session_token": "..." }</span>
+<span class="c"># NOT: { "user": {...}, "token": "..." }</span></pre>
+  </div>
+
+  <h3>T5 — Verify Health Endpoint is Public</h3>
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c"># No Authorization header — should return 200</span>
+curl -s https://wadjet-eye-ai.onrender.com/health | python3 -m json.tool
+<span class="c"># Expected: { "status": "healthy", "version": "6.0.0", ... }</span>
+<span class="c"># FAIL if: 401 or 404</span></pre>
+  </div>
+
+  <h3>T6 — IOC Type Validation Rejects Hash-as-IP</h3>
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c"># Should return 422 Unprocessable Entity</span>
+curl -s -X POST https://wadjet-eye-ai.onrender.com/api/iocs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"value":"a3f8d2e1b4c5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1","type":"ip","tenant_id":"test"}' \
+  | python3 -m json.tool
+<span class="c"># Expected: { "error": "Type mismatch: value looks like 'hash' but declared as 'ip'" }</span></pre>
+  </div>
+
+  <h3>T7 — XSS Token Theft Simulation</h3>
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre><span class="c"># Simulates what an XSS payload would do — run in DevTools after login</span>
+const stolenToken = localStorage.getItem('wadjet_access_token')
+                 || localStorage.getItem('we_access_token')
+                 || document.cookie.match(/waj_session=([^;]+)/)?.[1];
+
+console.log(stolenToken
+  ? `❌ FAIL: XSS could steal token: ${stolenToken.slice(0,20)}...`
+  : '✅ PASS: No token accessible to JavaScript — XSS cannot steal session');</pre>
+  </div>
+
+  <h3>T8 — security.txt Accessible</h3>
+  <div class="code">
+    <button class="copy-btn" onclick="cp(this)">Copy</button>
+<pre>curl -s https://wadjet-eye-ai.vercel.app/.well-known/security.txt
+<span class="c"># Expected: Contact: mailto:security@wadjet.ai ...</span></pre>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- CHECKLIST -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="checklist">
+  <div class="section-header">
+    <div class="section-icon si-green">☑️</div>
+    <div>
+      <div class="section-title">Security Validation Checklist</div>
+      <div class="section-sub">Track every remediation item to completion</div>
+    </div>
+  </div>
+
+  <h3>🔴 Critical — Do First</h3>
+  <ul class="checklist">
+    <li class="cli-crit"><input type="checkbox" id="c1"><label for="c1"><strong>Rotate credentials:</strong> Change passwords for all accounts listed in _EMERGENCY_ACCOUNTS immediately</label></li>
+    <li class="cli-crit"><input type="checkbox" id="c2"><label for="c2"><strong>Remove emergency accounts:</strong> Delete _EMERGENCY_ACCOUNTS object and _doEmergencyLogin() from js/main.js</label></li>
+    <li class="cli-crit"><input type="checkbox" id="c3"><label for="c3"><strong>Verify removal:</strong> Run T1 test — fetch /js/main.js and confirm no emergency account emails present</label></li>
+    <li class="cli-crit"><input type="checkbox" id="c4"><label for="c4"><strong>httpOnly cookies:</strong> Backend login sets Set-Cookie with HttpOnly + Secure + SameSite=Strict</label></li>
+    <li class="cli-crit"><input type="checkbox" id="c5"><label for="c5"><strong>Remove localStorage writes:</strong> No localStorage.setItem calls for tokens anywhere in frontend JS</label></li>
+    <li class="cli-crit"><input type="checkbox" id="c6"><label for="c6"><strong>Legacy key cleanup:</strong> auth-secure.js clears old localStorage keys on load (migration)</label></li>
+  </ul>
+
+  <h3>🟡 High — Complete Within 48 Hours</h3>
+  <ul class="checklist">
+    <li class="cli-high"><input type="checkbox" id="c7"><label for="c7"><strong>TOTP MFA enforcement:</strong> ADMIN and SUPER_ADMIN roles require TOTP code on every login</label></li>
+    <li class="cli-high"><input type="checkbox" id="c8"><label for="c8"><strong>MFA enrollment flow:</strong> All admin users enrolled in TOTP via /api/auth/mfa/enroll</label></li>
+    <li class="cli-high"><input type="checkbox" id="c9"><label for="c9"><strong>Public /health endpoint:</strong> Returns 200 without Authorization header</label></li>
+    <li class="cli-high"><input type="checkbox" id="c10"><label for="c10"><strong>Route alias /api/dashboard:</strong> Returns same data as /api/dashboard/stats-live</label></li>
+    <li class="cli-high"><input type="checkbox" id="c11"><label for="c11"><strong>Install cookie-parser:</strong> npm install cookie-parser in backend/ and add to server.js</label></li>
+    <li class="cli-high"><input type="checkbox" id="c12"><label for="c12"><strong>CORS credentials:true:</strong> Explicit origin list (not *) with credentials:true in CORS config</label></li>
+  </ul>
+
+  <h3>🔵 Medium — Complete Within 1 Week</h3>
+  <ul class="checklist">
+    <li class="cli-med"><input type="checkbox" id="c13"><label for="c13"><strong>IOC validator wired:</strong> canonicalizeIOC() called in upsertIOCs() before every DB write</label></li>
+    <li class="cli-med"><input type="checkbox" id="c14"><label for="c14"><strong>Type mismatch rejection:</strong> POST /api/iocs rejects hash values typed as IP (T6 test passes)</label></li>
+    <li class="cli-med"><input type="checkbox" id="c15"><label for="c15"><strong>ioc_validation_errors table:</strong> Migration v6.0 SQL run in Supabase</label></li>
+    <li class="cli-med"><input type="checkbox" id="c16"><label for="c16"><strong>security.txt deployed:</strong> Accessible at /.well-known/security.txt with valid Contact field</label></li>
+    <li class="cli-med"><input type="checkbox" id="c17"><label for="c17"><strong>Break-glass service:</strong> backend/services/break-glass.js created with IP allowlist and OTP flow</label></li>
+    <li class="cli-med"><input type="checkbox" id="c18"><label for="c18"><strong>BREAK_GLASS_ALLOWED_IPS:</strong> Set in Render environment variables</label></li>
+    <li class="cli-med"><input type="checkbox" id="c19"><label for="c19"><strong>API version headers:</strong> X-API-Version and Deprecation headers on legacy routes</label></li>
+    <li class="cli-med"><input type="checkbox" id="c20"><label for="c20"><strong>Session inventory UI:</strong> Users can see and revoke active sessions in Settings</label></li>
+  </ul>
+</div>
+
+</div><!-- /main -->
+</div><!-- /wrapper -->
+
+<script>
+// Nav active tracking
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.addEventListener('click', () => {
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    item.classList.add('active');
+  });
+});
+
+// Intersection observer for nav highlighting
+const sections = document.querySelectorAll('.section[id]');
+const navItems = document.querySelectorAll('.nav-item[href]');
+const io = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      navItems.forEach(n => n.classList.remove('active'));
+      const match = document.querySelector(`.nav-item[href="#${e.target.id}"]`);
+      if (match) match.classList.add('active');
+    }
+  });
+}, { rootMargin: '-20% 0px -60% 0px' });
+sections.forEach(s => io.observe(s));
+
+// Copy buttons
+function cp(btn) {
+  const block = btn.closest('.code, .diff');
+  const text = block.querySelector('pre')?.textContent || block.innerText;
+  navigator.clipboard.writeText(text.trim()).then(() => {
+    btn.textContent = '✓';
+    btn.classList.add('ok');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('ok'); }, 1800);
+  });
+}
+
+// Checklist persistence
+document.querySelectorAll('.checklist input[type=checkbox]').forEach(cb => {
+  const key = 'sec_check_' + cb.id;
+  if (localStorage.getItem(key) === '1') cb.checked = true;
+  cb.addEventListener('change', () => localStorage.setItem(key, cb.checked ? '1' : '0'));
+});
+</script>
+</body>
+</html>
