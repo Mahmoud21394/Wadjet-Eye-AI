@@ -117,32 +117,54 @@ function getDeviceInfo(req) {
   };
 }
 
-/** Log login activity — completely non-fatal */
+/**
+ * logActivity — fire-and-forget audit logging.
+ *
+ * RC-4 FIX: This function MUST be called without await on the hot login path,
+ * or with .catch(() => {}) to prevent blocking the response. It has its own
+ * internal 5s timeout so it never blocks for 15s on a slow DB.
+ * Never throws — all errors are silently swallowed.
+ */
+const LOG_ACTIVITY_TIMEOUT_MS = 5_000;
 async function logActivity(userId, tenantId, action, req, extras = {}) {
-  try {
-    const { error } = await supabase.from('login_activity').insert({
-      user_id:        userId   || null,
-      tenant_id:      tenantId || null,
-      email:          extras.email || null,
-      action,
-      ip_address:     req.ip || null,
-      user_agent:     (req.headers['user-agent'] || '').slice(0, 256),
-      device_info:    getDeviceInfo(req),
-      success:        extras.success !== false,
-      failure_reason: extras.failure_reason || null,
-      session_id:     extras.session_id || null,
-    });
-    if (error) {
-      // Silently ignore RLS / missing table errors for audit log
-      if (!error.message?.includes('row-level security') &&
-          !error.message?.includes('does not exist')) {
-        console.warn('[Auth] Failed to log activity:', error.message);
+  // Internal timeout so DB latency never delays the response
+  const logTimer = new Promise((resolve) =>
+    setTimeout(resolve, LOG_ACTIVITY_TIMEOUT_MS)
+  );
+
+  const logPromise = (async () => {
+    try {
+      const { error } = await supabase.from('login_activity').insert({
+        user_id:        userId   || null,
+        tenant_id:      tenantId || null,
+        email:          extras.email || null,
+        action,
+        ip_address:     req.ip || null,
+        user_agent:     (req.headers['user-agent'] || '').slice(0, 256),
+        device_info:    getDeviceInfo(req),
+        success:        extras.success !== false,
+        failure_reason: extras.failure_reason || null,
+        session_id:     extras.session_id || null,
+      });
+      if (error) {
+        // RC-4 FIX: AbortError returned in error field — treat as non-fatal
+        if (isAbortError(error)) return;
+        // Silently ignore RLS / missing table errors for audit log
+        if (!error.message?.includes('row-level security') &&
+            !error.message?.includes('does not exist')) {
+          console.warn('[Auth] Failed to log activity:', error.message);
+        }
+      }
+    } catch (err) {
+      // Non-fatal — never block login if audit logging fails
+      if (!isAbortError(err)) {
+        console.warn('[Auth] logActivity error:', err.message);
       }
     }
-  } catch (err) {
-    // Non-fatal — never block login if audit logging fails
-    console.warn('[Auth] logActivity error:', err.message);
-  }
+  })();
+
+  // Race: complete within 5s or give up silently
+  await Promise.race([logPromise, logTimer]);
 }
 
 /** Store a new refresh token in DB
@@ -393,27 +415,53 @@ router.post('/login', asyncHandler(async (req, res) => {
   console.log(`[auth:login:ok] Supabase auth OK for ${email} elapsed=${Date.now()-loginStart}ms`);
 
   // ── Fetch user profile ──
+  // RC-3 FIX: If DB times out, the Supabase client returns AbortError in the
+  // error FIELD (not thrown). Must check for abort BEFORE treating as
+  // 'profile not found'. An abort means the DB is slow/cold, not that
+  // the user doesn't exist. Return 503 so the client can retry.
   const { data: profile, error: profileError } = await supabase
     .from('users')
     .select('id, name, email, role, tenant_id, avatar, permissions, status, mfa_enabled')
     .eq('auth_id', loginData.user.id)
     .single();
 
-  if (profileError || !profile) {
-    await logActivity(null, null, 'LOGIN_FAILED', req, {
-      email,
-      success: false,
-      failure_reason: 'Profile not found',
-    });
+  if (profileError) {
+    // RC-3: Distinguish timeout/abort from genuine 'not found'
+    if (isAbortError(profileError)) {
+      const profileMs = Date.now() - loginStart;
+      console.error(`[auth:login:db-timeout] Profile lookup timed out after ${profileMs}ms for ${email}`);
+      logActivity(null, null, 'LOGIN_FAILED', req, {
+        email, success: false,
+        failure_reason: `DB timeout on profile lookup: ${profileError.message}`,
+      }).catch(() => {});
+      return res.status(503).json({
+        error:   'Database temporarily unavailable. Your credentials were accepted — please try again in a few seconds.',
+        code:    'DB_TIMEOUT',
+        retryIn: 5,
+      });
+    }
+    // Genuine profile error (e.g., auth_id not in users table)
+    logActivity(null, null, 'LOGIN_FAILED', req, {
+      email, success: false,
+      failure_reason: `Profile error: ${profileError.message}`,
+    }).catch(() => {});
+    console.warn(`[auth:login:no-profile] No users row for auth_id=${loginData.user.id} email=${email}: ${profileError.message}`);
+    return res.status(403).json({ error: 'User profile not found. Contact your administrator.' });
+  }
+
+  if (!profile) {
+    logActivity(null, null, 'LOGIN_FAILED', req, {
+      email, success: false,
+      failure_reason: 'Profile not found (null)',
+    }).catch(() => {});
     return res.status(403).json({ error: 'User profile not found. Contact your administrator.' });
   }
 
   if (profile.status !== 'active') {
-    await logActivity(profile.id, profile.tenant_id, 'LOGIN_FAILED', req, {
-      email,
-      success: false,
+    logActivity(profile.id, profile.tenant_id, 'LOGIN_FAILED', req, {
+      email, success: false,
       failure_reason: 'Account suspended',
-    });
+    }).catch(() => {});
     return res.status(403).json({ error: 'Your account has been suspended.' });
   }
 
@@ -440,19 +488,33 @@ router.post('/login', asyncHandler(async (req, res) => {
   const refreshToken = generateRefreshToken();
   const sessionId    = await storeRefreshToken(profile.id, profile.tenant_id, refreshToken, req);
 
-  // ── Update last login ──
-  await supabase.from('users').update({ last_login: new Date().toISOString() }).eq('id', profile.id);
+  // ── Update last login (fire-and-forget — non-critical) ──
+  // RC-7 FIX: Don't await non-critical DB writes on the login response path.
+  supabase.from('users').update({ last_login: new Date().toISOString() }).eq('id', profile.id)
+    .then(({ error: ulErr }) => {
+      if (ulErr && !isAbortError(ulErr)) console.warn('[auth:login] last_login update failed:', ulErr.message);
+    }).catch(() => {});
 
-  // ── Fetch tenant meta ──
-  const { data: tenantMeta } = await supabase
-    .from('tenants')
-    .select('short_name, name')
-    .eq('id', profile.tenant_id)
-    .single();
+  // ── Fetch tenant meta (with fallback on timeout) ──
+  let tenantMeta = null;
+  try {
+    const { data: tm, error: tmErr } = await supabase
+      .from('tenants')
+      .select('short_name, name')
+      .eq('id', profile.tenant_id)
+      .single();
+    if (tmErr && !isAbortError(tmErr)) {
+      console.warn('[auth:login] tenantMeta fetch error:', tmErr.message);
+    }
+    tenantMeta = tm || null;
+  } catch (_) {
+    // Non-fatal — tenant slug/name will be empty strings
+  }
 
-  await logActivity(profile.id, profile.tenant_id, 'LOGIN_SUCCESS', req, {
+  // Fire-and-forget login success audit
+  logActivity(profile.id, profile.tenant_id, 'LOGIN_SUCCESS', req, {
     email, session_id: sessionId,
-  });
+  }).catch(() => {});
 
   res.json({
     token:        loginData.session.access_token,
