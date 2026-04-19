@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Supabase Client v7.0 (Timeout Root-Cause Fix)
+ *  Wadjet-Eye AI — Supabase Client v7.4 (Complete Auth Audit Fix)
  *  backend/config/supabase.js
  *
  *  v7.0 ROOT-CAUSE FIX — SUPABASE_TIMEOUT elapsed=25000ms:
