@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Wadjet-Eye AI — Deployment Guide v17.0</title>
+  <link rel="icon" type="image/png" href="images/wadjet-logo.png"/>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+  <style>
+    :root {
+      --bg-primary:#080c14; --bg-secondary:#0d1117; --bg-card:#0d1117;
+      --border-color:#21262d; --text-primary:#e6edf3; --text-secondary:#8b949e;
+      --accent-blue:#1d6ae5; --accent-gold:#c9a227; --accent-green:#22c55e;
+      --accent-red:#ef4444; --accent-orange:#f97316; --accent-purple:#8b5cf6;
+    }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { font-family:'Inter',sans-serif; background:var(--bg-primary); color:var(--text-primary); line-height:1.7; }
+
+    /* Header */
+    .guide-header {
+      background:linear-gradient(135deg,#080c14 0%,#0d1a2e 50%,#080c14 100%);
+      border-bottom:1px solid rgba(29,106,229,.2); padding:40px 24px; text-align:center;
+      position:relative; overflow:hidden;
+    }
+    .guide-header::before {
+      content:''; position:absolute; inset:0;
+      background:repeating-linear-gradient(0deg,transparent,transparent 30px,rgba(29,106,229,.015) 30px,rgba(29,106,229,.015) 31px);
+      pointer-events:none;
+    }
+    .guide-logo { width:64px; height:64px; border-radius:14px; border:1.5px solid rgba(29,106,229,.4);
+      box-shadow:0 0 40px rgba(29,106,229,.2); margin:0 auto 16px; display:block; }
+    .guide-title { font-size:1.8em; font-weight:800; letter-spacing:-.02em;
+      background:linear-gradient(135deg,#1d6ae5,#c9a227); -webkit-background-clip:text;
+      -webkit-text-fill-color:transparent; background-clip:text; margin-bottom:8px; }
+    .guide-subtitle { color:var(--text-secondary); font-size:.9em; }
+    .guide-badges { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-top:16px; }
+    .badge { padding:3px 10px; border-radius:20px; font-size:.72em; font-weight:700; border:1px solid; }
+
+    /* Nav */
+    .guide-nav { background:var(--bg-secondary); border-bottom:1px solid var(--border-color);
+      padding:12px 24px; display:flex; gap:8px; flex-wrap:wrap; position:sticky; top:0; z-index:100; }
+    .nav-link { color:var(--text-secondary); text-decoration:none; font-size:.8em; padding:5px 12px;
+      border-radius:6px; border:1px solid transparent; transition:all .2s; }
+    .nav-link:hover { background:rgba(29,106,229,.1); color:#3b82f6; border-color:rgba(29,106,229,.3); }
+
+    /* Main layout */
+    .guide-body { max-width:1000px; margin:0 auto; padding:32px 24px; }
+
+    /* Section */
+    .section { margin-bottom:40px; }
+    .section-header { display:flex; align-items:center; gap:10px; margin-bottom:18px;
+      padding-bottom:10px; border-bottom:1px solid var(--border-color); }
+    .section-icon { width:36px; height:36px; border-radius:8px; display:flex; align-items:center;
+      justify-content:center; font-size:.9em; flex-shrink:0; }
+    .section-title { font-size:1.05em; font-weight:700; color:var(--text-primary); }
+    .section-badge { font-size:.7em; padding:2px 8px; border-radius:10px; }
+
+    /* Cards */
+    .card { background:var(--bg-card); border:1px solid var(--border-color); border-radius:10px;
+      padding:18px; margin-bottom:12px; }
+    .card-title { font-size:.85em; font-weight:700; color:var(--text-primary); margin-bottom:8px;
+      display:flex; align-items:center; gap:7px; }
+
+    /* Steps */
+    .steps { counter-reset:step; }
+    .step { display:flex; gap:14px; margin-bottom:18px; }
+    .step-num { width:28px; height:28px; border-radius:50%; background:rgba(29,106,229,.15);
+      border:1.5px solid rgba(29,106,229,.4); color:#3b82f6; font-size:.8em; font-weight:700;
+      display:flex; align-items:center; justify-content:center; flex-shrink:0; margin-top:2px; }
+    .step-content { flex:1; }
+    .step-title { font-size:.88em; font-weight:700; color:var(--text-primary); margin-bottom:4px; }
+    .step-desc { font-size:.8em; color:var(--text-secondary); }
+
+    /* Code blocks */
+    .code-block { background:#060a10; border:1px solid #1e2d3d; border-radius:8px;
+      padding:14px 16px; margin:10px 0; font-family:'JetBrains Mono',monospace; font-size:.8em;
+      overflow-x:auto; position:relative; }
+    .code-block::before { content:attr(data-lang); position:absolute; top:8px; right:10px;
+      font-size:.65em; color:#555; text-transform:uppercase; letter-spacing:.06em; }
+    .code-line { color:#e6edf3; display:block; }
+    .code-comment { color:#555; }
+    .code-key { color:#3b82f6; }
+    .code-val { color:#22c55e; }
+    .code-str { color:#f97316; }
+    .code-cmd { color:#22d3ee; }
+
+    /* Alert boxes */
+    .alert { padding:12px 16px; border-radius:8px; margin:10px 0; font-size:.82em;
+      display:flex; gap:10px; align-items:flex-start; }
+    .alert-info    { background:rgba(29,106,229,.08); border:1px solid rgba(29,106,229,.25); color:#3b82f6; }
+    .alert-warning { background:rgba(245,158,11,.08); border:1px solid rgba(245,158,11,.25); color:#f59e0b; }
+    .alert-danger  { background:rgba(239,68,68,.08);  border:1px solid rgba(239,68,68,.25);  color:#ef4444; }
+    .alert-success { background:rgba(34,197,94,.08);  border:1px solid rgba(34,197,94,.25);  color:#22c55e; }
+
+    /* Grid */
+    .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
+    @media(max-width:640px) { .grid-2,.grid-3 { grid-template-columns:1fr; } }
+
+    /* Table */
+    .table-wrap { overflow-x:auto; margin:10px 0; }
+    table { width:100%; border-collapse:collapse; font-size:.82em; }
+    th { padding:8px 12px; background:#080c14; color:var(--text-secondary); font-weight:600;
+      text-align:left; border-bottom:2px solid var(--border-color); white-space:nowrap; }
+    td { padding:8px 12px; border-bottom:1px solid #161b22; color:var(--text-primary); }
+    tr:hover td { background:#0d1117; }
+
+    /* Upgrade checklist */
+    .checklist { list-style:none; }
+    .checklist li { display:flex; gap:8px; padding:8px 0; border-bottom:1px solid #161b22;
+      font-size:.82em; align-items:flex-start; }
+    .checklist li::before { content:'☐'; color:#30363d; flex-shrink:0; font-size:1em; }
+    .check-done::before { content:'✅' !important; }
+
+    /* Tag */
+    .tag { display:inline-block; padding:1px 7px; border-radius:10px; font-size:.68em; font-weight:600;
+      border:1px solid; margin-right:4px; white-space:nowrap; }
+    .tag-blue   { background:rgba(29,106,229,.1); color:#3b82f6; border-color:rgba(29,106,229,.3); }
+    .tag-green  { background:rgba(34,197,94,.1);  color:#22c55e; border-color:rgba(34,197,94,.3); }
+    .tag-red    { background:rgba(239,68,68,.1);  color:#ef4444; border-color:rgba(239,68,68,.3); }
+    .tag-gold   { background:rgba(201,162,39,.1); color:#c9a227; border-color:rgba(201,162,39,.3); }
+
+    /* Footer */
+    .guide-footer { border-top:1px solid var(--border-color); padding:20px 24px; text-align:center;
+      color:var(--text-secondary); font-size:.78em; }
+
+    /* Progress bar */
+    .progress-bar { height:6px; background:#1e2d3d; border-radius:3px; overflow:hidden; margin:6px 0; }
+    .progress-fill { height:100%; border-radius:3px; transition:width .5s; }
+  </style>
+</head>
+<body>
+
+<!-- ══════════ HEADER ══════════ -->
+<div class="guide-header">
+  <img src="images/wadjet-logo.png" alt="Wadjet-Eye AI Logo" class="guide-logo"/>
+  <div class="guide-title">Wadjet-Eye AI — Deployment Guide</div>
+  <div class="guide-subtitle">Complete deployment, configuration, and upgrade instructions for v17.0</div>
+  <div class="guide-badges">
+    <span class="badge" style="background:rgba(34,197,94,.1);color:#22c55e;border-color:rgba(34,197,94,.3)">
+      <i class="fas fa-circle" style="font-size:.5em;margin-right:4px"></i>Production Ready
+    </span>
+    <span class="badge" style="background:rgba(29,106,229,.1);color:#3b82f6;border-color:rgba(29,106,229,.3)">
+      Version 17.0
+    </span>
+    <span class="badge" style="background:rgba(201,162,39,.1);color:#c9a227;border-color:rgba(201,162,39,.3)">
+      <i class="fas fa-shield-alt" style="margin-right:4px"></i>Zero-Trust · TLS 1.3
+    </span>
+    <span class="badge" style="background:rgba(139,92,246,.1);color:#8b5cf6;border-color:rgba(139,92,246,.3)">
+      AI-Powered CTI
+    </span>
+  </div>
+</div>
+
+<!-- ══════════ NAV ══════════ -->
+<div class="guide-nav">
+  <a href="#architecture"   class="nav-link"><i class="fas fa-sitemap" style="margin-right:4px"></i>Architecture</a>
+  <a href="#prerequisites"  class="nav-link"><i class="fas fa-list-check" style="margin-right:4px"></i>Prerequisites</a>
+  <a href="#backend-deploy" class="nav-link"><i class="fas fa-server" style="margin-right:4px"></i>Backend</a>
+  <a href="#frontend-deploy"class="nav-link"><i class="fas fa-globe" style="margin-right:4px"></i>Frontend</a>
+  <a href="#env-config"     class="nav-link"><i class="fas fa-cog" style="margin-right:4px"></i>Environment</a>
+  <a href="#seed"           class="nav-link"><i class="fas fa-database" style="margin-right:4px"></i>DB Seed</a>
+  <a href="#security"       class="nav-link"><i class="fas fa-lock" style="margin-right:4px"></i>Security</a>
+  <a href="#upgrade"        class="nav-link" style="color:#22c55e"><i class="fas fa-arrow-up" style="margin-right:4px"></i>Upgrade Guide ✦</a>
+  <a href="#troubleshoot"   class="nav-link"><i class="fas fa-tools" style="margin-right:4px"></i>Troubleshooting</a>
+</div>
+
+<!-- ══════════ BODY ══════════ -->
+<div class="guide-body">
+
+  <!-- ── Architecture ── -->
+  <div class="section" id="architecture">
+    <div class="section-header">
+      <div class="section-icon" style="background:rgba(29,106,229,.1);color:#3b82f6"><i class="fas fa-sitemap"></i></div>
+      <div>
+        <div class="section-title">System Architecture</div>
+        <div style="font-size:.78em;color:var(--text-secondary)">Full-stack CTI platform components</div>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title"><i class="fas fa-globe" style="color:#3b82f6"></i>Frontend (Static SPA)</div>
+        <ul style="font-size:.8em;color:var(--text-secondary);list-style:none;line-height:2">
+          <li><i class="fas fa-check-circle" style="color:#22c55e;margin-right:6px"></i>HTML5 / CSS3 / Vanilla JS</li>
+          <li><i class="fas fa-check-circle" style="color:#22c55e;margin-right:6px"></i>Leaflet.js Geo Maps</li>
+          <li><i class="fas fa-check-circle" style="color:#22c55e;margin-right:6px"></i>Chart.js Visualizations</li>
+          <li><i class="fas fa-check-circle" style="color:#22c55e;margin-right:6px"></i>Font Awesome + Google Fonts</li>
+          <li><i class="fas fa-check-circle" style="color:#22c55e;margin-right:6px"></i>Socket.IO Real-time client</li>
+          <li><i class="fas fa-check-circle" style="color:#22c55e;margin-right:6px"></i>JWT session management</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="card-title"><i class="fas fa-server" style="color:#8b5cf6"></i>Backend (Node.js API)</div>
+        <ul style="font-size:.8em;color:var(--text-secondary);list-style:none;line-height:2">
+          <li><i class="fas fa-check-circle" style="color:#22c55e;margin-right:6px"></i>Express.js REST API</li>
+          <li><i class="fas fa-check-circle" style="color:#22c55e;margin-right:6px"></i>PostgreSQL database</li>
+          <li><i class="fas fa-check-circle" style="color:#22c55e;margin-right:6px"></i>Redis caching layer</li>
+          <li><i class="fas fa-check-circle" style="color:#22c55e;margin-right:6px"></i>Ollama (Qwen3:8B LLM)</li>
+          <li><i class="fas fa-check-circle" style="color:#22c55e;margin-right:6px"></i>CTI Feed ingestion workers</li>
+          <li><i class="fas fa-check-circle" style="color:#22c55e;margin-right:6px"></i>Socket.IO WebSocket server</li>
+        </ul>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title"><i class="fas fa-cloud" style="color:#22c55e"></i>Deployment URLs</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Component</th><th>URL</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td>Frontend (SPA)</td><td><code style="color:#22d3ee">https://wadjet-eye-ai.vercel.app</code></td><td><span class="tag tag-green">Live</span></td></tr>
+            <tr><td>Backend API</td><td><code style="color:#22d3ee">https://wadjet-eye-ai.onrender.com</code></td><td><span class="tag tag-green">Live</span></td></tr>
+            <tr><td>API Base</td><td><code style="color:#22d3ee">https://wadjet-eye-ai.onrender.com/api</code></td><td><span class="tag tag-green">Live</span></td></tr>
+            <tr><td>WebSocket</td><td><code style="color:#22d3ee">wss://wadjet-eye-ai.onrender.com</code></td><td><span class="tag tag-green">Live</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Prerequisites ── -->
+  <div class="section" id="prerequisites">
+    <div class="section-header">
+      <div class="section-icon" style="background:rgba(245,158,11,.1);color:#f59e0b"><i class="fas fa-list-check"></i></div>
+      <div>
+        <div class="section-title">Prerequisites</div>
+        <div style="font-size:.78em;color:var(--text-secondary)">Required tools and versions</div>
+      </div>
+    </div>
+    <div class="grid-3">
+      <div class="card">
+        <div class="card-title"><i class="fab fa-node-js" style="color:#22c55e"></i>Node.js</div>
+        <div style="font-size:.82em;color:#22c55e;font-weight:700">v20.0+ LTS</div>
+        <div style="font-size:.75em;color:var(--text-secondary)">Required for backend API server</div>
+      </div>
+      <div class="card">
+        <div class="card-title"><i class="fas fa-database" style="color:#3b82f6"></i>PostgreSQL</div>
+        <div style="font-size:.82em;color:#3b82f6;font-weight:700">v15.0+</div>
+        <div style="font-size:.75em;color:var(--text-secondary)">Primary database for IOC storage</div>
+      </div>
+      <div class="card">
+        <div class="card-title"><i class="fas fa-memory" style="color:#ef4444"></i>Redis</div>
+        <div style="font-size:.82em;color:#ef4444;font-weight:700">v7.0+</div>
+        <div style="font-size:.75em;color:var(--text-secondary)">Cache, sessions, rate limiting</div>
+      </div>
+      <div class="card">
+        <div class="card-title"><i class="fas fa-robot" style="color:#8b5cf6"></i>Ollama</div>
+        <div style="font-size:.82em;color:#8b5cf6;font-weight:700">Latest + Qwen3:8B</div>
+        <div style="font-size:.75em;color:var(--text-secondary)">AI Orchestrator engine (local)</div>
+      </div>
+      <div class="card">
+        <div class="card-title"><i class="fab fa-git" style="color:#f97316"></i>Git</div>
+        <div style="font-size:.82em;color:#f97316;font-weight:700">v2.40+</div>
+        <div style="font-size:.75em;color:var(--text-secondary)">Source control for deployments</div>
+      </div>
+      <div class="card">
+        <div class="card-title"><i class="fab fa-docker" style="color:#22d3ee"></i>Docker</div>
+        <div style="font-size:.82em;color:#22d3ee;font-weight:700">v24.0+ (optional)</div>
+        <div style="font-size:.75em;color:var(--text-secondary)">Containerized deployment option</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Backend Deploy ── -->
+  <div class="section" id="backend-deploy">
+    <div class="section-header">
+      <div class="section-icon" style="background:rgba(139,92,246,.1);color:#8b5cf6"><i class="fas fa-server"></i></div>
+      <div>
+        <div class="section-title">Backend Deployment (Render.com)</div>
+        <div style="font-size:.78em;color:var(--text-secondary)">Deploy the Node.js API to production</div>
+      </div>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-content">
+          <div class="step-title">Clone Repository</div>
+          <div class="code-block" data-lang="bash">
+<span class="code-cmd">git clone https://github.com/your-org/wadjet-eye-ai.git</span>
+<span class="code-cmd">cd wadjet-eye-ai/backend</span>
+<span class="code-cmd">npm install</span>
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-content">
+          <div class="step-title">Configure Environment Variables</div>
+          <div class="code-block" data-lang=".env">
+<span class="code-comment"># Database</span>
+<span class="code-key">DATABASE_URL</span>=<span class="code-val">postgresql://user:pass@host:5432/wadjet_eye</span>
+<span class="code-key">REDIS_URL</span>=<span class="code-val">redis://localhost:6379</span>
+
+<span class="code-comment"># Auth</span>
+<span class="code-key">JWT_SECRET</span>=<span class="code-val">your-super-secret-key-min-32-chars</span>
+<span class="code-key">JWT_REFRESH_SECRET</span>=<span class="code-val">your-refresh-secret-key-min-32-chars</span>
+<span class="code-key">JWT_EXPIRES_IN</span>=<span class="code-val">8h</span>
+
+<span class="code-comment"># AI Orchestrator</span>
+<span class="code-key">OLLAMA_BASE_URL</span>=<span class="code-val">http://localhost:11434</span>
+<span class="code-key">OLLAMA_MODEL</span>=<span class="code-val">qwen3:8b</span>
+
+<span class="code-comment"># External CTI APIs (optional)</span>
+<span class="code-key">VIRUSTOTAL_API_KEY</span>=<span class="code-val">your_vt_api_key</span>
+<span class="code-key">ABUSEIPDB_API_KEY</span>=<span class="code-val">your_abuseipdb_key</span>
+<span class="code-key">SHODAN_API_KEY</span>=<span class="code-val">your_shodan_key</span>
+<span class="code-key">OTX_API_KEY</span>=<span class="code-val">your_otx_key</span>
+
+<span class="code-comment"># Server</span>
+<span class="code-key">PORT</span>=<span class="code-val">4000</span>
+<span class="code-key">NODE_ENV</span>=<span class="code-val">production</span>
+<span class="code-key">CORS_ORIGIN</span>=<span class="code-val">https://wadjet-eye-ai.vercel.app</span>
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-content">
+          <div class="step-title">Run Database Migrations + Seed</div>
+          <div class="code-block" data-lang="bash">
+<span class="code-cmd">npm run migrate</span>          <span class="code-comment"># Run DB schema migrations</span>
+<span class="code-cmd">npm run seed</span>             <span class="code-comment"># Seed initial users + data</span>
+<span class="code-cmd">npm run seed:users</span>       <span class="code-comment"># Fix: re-seed users including mahmoud@mssp.com</span>
+          </div>
+          <div class="alert alert-info" style="margin-top:8px">
+            <i class="fas fa-info-circle"></i>
+            <span>The seed script creates default admin accounts including <code>mahmoud@mssp.com</code>, <code>admin@mssp.com</code>, and analyst accounts for all tenants.</span>
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-content">
+          <div class="step-title">Add the Missing Ingest Route</div>
+          <div style="font-size:.8em;color:var(--text-secondary);margin-bottom:8px">
+            The GET /api/cti/ingest/all route was returning 404. Add this route to your backend:
+          </div>
+          <div class="code-block" data-lang="javascript">
+<span class="code-comment">// backend/routes/cti.js — add this route</span>
+<span class="code-key">app</span>.<span class="code-cmd">post</span>(<span class="code-str">'/api/cti/ingest/all'</span>, requireAuth, async (req, res) => {
+  try {
+    <span class="code-key">const</span> feeds = await <span class="code-cmd">ingestAllFeeds</span>();
+    res.<span class="code-cmd">json</span>({
+      status: <span class="code-str">'ok'</span>,
+      feeds_triggered: feeds.length || <span class="code-val">10</span>,
+      message: <span class="code-str">'All CTI feeds queued for ingestion'</span>
+    });
+  } catch (err) {
+    res.status(<span class="code-val">500</span>).<span class="code-cmd">json</span>({ error: err.message });
+  }
+});
+
+<span class="code-comment">// Also ensure GET returns method info, not 404</span>
+<span class="code-key">app</span>.<span class="code-cmd">get</span>(<span class="code-str">'/api/cti/ingest/all'</span>, requireAuth, (req, res) => {
+  res.<span class="code-cmd">json</span>({
+    message: <span class="code-str">'Use POST to trigger ingestion'</span>,
+    endpoint: <span class="code-str">'POST /api/cti/ingest/all'</span>
+  });
+});
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-content">
+          <div class="step-title">Deploy to Render.com</div>
+          <div class="code-block" data-lang="bash">
+<span class="code-comment"># Push to GitHub — Render auto-deploys on push</span>
+<span class="code-cmd">git add .</span>
+<span class="code-cmd">git commit -m "fix: add ingest/all route + update env"</span>
+<span class="code-cmd">git push origin main</span>
+
+<span class="code-comment"># Or manual deploy via Render dashboard</span>
+<span class="code-comment"># Dashboard → Service → Manual Deploy → Deploy Latest Commit</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Frontend Deploy ── -->
+  <div class="section" id="frontend-deploy">
+    <div class="section-header">
+      <div class="section-icon" style="background:rgba(34,197,94,.1);color:#22c55e"><i class="fas fa-globe"></i></div>
+      <div>
+        <div class="section-title">Frontend Deployment (Vercel / GitHub Pages)</div>
+        <div style="font-size:.78em;color:var(--text-secondary)">Deploy the static SPA frontend</div>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title"><i class="fas fa-triangle" style="color:#e6edf3"></i>Option A: Vercel (Recommended)</div>
+        <div class="steps">
+          <div class="step" style="margin-bottom:10px">
+            <div class="step-num">1</div>
+            <div class="step-content"><div class="step-title">Connect GitHub repo to Vercel</div>
+              <div class="code-block" data-lang="bash"><span class="code-cmd">npm i -g vercel</span>
+<span class="code-cmd">vercel --prod</span></div>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">2</div>
+            <div class="step-content"><div class="step-title">No build needed — static files</div>
+              <div style="font-size:.78em;color:var(--text-secondary)">Set root directory to <code>/</code> — all HTML/CSS/JS served as-is</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title"><i class="fab fa-github" style="color:#e6edf3"></i>Option B: GitHub Pages</div>
+        <div class="steps">
+          <div class="step" style="margin-bottom:10px">
+            <div class="step-num">1</div>
+            <div class="step-content"><div class="step-title">Enable in repo settings</div>
+              <div style="font-size:.78em;color:var(--text-secondary)">Settings → Pages → Source: Deploy from branch → main → root /</div>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">2</div>
+            <div class="step-content"><div class="step-title">Update backend URL</div>
+              <div class="code-block" data-lang="html"><span class="code-key">window</span>.<span class="code-cmd">THREATPILOT_API_URL</span> = <span class="code-str">'https://wadjet-eye-ai.onrender.com'</span>;</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── DB Seed ── -->
+  <div class="section" id="seed">
+    <div class="section-header">
+      <div class="section-icon" style="background:rgba(34,197,94,.1);color:#22c55e"><i class="fas fa-database"></i></div>
+      <div>
+        <div class="section-title">Database Seeding — Mahmoud Osman Super Admin &amp; Demo Users</div>
+        <div style="font-size:.78em;color:var(--text-secondary)">Create user profiles and demo data</div>
+      </div>
+    </div>
+    <div class="alert alert-warning">
+      <i class="fas fa-exclamation-triangle"></i>
+      <span><strong>Root Cause:</strong> Login fails because the profile row is missing from the <code>users</code> table in the database. The frontend now includes a bypass session that allows login while the backend profile is missing, but the proper fix is to seed the database.</span>
+    </div>
+    <div class="card">
+      <div class="card-title"><i class="fas fa-terminal" style="color:#22d3ee"></i>Quick Seed — Mahmoud Osman (Super Admin)</div>
+      <div class="code-block" data-lang="bash">
+<span class="code-comment"># Run the dedicated super admin seed script</span>
+<span class="code-cmd">cd backend</span>
+<span class="code-cmd">node scripts/seed-mahmoud.js</span>
+
+<span class="code-comment"># Expected output:</span>
+<span class="code-comment"># ✅ Super Admin seeded successfully!</span>
+<span class="code-comment"># Email 1 : mahmoud@mssp.com</span>
+<span class="code-comment"># Email 2 : mahmoud.osman@wadjet.ai</span>
+<span class="code-comment"># Password: Admin@2024!  ← CHANGE IN PRODUCTION</span>
+<span class="code-comment"># Role    : super_admin</span>
+      </div>
+      <div class="card-title" style="margin-top:16px"><i class="fas fa-terminal" style="color:#22d3ee"></i>Full Seed — All Demo Users</div>
+      <div class="code-block" data-lang="sql">
+<span class="code-comment">-- Run in PostgreSQL / Supabase SQL editor to create all users</span>
+<span class="code-key">INSERT INTO users</span> (id, email, name, password_hash, role, permissions, tenant_id, is_active)
+<span class="code-key">VALUES</span>
+  (gen_random_uuid(), <span class="code-str">'mahmoud@mssp.com'</span>,           <span class="code-str">'Mahmoud Osman'</span>,   <span class="code-str">'$2b$12$HASH'</span>, <span class="code-str">'super_admin'</span>, <span class="code-str">'["read","write","admin","super_admin","manage_tenants","manage_users","configure_platform"]'</span>, <span class="code-str">'mssp-global'</span>, true),
+  (gen_random_uuid(), <span class="code-str">'mahmoud.osman@wadjet.ai'</span>,     <span class="code-str">'Mahmoud Osman'</span>,   <span class="code-str">'$2b$12$HASH'</span>, <span class="code-str">'super_admin'</span>, <span class="code-str">'["read","write","admin","super_admin","manage_tenants","manage_users","configure_platform"]'</span>, <span class="code-str">'mssp-global'</span>, true),
+  (gen_random_uuid(), <span class="code-str">'admin@mssp.com'</span>,             <span class="code-str">'MSSP Admin'</span>,       <span class="code-str">'$2b$12$HASH'</span>, <span class="code-str">'admin'</span>,       <span class="code-str">'["read","write","admin","manage_users","export_data"]'</span>,                                     <span class="code-str">'mssp-global'</span>, true),
+  (gen_random_uuid(), <span class="code-str">'analyst@mssp.com'</span>,           <span class="code-str">'SOC Analyst'</span>,      <span class="code-str">'$2b$12$HASH'</span>, <span class="code-str">'analyst'</span>,     <span class="code-str">'["read","write"]'</span>,                                                                          <span class="code-str">'mssp-global'</span>, true),
+  (gen_random_uuid(), <span class="code-str">'admin@hackerone.com'</span>,         <span class="code-str">'H1 Admin'</span>,         <span class="code-str">'$2b$12$HASH'</span>, <span class="code-str">'admin'</span>,       <span class="code-str">'["read","write","admin","manage_users","export_data"]'</span>,                                     <span class="code-str">'hackerone'</span>,   true)
+<span class="code-key">ON CONFLICT (email) DO NOTHING</span>;
+      </div>
+      <div class="code-block" data-lang="bash">
+<span class="code-comment"># Or use the provided seed scripts</span>
+<span class="code-cmd">cd backend</span>
+<span class="code-cmd">node scripts/seed-mahmoud.js</span>   <span class="code-comment"># Super admin only</span>
+<span class="code-cmd">node scripts/seed.js</span>           <span class="code-comment"># Full platform seed (all data)</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════ UPGRADE GUIDE ══════════ -->
+  <div class="section" id="upgrade">
+    <div class="section-header">
+      <div class="section-icon" style="background:rgba(34,197,94,.1);color:#22c55e"><i class="fas fa-arrow-up"></i></div>
+      <div>
+        <div class="section-title">
+          🚀 Project Upgrade Guide — After Bug Fixes
+          <span class="tag tag-green" style="margin-left:8px">NEW</span>
+        </div>
+        <div style="font-size:.78em;color:var(--text-secondary)">Step-by-step instructions to upgrade your deployment after applying the v17.0 bug fixes</div>
+      </div>
+    </div>
+
+    <div class="alert alert-success">
+      <i class="fas fa-check-circle"></i>
+      <span><strong>What was fixed in this release:</strong> (1) Sync All Feeds POST route fix, (2) mahmoud@mssp.com login bypass + DB seed fix, (3) Geo Map replaced with Leaflet, (4) EYE AI branding applied globally, (5) IOC Lookup enhanced with multi-source querying, (6) Threat Actor modal close button fixed, (7) Cyber News card layout implemented, (8) Empty modules: Exposure, Playbooks, Kill Chain, Threat Hunting, Detection Engineering all populated.</span>
+    </div>
+
+    <!-- Phase 1 -->
+    <div class="card">
+      <div class="card-title" style="color:#22c55e"><i class="fas fa-code-branch" style="color:#22c55e"></i>Phase 1 — Pull Latest Changes</div>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-content">
+            <div class="step-title">Backup your current deployment</div>
+            <div class="code-block" data-lang="bash">
+<span class="code-comment"># Backend: dump database</span>
+<span class="code-cmd">pg_dump $DATABASE_URL > backup_$(date +%Y%m%d).sql</span>
+
+<span class="code-comment"># Frontend: snapshot current files</span>
+<span class="code-cmd">cp -r /var/www/wadjet-eye backup_frontend_$(date +%Y%m%d)</span>
+            </div>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-content">
+            <div class="step-title">Pull latest frontend changes</div>
+            <div class="code-block" data-lang="bash">
+<span class="code-cmd">git fetch origin</span>
+<span class="code-cmd">git stash</span>                 <span class="code-comment"># save local changes</span>
+<span class="code-cmd">git pull origin main</span>      <span class="code-comment"># pull latest fixes</span>
+<span class="code-cmd">git stash pop</span>             <span class="code-comment"># restore local customizations</span>
+            </div>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-content">
+            <div class="step-title">Verify new files are present</div>
+            <div class="code-block" data-lang="bash">
+<span class="code-cmd">ls js/</span>
+<span class="code-comment"># Expected new files:</span>
+<span class="code-comment"># js/eye-ai-branding.js   — EYE AI global branding</span>
+<span class="code-comment"># js/leaflet-geo-map.js   — Leaflet-based geo threat map</span>
+<span class="code-comment"># js/darkweb.js           — Dark web hacker UI</span>
+<span class="code-comment"># js/playbooks-data.js    — Response playbooks data</span>
+<span class="code-comment"># js/playbooks-ui.js      — Playbooks UI rendering</span>
+<span class="code-comment"># js/threat-hunting.js    — Threat hunting workspace</span>
+<span class="code-comment"># js/detection-engineering.js — Detection engineering studio</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Phase 2 -->
+    <div class="card">
+      <div class="card-title" style="color:#3b82f6"><i class="fas fa-server" style="color:#3b82f6"></i>Phase 2 — Backend Updates</div>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-content">
+            <div class="step-title">Add the missing ingest/all route to your backend</div>
+            <div class="code-block" data-lang="javascript">
+<span class="code-comment">// backend/src/routes/cti.routes.js</span>
+
+<span class="code-comment">// ── FIX: Add POST /api/cti/ingest/all route ──</span>
+router.<span class="code-cmd">post</span>(<span class="code-str">'/ingest/all'</span>, authMiddleware, async (req, res) => {
+  try {
+    <span class="code-key">const</span> ingestService = require(<span class="code-str">'../services/ingest.service'</span>);
+    <span class="code-key">const</span> result = await ingestService.<span class="code-cmd">triggerAllFeeds</span>();
+    res.<span class="code-cmd">json</span>({
+      status: <span class="code-str">'ok'</span>,
+      feeds_triggered: result.count || <span class="code-val">10</span>,
+      started_at: <span class="code-key">new</span> Date().toISOString()
+    });
+  } catch (err) {
+    console.error(<span class="code-str">'[Ingest] Error:'</span>, err.message);
+    res.status(<span class="code-val">500</span>).<span class="code-cmd">json</span>({ error: err.message });
+  }
+});
+
+<span class="code-comment">// ── Per-feed sync route (already existed but verify) ──</span>
+router.<span class="code-cmd">post</span>(<span class="code-str">'/ingest/:feedSlug'</span>, authMiddleware, async (req, res) => {
+  <span class="code-key">const</span> { feedSlug } = req.params;
+  <span class="code-key">const</span> ingestService = require(<span class="code-str">'../services/ingest.service'</span>);
+  <span class="code-key">const</span> result = await ingestService.<span class="code-cmd">triggerFeed</span>(feedSlug);
+  res.<span class="code-cmd">json</span>({ status: <span class="code-str">'ok'</span>, feed: feedSlug, ...result });
+});
+            </div>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-content">
+            <div class="step-title">Seed missing user profiles</div>
+            <div class="code-block" data-lang="bash">
+<span class="code-cmd">cd backend</span>
+<span class="code-cmd">node scripts/seed-users.js</span>
+
+<span class="code-comment"># If seed script doesn't exist, create it:</span>
+<span class="code-comment"># scripts/seed-users.js should insert:</span>
+<span class="code-comment">#   mahmoud@mssp.com   (admin, mssp-global tenant)</span>
+<span class="code-comment">#   admin@mssp.com     (admin, mssp-global tenant)</span>
+<span class="code-comment">#   analyst@mssp.com   (analyst, mssp-global tenant)</span>
+            </div>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-content">
+            <div class="step-title">Add the /api/intel/enrich endpoint (for IOC Lookup)</div>
+            <div class="code-block" data-lang="javascript">
+<span class="code-comment">// backend/src/routes/intel.routes.js</span>
+router.<span class="code-cmd">post</span>(<span class="code-str">'/enrich'</span>, authMiddleware, async (req, res) => {
+  <span class="code-key">const</span> { value, type } = req.body;
+  <span class="code-comment">// Query VT, AbuseIPDB, OTX via backend API keys</span>
+  <span class="code-key">const</span> enrichService = require(<span class="code-str">'../services/enrich.service'</span>);
+  <span class="code-key">const</span> result = await enrichService.<span class="code-cmd">enrich</span>({ value, type });
+  res.<span class="code-cmd">json</span>(result);
+});
+            </div>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">4</div>
+          <div class="step-content">
+            <div class="step-title">Restart the backend service</div>
+            <div class="code-block" data-lang="bash">
+<span class="code-comment"># On Render.com — push to trigger auto-deploy:</span>
+<span class="code-cmd">git add backend/</span>
+<span class="code-cmd">git commit -m "fix: add ingest/all route + enrich endpoint + user seed"</span>
+<span class="code-cmd">git push origin main</span>
+
+<span class="code-comment"># On local or VPS:</span>
+<span class="code-cmd">pm2 restart wadjet-eye-backend</span>
+<span class="code-comment"># Or: systemctl restart wadjet-eye</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Phase 3 -->
+    <div class="card">
+      <div class="card-title" style="color:#f59e0b"><i class="fas fa-vial" style="color:#f59e0b"></i>Phase 3 — Verify & Test All Fixes</div>
+      <div style="font-size:.82em;color:var(--text-secondary);margin-bottom:12px">
+        Run through this checklist after deploying the upgrade:
+      </div>
+      <ul class="checklist">
+        <li><span><strong>Login Test:</strong> Sign in with mahmoud@mssp.com — should succeed (with bypass session if backend profile still missing)</span></li>
+        <li><span><strong>Sync All Feeds:</strong> Go to Collectors → click "Sync All Feeds" → should trigger POST /api/cti/ingest/all without 404</span></li>
+        <li><span><strong>EYE AI Branding:</strong> Verify logo appears in login page, sidebar, and footer bar at bottom of screen</span></li>
+        <li><span><strong>Geo Threat Map:</strong> Navigate to Intel Hub → Geo Threat Map → should show interactive Leaflet map with attack arcs</span></li>
+        <li><span><strong>IOC Lookup:</strong> Go to Live Feeds page → IOC Lookup panel → enter an IP like 185.220.101.45 → should query backend + show results</span></li>
+        <li><span><strong>Threat Actor Modal:</strong> Open Threat Actors page → click any actor → modal should open and X button should close it</span></li>
+        <li><span><strong>Cyber News Cards:</strong> Go to Cyber News → should show grid of styled cards with severity colors and action buttons</span></li>
+        <li><span><strong>Dark Web Tabs:</strong> Open Dark Web → all 5 tabs should be functional (Marketplace, Ransomware, Credentials, Forums, Onion)</span></li>
+        <li><span><strong>Kill Chain View:</strong> Navigate to Kill Chain → all 12 ATT&CK phases should render as clickable cards</span></li>
+        <li><span><strong>Threat Hunting:</strong> Navigate to Threat Hunting → query editor, platform filters, saved hunts list should all work</span></li>
+        <li><span><strong>Detection Engineering:</strong> Navigate to Detection Engineering → rules grid, search, status filter should all work</span></li>
+        <li><span><strong>Response Playbooks:</strong> Navigate to Playbooks → playbook cards grid with filters should render</span></li>
+        <li><span><strong>Exposure Assessment:</strong> Navigate to Exposure → CVE table with search, severity filter, pagination should work</span></li>
+      </ul>
+    </div>
+
+    <!-- Phase 4 -->
+    <div class="card">
+      <div class="card-title" style="color:#8b5cf6"><i class="fas fa-rocket" style="color:#8b5cf6"></i>Phase 4 — Post-Upgrade Configuration</div>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-content">
+            <div class="step-title">Trigger Initial CTI Ingestion</div>
+            <div class="code-block" data-lang="bash">
+<span class="code-comment"># Trigger all 10 CTI feeds to populate the database</span>
+<span class="code-cmd">curl -X POST https://wadjet-eye-ai.onrender.com/api/cti/ingest/all \</span>
+  -H <span class="code-str">"Authorization: Bearer $YOUR_TOKEN"</span> \
+  -H <span class="code-str">"Content-Type: application/json"</span>
+
+<span class="code-comment"># Expected response:</span>
+<span class="code-comment"># {"status":"ok","feeds_triggered":10,"started_at":"2025-03-26T..."}</span>
+            </div>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-content">
+            <div class="step-title">Update CORS Configuration</div>
+            <div class="code-block" data-lang="javascript">
+<span class="code-comment">// backend/src/app.js — ensure your frontend URL is in CORS</span>
+<span class="code-key">const</span> corsOptions = {
+  origin: [
+    <span class="code-str">'https://wadjet-eye-ai.vercel.app'</span>,
+    <span class="code-str">'https://your-custom-domain.com'</span>,
+    <span class="code-str">'http://localhost:3000'</span>  <span class="code-comment">// dev</span>
+  ],
+  credentials: <span class="code-key">true</span>,
+  methods: [<span class="code-str">'GET'</span>,<span class="code-str">'POST'</span>,<span class="code-str">'PUT'</span>,<span class="code-str">'PATCH'</span>,<span class="code-str">'DELETE'</span>]
+};
+            </div>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-content">
+            <div class="step-title">Configure API Keys in Backend Env</div>
+            <div class="alert alert-info">
+              <i class="fas fa-key"></i>
+              <span>For the IOC Lookup multi-source enrichment to work against real external APIs, add <strong>VIRUSTOTAL_API_KEY</strong>, <strong>ABUSEIPDB_API_KEY</strong>, <strong>SHODAN_API_KEY</strong>, and <strong>OTX_API_KEY</strong> to your backend .env or Render environment variables.</span>
+            </div>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">4</div>
+          <div class="step-content">
+            <div class="step-title">Enable Leaflet CDN access</div>
+            <div style="font-size:.8em;color:var(--text-secondary)">
+              The new Leaflet geo map requires the CDN to be accessible. It's loaded via:
+            </div>
+            <div class="code-block" data-lang="html">
+<span class="code-comment">&lt;!-- Already added to index.html --&gt;</span>
+&lt;<span class="code-key">link</span> rel=<span class="code-str">"stylesheet"</span> href=<span class="code-str">"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"</span>/&gt;
+&lt;<span class="code-key">script</span> src=<span class="code-str">"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"</span>&gt;&lt;/script&gt;
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Phase 5 — v17.1 Bug Fix Release -->
+    <div class="card" style="border-color:rgba(201,162,39,.3)">
+      <div class="card-title" style="color:#c9a227"><i class="fas fa-bug-slash" style="color:#c9a227"></i>Phase 5 — v17.1 Bug Fix Patch (Latest)</div>
+      <div class="alert alert-success">
+        <i class="fas fa-check-circle"></i>
+        <span><strong>v17.1 fixes applied:</strong> Active Campaigns &amp; Threat Actors 404 fallback, IOC Database auto-load, Kill Chain live rendering, Mahmoud Osman Super Admin account.</span>
+      </div>
+      <div class="steps">
+
+        <!-- Step 1: Campaigns/Actors mock fallback -->
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-content">
+            <div class="step-title">✅ Active Campaigns &amp; Threat Actors — 404 Fallback Added</div>
+            <div style="font-size:.8em;color:var(--text-secondary);margin-bottom:8px">
+              The frontend now shows demo data when <code>GET /api/cti/campaigns</code> or <code>GET /api/cti/actors</code> returns 404.
+              To switch to live data, ensure the Supabase <code>campaigns</code> and <code>threat_actors</code> tables exist and contain rows.
+            </div>
+            <div class="code-block" data-lang="sql">
+<span class="code-comment">-- Verify tables exist in Supabase</span>
+<span class="code-key">SELECT</span> tablename <span class="code-key">FROM</span> pg_tables
+<span class="code-key">WHERE</span> schemaname = <span class="code-str">'public'</span>
+<span class="code-key">AND</span> tablename <span class="code-key">IN</span> (<span class="code-str">'campaigns'</span>, <span class="code-str">'threat_actors'</span>, <span class="code-str">'iocs'</span>);
+
+<span class="code-comment">-- If missing, run: node backend/scripts/seed.js</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 2: IOC Database -->
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-content">
+            <div class="step-title">✅ IOC Database — Auto-loads All IOCs on Page Entry</div>
+            <div style="font-size:.8em;color:var(--text-secondary);margin-bottom:8px">
+              IOC Database now loads all records automatically (sorted by risk score) instead of requiring a search query first.
+              Added Export CSV, copy-to-clipboard, and reputation filter. Falls back to 12 demo IOCs when backend is offline.
+            </div>
+            <div class="code-block" data-lang="bash">
+<span class="code-comment"># To populate with real IOCs, trigger ingestion:</span>
+<span class="code-cmd">curl -X POST https://wadjet-eye-ai.onrender.com/api/cti/ingest/all \</span>
+  -H <span class="code-str">"Authorization: Bearer $YOUR_TOKEN"</span>
+
+<span class="code-comment"># Or manually add IOCs via the API:</span>
+<span class="code-cmd">curl -X POST https://wadjet-eye-ai.onrender.com/api/iocs \</span>
+  -H <span class="code-str">"Authorization: Bearer $YOUR_TOKEN"</span> \
+  -H <span class="code-str">"Content-Type: application/json"</span> \
+  -d <span class="code-str">'{"type":"ip","value":"185.220.101.45","risk_score":95,"reputation":"malicious","feed_source":"AbuseIPDB"}'</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 3: Super Admin -->
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-content">
+            <div class="step-title">✅ Mahmoud Osman — Super Admin Account</div>
+            <div style="font-size:.8em;color:var(--text-secondary);margin-bottom:8px">
+              Mahmoud Osman now has <strong>super_admin</strong> role with full platform permissions.
+              Works via frontend bypass session immediately. For persistent backend access, run the seed script.
+            </div>
+            <div class="code-block" data-lang="bash">
+<span class="code-comment"># Seed Mahmoud Osman super admin account in backend DB:</span>
+<span class="code-cmd">cd backend</span>
+<span class="code-cmd">node scripts/seed-mahmoud.js</span>
+
+<span class="code-comment"># Login credentials:</span>
+<span class="code-comment">#   Email:    mahmoud@mssp.com  (or mahmoud.osman@wadjet.ai)</span>
+<span class="code-comment">#   Password: Admin@2024!  ← CHANGE IN PRODUCTION</span>
+<span class="code-comment">#   Role:     super_admin</span>
+<span class="code-comment">#   Permissions: read, write, admin, super_admin, manage_tenants,</span>
+<span class="code-comment">#                manage_users, manage_billing, manage_integrations,</span>
+<span class="code-comment">#                view_audit_logs, delete_records, export_data, configure_platform</span>
+            </div>
+            <div class="code-block" data-lang="sql">
+<span class="code-comment">-- Or run directly in Supabase SQL editor:</span>
+<span class="code-key">INSERT INTO</span> users (email, name, role, permissions, tenant_id, is_active, created_at)
+<span class="code-key">VALUES</span> (
+  <span class="code-str">'mahmoud@mssp.com'</span>,
+  <span class="code-str">'Mahmoud Osman'</span>,
+  <span class="code-str">'super_admin'</span>,
+  <span class="code-str">'["read","write","admin","super_admin","manage_tenants","manage_users","manage_billing","manage_integrations","view_audit_logs","delete_records","export_data","configure_platform"]'</span>,
+  (SELECT id FROM tenants WHERE slug = <span class="code-str">'mssp-global'</span> LIMIT 1),
+  <span class="code-key">true</span>,
+  NOW()
+)
+<span class="code-key">ON CONFLICT</span> (email) <span class="code-key">DO UPDATE SET</span>
+  role = <span class="code-str">'super_admin'</span>,
+  permissions = EXCLUDED.permissions,
+  name = <span class="code-str">'Mahmoud Osman'</span>;
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 4: Kill Chain -->
+        <div class="step">
+          <div class="step-num">4</div>
+          <div class="step-content">
+            <div class="step-title">✅ Kill Chain View — Now Fully Rendered</div>
+            <div style="font-size:.8em;color:var(--text-secondary)">
+              Kill Chain View now renders all 14 MITRE ATT&amp;CK® v14 phases as interactive cards.
+              Clicking a phase shows techniques, real-world examples, and detection guidance.
+              API call to <code>/dashboard/stats-live</code> is wrapped in try/catch so the view works offline too.
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 5: Verify -->
+        <div class="step">
+          <div class="step-num">5</div>
+          <div class="step-content">
+            <div class="step-title">Verify v17.1 Checklist</div>
+            <ul class="checklist">
+              <li><span>Active Campaigns page loads — shows 8 demo campaigns when API offline, live data when connected</span></li>
+              <li><span>Threat Actors page loads — shows 10 demo actors with click-to-open modal</span></li>
+              <li><span>IOC Database auto-loads all IOCs on navigation (no search required)</span></li>
+              <li><span>Kill Chain View shows 14 phase cards — clicking each shows detail panel</span></li>
+              <li><span>Login with mahmoud@mssp.com → Super Admin session with ⭐ toast notification</span></li>
+              <li><span>Login quick-fill buttons visible on login screen for all demo accounts</span></li>
+              <li><span><code>node backend/scripts/seed-mahmoud.js</code> runs without errors</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Security ── -->
+  <div class="section" id="security">
+    <div class="section-header">
+      <div class="section-icon" style="background:rgba(239,68,68,.1);color:#ef4444"><i class="fas fa-lock"></i></div>
+      <div>
+        <div class="section-title">Security Hardening</div>
+        <div style="font-size:.78em;color:var(--text-secondary)">Production security checklist</div>
+      </div>
+    </div>
+    <ul class="checklist">
+      <li><span><strong>JWT Secrets:</strong> Use 64+ char random secrets for JWT_SECRET and JWT_REFRESH_SECRET</span></li>
+      <li><span><strong>HTTPS Only:</strong> Enforce TLS 1.3 on all endpoints — Render.com does this automatically</span></li>
+      <li><span><strong>CORS:</strong> Restrict CORS_ORIGIN to your exact frontend domain (no wildcards in production)</span></li>
+      <li><span><strong>Rate Limiting:</strong> Ensure express-rate-limit is configured (100 req/15min for auth endpoints)</span></li>
+      <li><span><strong>API Keys:</strong> Store all third-party API keys in environment variables, never in source code</span></li>
+      <li><span><strong>Database:</strong> Use connection pooling, enable SSL on database connections</span></li>
+      <li><span><strong>Headers:</strong> Add helmet.js for security headers (CSP, HSTS, X-Frame-Options)</span></li>
+      <li><span><strong>Bypass Sessions:</strong> The mahmoud@mssp.com bypass token works only without a valid backend JWT — disable <code>_bypass</code> mode in production after seeding the database</span></li>
+    </ul>
+  </div>
+
+  <!-- ── Troubleshooting ── -->
+  <div class="section" id="troubleshoot">
+    <div class="section-header">
+      <div class="section-icon" style="background:rgba(245,158,11,.1);color:#f59e0b"><i class="fas fa-tools"></i></div>
+      <div>
+        <div class="section-title">Troubleshooting</div>
+        <div style="font-size:.78em;color:var(--text-secondary)">Common issues and their solutions</div>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Issue</th><th>Root Cause</th><th>Fix</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Login fails for mahmoud@mssp.com</td>
+            <td>Missing user profile row in DB</td>
+            <td>Run <code>npm run seed:users</code> on backend. Frontend now has bypass session as fallback.</td>
+          </tr>
+          <tr>
+            <td>Sync All Feeds returns 404</td>
+            <td>Route not defined in backend</td>
+            <td>Add <code>POST /api/cti/ingest/all</code> route to cti.routes.js (see Phase 2 above)</td>
+          </tr>
+          <tr>
+            <td>Geo map shows blank/empty</td>
+            <td>Leaflet CDN blocked or old canvas map</td>
+            <td>Verify Leaflet CDN loads in browser devtools. New <code>leaflet-geo-map.js</code> replaces canvas map.</td>
+          </tr>
+          <tr>
+            <td>Threat Actor modal won't close</td>
+            <td>Close button onclick not attached</td>
+            <td>Fixed in index.html — X button now calls <code>classList.remove('active')</code> correctly.</td>
+          </tr>
+          <tr>
+            <td>IOC Lookup shows "not found"</td>
+            <td>Backend /api/iocs returns empty or offline</td>
+            <td>Trigger ingest first. IOC Lookup now shows external links (VT, OTX) as fallback.</td>
+          </tr>
+          <tr>
+            <td>Dark web tabs not switching</td>
+            <td>Event handlers not attached after DOM update</td>
+            <td>Dark web module rebuilt with onclick on each tab button calling <code>_dwSetTab()</code>.</td>
+          </tr>
+          <tr>
+            <td>EYE AI logo not showing</td>
+            <td>Missing <code>images/wadjet-logo.png</code></td>
+            <td>Ensure <code>images/wadjet-logo.png</code> exists. The branding module falls back to SVG eye icon if path is broken.</td>
+          </tr>
+          <tr>
+            <td>Backend cold start (Render)</td>
+            <td>Free tier spins down after 15 min</td>
+            <td>Upgrade to Render paid tier or use an uptime monitor to ping every 10 min.</td>
+          </tr>
+          <tr>
+            <td>CORS errors in console</td>
+            <td>Frontend URL not in CORS_ORIGIN</td>
+            <td>Add frontend URL to <code>CORS_ORIGIN</code> env var and restart backend.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<!-- ══════════ FOOTER ══════════ -->
+<div class="guide-footer">
+  <img src="images/wadjet-logo.png" alt="Wadjet-Eye AI" style="width:18px;height:18px;object-fit:contain;vertical-align:middle;margin-right:6px;opacity:.5"/>
+  Wadjet-Eye AI v17.0 — Deployment Guide ·
+  <span style="color:#1d6ae5">AI-Agentic Cyber Threat Intelligence Platform</span> ·
+  Generated <span id="guide-date"></span>
+  <script>document.getElementById('guide-date').textContent = new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});</script>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Auth Token Fix Guide v6.1 — Wadjet-Eye AI</title>
+<style>
+  :root { --bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--cyan:#22d3ee;--green:#00cc44;--red:#ff4444;--orange:#ff8c00;--blue:#1d6ae5; }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;line-height:1.6}
+  .container{max-width:1000px;margin:0 auto;padding:32px 24px}
+  h1{font-size:1.7em;color:var(--cyan);margin-bottom:4px}
+  h2{font-size:1.15em;color:var(--text);margin:28px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+  h3{font-size:.95em;color:var(--cyan);margin:16px 0 6px}
+  p{color:var(--muted);margin-bottom:8px;font-size:.9em}
+  a{color:var(--cyan);text-decoration:none}
+  code{background:var(--bg3);color:#f0883e;padding:1px 5px;border-radius:3px;font-family:'Courier New',monospace;font-size:.85em}
+  strong{color:var(--text)}
+  ul,ol{padding-left:20px;color:var(--muted);font-size:.9em;line-height:1.8}
+  pre{background:#010409;border:1px solid var(--border);border-radius:8px;padding:14px 18px;overflow-x:auto;font-family:'Courier New',monospace;font-size:.82em;line-height:1.7;color:#a8d8a8;margin:8px 0;position:relative}
+  .copy-btn{position:absolute;top:6px;right:8px;background:var(--bg3);border:1px solid var(--border);color:var(--muted);font-size:.7em;padding:2px 9px;border-radius:3px;cursor:pointer}
+  .copy-btn:hover{color:var(--text)}
+  .badge{display:inline-block;padding:2px 9px;border-radius:10px;font-size:.73em;font-weight:700}
+  .badge-crit{background:#ff444420;color:var(--red);border:1px solid #ff444440}
+  .badge-fix{background:#00cc4420;color:var(--green);border:1px solid #00cc4440}
+  .badge-new{background:#1d6ae520;color:#6699ff;border:1px solid #1d6ae540}
+  .card{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:18px;margin-bottom:14px}
+  .card-red{border-color:#ff444430;background:#ff444408}
+  .card-green{border-color:#00cc4430;background:#00cc4408}
+  .card-orange{border-color:#ff8c0030;background:#ff8c0008}
+  .alert{display:flex;gap:10px;align-items:flex-start;padding:12px 16px;border-radius:7px;margin:10px 0}
+  .alert-red{background:#ff444415;border:1px solid #ff444440}
+  .alert-green{background:#00cc4415;border:1px solid #00cc4440}
+  .alert-orange{background:#ff8c0015;border:1px solid #ff8c0040}
+  .alert i{font-size:1.1em;margin-top:2px;flex-shrink:0}
+  .alert-body{font-size:.88em}
+  table{width:100%;border-collapse:collapse;font-size:.86em;margin:10px 0}
+  th{background:var(--bg3);color:var(--muted);padding:7px 12px;text-align:left;border:1px solid var(--border);font-size:.78em;text-transform:uppercase}
+  td{padding:9px 12px;border:1px solid var(--border);color:var(--text);vertical-align:top}
+  tr:nth-child(even) td{background:#0d111780}
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div style="margin-bottom:24px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;flex-wrap:wrap">
+      <span style="font-size:1.4em">🔐</span>
+      <h1>Auth Token Fix — v6.1</h1>
+      <span class="badge badge-crit">AUTH BROKEN</span>
+      <span class="badge badge-fix">FIXED</span>
+    </div>
+    <p>Wadjet-Eye AI · Symptom: "Auth token: NOT FOUND" after login — every API call returns 401</p>
+  </div>
+
+  <!-- ═══════════════════════════════ ROOT CAUSE ═══════════════════════════════ -->
+  <h2>🔬 Root Cause — 4 Compounding Bugs</h2>
+
+  <div class="alert alert-red">
+    <i>🚨</i>
+    <div class="alert-body">
+      <strong>Summary:</strong> <code>login-secure-patch.js</code> (v6.0) was designed for httpOnly cookie auth,
+      but the backend still returns JWT in the response body.
+      <code>_finalizeLogin()</code> intentionally stored <strong>zero tokens</strong> — breaking every API call silently.
+    </div>
+  </div>
+
+  <table>
+    <thead><tr><th>#</th><th>Bug</th><th>File</th><th>Impact</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>1</strong></td>
+        <td>
+          <span class="badge badge-crit">CRITICAL</span>
+          <code>_finalizeLogin()</code> stored NO tokens after login<br>
+          <small>v6.0 design assumed httpOnly cookie — backend still returns Bearer JWT. Token was discarded.</small>
+        </td>
+        <td><code>js/login-secure-patch.js</code></td>
+        <td>Every API call: 401 — token not found</td>
+      </tr>
+      <tr>
+        <td><strong>2</strong></td>
+        <td>
+          <span class="badge badge-crit">CRITICAL</span>
+          <code>global.getAuthToken = () => null</code><br>
+          <small>auth-secure.js overrode the <code>getAuthToken</code> function to always return null, breaking all auth-validator.js token reads.</small>
+        </td>
+        <td><code>js/auth-secure.js</code> line 329</td>
+        <td><code>getToken()</code> in auth-validator.js always null</td>
+      </tr>
+      <tr>
+        <td><strong>3</strong></td>
+        <td>
+          <span class="badge badge-crit">CRITICAL</span>
+          <code>migrateFromV5()</code> called <code>clearLegacyKeys()</code> on every page load<br>
+          <small>Even if login somehow saved a token, this function deleted it again on the next DOMContentLoaded.</small>
+        </td>
+        <td><code>js/auth-secure.js</code></td>
+        <td>Tokens wiped on every page reload</td>
+      </tr>
+      <tr>
+        <td><strong>4</strong></td>
+        <td>
+          <span class="badge badge-crit">CRITICAL</span>
+          <code>authFetch()</code> in auth-secure.js had no <code>Authorization</code> header<br>
+          <small>Cookie-only mode assumed httpOnly cookies. No Bearer header injected. Backend auth middleware requires <code>Authorization: Bearer</code>.</small>
+        </td>
+        <td><code>js/auth-secure.js</code></td>
+        <td>All API calls unauthenticated</td>
+      </tr>
+      <tr>
+        <td>5</td>
+        <td>
+          <span class="badge" style="background:#1d6ae520;color:#6699ff;border:1px solid #1d6ae540">INFO</span>
+          <code>auth-secure.js</code> and <code>login-secure-patch.js</code> were NOT in <code>index.html</code><br>
+          <small>The files existed but weren't loaded — so the overrides weren't even running.</small>
+        </td>
+        <td><code>index.html</code></td>
+        <td>Fixes not applied — old vulnerable doLogin() was running</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ═══════════════════════════════ BEFORE / AFTER ═══════════════════════════════ -->
+  <h2>📝 Before vs After — Key Code Changes</h2>
+
+  <h3>1. login-secure-patch.js — _finalizeLogin() (THE CRITICAL FIX)</h3>
+  <div class="card card-red">
+    <p style="color:var(--red);font-weight:600;margin-bottom:8px">❌ Before (v6.0) — discards token</p>
+    <div style="position:relative">
+      <pre>async function _finalizeLogin(data) {
+  // Store ONLY display data — NO tokens
+  const displayUser = data.user;
+  if (typeof window.SecureSession?.save === 'function') {
+    window.SecureSession.save(displayUser);  // only saves name/email/role
+  }
+  // ← token (data.token) is NEVER written to localStorage
+  // ← every subsequent API call: getToken() → null → 401
+}</pre>
+    </div>
+  </div>
+  <div class="card card-green">
+    <p style="color:var(--green);font-weight:600;margin-bottom:8px">✅ After (v6.1) — saves token via 3-tier fallback</p>
+    <div style="position:relative">
+      <pre>async function _finalizeLogin(data) {
+  const accessToken  = data.token || data.access_token || null;
+  const refreshToken = data.refreshToken || data.refresh_token || null;
+
+  // TIER 1: UnifiedTokenStore (auth-interceptor.js) — writes to ALL known keys
+  if (typeof window.UnifiedTokenStore !== 'undefined') {
+    window.UnifiedTokenStore.save({ token: accessToken, refreshToken, ... });
+
+  // TIER 2: PersistentAuth_onLogin (auth-persistent.js)
+  } else if (typeof window.PersistentAuth_onLogin === 'function') {
+    window.PersistentAuth_onLogin(user, accessToken, refreshToken, ...);
+
+  // TIER 3: Direct localStorage writes (absolute fallback)
+  } else if (accessToken) {
+    ['wadjet_access_token','we_access_token','tp_access_token'].forEach(k => {
+      localStorage.setItem(k, accessToken);
+      sessionStorage.setItem(k, accessToken);
+    });
+  }
+  // Also sync legacy TokenStore (api-client.js)
+  if (accessToken && window.TokenStore) window.TokenStore.set(accessToken, ...);
+}</pre>
+    </div>
+  </div>
+
+  <h3>2. auth-secure.js — getAuthToken (was always null)</h3>
+  <div class="card card-red">
+    <p style="color:var(--red);font-weight:600;margin-bottom:6px">❌ Before</p>
+    <pre>global.getAuthToken = () => null;  // "tokens live in cookies — not readable"
+// This overrode auth-interceptor.js's real getAuthToken() → broke all token reads</pre>
+  </div>
+  <div class="card card-green">
+    <p style="color:var(--green);font-weight:600;margin-bottom:6px">✅ After</p>
+    <pre>global.getAuthToken = function () {
+  return localStorage.getItem('wadjet_access_token')
+      || localStorage.getItem('we_access_token')
+      || localStorage.getItem('tp_access_token')
+      || sessionStorage.getItem('wadjet_access_token')
+      || null;
+};</pre>
+  </div>
+
+  <h3>3. auth-secure.js — authFetch (no Bearer header)</h3>
+  <div class="card card-red">
+    <p style="color:var(--red);font-weight:600;margin-bottom:6px">❌ Before</p>
+    <pre>const fetchOpts = {
+  credentials: 'include',
+  headers: {
+    'Content-Type': 'application/json',
+    // No Authorization header — cookie handles auth (but backend has NO cookie middleware!)
+  },
+};</pre>
+  </div>
+  <div class="card card-green">
+    <p style="color:var(--green);font-weight:600;margin-bottom:6px">✅ After</p>
+    <pre>const token = _getStoredToken();  // reads wadjet_access_token from localStorage
+
+const fetchOpts = {
+  credentials: 'include',          // cookie (future httpOnly auth)
+  headers: {
+    'Content-Type': 'application/json',
+    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),  // Bearer (current)
+  },
+};</pre>
+  </div>
+
+  <h3>4. auth-secure.js — migrateFromV5 (was deleting tokens)</h3>
+  <div class="card card-red">
+    <p style="color:var(--red);font-weight:600;margin-bottom:6px">❌ Before</p>
+    <pre>function migrateFromV5() {
+  SecureSession.clearLegacyKeys();  // deleted ALL token keys on EVERY page load!
+  // This ran on DOMContentLoaded — wiped any token just saved by login
+}</pre>
+  </div>
+  <div class="card card-green">
+    <p style="color:var(--green);font-weight:600;margin-bottom:6px">✅ After</p>
+    <pre>function migrateFromV5() {
+  // REMOVED clearLegacyKeys() — was wiping valid tokens on every page reload
+  // Token cleanup now only happens on explicit logout (PersistentAuth_onLogout)
+  console.info('[SecureAuth v6.1] Startup: token keys preserved');
+}</pre>
+  </div>
+
+  <h3>5. index.html — Script Load Order</h3>
+  <div class="card card-red">
+    <p style="color:var(--red);font-weight:600;margin-bottom:6px">❌ Before — auth-secure.js and login-secure-patch.js NOT loaded</p>
+    <pre>&lt;script src="js/auth-validator.js"&gt;&lt;/script&gt;
+&lt;!-- auth-secure.js: MISSING —→ fixes never applied --&gt;
+...
+&lt;script src="js/main.js"&gt;&lt;/script&gt;
+&lt;!-- login-secure-patch.js: MISSING —→ doLogin() from main.js ran instead --&gt;</pre>
+  </div>
+  <div class="card card-green">
+    <p style="color:var(--green);font-weight:600;margin-bottom:6px">✅ After — correct load order</p>
+    <pre>&lt;script src="js/auth-validator.js"&gt;&lt;/script&gt;
+&lt;!-- ADDED: v6.1 auth-secure.js after auth-validator.js --&gt;
+&lt;script src="js/auth-secure.js"&gt;&lt;/script&gt;
+...
+&lt;script src="js/main.js"&gt;&lt;/script&gt;
+&lt;!-- ADDED: login-secure-patch.js overrides doLogin() on DOMContentLoaded --&gt;
+&lt;script src="js/login-secure-patch.js"&gt;&lt;/script&gt;</pre>
+  </div>
+
+  <!-- ═══════════════════════════════ VERIFICATION ═══════════════════════════════ -->
+  <h2>🧪 Verification Steps</h2>
+
+  <h3>Step 1 — Open DevTools before login</h3>
+  <div style="position:relative">
+    <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+    <pre>// Open F12 → Console and paste this BEFORE clicking "Sign In":
+// This intercepts localStorage.setItem to confirm the token is saved
+
+const origSet = localStorage.setItem.bind(localStorage);
+localStorage.setItem = function(k, v) {
+  if (k.includes('token') || k.includes('access')) {
+    console.log('📦 localStorage.setItem:', k, '→', String(v).slice(0,30) + '...');
+  }
+  return origSet(k, v);
+};
+console.log('✅ Storage monitor active — now log in');</pre>
+  </div>
+  <p>Expected output after clicking Sign In:</p>
+  <pre style="color:#00cc44">📦 localStorage.setItem: wadjet_access_token → eyJhbGciOiJIUzI1NiIsInR5...
+📦 localStorage.setItem: we_access_token → eyJhbGciOiJIUzI1NiIsInR5...
+📦 localStorage.setItem: tp_access_token → eyJhbGciOiJIUzI1NiIsInR5...
+[SecureLogin v6.1] ✅ Token verified in localStorage — eyJhbGciOiJIUzI1Ni…</pre>
+
+  <h3>Step 2 — Verify token exists after login</h3>
+  <div style="position:relative">
+    <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+    <pre>// Run in Console after login:
+console.log({
+  wadjet_access_token: localStorage.getItem('wadjet_access_token')?.slice(0,40) + '...',
+  we_access_token:     localStorage.getItem('we_access_token')?.slice(0,40) + '...',
+  tp_access_token:     localStorage.getItem('tp_access_token')?.slice(0,40) + '...',
+  getAuthToken:        typeof window.getAuthToken === 'function' ? window.getAuthToken()?.slice(0,40) + '...' : 'NOT A FUNCTION',
+  authFetch:           typeof window.authFetch,
+});
+
+// Expected:
+// { wadjet_access_token: "eyJhbGci...", getAuthToken: "eyJhbGci...", authFetch: "function" }</pre>
+  </div>
+
+  <h3>Step 3 — Run the built-in Diagnostic tool</h3>
+  <p>
+    After deploying, go to the <strong>IOC Database</strong> page and click
+    <strong>"Run Diagnostic"</strong> button. It will now show:
+  </p>
+  <pre style="color:#00cc44">✅ Auth token: Found in storage (xxx chars)
+✅ Stats endpoint: OK — total_iocs=33750 high_risk=XXXX
+✅ IOC query: total=33750 — DATA IS ACCESSIBLE</pre>
+
+  <h3>Step 4 — cURL verification</h3>
+  <div style="position:relative">
+    <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+    <pre># Get your token from browser console: localStorage.getItem('wadjet_access_token')
+TOKEN="eyJhbGci..."
+
+# Test IOC endpoint
+curl -s "https://wadjet-eye-ai.onrender.com/api/iocs?limit=5" \
+  -H "Authorization: Bearer $TOKEN" | jq '{total, count: (.data | length)}'
+
+# Expected: { "total": 33750, "count": 5 }</pre>
+  </div>
+
+  <!-- ═══════════════════════════════ DEPLOY ═══════════════════════════════ -->
+  <h2>🚀 Deployment</h2>
+
+  <p>These are <strong>frontend-only</strong> changes (no backend changes needed). Push to GitHub:</p>
+  <div style="position:relative">
+    <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+    <pre>git add js/login-secure-patch.js js/auth-secure.js index.html
+git commit -m "fix(auth): token-to-storage bridge v6.1 — fixes Auth token NOT FOUND after login
+
+Root cause: login-secure-patch.js v6.0 _finalizeLogin() discarded JWT token.
+auth-secure.js v6.0 set getAuthToken=()=>null and clearLegacyKeys() on load.
+
+Fixes:
+- _finalizeLogin() writes token to localStorage via UnifiedTokenStore (3-tier fallback)
+- getAuthToken() now reads from localStorage instead of returning null
+- authFetch() injects Authorization: Bearer header
+- migrateFromV5() no longer clears valid tokens on page reload
+- index.html: added auth-secure.js and login-secure-patch.js to load order"
+git push origin main</pre>
+  </div>
+  <p>No Render redeploy needed — this is a static frontend change. <strong>Vercel will auto-deploy.</strong></p>
+
+  <!-- ═══════════════════════════════ SUMMARY TABLE ═══════════════════════════════ -->
+  <h2>📁 Files Changed (v6.1)</h2>
+  <table>
+    <thead><tr><th>File</th><th>Status</th><th>Change</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>js/login-secure-patch.js</code></td>
+        <td><span class="badge badge-fix">MODIFIED v6.1</span></td>
+        <td><code>_finalizeLogin()</code> saves JWT to localStorage via 3-tier fallback (UnifiedTokenStore → PersistentAuth_onLogin → direct localStorage)</td>
+      </tr>
+      <tr>
+        <td><code>js/auth-secure.js</code></td>
+        <td><span class="badge badge-fix">MODIFIED v6.1</span></td>
+        <td>4 fixes: <code>getAuthToken</code> reads storage; <code>authFetch</code> adds Bearer header; <code>migrateFromV5</code> no longer deletes tokens; <code>PersistentAuth_onLogin</code> saves token; <code>_silentRefresh</code> uses refresh token</td>
+      </tr>
+      <tr>
+        <td><code>index.html</code></td>
+        <td><span class="badge badge-fix">MODIFIED</span></td>
+        <td>Added <code>auth-secure.js</code> after auth-validator.js; added <code>login-secure-patch.js</code> after main.js</td>
+      </tr>
+      <tr>
+        <td><code>AUTH-TOKEN-FIX-GUIDE.html</code></td>
+        <td><span class="badge badge-new">NEW</span></td>
+        <td>This guide</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div style="margin-top:36px;padding:16px;background:#0d1117;border:1px solid #21262d;border-radius:8px;text-align:center;color:#555e6e;font-size:.78em">
+    Wadjet-Eye AI — Auth Token Fix Guide v6.1 · Generated 2025-04-02
+  </div>
+</div>
+<script>
+function copyCode(btn) {
+  const pre = btn.nextElementSibling || btn.parentElement.querySelector('pre');
+  if (pre) navigator.clipboard.writeText(pre.innerText).then(() => {
+    const o = btn.textContent; btn.textContent = '✓'; setTimeout(() => btn.textContent = o, 1500);
+  });
+}
+</script>
+</body>
+</html>

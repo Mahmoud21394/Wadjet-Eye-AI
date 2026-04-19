@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Wadjet-Eye AI — Platform Enhancements v18.0 Deploy Guide</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #04060a; color: #e6edf3; font-family: 'Segoe UI', system-ui, sans-serif; line-height: 1.6; }
+.container { max-width: 900px; margin: 0 auto; padding: 40px 20px; }
+h1 { font-size: 1.6em; color: #22d3ee; margin-bottom: 6px; }
+h2 { font-size: 1.1em; color: #e6edf3; margin: 28px 0 12px; padding-left: 12px; border-left: 3px solid #22d3ee; }
+h3 { font-size: .92em; color: #22d3ee; margin: 16px 0 8px; }
+p { color: #b0bec5; font-size: .9em; margin-bottom: 10px; }
+.subtitle { color: #8b949e; font-size: .88em; margin-bottom: 28px; }
+.card { background: #0d1421; border: 1px solid #1a2535; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: .72em; font-weight: 700; text-transform: uppercase; }
+.badge-new      { background: rgba(34,211,238,.12); color: #22d3ee; border: 1px solid rgba(34,211,238,.25); }
+.badge-fix      { background: rgba(34,197,94,.12);  color: #22c55e; border: 1px solid rgba(34,197,94,.25);  }
+.badge-critical { background: rgba(239,68,68,.12);  color: #ef4444; border: 1px solid rgba(239,68,68,.25);  }
+pre { background: #080c14; border: 1px solid #1a2535; border-radius: 8px; padding: 14px 16px; overflow-x: auto; margin: 10px 0; }
+code { font-family: 'JetBrains Mono', 'Cascadia Code', monospace; font-size: .84em; color: #22d3ee; }
+pre code { color: #e6edf3; font-size: .82em; }
+.step { display: flex; gap: 14px; margin-bottom: 16px; }
+.step-num { width: 32px; height: 32px; background: rgba(34,211,238,.1); border: 1px solid rgba(34,211,238,.2); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: .82em; font-weight: 800; color: #22d3ee; flex-shrink: 0; }
+.step-body { flex: 1; }
+.step-title { font-weight: 700; color: #e6edf3; font-size: .92em; margin-bottom: 4px; }
+table { width: 100%; border-collapse: collapse; font-size: .84em; margin: 10px 0; }
+th { padding: 8px 10px; text-align: left; color: #8b949e; font-size: .78em; text-transform: uppercase; border-bottom: 2px solid #1a2535; }
+td { padding: 8px 10px; border-bottom: 1px solid rgba(26,37,53,.8); color: #b0bec5; vertical-align: top; }
+td:first-child { color: #22d3ee; font-family: monospace; font-size: .82em; }
+.check { color: #22c55e; }
+.warn  { color: #f97316; }
+.alert { background: rgba(239,68,68,.06); border: 1px solid rgba(239,68,68,.2); border-radius: 8px; padding: 10px 14px; margin: 10px 0; font-size: .85em; color: #ef4444; }
+.info  { background: rgba(34,211,238,.06); border: 1px solid rgba(34,211,238,.2); border-radius: 8px; padding: 10px 14px; margin: 10px 0; font-size: .85em; color: #22d3ee; }
+.success { background: rgba(34,197,94,.06); border: 1px solid rgba(34,197,94,.2); border-radius: 8px; padding: 10px 14px; margin: 10px 0; font-size: .85em; color: #22c55e; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 600px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <h1>🚀 Platform Enhancements v18.0 — Deploy Guide</h1>
+  <p class="subtitle">Wadjet-Eye AI · 2026-04-02 · Complete deployment instructions for all v18.0 improvements</p>
+
+  <!-- What's New -->
+  <h2>What's New in v18.0</h2>
+  <div class="grid2">
+    <div class="card">
+      <h3>🕸️ Dark Web Module v5.0 <span class="badge badge-new">NEW</span></h3>
+      <p>Full redesign matching Threat Actor Intelligence style. Animated cards, 5 tabs (Marketplace/RaaS/Credentials/Forums/Onion), slide-in detail panel, live threat level banner, export.</p>
+    </div>
+    <div class="card">
+      <h3>🛡️ Exposure Assessment v3.0 <span class="badge badge-new">NEW</span></h3>
+      <p>CVE tracking with CVSS score rings, exploited-in-wild highlighting, MITRE technique chips, asset count, detail panel with NVD link, patch tracking, AI analysis.</p>
+    </div>
+    <div class="card">
+      <h3>🔍 IOC Search v2.0 <span class="badge badge-fix">FIX</span></h3>
+      <p>Real-time IOC type detection for 13 types (IP/domain/URL/hash/email/CVE/ASN/CIDR/IPv6/filename). Instant validation feedback, type badges, integration with quick-search overlay.</p>
+    </div>
+    <div class="card">
+      <h3>🤖 AI Orchestrator v4.0 <span class="badge badge-fix">FIX</span></h3>
+      <p>Real multi-source investigation: VirusTotal + AbuseIPDB + Shodan + AlienVault OTX run in parallel. Verdict computation, session stats, action logging, exportable reports.</p>
+    </div>
+    <div class="card">
+      <h3>📡 Live IOC Lookup v2.0 <span class="badge badge-fix">FIX</span></h3>
+      <p>Unified results from 6 sources. Parallel queries, direct clickable links to external reports, search history, verdict computation, case creation from results.</p>
+    </div>
+    <div class="card">
+      <h3>💰 Pricing Module v2.0 <span class="badge badge-new">NEW</span></h3>
+      <p>Monthly/annual billing toggle (20% savings). Admin-editable prices. Feature comparison table. FAQ accordion. CTA actions. Visible from navigation for all roles.</p>
+    </div>
+    <div class="card">
+      <h3>⚙️ Settings Fix v2.0 <span class="badge badge-critical">HTTP 400 FIX</span></h3>
+      <p>Fixes HTTP 400 save errors: validates payload, strips null/empty values, uses PATCH with retry to PUT. Clear error messages. Offline edit mode. Collapsible sections.</p>
+    </div>
+    <div class="card">
+      <h3>🏢 Tenant Management v2.0 <span class="badge badge-fix">FIX</span></h3>
+      <p>Functional add/edit/delete via /api/tenants. Color-coded tenant cards. Plan badges. RBAC permission import/export as JSON. Search + filter by plan/status.</p>
+    </div>
+  </div>
+
+  <!-- Files Changed -->
+  <h2>📁 Files Changed / Added</h2>
+  <table>
+    <thead><tr><th>File</th><th>Change</th><th>Size</th></tr></thead>
+    <tbody>
+      <tr><td>css/enhancements.css</td><td><span class="badge badge-new">NEW</span> Unified dark neon CSS — all enhanced modules</td><td>~36 KB</td></tr>
+      <tr><td>js/darkweb-enhanced.js</td><td><span class="badge badge-new">NEW</span> Dark Web v5.0 renderer — replaces renderDarkWeb()</td><td>~42 KB</td></tr>
+      <tr><td>js/exposure-enhanced.js</td><td><span class="badge badge-new">NEW</span> Exposure Assessment v3.0 renderer</td><td>~34 KB</td></tr>
+      <tr><td>js/ioc-search-enhanced.js</td><td><span class="badge badge-new">NEW</span> IOC type detection engine + search overlay</td><td>~25 KB</td></tr>
+      <tr><td>js/ai-orchestrator-enhanced.js</td><td><span class="badge badge-new">NEW</span> AI Orchestrator v4.0 — real multi-source</td><td>~33 KB</td></tr>
+      <tr><td>js/live-ioc-lookup.js</td><td><span class="badge badge-new">NEW</span> Live IOC Lookup v2.0 — 6 sources</td><td>~22 KB</td></tr>
+      <tr><td>js/pricing-enhanced.js</td><td><span class="badge badge-new">NEW</span> Pricing Module v2.0</td><td>~18 KB</td></tr>
+      <tr><td>js/settings-enhanced.js</td><td><span class="badge badge-new">NEW</span> Platform Settings HTTP 400 fix</td><td>~20 KB</td></tr>
+      <tr><td>js/tenant-management-enhanced.js</td><td><span class="badge badge-new">NEW</span> Tenant CRUD + RBAC import/export</td><td>~24 KB</td></tr>
+      <tr><td>index.html</td><td><span class="badge badge-fix">UPDATED</span> Added CSS link + 9 script tags + integration inline script</td><td>+5 KB</td></tr>
+      <tr><td>README.md</td><td><span class="badge badge-fix">UPDATED</span> Complete v18.0 documentation</td><td>~15 KB</td></tr>
+    </tbody>
+  </table>
+
+  <!-- Deployment Steps -->
+  <h2>🛠️ Step-by-Step Deployment</h2>
+
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-body">
+      <div class="step-title">Commit all new files</div>
+      <pre><code>git add \
+  css/enhancements.css \
+  js/darkweb-enhanced.js \
+  js/exposure-enhanced.js \
+  js/ioc-search-enhanced.js \
+  js/ai-orchestrator-enhanced.js \
+  js/live-ioc-lookup.js \
+  js/pricing-enhanced.js \
+  js/settings-enhanced.js \
+  js/tenant-management-enhanced.js \
+  index.html README.md
+
+git commit -m "feat(platform): v18.0 — Dark Web v5, Exposure v3, IOC Search v2, AI Orchestrator v4, Pricing v2, Settings HTTP400 fix, Tenant CRUD, Live IOC Lookup"
+
+git push origin main</code></pre>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-body">
+      <div class="step-title">Render.com auto-deploys (2-3 min) — verify deployment</div>
+      <p>Watch Render.com dashboard → Deploys tab. Green "Live" status means deployment succeeded.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-body">
+      <div class="step-title">Hard-refresh browser and run console verification</div>
+      <pre><code>// Open browser DevTools → Console → paste:
+(async () => {
+  const checks = {
+    'Dark Web v5':       typeof window.renderDarkWeb,
+    'Exposure v3':       typeof window.renderExposureAssessment,
+    'IOC Type Detect':   typeof window.detectIOCType,
+    'AI Orchestrator v4':typeof window.renderAIOrchestrator,
+    'Live IOC Lookup':   typeof window.renderLiveIOCLookup,
+    'Pricing v2':        typeof window.renderPricing,
+    'Settings Enhanced': typeof window.renderSettingsEnhanced,
+    'Tenant Mgmt':       typeof window.renderTenantManagement,
+    'IOC Search Overlay':typeof window.openIOCSearch,
+    'Export RBAC':       typeof window.exportRBACPermissions,
+  };
+  console.table(checks);
+
+  // Test IOC type detection
+  console.log('\n--- IOC Type Detection ---');
+  ['8.8.8.8','evil.com','https://malware.com/pay','a3f2b1c9d4e5f6789012345678901234567890abcdef1234567890abcdef1234','CVE-2024-3400'].forEach(v => {
+    const d = detectIOCType(v);
+    console.log(`${v} → ${d.label} (valid:${d.valid})`);
+  });
+})();</code></pre>
+      <p>All entries should show <code>function</code>, not <code>undefined</code>.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">4</div>
+    <div class="step-body">
+      <div class="step-title">Test each enhanced module manually</div>
+      <table>
+        <thead><tr><th>Module</th><th>Navigation Path</th><th>What to Verify</th></tr></thead>
+        <tbody>
+          <tr><td>Dark Web v5</td><td>Intelligence → Dark Web</td><td>5 tabs visible, cards animate, click a card → detail panel slides in from right</td></tr>
+          <tr><td>Exposure v3</td><td>Intelligence → CVEs &amp; Vulnerabilities</td><td>CVSS rings render, "Exploited in Wild" banner appears, click CVE → panel opens</td></tr>
+          <tr><td>IOC Search</td><td>Intelligence → IOC Registry → search box</td><td>Type an IP → cyan badge "IPv4" appears; type SHA256 hash → red badge "SHA256 Hash"</td></tr>
+          <tr><td>AI Orchestrator</td><td>AI Operations → Agentic Investigation</td><td>Chat interface renders, type "185.220.101.45" and press Enter → multi-source investigation runs</td></tr>
+          <tr><td>Live IOC Lookup</td><td>AI Operations → Collectors (or Live Feeds)</td><td>Source checkboxes visible, enter IP and click Investigate → loading panels animate</td></tr>
+          <tr><td>Pricing</td><td>Platform → Subscription Tiers</td><td>3 plan cards with annual/monthly toggle, FAQ accordion opens/closes</td></tr>
+          <tr><td>Settings</td><td>Platform → Settings</td><td>All sections collapsible, change a value → Save button enables, save → no HTTP 400</td></tr>
+          <tr><td>Tenant Mgmt</td><td>Platform → Customers</td><td>Tenant cards visible, "Add Tenant" button opens modal, fill form and save</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">5</div>
+    <div class="step-body">
+      <div class="step-title">Configure backend API keys for full intelligence (optional)</div>
+      <p>Set these in Render.com → Environment Variables:</p>
+      <pre><code>VIRUSTOTAL_API_KEY=vt-api-key          # https://virustotal.com
+ABUSEIPDB_API_KEY=abuseipdb-key        # https://abuseipdb.com  
+SHODAN_API_KEY=shodan-key              # https://shodan.io
+OTX_API_KEY=otx-key                    # https://otx.alienvault.com</code></pre>
+      <div class="info">Without API keys, lookups gracefully show "UNAVAILABLE" with direct links to external reports. All other platform features work normally.</div>
+    </div>
+  </div>
+
+  <!-- Settings HTTP 400 Fix Details -->
+  <h2>⚠️ Platform Settings HTTP 400 — Root Cause &amp; Fix</h2>
+  <div class="card">
+    <h3>Root Cause</h3>
+    <p>The original <code>platform-settings.js</code> used <code>PUT /api/settings</code> with the full settings object including null values. The backend validation rejected payloads with <code>null</code> fields (HTTP 400 Bad Request).</p>
+    <h3>Fix Applied in <code>js/settings-enhanced.js</code></h3>
+    <ul style="font-size:.86em;color:#b0bec5;margin-left:20px;margin-top:8px;line-height:2">
+      <li>Validates all fields before sending (email format, port range, URL validity)</li>
+      <li>Strips all <code>null</code>, <code>undefined</code>, and empty-string values from payload</li>
+      <li>Uses <code>PATCH /api/settings</code> (partial update) instead of full <code>PUT</code></li>
+      <li>Automatically retries with <code>PUT /api/settings</code> + <code>{settings: {...}}</code> wrapper if PATCH fails</li>
+      <li>Displays specific error messages (validation failed / HTTP error / permission error)</li>
+      <li>Offline edit mode when API is unreachable</li>
+    </ul>
+    <pre><code>// The fix — collect only non-null values and use PATCH:
+const { errors, cleaned } = _validateSettings(rawData);
+if (errors.length) { show error; return; }
+await _settingsEnhFetch('/settings', { method: 'PATCH', body: cleaned });
+// cleaned = { platform_name: "X", session_timeout: 480 }
+// NOT: { platform_name: "X", smtp_password: null, jira_url: "" }</code></pre>
+  </div>
+
+  <!-- IOC Search Fix Details -->
+  <h2>🔍 IOC Search — Supported Types &amp; Validation</h2>
+  <table>
+    <thead><tr><th>IOC Type</th><th>Example</th><th>Validation</th></tr></thead>
+    <tbody>
+      <tr><td>IPv4</td><td>185.220.101.45</td><td>Octets 0-255, warns on RFC1918 private ranges</td></tr>
+      <tr><td>IPv6</td><td>2001:db8::1</td><td>Full and compressed notation</td></tr>
+      <tr><td>CIDR</td><td>10.0.0.0/8</td><td>Valid IP + prefix length 0-32</td></tr>
+      <tr><td>Domain</td><td>malware[.]ru</td><td>FQDN pattern, warns on suspicious TLDs (.ru .cn .tk etc)</td></tr>
+      <tr><td>URL</td><td>https://evil.com/payload</td><td>Must start with http:// or https://</td></tr>
+      <tr><td>MD5 Hash</td><td>d41d8cd98f00b204...</td><td>Exactly 32 hex chars</td></tr>
+      <tr><td>SHA1 Hash</td><td>da39a3ee5e6b4b0d...</td><td>Exactly 40 hex chars</td></tr>
+      <tr><td>SHA256 Hash</td><td>e3b0c44298fc1c14...</td><td>Exactly 64 hex chars</td></tr>
+      <tr><td>SHA512 Hash</td><td>cf83e1357eefb8bd...</td><td>Exactly 128 hex chars</td></tr>
+      <tr><td>Email</td><td>attacker@evil.com</td><td>user@domain.tld format</td></tr>
+      <tr><td>CVE</td><td>CVE-2024-3400</td><td>CVE-YYYY-NNNNN format (case insensitive)</td></tr>
+      <tr><td>ASN</td><td>AS12345</td><td>AS + numeric (case insensitive)</td></tr>
+      <tr><td>Filename</td><td>svchost_update.exe</td><td>filename.extension pattern</td></tr>
+    </tbody>
+  </table>
+
+  <!-- Rollback -->
+  <h2>🔄 Rollback Procedure</h2>
+  <div class="card">
+    <h3>Option 1: Git Revert</h3>
+    <pre><code>git revert HEAD --no-edit
+git push origin main</code></pre>
+    <h3>Option 2: Render.com Dashboard</h3>
+    <p>Go to Render.com → Your Service → Deploys → click any previous successful deploy → "Manual Deploy"</p>
+    <h3>Option 3: Emergency CSS/JS Disable</h3>
+    <p>If a specific module causes issues, comment out its script tag in <code>index.html</code> and redeploy:</p>
+    <pre><code>&lt;!-- DISABLED:
+&lt;script src="js/darkweb-enhanced.js"&gt;&lt;/script&gt;
+--&gt;</code></pre>
+  </div>
+
+  <!-- Success Criteria -->
+  <h2>✅ Success Criteria</h2>
+  <div class="success">
+    All of these must be true after successful deployment:
+    <ul style="margin-left:20px;margin-top:8px;line-height:2">
+      <li class="check">✓ Dark Web Intelligence shows 5 tabs with animated cards</li>
+      <li class="check">✓ Exposure Assessment shows CVE list with CVSS rings, not a blank page</li>
+      <li class="check">✓ IOC Registry search shows type badge (e.g., "IPv4") while typing</li>
+      <li class="check">✓ AI Orchestrator chat accepts messages and shows multi-source investigation results</li>
+      <li class="check">✓ Live IOC Lookup shows 6 source panels with loading animation then results</li>
+      <li class="check">✓ Pricing module shows 3 plan cards with monthly/annual toggle</li>
+      <li class="check">✓ Platform Settings saves without HTTP 400 error (visible success toast)</li>
+      <li class="check">✓ Add Tenant modal opens, validates, and creates tenant (shown in grid)</li>
+      <li class="check">✓ RBAC Export button downloads JSON with role configurations</li>
+    </ul>
+  </div>
+
+  <div style="margin-top:40px;text-align:center;color:#4b5563;font-size:.8em">
+    Wadjet-Eye AI Platform v18.0 · Generated 2026-04-02 · Build ENHANCEMENTS-v18.0
+  </div>
+
+</div>
+</body>
+</html>

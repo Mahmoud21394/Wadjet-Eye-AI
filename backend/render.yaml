@@ -1,0 +1,173 @@
+# ══════════════════════════════════════════════════════════
+#  ThreatPilot AI — Render.com Deployment Configuration
+#  https://render.com/docs/render-yaml
+#
+#  HOW TO USE:
+#  1. Push this file to the root of your GitHub repo
+#  2. Connect the repo to Render.com via "New → Blueprint"
+#  3. Render reads render.yaml and auto-creates all services
+#  4. Set secrets in Render Dashboard → Environment → Secret Files
+# ══════════════════════════════════════════════════════════
+
+services:
+
+  # ─────────────────────────────────────────────────────────
+  #  BACKEND — Node.js / Express API
+  # ─────────────────────────────────────────────────────────
+  - type: web
+    name: threatpilot-api
+    runtime: node
+    region: oregon          # Choose: oregon | frankfurt | singapore | ohio
+    plan: free              # free | starter ($7/mo) | standard ($25/mo)
+
+    # ── Build ──────────────────────────────────────────────
+    rootDir: backend
+    buildCommand: npm install --omit=dev
+    startCommand: npm start
+
+    # ── Health Check ───────────────────────────────────────
+    # Render pings this URL every 30s; restarts if it fails 3× in a row
+    healthCheckPath: /api/ping   # Ultra-fast, no DB required — returns in <1ms when warm
+
+    # ── Auto-Deploy ────────────────────────────────────────
+    autoDeploy: true          # Redeploy automatically on git push
+
+    # ── Environment Variables ──────────────────────────────
+    # Non-secret values defined here; secrets set in Render Dashboard
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      - key: PORT
+        value: 4000
+
+      # Set this AFTER the frontend is deployed on Vercel/Netlify
+      # Format: comma-separated list of allowed frontend origins (no trailing slashes)
+      - key: ALLOWED_ORIGINS
+        value: https://wadjet-eye-ai.vercel.app,https://wadjet-ai.vercel.app,https://www.genspark.ai,http://localhost:3000,http://localhost:5500
+
+      - key: FRONTEND_URL
+        value: https://wadjet-eye-ai.vercel.app
+
+      # ── Supabase secrets — set in Render Dashboard, NOT here ──
+      # Dashboard → Service → Environment → Add Secret
+      - key: SUPABASE_URL
+        sync: false          # sync:false = Render prompts you to enter this manually
+
+      - key: SUPABASE_ANON_KEY
+        sync: false
+
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+
+      # ── Threat Intel API Keys — set in Render Dashboard ──
+      - key: VIRUSTOTAL_API_KEY
+        sync: false
+
+      - key: ABUSEIPDB_API_KEY
+        sync: false
+
+      - key: SHODAN_API_KEY
+        sync: false
+
+      - key: OTX_API_KEY
+        sync: false
+
+      # ── Optional ──
+      - key: GREYNOISE_API_KEY
+        sync: false
+
+      - key: THREATFOX_API_KEY
+        sync: false
+
+      - key: URLSCAN_API_KEY
+        sync: false
+
+      # ── CTI Scheduler intervals (minutes) ──
+      - key: OTX_INTERVAL_MIN
+        value: "60"
+
+      - key: ABUSE_INTERVAL_MIN
+        value: "120"
+
+      - key: URLHAUS_INTERVAL_MIN
+        value: "30"
+
+      - key: NVD_INTERVAL_MIN
+        value: "360"
+
+      - key: SOAR_INTERVAL_MIN
+        value: "5"
+
+      # ── Default tenant for ingestion (MSSP Global) ──
+      - key: DEFAULT_TENANT_ID
+        value: "00000000-0000-0000-0000-000000000001"
+
+      # ── Set to 'true' to disable background scheduler (debug only) ──
+      - key: DISABLE_SCHEDULER
+        value: "false"
+
+    # ── Disk (optional — for local file caching) ───────────
+    # disk:
+    #   name: threatpilot-cache
+    #   mountPath: /var/data
+    #   sizeGB: 1
+
+# ─────────────────────────────────────────────────────────
+#  COLD-START MITIGATION (Free Tier)
+# ─────────────────────────────────────────────────────────
+# Render free tier sleeps after 15 min of inactivity. Cold starts take 10-30s.
+# To prevent cold starts:
+#
+#  OPTION A — External Uptime Monitor (Recommended, Free):
+#    Use UptimeRobot (https://uptimerobot.com) to ping /api/ping every 5 min.
+#    Free plan supports 5-minute intervals.
+#    Setup: New Monitor → HTTP(s) → URL: https://wadjet-eye-ai.onrender.com/api/ping
+#
+#  OPTION B — Render Cron Job (paid feature, requires starter plan):
+#    Uncomment the cron job below after upgrading from free tier.
+#
+#  OPTION C — Upgrade to Starter ($7/mo):
+#    - No sleep on inactivity (always warm)
+#    - Faster cold start if it does happen
+#    - Persistent disk support
+#
+# ─────────────────────────────────────────────────────────
+#  NOTES FOR PRODUCTION UPGRADE
+# ─────────────────────────────────────────────────────────
+# 1. Upgrade from "free" to "starter" for:
+#    - No sleep on inactivity (free tier sleeps after 15 min)
+#    - Persistent disk support
+#    - Higher RAM limits
+#
+# 2. For multi-region / high availability:
+#    - Use "standard" plan or higher
+#    - Enable "Auto-Scaling" in Render settings
+#
+# 3. Custom domain:
+#    - Add in Render → Service → Settings → Custom Domain
+#    - Render auto-provisions a free TLS certificate
+#
+# 4. Database:
+#    - ThreatPilot uses Supabase (external) — no Render DB needed
+#    - Supabase free tier: 500MB, 2 CPU, 1GB RAM
+
+# ─────────────────────────────────────────────────────────
+#  KEEP-ALIVE CRON JOB (requires Render starter plan or above)
+#  Uncomment after upgrading from free tier.
+#  This pings /api/ping every 14 minutes to prevent cold starts.
+# ─────────────────────────────────────────────────────────
+#  - type: cron
+#    name: keep-alive-pinger
+#    runtime: node
+#    region: oregon
+#    plan: starter
+#    schedule: "*/14 * * * *"   # Every 14 minutes
+#    buildCommand: echo "no build needed"
+#    startCommand: >
+#      node -e "
+#        const https = require('https');
+#        https.get('https://wadjet-eye-ai.onrender.com/api/ping', r => {
+#          process.stdout.write('Ping ' + r.statusCode + '\\n');
+#        }).on('error', e => process.stderr.write(e.message + '\\n'));
+#      "

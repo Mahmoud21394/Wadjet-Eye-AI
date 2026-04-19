@@ -1,0 +1,1118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Complete Fix & Deploy Guide — Wadjet-Eye AI v5.1</title>
+<style>
+:root {
+  --bg:      #0d1117;
+  --bg2:     #161b22;
+  --bg3:     #21262d;
+  --border:  #30363d;
+  --accent:  #58a6ff;
+  --green:   #3fb950;
+  --orange:  #d29922;
+  --red:     #f85149;
+  --purple:  #bc8cff;
+  --yellow:  #e3b341;
+  --text:    #e6edf3;
+  --muted:   #8b949e;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,-apple-system,sans-serif;font-size:14px;line-height:1.7;}
+a{color:var(--accent);text-decoration:none;}
+a:hover{text-decoration:underline;}
+.page{max-width:1050px;margin:0 auto;padding:32px 20px 80px;}
+h1{font-size:28px;font-weight:700;line-height:1.3;}
+h2{font-size:18px;font-weight:700;color:var(--accent);margin:36px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--border);}
+h3{font-size:15px;font-weight:600;margin:16px 0 8px;}
+h4{font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px;}
+p{margin-bottom:10px;}
+ul,ol{padding-left:22px;margin-bottom:10px;}
+li{margin-bottom:4px;}
+code{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:2px 7px;font-family:'Cascadia Code','Fira Code','Consolas',monospace;font-size:12.5px;color:#79c0ff;word-break:break-all;}
+pre{background:#090d14;border:1px solid #1d2737;border-radius:10px;padding:18px 20px;overflow-x:auto;margin:10px 0;position:relative;}
+pre code{background:none;border:none;padding:0;font-size:12.5px;color:#e6edf3;line-height:1.75;word-break:normal;}
+
+/* Copy Button */
+.copy-btn{position:absolute;top:10px;right:10px;background:var(--bg3);border:1px solid var(--border);color:var(--muted);padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:500;transition:all .2s;z-index:1;}
+.copy-btn:hover{color:var(--text);border-color:var(--accent);}
+.copy-btn.copied{color:var(--green);border-color:var(--green);background:#3fb95015;}
+
+/* Badges */
+.badge{display:inline-block;padding:2px 9px;border-radius:12px;font-size:11px;font-weight:700;vertical-align:middle;margin:1px 2px;}
+.b-red{background:#f8514920;color:var(--red);}
+.b-green{background:#3fb95020;color:var(--green);}
+.b-orange{background:#d2992220;color:var(--orange);}
+.b-blue{background:#58a6ff20;color:var(--accent);}
+.b-purple{background:#bc8cff20;color:var(--purple);}
+.b-yellow{background:#e3b34120;color:var(--yellow);}
+
+/* Callout boxes */
+.callout{border-left:3px solid;border-radius:0 10px 10px 0;padding:14px 18px;margin:14px 0;}
+.c-danger{border-color:var(--red);background:#f8514912;}
+.c-success{border-color:var(--green);background:#3fb95012;}
+.c-info{border-color:var(--accent);background:#58a6ff10;}
+.c-warn{border-color:var(--orange);background:#d2992215;}
+.callout strong{display:block;margin-bottom:4px;}
+
+/* Step cards */
+.step-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:22px;margin:18px 0;position:relative;}
+.step-card.critical{border-color:var(--red);}
+.step-card.done{border-color:var(--green);}
+.step-num{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;font-weight:700;font-size:13px;margin-right:10px;flex-shrink:0;}
+.step-header{display:flex;align-items:center;margin-bottom:14px;}
+.step-header h3{margin:0;}
+.sn-red{background:var(--red);color:#fff;}
+.sn-green{background:var(--green);color:#000;}
+.sn-blue{background:var(--accent);color:#000;}
+.sn-orange{background:var(--orange);color:#000;}
+.sn-purple{background:var(--purple);color:#000;}
+
+/* Header Banner */
+.header-banner{background:linear-gradient(135deg,#0d1f0d 0%,#0d1a2d 60%,#1a0d0d 100%);border:1px solid #2d5a2d;border-radius:14px;padding:28px 32px;margin-bottom:30px;}
+.header-banner h1{background:linear-gradient(90deg,#3fb950,#58a6ff,#f85149);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+.header-banner p{color:var(--muted);font-size:15px;margin-top:8px;}
+.version-badge{font-size:11px;font-weight:700;padding:3px 10px;border-radius:10px;background:#58a6ff20;color:var(--accent);border:1px solid #58a6ff40;}
+
+/* Error box */
+.error-box{background:#f8514910;border:1px solid var(--red);border-radius:8px;padding:14px 18px;margin:12px 0;font-family:'Cascadia Code','Fira Code',monospace;font-size:13px;}
+.error-box .label{color:var(--red);font-weight:700;margin-bottom:4px;}
+.error-box .msg{color:#ff7b72;}
+
+/* Fix box */
+.fix-box{background:#3fb95010;border:1px solid var(--green);border-radius:8px;padding:14px 18px;margin:6px 0 14px;}
+.fix-box .label{color:var(--green);font-weight:700;margin-bottom:4px;}
+
+/* Tables */
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px;}
+th{background:var(--bg3);color:var(--muted);text-align:left;padding:9px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;border:1px solid var(--border);}
+td{padding:9px 14px;border:1px solid var(--border);vertical-align:top;}
+tr:nth-child(even) td{background:#161b2240;}
+
+/* Progress tracker */
+.progress-bar{background:var(--bg3);border-radius:8px;height:8px;margin:10px 0;}
+.progress-fill{height:100%;border-radius:8px;background:linear-gradient(90deg,var(--green),var(--accent));transition:width .4s;}
+.checklist{list-style:none;padding:0;}
+.checklist li{padding:6px 0;display:flex;align-items:flex-start;gap:8px;}
+.checklist li::before{content:'☐';color:var(--muted);font-size:16px;flex-shrink:0;margin-top:1px;}
+.checklist li.done::before{content:'✅';font-size:14px;}
+
+/* Architecture diagram */
+.arch-box{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:14px 0;}
+.arch-node{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center;font-size:12px;}
+.arch-node .icon{font-size:22px;margin-bottom:6px;}
+.arch-node .name{font-weight:600;color:var(--text);margin-bottom:2px;}
+.arch-node .sub{color:var(--muted);}
+.arch-node.highlight{border-color:var(--accent);}
+
+/* TOC */
+.toc{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin:20px 0;}
+.toc h4{margin:0 0 10px;color:var(--accent);}
+.toc ol{margin:0;padding-left:20px;}
+.toc li{margin-bottom:3px;font-size:13px;}
+
+/* Tabs */
+.tabs{display:flex;gap:4px;margin-bottom:-1px;}
+.tab-btn{padding:8px 18px;border:1px solid var(--border);border-bottom:none;border-radius:8px 8px 0 0;background:var(--bg3);color:var(--muted);cursor:pointer;font-size:13px;font-weight:500;transition:all .2s;}
+.tab-btn.active{background:var(--bg2);color:var(--text);border-color:var(--border);}
+.tab-content{display:none;background:var(--bg2);border:1px solid var(--border);border-radius:0 10px 10px 10px;padding:20px;}
+.tab-content.active{display:block;}
+
+@media(max-width:700px){.arch-box{grid-template-columns:1fr 1fr;}}
+@media(max-width:500px){.arch-box{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+<div class="page">
+
+<!-- ══════════ HEADER ══════════ -->
+<div class="header-banner">
+  <div style="display:flex;align-items:center;gap:14px;margin-bottom:12px;">
+    <span style="font-size:36px;">🦅</span>
+    <div>
+      <h1>Wadjet-Eye AI — Complete Fix &amp; Deploy Guide</h1>
+      <p>Session Expiration Fix · RLS Policy Fix · Persistent Login · Step-by-Step Deployment</p>
+    </div>
+    <span class="version-badge" style="margin-left:auto;white-space:nowrap;">v5.1</span>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <span class="badge b-red">RLS Fixed</span>
+    <span class="badge b-green">JWT Configured</span>
+    <span class="badge b-blue">Persistent Login</span>
+    <span class="badge b-orange">Token Rotation</span>
+    <span class="badge b-purple">Auto-Refresh</span>
+    <span class="badge b-yellow">Cold-Start Safe</span>
+  </div>
+</div>
+
+<!-- ══════════ ERROR SUMMARY ══════════ -->
+<h2>❌ Errors You Were Getting (and Why)</h2>
+
+<div class="error-box">
+  <div class="label">ERROR 1 — Seen in Node.js terminal</div>
+  <div class="msg">❌ Failed to store refresh token: new row violates row-level security policy for table "refresh_tokens"</div>
+</div>
+<div class="fix-box">
+  <div class="label">✅ ROOT CAUSE & FIX</div>
+  <p>The <code>refresh_tokens</code> table had RLS (Row Level Security) enabled but <strong>no INSERT policy</strong> for the <code>service_role</code>. Even though your backend uses the Supabase service key, PostgREST still checks RLS policies unless an explicit bypass exists.</p>
+  <p><strong>Fix:</strong> Run <code>backend/database/rls-fix-v5.1.sql</code> in the Supabase SQL Editor. This adds <code>FOR ALL TO service_role USING (true)</code> policies to all tables.</p>
+</div>
+
+<div class="error-box">
+  <div class="label">ERROR 2 — Seen in browser console / app UI</div>
+  <div class="msg">⚠️ Session expired. Please log in again.</div>
+</div>
+<div class="fix-box">
+  <div class="label">✅ ROOT CAUSE & FIX (6 root causes)</div>
+  <table>
+    <tr><th>#</th><th>Root Cause</th><th>Fix Applied</th></tr>
+    <tr>
+      <td><span class="badge b-red">1</span></td>
+      <td>Tokens stored in <code>sessionStorage</code> — cleared on tab close or page refresh</td>
+      <td><code>PersistentTokenStore</code> now uses <code>localStorage</code> in <code>js/auth-persistent.js</code></td>
+    </tr>
+    <tr>
+      <td><span class="badge b-red">2</span></td>
+      <td>No proactive refresh — waited until 401 error before attempting refresh</td>
+      <td><code>SmartRefresh.scheduleRefresh()</code> proactively refreshes at 80% of TTL</td>
+    </tr>
+    <tr>
+      <td><span class="badge b-red">3</span></td>
+      <td>Refresh endpoint called <code>generateLink</code> (magic-link) which returns a URL, not a JWT</td>
+      <td><code>auth.js v5.1</code> uses <code>admin.createSession()</code> → falls back to <code>jwt.sign()</code> with <code>JWT_SECRET</code></td>
+    </tr>
+    <tr>
+      <td><span class="badge b-orange">4</span></td>
+      <td>After 401, the API client immediately showed "Session expired" without retrying</td>
+      <td><code>api-client.js</code> retries once after 401 by calling <code>refreshAccessToken()</code></td>
+    </tr>
+    <tr>
+      <td><span class="badge b-orange">5</span></td>
+      <td>Multiple concurrent refresh calls racing each other causing token invalidation</td>
+      <td><code>SmartRefresh</code> uses a lock (<code>_refreshLock</code>) to deduplicate concurrent calls</td>
+    </tr>
+    <tr>
+      <td><span class="badge b-orange">6</span></td>
+      <td>RLS policy on <code>refresh_tokens</code> blocked all backend INSERT operations</td>
+      <td><code>rls-fix-v5.1.sql</code> adds <code>service_role</code> full-access policies</td>
+    </tr>
+  </table>
+</div>
+
+<div class="error-box">
+  <div class="label">ERROR 3 — When running seed script</div>
+  <div class="msg">❌ SEED ERROR: Tenant or user not found</div>
+</div>
+<div class="fix-box">
+  <div class="label">✅ ROOT CAUSE & FIX</div>
+  <p>The old seed script used <code>require('pg')</code> (raw PostgreSQL driver) and referenced <code>DATABASE_URL</code> which doesn't exist in this project. Column names were also wrong (<code>slug</code> instead of <code>short_name</code>, <code>is_active</code> instead of <code>status</code>).</p>
+  <p><strong>Fix:</strong> <code>seed-mahmoud.js</code> has been completely rewritten to use the Supabase JS SDK with correct column names.</p>
+</div>
+
+<!-- ══════════ ARCHITECTURE ══════════ -->
+<h2>🏗️ Architecture Overview</h2>
+
+<div class="arch-box">
+  <div class="arch-node highlight">
+    <div class="icon">🌐</div>
+    <div class="name">Frontend</div>
+    <div class="sub">Vercel<br/>wadjet-eye-ai.vercel.app</div>
+  </div>
+  <div class="arch-node highlight">
+    <div class="icon">⚙️</div>
+    <div class="name">Backend API</div>
+    <div class="sub">Render (Node.js)<br/>wadjet-eye-ai.onrender.com</div>
+  </div>
+  <div class="arch-node highlight">
+    <div class="icon">🗄️</div>
+    <div class="name">Database</div>
+    <div class="sub">Supabase (PostgreSQL)<br/>miywxnplaltduuscjfmq</div>
+  </div>
+</div>
+
+<div class="callout c-info">
+  <strong>📌 Auth Token Flow (v5.1)</strong>
+  <ol style="margin-top:8px;">
+    <li>User logs in → <code>POST /api/auth/login</code> → Supabase validates credentials</li>
+    <li>Backend returns: <strong>access_token</strong> (15 min) + <strong>refresh_token</strong> (30 days)</li>
+    <li>Frontend stores both in <code>localStorage</code> via <code>PersistentTokenStore</code></li>
+    <li>At 80% of TTL (≈12 min), <code>SmartRefresh</code> automatically calls <code>POST /api/auth/refresh</code></li>
+    <li>Refresh rotates tokens: old refresh token revoked, new tokens issued</li>
+    <li>On page reload: <code>SessionRestoreGate</code> reads <code>localStorage</code> and silently refreshes if needed</li>
+    <li>On tab close + reopen: session is fully restored from <code>localStorage</code></li>
+  </ol>
+</div>
+
+<!-- ══════════ TOC ══════════ -->
+<div class="toc">
+  <h4>📋 Table of Contents — Steps to Execute</h4>
+  <ol>
+    <li><a href="#step1">Step 1: Run Schema SQL in Supabase</a> <span class="badge b-red">CRITICAL</span></li>
+    <li><a href="#step2">Step 2: Run RLS Fix SQL</a> <span class="badge b-red">CRITICAL — Fixes the error</span></li>
+    <li><a href="#step3">Step 3: Install npm dependencies</a></li>
+    <li><a href="#step4">Step 4: Verify backend/.env</a></li>
+    <li><a href="#step5">Step 5: Run the seed script</a></li>
+    <li><a href="#step6">Step 6: Test login locally</a></li>
+    <li><a href="#step7">Step 7: Deploy backend to Render</a></li>
+    <li><a href="#step8">Step 8: Deploy frontend to Vercel / GitHub</a></li>
+    <li><a href="#step9">Step 9: Verify end-to-end</a></li>
+    <li><a href="#step10">Step 10: Configure Supabase Auth settings</a></li>
+    <li><a href="#scripts">PowerShell / Python / Node.js Test Scripts</a></li>
+    <li><a href="#troubleshoot">Troubleshooting Reference</a></li>
+  </ol>
+</div>
+
+<!-- ══════════ STEP 1 ══════════ -->
+<h2 id="step1">Step 1 — Run Schema SQL in Supabase</h2>
+<div class="step-card critical">
+  <div class="step-header">
+    <span class="step-num sn-red">1</span>
+    <h3>Run the base schema (if not already done)</h3>
+  </div>
+  <div class="callout c-warn">
+    <strong>⚠️ Only run this if tables don't exist yet.</strong>
+    If your database already has <code>tenants</code>, <code>users</code>, <code>alerts</code> tables, skip to Step 2.
+  </div>
+  <ol>
+    <li>Open <a href="https://supabase.com/dashboard/project/miywxnplaltduuscjfmq/editor" target="_blank">Supabase SQL Editor</a></li>
+    <li>Open file: <code>backend/database/schema.sql</code></li>
+    <li>Copy the entire content → Paste in SQL Editor → Click <strong>Run</strong></li>
+  </ol>
+  <div class="callout c-info" style="margin-top:12px;">
+    After schema.sql, also run <code>backend/database/migration-v5.0-auth-tables.sql</code> to create the auth tables (refresh_tokens, login_activity, etc.)
+  </div>
+</div>
+
+<!-- ══════════ STEP 2 ══════════ -->
+<h2 id="step2">Step 2 — Run RLS Fix SQL (CRITICAL)</h2>
+<div class="step-card critical">
+  <div class="step-header">
+    <span class="step-num sn-red">2</span>
+    <h3>Fix the Row Level Security policies <span class="badge b-red">FIXES THE ERROR</span></h3>
+  </div>
+
+  <div class="error-box">
+    <div class="label">Error this fixes:</div>
+    <div class="msg">❌ Failed to store refresh token: new row violates row-level security policy for table "refresh_tokens"</div>
+  </div>
+
+  <h4>Instructions:</h4>
+  <ol>
+    <li>Open <a href="https://supabase.com/dashboard/project/miywxnplaltduuscjfmq/editor" target="_blank">Supabase Dashboard → SQL Editor</a></li>
+    <li>Click <strong>"New Query"</strong></li>
+    <li>Copy the SQL below → Paste → Click <strong>Run</strong></li>
+  </ol>
+
+  <p style="margin-top:12px;color:var(--muted);">Or run the full file: <code>backend/database/rls-fix-v5.1.sql</code></p>
+
+  <pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><code>-- ══ MINIMAL RLS FIX (run this in Supabase SQL Editor) ══
+
+-- 1. Enable RLS on refresh_tokens
+ALTER TABLE public.refresh_tokens ENABLE ROW LEVEL SECURITY;
+
+-- 2. Drop conflicting policies
+DROP POLICY IF EXISTS "service_role_full_access_rt" ON public.refresh_tokens;
+DROP POLICY IF EXISTS "user_read_own_tokens"        ON public.refresh_tokens;
+DROP POLICY IF EXISTS "user_update_own_tokens"      ON public.refresh_tokens;
+DROP POLICY IF EXISTS "postgres_full_access_rt"     ON public.refresh_tokens;
+
+-- 3. Service role gets FULL access (fixes the INSERT error)
+CREATE POLICY "service_role_full_access_rt"
+  ON public.refresh_tokens
+  FOR ALL
+  TO service_role
+  USING (true)
+  WITH CHECK (true);
+
+-- 4. Postgres superuser also gets full access
+CREATE POLICY "postgres_full_access_rt"
+  ON public.refresh_tokens
+  FOR ALL
+  TO postgres
+  USING (true)
+  WITH CHECK (true);
+
+-- 5. Enable RLS on login_activity
+ALTER TABLE public.login_activity ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "service_role_full_access_la" ON public.login_activity;
+CREATE POLICY "service_role_full_access_la"
+  ON public.login_activity
+  FOR ALL
+  TO service_role
+  USING (true)
+  WITH CHECK (true);
+
+-- 6. Grant ALL to service_role on all public tables
+GRANT ALL ON ALL TABLES    IN SCHEMA public TO postgres, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, service_role;
+GRANT USAGE ON SCHEMA public TO postgres, service_role, authenticated, anon;
+
+-- Verify it worked
+SELECT tablename, policyname, roles, cmd
+FROM pg_policies
+WHERE schemaname = 'public' AND tablename IN ('refresh_tokens','login_activity')
+ORDER BY tablename, policyname;</code></pre>
+
+  <div class="fix-box" style="margin-top:12px;">
+    <div class="label">✅ Expected output in SQL Editor</div>
+    <p>You should see the policies table showing <code>service_role_full_access_rt</code> for both tables with <code>cmd = ALL</code>.</p>
+    <p>The NOTICE at the bottom should say: <em>"RLS Fix v5.1 Applied Successfully"</em></p>
+  </div>
+
+  <h4>Why the service_role key still hits RLS:</h4>
+  <div class="callout c-info">
+    <p>When you use <code>SUPABASE_SERVICE_KEY</code> in your Node.js backend, PostgREST connects as the <code>service_role</code> PostgreSQL role. In Supabase's hosted PostgREST, the service_role bypasses RLS automatically <em>at the PostgREST level</em>. However, if a table has RLS enabled and the explicit <code>SECURITY DEFINER</code> attribute is missing or the role mapping is wrong, some PostgreSQL operations may still be blocked. The safest approach is to always add explicit policies for <code>service_role</code> as done here.</p>
+  </div>
+</div>
+
+<!-- ══════════ STEP 3 ══════════ -->
+<h2 id="step3">Step 3 — Install npm Dependencies</h2>
+<div class="step-card">
+  <div class="step-header">
+    <span class="step-num sn-blue">3</span>
+    <h3>Install jsonwebtoken (new dependency)</h3>
+  </div>
+  <p>The updated <code>auth.js v5.1</code> uses <code>jsonwebtoken</code> to sign custom JWTs when <code>admin.createSession()</code> is unavailable.</p>
+  <pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><code># Navigate to your backend directory
+cd backend
+
+# Install jsonwebtoken
+npm install jsonwebtoken
+
+# Verify it's installed
+node -e "const jwt = require('jsonwebtoken'); console.log('jsonwebtoken v' + require('./node_modules/jsonwebtoken/package.json').version + ' ✅')"</code></pre>
+
+  <div class="callout c-warn">
+    <strong>⚠️ If you're using Render (cloud deployment)</strong>, you don't need to run npm install locally. Render runs it automatically. Just make sure <code>package.json</code> includes <code>"jsonwebtoken": "^9.0.2"</code> in dependencies — this has already been updated.
+  </div>
+</div>
+
+<!-- ══════════ STEP 4 ══════════ -->
+<h2 id="step4">Step 4 — Verify backend/.env Configuration</h2>
+<div class="step-card">
+  <div class="step-header">
+    <span class="step-num sn-blue">4</span>
+    <h3>Your backend/.env should look like this</h3>
+  </div>
+
+  <pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><code>NODE_ENV=production
+PORT=4000
+
+# Frontend URL
+FRONTEND_URL=https://wadjet-eye-ai.vercel.app
+ALLOWED_ORIGINS=https://wadjet-eye-ai.vercel.app,https://www.genspark.ai,http://localhost:3000
+
+# ── Supabase ──────────────────────────────────────────────
+SUPABASE_URL=https://miywxnplaltduuscjfmq.supabase.co
+SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1peXd4bnBsYWx0ZHV1c2NqZm1xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDI5MjAyMDYsImV4cCI6MjA1ODQ5NjIwNn0.fFleTPLCpFADfmQGjP5ynKfS7l1YMD2aD6e5wGJlqxY
+SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1peXd4bnBsYWx0ZHV1c2NqZm1xIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjkyMDIwNiwiZXhwIjoyMDU4NDk2MjA2fQ.7SHGxhxOXDWaHQ7PFGJ3nEBpRBQNDsJdKUFHkLWMsZE
+
+# ── JWT Secret ─────────────────────────────────────────────
+# Get this from: Supabase Dashboard → Settings → API → JWT Settings → JWT Secret
+# CRITICAL: This must match exactly what Supabase uses to sign tokens
+JWT_SECRET=KO3aLoS4LJqK4Nz6O+LxOqq4X/MxGlKBbhbiIR6aNg/eyTujTSIuCqMlUT930rBIhIGrorftB0pZjsRux7pR/g==
+
+# ── Token TTL ─────────────────────────────────────────────
+ACCESS_TOKEN_TTL=900
+REFRESH_TOKEN_EXPIRY_DAYS=30
+
+# ── Threat Intel APIs ─────────────────────────────────────
+OTX_API_KEY=17461d678f5d3106923e42edaddfec4b6f9aa76307c9a5cbc64b55dd0f311e15
+ABUSEIPDB_API_KEY=c5708a7dd63b526a1d293e13d06f1d66f9d50fe673171ed36af277f408b72be057ed7c8f1311eb4e
+VIRUSTOTAL_API_KEY=ebe28cff859d6364a86124619de26a2b9c5e2874789f8a9165ed38fb8c8c9ae0
+SHODAN_API_KEY=327xzJDK5fRvel8psYDTKLGi1UaytfWG</code></pre>
+
+  <h4>Where to find your JWT Secret:</h4>
+  <ol>
+    <li>Go to <a href="https://supabase.com/dashboard/project/miywxnplaltduuscjfmq/settings/api" target="_blank">Supabase Dashboard → Settings → API</a></li>
+    <li>Scroll to <strong>"JWT Settings"</strong> section</li>
+    <li>Copy the <strong>JWT Secret</strong> value</li>
+    <li>Paste it as the value of <code>JWT_SECRET</code> in your <code>.env</code> file</li>
+  </ol>
+
+  <div class="callout c-warn">
+    <strong>⚠️ Important:</strong> The <code>JWT_SECRET</code> you provided (<code>KO3aLoS4LJqK4Nz6O+LxOqq4X/...</code>) has already been added to <code>backend/.env</code>. Verify it matches exactly what is in the Supabase dashboard. Even a single character difference will cause token validation failures.
+  </div>
+</div>
+
+<!-- ══════════ STEP 5 ══════════ -->
+<h2 id="step5">Step 5 — Run the Seed Script</h2>
+<div class="step-card">
+  <div class="step-header">
+    <span class="step-num sn-blue">5</span>
+    <h3>Seed the database with users and sample data</h3>
+  </div>
+
+  <pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><code># Run from the project root
+cd "Wadjet AI Final V3.4"
+
+# Run the seed script (uses Supabase SDK, not raw pg)
+node backend/scripts/seed-mahmoud.js</code></pre>
+
+  <h4>Expected output:</h4>
+  <pre><code>╔══════════════════════════════════════════════════════╗
+║   Wadjet-Eye AI — Seed Script v5.0 (FIXED)          ║
+╚══════════════════════════════════════════════════════╝
+
+══════════════════════════════════════════════════════════
+  STEP 1: Verifying Supabase Connection
+══════════════════════════════════════════════════════════
+  ✅ Supabase connection: OK (https://miywxnplaltduuscjfmq.supabase.co)
+
+══════════════════════════════════════════════════════════
+  STEP 2: Seeding Tenant
+══════════════════════════════════════════════════════════
+  ✅ Tenant seeded: MSSP Global Operations — ID: 00000000-0000-0000-0000-000000000001
+
+══════════════════════════════════════════════════════════
+  STEPS 3 + 4: Creating Auth Users & Profiles
+══════════════════════════════════════════════════════════
+  ▶  Processing auth user: mahmoud@mssp.com [SUPER_ADMIN]
+  ✅  Auth user created: &lt;uuid&gt;
+  ✅  Profile upserted: &lt;uuid&gt; [SUPER_ADMIN] — active
+
+  ✅ SEED COMPLETE — LOGIN CREDENTIALS
+  ┌──────────────────────────────────────────────────────┐
+  │  ✅ Primary Super Admin
+  │     Email   : mahmoud@mssp.com
+  │     Password: Admin@2024Wadjet!
+  │     Role    : SUPER_ADMIN
+  ├──────────────────────────────────────────────────────┤
+  ...</code></pre>
+
+  <h4>If you see errors:</h4>
+  <table>
+    <tr><th>Error</th><th>Cause</th><th>Fix</th></tr>
+    <tr>
+      <td><code>Cannot find module '@supabase/supabase-js'</code></td>
+      <td>npm not installed</td>
+      <td>Run <code>cd backend &amp;&amp; npm install</code></td>
+    </tr>
+    <tr>
+      <td><code>Missing required environment variables: SUPABASE_URL</code></td>
+      <td>Wrong working directory or missing .env</td>
+      <td>Run from project root with <code>node backend/scripts/seed-mahmoud.js</code></td>
+    </tr>
+    <tr>
+      <td><code>Table "tenants" does not exist</code></td>
+      <td>Schema not run yet</td>
+      <td>Run <code>backend/database/schema.sql</code> in Supabase SQL Editor first</td>
+    </tr>
+    <tr>
+      <td><code>row-level security policy for table "refresh_tokens"</code></td>
+      <td>RLS fix not applied</td>
+      <td>Run Step 2 (rls-fix-v5.1.sql) again</td>
+    </tr>
+    <tr>
+      <td><code>User already registered</code></td>
+      <td>Auth user exists</td>
+      <td>Normal — script updates the password and continues</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ══════════ STEP 6 ══════════ -->
+<h2 id="step6">Step 6 — Test Login Locally</h2>
+<div class="step-card">
+  <div class="step-header">
+    <span class="step-num sn-blue">6</span>
+    <h3>Verify everything works before deploying</h3>
+  </div>
+
+  <div class="tabs">
+    <button class="tab-btn active" onclick="showTab('ps')">PowerShell</button>
+    <button class="tab-btn" onclick="showTab('node')">Node.js</button>
+    <button class="tab-btn" onclick="showTab('python')">Python</button>
+    <button class="tab-btn" onclick="showTab('curl')">cURL</button>
+  </div>
+
+  <div id="tab-ps" class="tab-content active">
+    <pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><code>$backendUrl = "https://wadjet-eye-ai.onrender.com"
+# For local testing use: $backendUrl = "http://localhost:4000"
+
+$body = @{
+    email    = "mahmoud@mssp.com"
+    password = "Admin@2024Wadjet!"
+} | ConvertTo-Json
+
+Write-Host "Testing login..." -ForegroundColor Cyan
+
+try {
+    $response = Invoke-RestMethod -Uri "$backendUrl/api/auth/login" `
+        -Method POST `
+        -ContentType "application/json" `
+        -Body $body
+
+    Write-Host "✅ LOGIN SUCCESS" -ForegroundColor Green
+    Write-Host "User: $($response.user.name)" -ForegroundColor White
+    Write-Host "Role: $($response.user.role)" -ForegroundColor White
+    Write-Host "Token (first 40 chars): $($response.token.Substring(0, [Math]::Min(40, $response.token.Length)))..." -ForegroundColor Yellow
+    Write-Host "Expires At: $($response.expiresAt)" -ForegroundColor Yellow
+    Write-Host "Session ID: $($response.sessionId)" -ForegroundColor Gray
+
+    # Test token refresh
+    Write-Host "`nTesting token refresh..." -ForegroundColor Cyan
+    $refreshBody = @{ refresh_token = $response.refreshToken } | ConvertTo-Json
+    $refreshResponse = Invoke-RestMethod -Uri "$backendUrl/api/auth/refresh" `
+        -Method POST `
+        -ContentType "application/json" `
+        -Body $refreshBody
+
+    Write-Host "✅ REFRESH SUCCESS" -ForegroundColor Green
+    Write-Host "New Token (first 40 chars): $($refreshResponse.token.Substring(0, [Math]::Min(40, $refreshResponse.token.Length)))..." -ForegroundColor Yellow
+
+} catch {
+    Write-Host "❌ FAILED: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Response: $($_.ErrorDetails.Message)" -ForegroundColor Red
+}</code></pre>
+  </div>
+
+  <div id="tab-node" class="tab-content">
+    <pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><code>// Save as: test-login.js
+// Run: node test-login.js
+
+const https = require('https');
+
+const BACKEND = 'https://wadjet-eye-ai.onrender.com';
+// For local: const BACKEND = 'http://localhost:4000';
+
+function post(url, data) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(data);
+    const u = new URL(url);
+    const opts = {
+      hostname: u.hostname,
+      port:     u.port || (u.protocol === 'https:' ? 443 : 80),
+      path:     u.pathname,
+      method:   'POST',
+      headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    };
+    const req = (u.protocol === 'https:' ? https : require('http')).request(opts, res => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, body: JSON.parse(d) }); }
+        catch(e) { resolve({ status: res.statusCode, body: d }); }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+async function main() {
+  console.log('Testing Wadjet-Eye AI Auth...\n');
+
+  // 1. Login
+  console.log('1️⃣  Login test...');
+  const loginRes = await post(`${BACKEND}/api/auth/login`, {
+    email:    'mahmoud@mssp.com',
+    password: 'Admin@2024Wadjet!',
+  });
+
+  if (loginRes.status !== 200) {
+    console.error('❌ Login failed:', loginRes.status, loginRes.body);
+    process.exit(1);
+  }
+
+  const { token, refreshToken, expiresAt, user, sessionId } = loginRes.body;
+  console.log('✅ Login success!');
+  console.log('   User:', user.name, '|', user.role);
+  console.log('   Token:', token.slice(0, 40) + '...');
+  console.log('   Expires:', expiresAt);
+  console.log('   Session:', sessionId);
+
+  // 2. Token refresh
+  console.log('\n2️⃣  Refresh test...');
+  const refreshRes = await post(`${BACKEND}/api/auth/refresh`, {
+    refresh_token: refreshToken,
+  });
+
+  if (refreshRes.status !== 200) {
+    console.error('❌ Refresh failed:', refreshRes.status, refreshRes.body);
+    process.exit(1);
+  }
+
+  console.log('✅ Refresh success!');
+  console.log('   New Token:', refreshRes.body.token?.slice(0, 40) + '...');
+  console.log('   New Expires:', refreshRes.body.expiresAt);
+  console.log('   Requires Reauth:', refreshRes.body.requires_reauth || false);
+
+  console.log('\n🎉 All auth tests passed!');
+}
+
+main().catch(console.error);</code></pre>
+  </div>
+
+  <div id="tab-python" class="tab-content">
+    <pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><code># Save as: test_login.py
+# Run: python test_login.py
+
+import urllib.request
+import json
+
+BACKEND = "https://wadjet-eye-ai.onrender.com"
+# For local: BACKEND = "http://localhost:4000"
+
+def post(url, data):
+    body = json.dumps(data).encode()
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            return json.loads(response.read().decode())
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode()
+        print(f"HTTP {e.code}: {err_body}")
+        raise
+
+print("Testing Wadjet-Eye AI Auth...\n")
+
+# 1. Login
+print("1️⃣  Login test...")
+try:
+    login = post(f"{BACKEND}/api/auth/login", {
+        "email":    "mahmoud@mssp.com",
+        "password": "Admin@2024Wadjet!"
+    })
+    print(f"✅ Login success!")
+    print(f"   User: {login['user']['name']} | {login['user']['role']}")
+    print(f"   Token: {login['token'][:40]}...")
+    print(f"   Expires: {login['expiresAt']}")
+    print(f"   Session: {login.get('sessionId', 'N/A')}")
+
+    # 2. Refresh
+    print("\n2️⃣  Refresh test...")
+    refresh = post(f"{BACKEND}/api/auth/refresh", {
+        "refresh_token": login["refreshToken"]
+    })
+    print(f"✅ Refresh success!")
+    print(f"   New Token: {refresh.get('token','')[:40]}...")
+    print(f"   New Expires: {refresh.get('expiresAt', 'N/A')}")
+    print(f"   Requires Reauth: {refresh.get('requires_reauth', False)}")
+    print("\n🎉 All auth tests passed!")
+
+except Exception as e:
+    print(f"❌ Test failed: {e}")</code></pre>
+  </div>
+
+  <div id="tab-curl" class="tab-content">
+    <pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><code># 1. Login
+curl -s -X POST https://wadjet-eye-ai.onrender.com/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"mahmoud@mssp.com","password":"Admin@2024Wadjet!"}' \
+  | python -m json.tool
+
+# 2. Save token and refresh token (bash)
+RESP=$(curl -s -X POST https://wadjet-eye-ai.onrender.com/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"mahmoud@mssp.com","password":"Admin@2024Wadjet!"}')
+
+TOKEN=$(echo $RESP | python -c "import sys,json; print(json.load(sys.stdin)['token'])")
+REFRESH=$(echo $RESP | python -c "import sys,json; print(json.load(sys.stdin)['refreshToken'])")
+
+echo "Token: ${TOKEN:0:40}..."
+echo "Refresh: ${REFRESH:0:40}..."
+
+# 3. Test /api/auth/me
+curl -s https://wadjet-eye-ai.onrender.com/api/auth/me \
+  -H "Authorization: Bearer $TOKEN" \
+  | python -m json.tool
+
+# 4. Refresh the token
+curl -s -X POST https://wadjet-eye-ai.onrender.com/api/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d "{\"refresh_token\":\"$REFRESH\"}" \
+  | python -m json.tool</code></pre>
+  </div>
+</div>
+
+<!-- ══════════ STEP 7 ══════════ -->
+<h2 id="step7">Step 7 — Deploy Backend to Render</h2>
+<div class="step-card">
+  <div class="step-header">
+    <span class="step-num sn-green">7</span>
+    <h3>Push changes and deploy to Render</h3>
+  </div>
+
+  <h4>Files changed in this fix (commit these):</h4>
+  <table>
+    <tr><th>File</th><th>What Changed</th><th>Why Important</th></tr>
+    <tr>
+      <td><code>backend/routes/auth.js</code></td>
+      <td>v5.1 — refresh uses <code>admin.createSession</code> + JWT signing fallback</td>
+      <td>Fixes blank access token on refresh</td>
+    </tr>
+    <tr>
+      <td><code>backend/package.json</code></td>
+      <td>Added <code>jsonwebtoken ^9.0.2</code></td>
+      <td>Required for JWT signing in auth.js v5.1</td>
+    </tr>
+    <tr>
+      <td><code>backend/database/rls-fix-v5.1.sql</code></td>
+      <td>Complete rewrite with service_role policies</td>
+      <td>CRITICAL — Fixes the RLS INSERT error</td>
+    </tr>
+    <tr>
+      <td><code>backend/scripts/seed-mahmoud.js</code></td>
+      <td>Rewritten to use Supabase SDK</td>
+      <td>Fixes "Tenant or user not found" error</td>
+    </tr>
+    <tr>
+      <td><code>js/auth-persistent.js</code></td>
+      <td>v5.1 — localStorage, SmartRefresh, SessionRestoreGate</td>
+      <td>Fixes "Session expired" on page refresh</td>
+    </tr>
+    <tr>
+      <td><code>backend/.env</code></td>
+      <td>Added JWT_SECRET</td>
+      <td>Required for custom JWT signing</td>
+    </tr>
+  </table>
+
+  <h4>Git commands to push:</h4>
+  <pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><code># Navigate to your project
+cd "Wadjet AI Final V3.4"
+
+# Stage the changed files
+git add backend/routes/auth.js
+git add backend/package.json
+git add backend/database/rls-fix-v5.1.sql
+git add backend/scripts/seed-mahmoud.js
+git add js/auth-persistent.js
+
+# Do NOT add backend/.env to git (it contains secrets!)
+echo "backend/.env" >> .gitignore
+
+# Commit
+git commit -m "fix: RLS bypass + JWT refresh + persistent session v5.1
+
+- Fix: refresh_tokens RLS policy blocks service_role INSERT
+- Fix: auth.js refresh uses admin.createSession + jwt.sign fallback
+- Fix: PersistentTokenStore uses localStorage (not sessionStorage)
+- Fix: SmartRefresh proactively refreshes at 80% of TTL
+- Fix: seed-mahmoud.js uses Supabase SDK (removes raw pg dependency)
+- Add: jsonwebtoken dependency to package.json
+- Add: rls-fix-v5.1.sql with service_role full-access policies"
+
+# Push to GitHub (Render auto-deploys from GitHub)
+git push origin main</code></pre>
+
+  <h4>Add environment variables to Render:</h4>
+  <ol>
+    <li>Open <a href="https://dashboard.render.com" target="_blank">Render Dashboard</a></li>
+    <li>Find your <strong>wadjet-eye-ai</strong> service</li>
+    <li>Go to <strong>Environment</strong> tab</li>
+    <li>Add these variables (they are NOT in .env which is .gitignored):</li>
+  </ol>
+
+  <pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><code>SUPABASE_URL=https://miywxnplaltduuscjfmq.supabase.co
+SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+JWT_SECRET=KO3aLoS4LJqK4Nz6O+LxOqq4X/MxGlKBbhbiIR6aNg/eyTujTSIuCqMlUT930rBIhIGrorftB0pZjsRux7pR/g==
+ACCESS_TOKEN_TTL=900
+REFRESH_TOKEN_EXPIRY_DAYS=30
+NODE_ENV=production
+PORT=4000
+FRONTEND_URL=https://wadjet-eye-ai.vercel.app
+ALLOWED_ORIGINS=https://wadjet-eye-ai.vercel.app,https://www.genspark.ai,http://localhost:3000
+OTX_API_KEY=17461d678f5d3106923e42edaddfec4b6f9aa76307c9a5cbc64b55dd0f311e15
+ABUSEIPDB_API_KEY=c5708a7dd63b526a1d293e13d06f1d66f9d50fe673171ed36af277f408b72be057ed7c8f1311eb4e
+VIRUSTOTAL_API_KEY=ebe28cff859d6364a86124619de26a2b9c5e2874789f8a9165ed38fb8c8c9ae0
+SHODAN_API_KEY=327xzJDK5fRvel8psYDTKLGi1UaytfWG</code></pre>
+
+  <div class="callout c-warn">
+    <strong>⚠️ Render Cold Starts</strong>: Render free tier shuts down after 15 min of inactivity. First request after sleep takes 10–30 seconds. The <code>SessionRestoreGate</code> handles this with 4 retries + exponential back-off. To avoid cold starts, upgrade to Render Starter ($7/mo) or use a free UptimeRobot monitor to ping <code>/health</code> every 14 min.
+  </div>
+</div>
+
+<!-- ══════════ STEP 8 ══════════ -->
+<h2 id="step8">Step 8 — Deploy Frontend to Vercel / GitHub</h2>
+<div class="step-card">
+  <div class="step-header">
+    <span class="step-num sn-green">8</span>
+    <h3>Push frontend changes</h3>
+  </div>
+
+  <pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><code># Add frontend files
+git add index.html
+git add js/auth-persistent.js
+git add js/api-client.js
+git add js/main.js
+
+# Commit
+git commit -m "fix: persistent login v5.1 - localStorage token store + SmartRefresh"
+
+# Push (Vercel auto-deploys from GitHub)
+git push origin main</code></pre>
+
+  <div class="callout c-info">
+    <strong>📌 Vercel auto-deploy:</strong> If your Vercel project is connected to your GitHub repo, pushing to <code>main</code> will automatically trigger a new deployment. Watch the Vercel dashboard for the build status.
+  </div>
+</div>
+
+<!-- ══════════ STEP 9 ══════════ -->
+<h2 id="step9">Step 9 — Verify End-to-End</h2>
+<div class="step-card done">
+  <div class="step-header">
+    <span class="step-num sn-green">9</span>
+    <h3>Final verification checklist</h3>
+  </div>
+  <ul class="checklist">
+    <li>Open <code>https://wadjet-eye-ai.vercel.app</code></li>
+    <li>Log in with <code>mahmoud@mssp.com</code> / <code>Admin@2024Wadjet!</code></li>
+    <li>Open browser DevTools → Application → Local Storage → verify <code>wadjet_access_token</code>, <code>wadjet_refresh_token</code> are stored</li>
+    <li>Refresh the page (F5) — you should stay logged in (not see "Session expired")</li>
+    <li>Close the tab, reopen — you should still be logged in</li>
+    <li>Wait 15 minutes — token should auto-refresh (watch Network tab for <code>/api/auth/refresh</code> call)</li>
+    <li>Open DevTools Console — you should see <code>[PersistentAuth] ✅ Token refreshed successfully</code></li>
+    <li>Check the dashboard loads real data from backend</li>
+  </ul>
+</div>
+
+<!-- ══════════ STEP 10 ══════════ -->
+<h2 id="step10">Step 10 — Configure Supabase Auth Settings</h2>
+<div class="step-card">
+  <div class="step-header">
+    <span class="step-num sn-purple">10</span>
+    <h3>Optional but recommended Supabase settings</h3>
+  </div>
+
+  <h4>1. Set JWT Expiry to 900 seconds (matches backend):</h4>
+  <ol>
+    <li>Go to <a href="https://supabase.com/dashboard/project/miywxnplaltduuscjfmq/settings/auth" target="_blank">Supabase → Settings → Auth</a></li>
+    <li>Find <strong>"JWT Expiry"</strong> and set it to <code>900</code> (15 minutes)</li>
+    <li>Click <strong>Save</strong></li>
+  </ol>
+
+  <h4>2. Add your frontend URL to allowed redirect URLs:</h4>
+  <ol>
+    <li>Go to <a href="https://supabase.com/dashboard/project/miywxnplaltduuscjfmq/auth/url-configuration" target="_blank">Supabase → Auth → URL Configuration</a></li>
+    <li>Add <code>https://wadjet-eye-ai.vercel.app</code> to <strong>Redirect URLs</strong></li>
+  </ol>
+
+  <h4>3. Disable email confirmation (for development):</h4>
+  <ol>
+    <li>Go to <a href="https://supabase.com/dashboard/project/miywxnplaltduuscjfmq/settings/auth" target="_blank">Supabase → Auth → Email Settings</a></li>
+    <li>Disable <strong>"Enable email confirmation"</strong> (or keep it off — seed script uses <code>email_confirm: true</code>)</li>
+  </ol>
+
+  <h4>4. Verify JWT Secret matches your .env:</h4>
+  <ol>
+    <li>Go to <a href="https://supabase.com/dashboard/project/miywxnplaltduuscjfmq/settings/api" target="_blank">Supabase → Settings → API → JWT Settings</a></li>
+    <li>Compare the JWT Secret shown there with <code>JWT_SECRET</code> in <code>backend/.env</code> and in Render environment variables</li>
+    <li>They MUST be identical</li>
+  </ol>
+</div>
+
+<!-- ══════════ SCRIPTS ══════════ -->
+<h2 id="scripts">Test Scripts (PowerShell, Node.js, Python)</h2>
+
+<div class="callout c-info">
+  <strong>📁 Save these scripts in your project root</strong> and run them to verify auth is working after deployment.
+</div>
+
+<h3>PowerShell — Full Session Test</h3>
+<pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><code># test-auth.ps1 — Full session test
+# Usage: .\test-auth.ps1
+# Or with custom backend: .\test-auth.ps1 -BackendUrl "http://localhost:4000"
+
+param(
+    [string]$BackendUrl = "https://wadjet-eye-ai.onrender.com",
+    [string]$Email      = "mahmoud@mssp.com",
+    [string]$Password   = "Admin@2024Wadjet!"
+)
+
+function Invoke-Api($method, $path, $body = $null, $token = $null) {
+    $headers = @{ "Content-Type" = "application/json" }
+    if ($token) { $headers["Authorization"] = "Bearer $token" }
+    $params = @{
+        Uri     = "$BackendUrl$path"
+        Method  = $method
+        Headers = $headers
+    }
+    if ($body) { $params["Body"] = ($body | ConvertTo-Json) }
+    try {
+        return Invoke-RestMethod @params
+    } catch {
+        $msg = $_.ErrorDetails.Message
+        try { $err = $msg | ConvertFrom-Json; Write-Host "  API Error: $($err.error)" -ForegroundColor Red }
+        catch { Write-Host "  HTTP Error: $($_.Exception.Message)" -ForegroundColor Red }
+        return $null
+    }
+}
+
+Write-Host "=============================================" -ForegroundColor Cyan
+Write-Host "  Wadjet-Eye AI — Auth Test Suite" -ForegroundColor Cyan
+Write-Host "  Backend: $BackendUrl" -ForegroundColor Gray
+Write-Host "=============================================" -ForegroundColor Cyan
+
+# Health check
+Write-Host "`n[1/5] Health Check..." -ForegroundColor Yellow
+$health = Invoke-Api "GET" "/health"
+if ($health) { Write-Host "  ✅ Health: $($health.status) | DB: $($health.db)" -ForegroundColor Green }
+else         { Write-Host "  ⚠️  Health check failed — server may be sleeping (cold start). Waiting 15s..." -ForegroundColor Orange; Start-Sleep 15 }
+
+# Login
+Write-Host "`n[2/5] Login test ($Email)..." -ForegroundColor Yellow
+$login = Invoke-Api "POST" "/api/auth/login" @{ email = $Email; password = $Password }
+if (!$login) { Write-Host "  ❌ Login FAILED" -ForegroundColor Red; exit 1 }
+Write-Host "  ✅ Login SUCCESS" -ForegroundColor Green
+Write-Host "  User: $($login.user.name) | Role: $($login.user.role)" -ForegroundColor White
+Write-Host "  Token: $($login.token.Substring(0, [Math]::Min(50, $login.token.Length)))..." -ForegroundColor Gray
+Write-Host "  Expires: $($login.expiresAt)" -ForegroundColor Gray
+
+# Get profile
+Write-Host "`n[3/5] Get profile (/api/auth/me)..." -ForegroundColor Yellow
+$me = Invoke-Api "GET" "/api/auth/me" -token $login.token
+if (!$me) { Write-Host "  ❌ /api/auth/me FAILED" -ForegroundColor Red }
+else      { Write-Host "  ✅ Profile: $($me.user.name) | $($me.user.email)" -ForegroundColor Green }
+
+# Token refresh
+Write-Host "`n[4/5] Token refresh..." -ForegroundColor Yellow
+$refresh = Invoke-Api "POST" "/api/auth/refresh" @{ refresh_token = $login.refreshToken }
+if (!$refresh) { Write-Host "  ❌ Refresh FAILED" -ForegroundColor Red }
+else {
+    Write-Host "  ✅ Refresh SUCCESS" -ForegroundColor Green
+    Write-Host "  New Token: $($refresh.token.Substring(0, [Math]::Min(50, $refresh.token.Length)))..." -ForegroundColor Gray
+    Write-Host "  Requires Reauth: $($refresh.requires_reauth)" -ForegroundColor Gray
+}
+
+# Logout
+Write-Host "`n[5/5] Logout test..." -ForegroundColor Yellow
+$logout = Invoke-Api "POST" "/api/auth/logout" @{ refresh_token = $login.refreshToken } -token $login.token
+if (!$logout) { Write-Host "  ⚠️  Logout returned null (may still have succeeded)" -ForegroundColor Orange }
+else          { Write-Host "  ✅ Logout: $($logout.message)" -ForegroundColor Green }
+
+Write-Host "`n=============================================" -ForegroundColor Cyan
+Write-Host "  ✅ All auth tests complete!" -ForegroundColor Green
+Write-Host "=============================================" -ForegroundColor Cyan</code></pre>
+
+<!-- ══════════ TROUBLESHOOT ══════════ -->
+<h2 id="troubleshoot">Troubleshooting Reference</h2>
+
+<table>
+  <tr>
+    <th>Error / Symptom</th>
+    <th>Cause</th>
+    <th>Fix</th>
+  </tr>
+  <tr>
+    <td><code>row-level security policy for table "refresh_tokens"</code></td>
+    <td>RLS enabled, no INSERT policy for service_role</td>
+    <td>Run <code>rls-fix-v5.1.sql</code> in Supabase SQL Editor (Step 2)</td>
+  </tr>
+  <tr>
+    <td>"Session expired" on page refresh</td>
+    <td>Tokens were in sessionStorage (cleared on refresh)</td>
+    <td>✅ Fixed in <code>auth-persistent.js v5.1</code> (uses localStorage)</td>
+  </tr>
+  <tr>
+    <td>"Session expired" after 15 minutes</td>
+    <td>Token TTL expired, no proactive refresh</td>
+    <td>✅ Fixed in <code>auth-persistent.js v5.1</code> (SmartRefresh at 80%)</td>
+  </tr>
+  <tr>
+    <td>Refresh returns <code>requires_reauth: true</code></td>
+    <td><code>admin.createSession</code> failed AND JWT_SECRET not set</td>
+    <td>Verify <code>JWT_SECRET</code> in .env matches Supabase dashboard</td>
+  </tr>
+  <tr>
+    <td><code>Invalid token</code> on <code>/api/auth/me</code></td>
+    <td>JWT_SECRET mismatch between backend and Supabase</td>
+    <td>Get JWT Secret from Supabase Dashboard → Settings → API → JWT Settings</td>
+  </tr>
+  <tr>
+    <td>Login times out (30+ seconds)</td>
+    <td>Render cold start (free tier)</td>
+    <td>Wait 30s or set up UptimeRobot ping every 14 min to <code>/health</code></td>
+  </tr>
+  <tr>
+    <td><code>Cannot find module 'jsonwebtoken'</code></td>
+    <td>npm install not run after package.json update</td>
+    <td>Run <code>cd backend &amp;&amp; npm install</code></td>
+  </tr>
+  <tr>
+    <td>CORS error in browser</td>
+    <td>Frontend URL not in ALLOWED_ORIGINS</td>
+    <td>Add your frontend URL to <code>ALLOWED_ORIGINS</code> in backend .env and Render env vars</td>
+  </tr>
+  <tr>
+    <td><code>User profile not found</code> on login</td>
+    <td>auth_id in users table doesn't match Supabase auth.users</td>
+    <td>Re-run <code>node backend/scripts/seed-mahmoud.js</code></td>
+  </tr>
+  <tr>
+    <td>Seed script: <code>Tenant or user not found</code></td>
+    <td>Old seed script (uses pg driver)</td>
+    <td>✅ Fixed — new seed script uses Supabase SDK</td>
+  </tr>
+</table>
+
+<h2>Files Changed Summary</h2>
+
+<div class="callout c-success">
+  <strong>✅ Complete list of files updated/created in this fix:</strong>
+  <table style="margin-top:8px;">
+    <tr><th>File</th><th>Status</th><th>What It Does</th></tr>
+    <tr><td><code>backend/database/rls-fix-v5.1.sql</code></td><td><span class="badge b-red">Run in Supabase</span></td><td>Adds service_role full-access policies to all tables</td></tr>
+    <tr><td><code>backend/routes/auth.js</code></td><td><span class="badge b-green">Updated v5.1</span></td><td>Refresh now uses admin.createSession + jwt.sign fallback</td></tr>
+    <tr><td><code>backend/package.json</code></td><td><span class="badge b-green">Updated</span></td><td>Added jsonwebtoken dependency</td></tr>
+    <tr><td><code>backend/scripts/seed-mahmoud.js</code></td><td><span class="badge b-green">Rewritten v5.0</span></td><td>Uses Supabase SDK, correct column names, better error handling</td></tr>
+    <tr><td><code>backend/.env</code></td><td><span class="badge b-blue">Updated</span></td><td>JWT_SECRET added</td></tr>
+    <tr><td><code>js/auth-persistent.js</code></td><td><span class="badge b-green">Rewritten v5.1</span></td><td>localStorage, SmartRefresh, SessionRestoreGate, ActivityTracker</td></tr>
+    <tr><td><code>COMPLETE-FIX-DEPLOY-GUIDE.html</code></td><td><span class="badge b-purple">New</span></td><td>This file — comprehensive step-by-step guide</td></tr>
+  </table>
+</div>
+
+</div><!-- /.page -->
+
+<script>
+function copyCode(btn) {
+  const pre = btn.closest('pre');
+  const code = pre.querySelector('code').textContent;
+  navigator.clipboard.writeText(code).then(() => {
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => {
+      btn.textContent = 'Copy';
+      btn.classList.remove('copied');
+    }, 2000);
+  }).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = code;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+function showTab(id) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.getElementById('tab-' + id).classList.add('active');
+  event.target.classList.add('active');
+}
+
+// Smooth scroll for anchor links
+document.querySelectorAll('a[href^="#"]').forEach(a => {
+  a.addEventListener('click', e => {
+    e.preventDefault();
+    const el = document.querySelector(a.getAttribute('href'));
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+});
+</script>
+</body>
+</html>

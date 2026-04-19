@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wadjet-Eye AI — SOC Campaigns & Live Detections v2.0 — Deploy Guide</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;line-height:1.7}
+.container{max-width:1100px;margin:0 auto;padding:40px 24px}
+.hero{background:linear-gradient(135deg,#0f1a2e 0%,#0d1117 100%);border:1px solid #1e2d3d;border-radius:16px;padding:40px;margin-bottom:40px;position:relative;overflow:hidden}
+.hero::before{content:'';position:absolute;top:-60px;right:-60px;width:280px;height:280px;background:radial-gradient(circle,#a78bfa15,transparent 70%)}
+.hero h1{font-size:1.9em;color:#a78bfa;margin-bottom:10px}
+.hero .sub{color:#8b949e;font-size:.95em;max-width:680px;line-height:1.7}
+.badge{display:inline-block;padding:4px 12px;border-radius:20px;font-size:.73em;font-weight:700;margin-right:8px}
+.badge-new{background:#a78bfa20;color:#a78bfa;border:1px solid #a78bfa40}
+.badge-fix{background:#34d39920;color:#34d399;border:1px solid #34d39940}
+.badge-critical{background:#f43f5e20;color:#f43f5e;border:1px solid #f43f5e40}
+.section{background:#161b22;border:1px solid #21262d;border-radius:12px;padding:28px 32px;margin-bottom:28px}
+.section h2{font-size:1.15em;color:#e6edf3;margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid #21262d;display:flex;align-items:center;gap:10px}
+.section h3{color:#e6edf3;font-size:.95em;margin:20px 0 10px}
+.section p{color:#8b949e;margin-bottom:12px;font-size:.9em}
+pre{background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:16px 20px;overflow-x:auto;font-family:'JetBrains Mono','SF Mono',Consolas,monospace;font-size:.8em;line-height:1.7;margin:10px 0}
+code{font-family:'JetBrains Mono','SF Mono',Consolas,monospace;font-size:.82em;background:#21262d;padding:2px 6px;border-radius:4px;color:#a78bfa}
+.file-table{width:100%;border-collapse:collapse;font-size:.86em;margin-bottom:16px}
+.file-table th{padding:9px 14px;background:#0d1117;color:#8b949e;text-align:left;font-weight:600;font-size:.76em;text-transform:uppercase;letter-spacing:.04em}
+.file-table td{padding:10px 14px;border-bottom:1px solid #21262d;vertical-align:top}
+.file-table tr:last-child td{border-bottom:none}
+.file-table .new{color:#34d399;font-size:.72em;font-weight:700;background:rgba(52,211,153,.1);padding:2px 7px;border-radius:10px}
+.file-table .mod{color:#fbbf24;font-size:.72em;font-weight:700;background:rgba(251,191,36,.1);padding:2px 7px;border-radius:10px}
+.alert{border-radius:8px;padding:14px 18px;margin:14px 0;font-size:.88em}
+.alert-warn{background:#fb923c10;border:1px solid #fb923c;color:#fb923c}
+.alert-info{background:#22d3ee10;border:1px solid #22d3ee;color:#7dd3fc}
+.alert-success{background:#34d39910;border:1px solid #34d399;color:#6ee7b7}
+.alert-critical{background:#f43f5e10;border:1px solid #f43f5e;color:#fca5a5}
+.step{display:flex;gap:16px;padding:14px 0;border-bottom:1px solid #21262d}
+.step:last-child{border-bottom:none}
+.step-num{width:32px;height:32px;border-radius:50%;background:#a78bfa20;color:#a78bfa;border:1px solid #a78bfa40;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.85em;flex-shrink:0}
+.step-body{flex:1}
+.step-title{font-weight:700;color:#e6edf3;margin-bottom:4px}
+.step-desc{font-size:.85em;color:#8b949e;line-height:1.6}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+@media(max-width:700px){.two-col{grid-template-columns:1fr}}
+.feat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+.feat-card{background:#0d1117;border:1px solid #1e2d3d;border-radius:10px;padding:16px;border-left:3px solid var(--c,#a78bfa)}
+.feat-card .icon{font-size:1.3em;margin-bottom:8px}
+.feat-card .title{font-weight:700;color:#e6edf3;font-size:.9em;margin-bottom:4px}
+.feat-card .desc{font-size:.78em;color:#8b949e;line-height:1.5}
+footer{text-align:center;color:#555;font-size:.78em;padding:40px 0 20px;border-top:1px solid #21262d;margin-top:60px}
+.diff-add{color:#6ee7b7;background:rgba(52,211,153,.06)}
+.diff-rem{color:#fca5a5;background:rgba(244,63,94,.06)}
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- ═══ HERO ═══ -->
+<div class="hero">
+  <div style="margin-bottom:16px">
+    <span class="badge badge-new">v2.0 NEW</span>
+    <span class="badge badge-fix">CAMPAIGNS FIXED</span>
+    <span class="badge badge-fix">DETECTIONS FIXED</span>
+    <span class="badge badge-critical">SOC-GRADE UI</span>
+  </div>
+  <h1>🎯 Active Campaigns &amp; Live Detections — Deploy Guide v2.0</h1>
+  <p class="sub">
+    Complete step-by-step deployment instructions for the SOC-grade campaign dashboard and live detections
+    module. Includes root-cause analysis of the "No Active Campaigns" bug, all new file locations,
+    exact code modifications, and production validation steps.
+  </p>
+</div>
+
+<!-- ═══ ROOT CAUSE ═══ -->
+<div class="section">
+  <h2>🔬 Root Cause Analysis — "No Active Campaigns"</h2>
+  <p>The empty campaigns page was caused by a cascade of five issues working together:</p>
+  <table class="file-table">
+    <thead><tr><th>#</th><th>Root Cause</th><th>Location</th><th>Fix Applied</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>1</strong></td>
+        <td style="color:#f43f5e"><strong>No campaigns in database</strong> — Backend <code>/api/cti/campaigns</code> returns 0 rows because no correlation has run and no seed data exists for the tenant</td>
+        <td>Supabase <code>campaigns</code> table</td>
+        <td style="color:#34d399">Correlation Engine auto-creates campaigns from IOC clusters on load</td>
+      </tr>
+      <tr>
+        <td><strong>2</strong></td>
+        <td style="color:#fb923c"><strong>Frontend exits on empty array</strong> — <code>renderCampaignsLive()</code> shows static "No Active Campaigns" UI with no retry or auto-trigger</td>
+        <td><code>js/live-pages.js</code> + <code>js/live-pages-patch.js</code></td>
+        <td style="color:#34d399">New SOC module shows actionable empty state with "Run Correlation" + "Trigger Ingestion" buttons</td>
+      </tr>
+      <tr>
+        <td><strong>3</strong></td>
+        <td style="color:#fb923c"><strong>Ingestion pipeline never triggered</strong> — Feeds (OTX, AbuseIPDB, URLhaus) have not run, so no IOCs ingested → no campaigns to correlate</td>
+        <td><code>backend/services/ingestion/index.js</code></td>
+        <td style="color:#34d399">Correlation Engine calls <code>POST /api/ingest/run</code> automatically when IOC count = 0</td>
+      </tr>
+      <tr>
+        <td><strong>4</strong></td>
+        <td style="color:#fbbf24"><strong>No IOC→Campaign linking</strong> — Even when IOCs exist, nothing clusters them into campaigns without a correlation job</td>
+        <td>Missing <code>/api/ingest/correlate</code> endpoint</td>
+        <td style="color:#34d399">Client-side correlation engine in <code>campaign-correlation.js</code> clusters IOCs by actor, malware family, tags, geo+ASN</td>
+      </tr>
+      <tr>
+        <td><strong>5</strong></td>
+        <td style="color:#fbbf24"><strong>Live detections feed broken</strong> — <code>/api/cti/detections</code> returns empty; no WebSocket connection; old UI has no fallback</td>
+        <td><code>js/live-pages.js</code></td>
+        <td style="color:#34d399">New module connects WebSocket with polling fallback, graceful empty state, MITRE mapping</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ═══ NEW FILES ═══ -->
+<div class="section">
+  <h2>📁 Files Created &amp; Modified</h2>
+  <table class="file-table">
+    <thead><tr><th>File</th><th>Status</th><th>Purpose</th><th>Size</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>css/soc-campaigns.css</code></td>
+        <td><span class="new">NEW</span></td>
+        <td>Full SOC dark theme — CSS variables, 12 keyframe animations, campaign cards, KPI cards, detail panel, feed rows, IOC graph, threat map, filter bar, skeleton loaders, notification toasts</td>
+        <td>~22 KB</td>
+      </tr>
+      <tr>
+        <td><code>js/campaigns-soc.js</code></td>
+        <td><span class="new">NEW</span></td>
+        <td>Active Campaigns SOC module v2.0 — animated KPI cards, card/table view, slide-in detail panel, MITRE chips, IOC relationship graph (canvas), threat map (canvas), filter bar, live polling, WebSocket, correlation trigger, AI investigation, export</td>
+        <td>~58 KB</td>
+      </tr>
+      <tr>
+        <td><code>js/live-detections-soc.js</code></td>
+        <td><span class="new">NEW</span></td>
+        <td>Live Detections SOC module v2.0 — real-time feed, WebSocket + polling fallback, severity badges, MITRE mapping, campaign tagging, case creation, event rate counter, pause/resume, export CSV</td>
+        <td>~30 KB</td>
+      </tr>
+      <tr>
+        <td><code>js/campaign-correlation.js</code></td>
+        <td><span class="new">NEW</span></td>
+        <td>Correlation engine — IOC→Campaign clustering, pipeline health check, auto-trigger ingestion, scheduled auto-run every 5 min, logs, client-side fallback when backend endpoint missing</td>
+        <td>~14 KB</td>
+      </tr>
+      <tr>
+        <td><code>index.html</code></td>
+        <td><span class="mod">MODIFIED</span></td>
+        <td>Updated page containers for campaigns + detections; added <code>soc-campaigns-wrap</code> + <code>soc-detections-wrap</code> divs; loaded 4 new files (1 CSS + 3 JS)</td>
+        <td>+40 lines</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ═══ FEATURES ═══ -->
+<div class="section">
+  <h2>✨ New Features Delivered</h2>
+  <div class="feat-grid">
+    <div class="feat-card" style="--c:#f43f5e">
+      <div class="icon">📊</div>
+      <div class="title">Animated KPI Cards</div>
+      <div class="desc">4 live counters (Active Campaigns, Critical, New 24h, IOCs Tracked) with animated number roll-up, sparklines, delta badges</div>
+    </div>
+    <div class="feat-card" style="--c:#a78bfa">
+      <div class="icon">🗂️</div>
+      <div class="title">Cards &amp; Table Views</div>
+      <div class="desc">Toggle between card grid and data table. Cards show severity glow, actor, TTP chips, progress bar. Table shows all columns sortable.</div>
+    </div>
+    <div class="feat-card" style="--c:#22d3ee">
+      <div class="icon">📋</div>
+      <div class="title">Slide-in Detail Panel</div>
+      <div class="desc">Click any campaign → panel slides in from right with full details: risk score, MITRE ATT&CK chips, IOC list, timeline, AI investigate, contain, export actions</div>
+    </div>
+    <div class="feat-card" style="--c:#fb923c">
+      <div class="icon">🗺️</div>
+      <div class="title">Global Threat Map</div>
+      <div class="desc">Canvas-based attack flow visualization with animated bezier curves, pulsing nodes, source/target countries, live attack counters, legend</div>
+    </div>
+    <div class="feat-card" style="--c:#fbbf24">
+      <div class="icon">🕸️</div>
+      <div class="title">IOC Relationship Graph</div>
+      <div class="desc">Force-directed canvas graph: campaigns → actors → TTPs → IOCs. Drag nodes, scroll to zoom, pan, hover tooltips. Physics simulation.</div>
+    </div>
+    <div class="feat-card" style="--c:#34d399">
+      <div class="icon">📡</div>
+      <div class="title">Live Detections Feed</div>
+      <div class="desc">Real-time events with WebSocket + 15s polling fallback. Fade-in new rows, severity pulse, event rate counter, pause/resume, per-row expand</div>
+    </div>
+    <div class="feat-card" style="--c:#a78bfa">
+      <div class="icon">🧠</div>
+      <div class="title">Correlation Engine</div>
+      <div class="desc">Auto-clusters IOCs by threat_actor, malware_family, tags, geo+ASN. Creates campaigns via POST /api/cti/campaigns. Runs every 5 minutes.</div>
+    </div>
+    <div class="feat-card" style="--c:#22d3ee">
+      <div class="icon">🔔</div>
+      <div class="title">Live Notifications</div>
+      <div class="desc">Toast-style pop-up notifications for new campaigns detected. Auto-dismiss after 7s, manual close, stacked multiple alerts.</div>
+    </div>
+    <div class="feat-card" style="--c:#f43f5e">
+      <div class="icon">⚡</div>
+      <div class="title">Auto-Correlation</div>
+      <div class="desc">On page load, engine checks pipeline health, triggers ingestion if 0 IOCs, runs correlation if IOCs exist with 0 campaigns. Fully automatic.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ DEPLOYMENT STEPS ═══ -->
+<div class="section">
+  <h2>🚀 Step-by-Step Deployment</h2>
+
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-body">
+      <div class="step-title">Commit all new/modified files</div>
+      <div class="step-desc">
+        <pre>
+git add css/soc-campaigns.css \
+        js/campaigns-soc.js \
+        js/live-detections-soc.js \
+        js/campaign-correlation.js \
+        index.html
+
+git commit -m "feat(campaigns): SOC v2.0 — animated dashboard, correlation engine, live detections
+
+- css/soc-campaigns.css: dark neon theme, 12 keyframe animations, all components
+- js/campaigns-soc.js: KPI cards, card/table view, detail panel, IOC graph, threat map
+- js/live-detections-soc.js: live feed, WS+polling, row expand, rate counter
+- js/campaign-correlation.js: auto-cluster IOCs into campaigns, pipeline health
+- index.html: updated page containers, loaded 4 new files
+
+Fixes: empty campaigns page, no live detections, missing correlation pipeline"
+
+git push origin main</pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-body">
+      <div class="step-title">Verify Render auto-deploy (backend unchanged)</div>
+      <div class="step-desc">
+        No backend changes are required for the frontend fixes. The correlation engine uses existing endpoints:
+        <code>GET /api/cti/campaigns</code>, <code>POST /api/cti/campaigns</code>, <code>POST /api/ingest/run</code>,
+        <code>GET /api/iocs</code>, <code>GET /api/ingest/stats</code>.<br><br>
+        If the backend needs to be redeployed, trigger it manually in the Render dashboard — no code changes needed.
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-body">
+      <div class="step-title">Hard-reload the browser</div>
+      <div class="step-desc">
+        <strong>Windows/Linux:</strong> <code>Ctrl + Shift + R</code><br>
+        <strong>Mac:</strong> <code>Cmd + Shift + R</code><br>
+        <strong>Or:</strong> DevTools → Network → ☑ Disable cache → Reload<br><br>
+        This clears old JS/CSS from browser cache.
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">4</div>
+    <div class="step-body">
+      <div class="step-title">Verify in DevTools Console</div>
+      <div class="step-desc">
+        After reload, open DevTools → Console. You should see:
+        <pre>
+[CampaignsSOC v2.0] campaigns-soc.js loaded ✅
+[DetectSOC v2.0] live-detections-soc.js loaded ✅
+[CorrelationEngine v2.0] campaign-correlation.js loaded ✅
+[CampaignsSOC] PAGE_CONFIG[campaigns].onEnter patched ✅
+[DetectSOC] PAGE_CONFIG[detections].onEnter patched ✅
+[CorrelationEngine] Checking ingestion pipeline health…
+[CorrelationEngine] ✅ IOC database: 12,099 total IOCs
+[CorrelationEngine] ℹ️ Campaign count: N (where N > 0 after correlation)
+        </pre>
+        If you see correlation results:
+        <pre>
+[CorrelationEngine] Found X campaign clusters from 12,099 IOCs
+[CorrelationEngine] ✅ Correlation complete: +X campaigns created
+        </pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">5</div>
+    <div class="step-body">
+      <div class="step-title">Navigate to Active Campaigns page</div>
+      <div class="step-desc">
+        Click <strong>Intelligence → Active Campaigns</strong> in the sidebar.<br>
+        You should now see:
+        <ul style="padding-left:20px;margin-top:8px;font-size:.9em;line-height:2">
+          <li>4 animated KPI cards (Active, Critical, New 24h, IOCs Tracked)</li>
+          <li>Campaign cards or table with severity glow effects</li>
+          <li>Filter bar (search, severity, status, view toggle)</li>
+          <li>IOC Relationship Graph at the bottom</li>
+          <li>If empty: actionable empty state with "Run Correlation" button</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">6</div>
+    <div class="step-body">
+      <div class="step-title">If still 0 campaigns — Run manual correlation</div>
+      <div class="step-desc">
+        Click the <strong>"Run Correlation"</strong> button in the campaigns page.<br>
+        The engine will:
+        <ol style="padding-left:20px;margin-top:8px;font-size:.9em;line-height:2">
+          <li>Fetch 200 recent IOCs from <code>/api/iocs</code></li>
+          <li>Cluster them by threat_actor, malware_family, tags, geo+ASN</li>
+          <li>Create campaigns via <code>POST /api/cti/campaigns</code></li>
+          <li>Reload the campaigns page with new data</li>
+        </ol>
+        Or trigger ingestion first if IOC count is also 0:
+        <pre>
+# Manual trigger via DevTools console:
+await triggerThreatIngestion();   // triggers /api/ingest/run
+// Wait 30s for feeds to process, then:
+await runCampaignCorrelation();   // creates campaigns from IOC clusters
+        </pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">7</div>
+    <div class="step-body">
+      <div class="step-title">Navigate to Live Detections</div>
+      <div class="step-desc">
+        Click <strong>Detection → Live Detections</strong> in the sidebar.<br>
+        You should see:
+        <ul style="padding-left:20px;margin-top:8px;font-size:.9em;line-height:2">
+          <li>Live waveform indicator + events/sec rate badge</li>
+          <li>5 KPI cards (Total, Critical, High, IOCs, Auto-Tagged)</li>
+          <li>Scrollable event feed with severity color-coded rows</li>
+          <li>WebSocket connection attempt (falls back to 15s polling)</li>
+          <li>Click any row to expand details (asset, MITRE, campaign link, case creation)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ BACKEND OPTIONAL FIXES ═══ -->
+<div class="section">
+  <h2>🔧 Optional Backend Improvements (Render)</h2>
+  <p>These backend changes improve correlation quality but are NOT required for the frontend to work:</p>
+
+  <h3>Add /api/ingest/correlate endpoint (backend/routes/ioc-ingestion.js)</h3>
+  <pre>
+<span class="diff-add">// POST /api/ingest/correlate — trigger server-side IOC→Campaign correlation</span>
+<span class="diff-add">router.post('/correlate', verifyToken, asyncHandler(async (req, res) => {</span>
+<span class="diff-add">  const tenantId = resolveTenantId(req);</span>
+<span class="diff-add">  const { force = false, min_cluster_size = 3 } = req.body || {};</span>
+<span class="diff-add">  </span>
+<span class="diff-add">  // Fetch all IOCs for tenant</span>
+<span class="diff-add">  const { data: iocs } = await supabaseAdmin</span>
+<span class="diff-add">    .from('iocs')</span>
+<span class="diff-add">    .select('id, value, type, threat_actor, malware_family, tags, country, asn, risk_score')</span>
+<span class="diff-add">    .eq('tenant_id', tenantId)</span>
+<span class="diff-add">    .limit(5000);</span>
+<span class="diff-add">  </span>
+<span class="diff-add">  let created = 0;</span>
+<span class="diff-add">  // Cluster by threat_actor</span>
+<span class="diff-add">  const actorMap = {};</span>
+<span class="diff-add">  (iocs || []).forEach(ioc => {</span>
+<span class="diff-add">    if (ioc.threat_actor) {</span>
+<span class="diff-add">      actorMap[ioc.threat_actor] = actorMap[ioc.threat_actor] || [];</span>
+<span class="diff-add">      actorMap[ioc.threat_actor].push(ioc);</span>
+<span class="diff-add">    }</span>
+<span class="diff-add">  });</span>
+<span class="diff-add">  </span>
+<span class="diff-add">  for (const [actor, cluster] of Object.entries(actorMap)) {</span>
+<span class="diff-add">    if (cluster.length < min_cluster_size) continue;</span>
+<span class="diff-add">    const maxRisk = Math.max(...cluster.map(i => i.risk_score || 0));</span>
+<span class="diff-add">    const severity = maxRisk >= 80 ? 'CRITICAL' : maxRisk >= 60 ? 'HIGH' : 'MEDIUM';</span>
+<span class="diff-add">    await supabaseAdmin.from('campaigns').upsert({</span>
+<span class="diff-add">      name: `Operation by ${actor}`,</span>
+<span class="diff-add">      threat_actor_name: actor,</span>
+<span class="diff-add">      severity, status: 'active',</span>
+<span class="diff-add">      tenant_id: tenantId,</span>
+<span class="diff-add">      ioc_count: cluster.length,</span>
+<span class="diff-add">      source: 'correlation_engine',</span>
+<span class="diff-add">    }, { onConflict: 'name,tenant_id', ignoreDuplicates: true });</span>
+<span class="diff-add">    created++;</span>
+<span class="diff-add">  }</span>
+<span class="diff-add">  </span>
+<span class="diff-add">  res.json({ campaigns_created: created, iocs_analyzed: iocs?.length || 0 });</span>
+<span class="diff-add">}));</span></pre>
+
+  <h3>Add detection endpoint (backend/routes/cti.js)</h3>
+  <pre>
+<span class="diff-add">// GET /api/cti/detections — list security events/detections</span>
+<span class="diff-add">router.get('/detections', verifyToken, asyncHandler(async (req, res) => {</span>
+<span class="diff-add">  const tenantId = resolveTenantId(req);</span>
+<span class="diff-add">  const { page=1, limit=50, severity, type, search, sort='created_at', order='desc' } = req.query;</span>
+<span class="diff-add">  let query = supabaseAdmin.from('detections')</span>
+<span class="diff-add">    .select('*', { count: 'exact' })</span>
+<span class="diff-add">    .eq('tenant_id', tenantId)</span>
+<span class="diff-add">    .order(sort, { ascending: order === 'asc' })</span>
+<span class="diff-add">    .range((page-1)*limit, page*limit-1);</span>
+<span class="diff-add">  if (severity) query = query.eq('severity', severity);</span>
+<span class="diff-add">  if (type)     query = query.eq('type', type);</span>
+<span class="diff-add">  if (search)   query = query.ilike('title', `%${search}%`);</span>
+<span class="diff-add">  const { data, count, error } = await query;</span>
+<span class="diff-add">  if (error) throw error;</span>
+<span class="diff-add">  res.json({ data: data || [], total: count || 0, page: +page, limit: +limit });</span>
+<span class="diff-add">}));</span></pre>
+</div>
+
+<!-- ═══ SUPABASE SCHEMA ═══ -->
+<div class="section">
+  <h2>🗃️ Supabase Schema (If Missing Tables)</h2>
+  <p>Run in Supabase SQL Editor if <code>campaigns</code> or <code>detections</code> tables are missing:</p>
+  <pre>
+-- Campaigns table (if not exists)
+CREATE TABLE IF NOT EXISTS campaigns (
+  id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id        uuid NOT NULL,
+  name             text NOT NULL,
+  description      text,
+  severity         text DEFAULT 'MEDIUM' CHECK (severity IN ('CRITICAL','HIGH','MEDIUM','LOW','INFO')),
+  status           text DEFAULT 'active'  CHECK (status  IN ('active','monitoring','contained','resolved')),
+  threat_actor_name text,
+  risk_score       integer DEFAULT 0,
+  ioc_count        integer DEFAULT 0,
+  finding_count    integer DEFAULT 0,
+  confidence       integer DEFAULT 70,
+  techniques       text[],
+  tags             text[],
+  source           text DEFAULT 'manual',
+  created_at       timestamptz DEFAULT now(),
+  updated_at       timestamptz DEFAULT now()
+);
+
+ALTER TABLE campaigns ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "campaigns_tenant_read" ON campaigns FOR SELECT TO authenticated
+  USING (tenant_id = (SELECT tenant_id FROM public.users WHERE auth_id = auth.uid() LIMIT 1));
+CREATE POLICY "campaigns_service_role" ON campaigns FOR ALL TO service_role
+  USING (true) WITH CHECK (true);
+
+CREATE INDEX IF NOT EXISTS idx_campaigns_tenant ON campaigns (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_campaigns_severity ON campaigns (severity);
+CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns (status);
+
+-- Detections table (if not exists)
+CREATE TABLE IF NOT EXISTS detections (
+  id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id        uuid NOT NULL,
+  title            text NOT NULL,
+  description      text,
+  severity         text DEFAULT 'INFO' CHECK (severity IN ('CRITICAL','HIGH','MEDIUM','LOW','INFO')),
+  type             text,
+  source           text DEFAULT 'SIEM',
+  ioc_value        text,
+  ioc_type         text,
+  mitre_technique  text,
+  campaign_id      uuid REFERENCES campaigns(id) ON DELETE SET NULL,
+  campaign_name    text,
+  asset            text,
+  hostname         text,
+  risk_score       integer DEFAULT 0,
+  created_at       timestamptz DEFAULT now()
+);
+
+ALTER TABLE detections ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "detections_tenant_read" ON detections FOR SELECT TO authenticated
+  USING (tenant_id = (SELECT tenant_id FROM public.users WHERE auth_id = auth.uid() LIMIT 1));
+CREATE POLICY "detections_service_role" ON detections FOR ALL TO service_role
+  USING (true) WITH CHECK (true);
+
+CREATE INDEX IF NOT EXISTS idx_detections_tenant   ON detections (tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_detections_severity ON detections (severity);
+CREATE INDEX IF NOT EXISTS idx_detections_campaign ON detections (campaign_id);</pre>
+</div>
+
+<!-- ═══ VALIDATION ═══ -->
+<div class="section">
+  <h2>✅ Post-Deploy Validation Checklist</h2>
+  <div class="two-col">
+    <div>
+      <h3>Browser Console Checks</h3>
+      <pre style="font-size:.75em">
+// Run these in DevTools console:
+
+// 1. Verify modules loaded
+typeof window.renderCampaignsSOC  // → 'function'
+typeof window.renderLiveDetectionsSOC  // → 'function'
+typeof window.CorrelationEngine   // → 'object'
+
+// 2. Check correlation engine state
+CorrelationEngine.lastRun         // → ISO timestamp
+CorrelationEngine.results         // → {created:N, updated:M, errors:0}
+
+// 3. Check campaign data
+await fetch('/api/cti/campaigns', {
+  headers: { Authorization: 'Bearer ' + localStorage.getItem('wadjet_access_token') }
+}).then(r => r.json()).then(d => console.log('Campaigns:', d.total));
+
+// 4. Manual correlation run
+await runCampaignCorrelation({ force: true });
+</pre>
+    </div>
+    <div>
+      <h3>Visual Checklist</h3>
+      <div style="font-size:.85em;line-height:2.2">
+        <label style="display:flex;gap:8px;align-items:center;cursor:pointer;color:#8b949e">
+          <input type="checkbox" style="accent-color:#a78bfa"> Campaigns page shows animated KPI cards
+        </label>
+        <label style="display:flex;gap:8px;align-items:center;cursor:pointer;color:#8b949e">
+          <input type="checkbox" style="accent-color:#a78bfa"> Campaign cards render with severity glow
+        </label>
+        <label style="display:flex;gap:8px;align-items:center;cursor:pointer;color:#8b949e">
+          <input type="checkbox" style="accent-color:#a78bfa"> Click campaign → detail panel slides in
+        </label>
+        <label style="display:flex;gap:8px;align-items:center;cursor:pointer;color:#8b949e">
+          <input type="checkbox" style="accent-color:#a78bfa"> IOC Graph renders at bottom
+        </label>
+        <label style="display:flex;gap:8px;align-items:center;cursor:pointer;color:#8b949e">
+          <input type="checkbox" style="accent-color:#a78bfa"> "Threat Map" button shows attack flows
+        </label>
+        <label style="display:flex;gap:8px;align-items:center;cursor:pointer;color:#8b949e">
+          <input type="checkbox" style="accent-color:#a78bfa"> Live Detections shows event feed
+        </label>
+        <label style="display:flex;gap:8px;align-items:center;cursor:pointer;color:#8b949e">
+          <input type="checkbox" style="accent-color:#a78bfa"> Event rate badge shows events/sec
+        </label>
+        <label style="display:flex;gap:8px;align-items:center;cursor:pointer;color:#8b949e">
+          <input type="checkbox" style="accent-color:#a78bfa"> Filter bar filters results in real-time
+        </label>
+        <label style="display:flex;gap:8px;align-items:center;cursor:pointer;color:#8b949e">
+          <input type="checkbox" style="accent-color:#a78bfa"> Console shows no errors
+        </label>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ ARCHITECTURE ═══ -->
+<div class="section">
+  <h2>🏗️ Architecture Overview</h2>
+  <pre style="font-size:.78em;line-height:2">
+┌─────────────────────────────────────────────────────────────────┐
+│                    BROWSER (Frontend)                           │
+│                                                                  │
+│  index.html loads:                                              │
+│  ├── css/soc-campaigns.css   → Dark neon SOC theme             │
+│  ├── js/campaign-correlation.js → Auto-init on auth:restored   │
+│  │     ├── checkIngestionPipeline()  → GET /ingest/stats       │
+│  │     ├── triggerIngestion()        → POST /ingest/run        │
+│  │     ├── runCorrelation()          → POST /ingest/correlate  │
+│  │     │    └── fallback: client-side IOC clustering           │
+│  │     └── startCorrelationScheduler() → every 5 min          │
+│  │                                                              │
+│  ├── js/campaigns-soc.js    → renderCampaigns() override      │
+│  │     ├── _csocLoadKPIs()           → GET /cti/campaigns      │
+│  │     │                               GET /ingest/stats       │
+│  │     ├── _csocLoadCampaigns()      → GET /cti/campaigns?qs  │
+│  │     ├── _csocOpenDetail()         → GET /cti/campaigns/:id  │
+│  │     ├── _csocDrawGraph()          → Canvas IOC Graph       │
+│  │     ├── _csocInitThreatMap()      → Canvas Attack Map      │
+│  │     └── _csocStartPolling()       → 30s poll for new camps │
+│  │                                                              │
+│  └── js/live-detections-soc.js → renderLiveDetections() override
+│        ├── _dsocLoadKPIs()           → GET /cti/detections     │
+│        ├── _dsocLoadFeed()           → GET /cti/detections?qs  │
+│        ├── _dsocConnectWS()          → WS /ws/detections       │
+│        ├── _dsocPollNew()            → 15s fallback poll       │
+│        └── _dsocInjectLiveEvent()    → inject row + animate   │
+│                                                                  │
+├─────────────────────────────────────────────────────────────────┤
+│                   BACKEND (Render)                              │
+│                                                                  │
+│  GET  /api/cti/campaigns      → list campaigns (tenant-scoped)│
+│  POST /api/cti/campaigns      → create campaign               │
+│  GET  /api/cti/campaigns/:id  → campaign detail + IOCs        │
+│  GET  /api/cti/detections     → list detection events         │
+│  POST /api/ingest/run         → trigger feed ingestion        │
+│  POST /api/ingest/correlate   → server-side IOC correlation   │
+│  GET  /api/ingest/stats       → IOC counts + feed status      │
+│  GET  /api/iocs               → IOC list (for graph data)     │
+│  WS   /ws/detections          → real-time event stream        │
+└─────────────────────────────────────────────────────────────────┘</pre>
+</div>
+
+<footer>
+  <p>Wadjet-Eye AI — Active Campaigns &amp; Live Detections v2.0 Deploy Guide</p>
+  <p style="margin-top:6px">Generated 2026-04-02 | Backend: wadjet-eye-ai.onrender.com</p>
+</footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,1257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAKAY SOC Assistant — Wadjet-Eye AI</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+<style>
+/* ── Reset & Base ─────────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg-1:#0d1117;--bg-2:#161b22;--bg-3:#1c2330;--bg-4:#21262d;
+  --border:#30363d;--border-2:#3d444d;
+  --text-1:#e6edf3;--text-2:#8b949e;--text-3:#6e7781;
+  --accent:#58a6ff;--accent-dim:#1f4068;
+  --green:#3fb950;--green-dim:#0d3d1a;
+  --red:#f85149;--red-dim:#3d1414;
+  --orange:#e3b341;--orange-dim:#3d2e00;
+  --purple:#d2a8ff;--purple-dim:#2d1a4a;
+  --cyan:#39c5cf;--cyan-dim:#0d2e30;
+  --font-mono:'JetBrains Mono','Fira Code','Cascadia Code',monospace;
+  --font-ui:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  --radius:8px;--radius-lg:12px;
+  --shadow:0 4px 16px rgba(0,0,0,.4);
+  --sidebar-width:260px;
+  --chat-max:820px;
+}
+html{font-size:14px;scroll-behavior:smooth}
+body{background:var(--bg-1);color:var(--text-1);font-family:var(--font-ui);line-height:1.6;overflow:hidden;height:100vh;display:flex;flex-direction:column}
+
+/* ── Layout ─────────────────────────────────────────────────────── */
+#app{display:flex;height:100vh;overflow:hidden}
+#sidebar{width:var(--sidebar-width);min-width:var(--sidebar-width);background:var(--bg-2);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;transition:width .25s}
+#sidebar.collapsed{width:0;min-width:0}
+#main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+
+/* ── Topbar ─────────────────────────────────────────────────────── */
+#topbar{height:56px;min-height:56px;background:var(--bg-2);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 16px;gap:12px;z-index:10}
+#topbar .logo{display:flex;align-items:center;gap:8px;font-weight:700;font-size:15px;color:var(--accent)}
+#topbar .logo .eye{font-size:22px}
+#topbar .status-chip{padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;letter-spacing:.3px}
+#topbar .status-chip.online{background:var(--green-dim);color:var(--green);border:1px solid var(--green)}
+#topbar .status-chip.offline{background:var(--red-dim);color:var(--red);border:1px solid var(--red)}
+#topbar .status-chip.degraded{background:var(--orange-dim);color:var(--orange);border:1px solid var(--orange)}
+#topbar .spacer{flex:1}
+#topbar .nav-tabs{display:flex;gap:4px}
+.nav-tab{padding:6px 14px;border-radius:var(--radius);font-size:13px;font-weight:500;cursor:pointer;color:var(--text-2);border:none;background:transparent;transition:.15s;white-space:nowrap}
+.nav-tab:hover{background:var(--bg-4);color:var(--text-1)}
+.nav-tab.active{background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent)}
+#btn-sidebar-toggle{background:transparent;border:1px solid var(--border);border-radius:var(--radius);padding:6px 10px;cursor:pointer;color:var(--text-2);font-size:16px}
+
+/* ── Panels (tab content) ───────────────────────────────────────── */
+.panel{display:none;flex:1;overflow:hidden;flex-direction:column}
+.panel.active{display:flex}
+
+/* ── Chat Panel ─────────────────────────────────────────────────── */
+#panel-chat{flex-direction:row}
+#chat-sidebar{width:var(--sidebar-width);min-width:var(--sidebar-width);background:var(--bg-2);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+#chat-main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+#chat-messages{flex:1;overflow-y:auto;padding:24px 16px;display:flex;flex-direction:column;gap:20px}
+#chat-messages::-webkit-scrollbar{width:4px}
+#chat-messages::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:4px}
+
+/* Sidebar — sessions */
+.sidebar-header{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+.sidebar-header span{font-weight:600;font-size:13px;color:var(--text-2);text-transform:uppercase;letter-spacing:.6px}
+.btn-new-chat{background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:var(--radius);font-size:12px;cursor:pointer;font-weight:600}
+#sessions-list{flex:1;overflow-y:auto;padding:8px}
+.session-item{padding:8px 10px;border-radius:var(--radius);cursor:pointer;font-size:12px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:.12s}
+.session-item:hover{background:var(--bg-4);color:var(--text-1)}
+.session-item.active{background:var(--accent-dim);color:var(--accent)}
+
+/* Messages */
+.msg{display:flex;gap:12px;max-width:var(--chat-max);align-self:flex-start;width:100%}
+.msg.user{align-self:flex-end;flex-direction:row-reverse}
+.msg-avatar{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;margin-top:2px}
+.msg.assistant .msg-avatar{background:var(--accent-dim);border:1px solid var(--accent)}
+.msg.user .msg-avatar{background:var(--green-dim);border:1px solid var(--green)}
+.msg-body{flex:1;min-width:0}
+.msg-bubble{background:var(--bg-3);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;font-size:13px;line-height:1.7}
+.msg.user .msg-bubble{background:var(--accent-dim);border-color:var(--accent)}
+.msg-meta{display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap}
+.badge{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:.3px}
+.badge-provider-openai{background:#0d3d1a;color:#3fb950;border:1px solid #3fb950}
+.badge-provider-anthropic{background:#3d2200;color:#e3b341;border:1px solid #e3b341}
+.badge-provider-gemini{background:#0d1f4a;color:#58a6ff;border:1px solid #58a6ff}
+.badge-provider-ollama{background:#2d1a4a;color:#d2a8ff;border:1px solid #d2a8ff}
+.badge-provider-mock,.badge-provider-demo,.badge-provider-hybrid-fallback{background:#2d2d2d;color:#8b949e;border:1px solid #8b949e}
+.badge-priority-high{background:#3d0e0e;color:#f85149;border:1px solid #f85149}
+.badge-priority-medium{background:#3d2e00;color:#e3b341;border:1px solid #e3b341}
+.badge-priority-low{background:#0d2d1a;color:#3fb950;border:1px solid #3fb950}
+.badge-degraded{background:#3d0e0e;color:#f85149;border:1px solid #f85149}
+.badge-streaming{background:#0d2e30;color:#39c5cf;border:1px solid #39c5cf;animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.msg-time{font-size:10px;color:var(--text-3)}
+
+/* Markdown rendered */
+.msg-bubble h2{font-size:14px;font-weight:700;margin:14px 0 6px;color:var(--text-1);border-bottom:1px solid var(--border);padding-bottom:4px}
+.msg-bubble h2:first-child{margin-top:0}
+.msg-bubble h3{font-size:13px;font-weight:600;margin:10px 0 4px;color:var(--accent)}
+.msg-bubble h4{font-size:12px;font-weight:600;margin:8px 0 3px;color:var(--text-2)}
+.msg-bubble p{margin:4px 0}
+.msg-bubble ul,.msg-bubble ol{margin:4px 0 4px 16px}
+.msg-bubble li{margin:2px 0}
+.msg-bubble strong{color:var(--orange);font-weight:700}
+.msg-bubble em{color:var(--purple)}
+.msg-bubble code{font-family:var(--font-mono);background:var(--bg-4);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:11.5px;color:var(--cyan)}
+.msg-bubble pre{background:var(--bg-1);border:1px solid var(--border);border-radius:var(--radius);padding:12px;overflow-x:auto;margin:8px 0;position:relative}
+.msg-bubble pre code{background:none;border:none;padding:0;font-size:11.5px;color:var(--text-1);line-height:1.6}
+.code-header{display:flex;justify-content:space-between;align-items:center;padding:6px 12px 0;font-size:10px;color:var(--text-3);font-family:var(--font-mono)}
+.btn-copy-code{background:var(--bg-4);border:1px solid var(--border);color:var(--text-2);padding:2px 8px;border-radius:4px;font-size:10px;cursor:pointer;font-family:var(--font-mono)}
+.btn-copy-code:hover{background:var(--accent-dim);color:var(--accent)}
+.msg-bubble table{border-collapse:collapse;width:100%;margin:8px 0;font-size:12px}
+.msg-bubble th,.msg-bubble td{border:1px solid var(--border);padding:6px 10px;text-align:left}
+.msg-bubble th{background:var(--bg-4);font-weight:600;color:var(--text-2)}
+.msg-bubble tr:nth-child(even) td{background:var(--bg-3)}
+.msg-bubble blockquote{border-left:3px solid var(--accent);margin:8px 0;padding:6px 12px;background:var(--accent-dim);border-radius:0 var(--radius) var(--radius) 0;color:var(--text-2);font-size:12px}
+
+/* Tool indicator */
+.tool-indicator{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--cyan);background:var(--cyan-dim);border:1px solid var(--cyan);border-radius:20px;padding:3px 10px;margin:6px 0}
+
+/* Typing */
+.typing-indicator{display:flex;align-items:center;gap:4px;padding:8px 12px}
+.typing-dot{width:6px;height:6px;background:var(--accent);border-radius:50%;animation:typing .8s infinite;opacity:.4}
+.typing-dot:nth-child(2){animation-delay:.2s}
+.typing-dot:nth-child(3){animation-delay:.4s}
+@keyframes typing{0%,100%{opacity:.4;transform:scale(1)}50%{opacity:1;transform:scale(1.3)}}
+
+/* Welcome */
+#chat-welcome{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;padding:40px 20px;text-align:center;gap:20px}
+#chat-welcome h2{font-size:22px;font-weight:700;color:var(--text-1)}
+#chat-welcome p{color:var(--text-2);font-size:14px;max-width:480px}
+.quick-prompts{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:600px}
+.quick-prompt{background:var(--bg-3);border:1px solid var(--border);border-radius:var(--radius-lg);padding:8px 14px;font-size:12px;cursor:pointer;color:var(--text-2);transition:.15s;text-align:left;max-width:280px}
+.quick-prompt:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
+
+/* Input area */
+#chat-input-area{padding:14px 16px;border-top:1px solid var(--border);background:var(--bg-2)}
+#chat-form{display:flex;gap:8px;align-items:flex-end}
+#chat-input{flex:1;background:var(--bg-4);border:1px solid var(--border);border-radius:var(--radius-lg);padding:10px 14px;color:var(--text-1);font-size:13px;font-family:var(--font-ui);resize:none;min-height:44px;max-height:200px;outline:none;transition:.15s;line-height:1.5}
+#chat-input:focus{border-color:var(--accent)}
+#chat-input::placeholder{color:var(--text-3)}
+#btn-send{background:var(--accent);border:none;border-radius:var(--radius-lg);padding:10px 18px;color:#fff;font-weight:600;font-size:13px;cursor:pointer;transition:.15s;white-space:nowrap}
+#btn-send:hover{filter:brightness(1.1)}
+#btn-send:disabled{opacity:.4;cursor:not-allowed}
+.input-meta{display:flex;gap:8px;align-items:center;margin-top:6px;font-size:11px;color:var(--text-3)}
+#char-count{color:var(--text-3)}
+#char-count.near{color:var(--orange)}
+
+/* ── Threat Intel Panel ───────────────────────────────────────────── */
+#panel-intel{padding:20px;overflow-y:auto;gap:20px}
+#panel-intel::-webkit-scrollbar{width:4px}
+#panel-intel::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:4px}
+.intel-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:900px){.intel-grid{grid-template-columns:1fr}}
+.card{background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;overflow:hidden}
+.card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.card-title{font-size:13px;font-weight:700;color:var(--text-1);text-transform:uppercase;letter-spacing:.5px}
+.card-badge{font-size:10px;padding:2px 7px;border-radius:20px;font-weight:700}
+.cve-row{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);font-size:12px}
+.cve-row:last-child{border-bottom:none}
+.cve-id{font-family:var(--font-mono);font-size:11px;color:var(--accent);font-weight:600;min-width:130px}
+.cve-score{font-family:var(--font-mono);font-size:11px;min-width:60px}
+.cve-score.critical{color:var(--red)}
+.cve-score.high{color:var(--orange)}
+.exploited-badge{font-size:9px;padding:1px 5px;border-radius:4px;background:var(--red-dim);color:var(--red);border:1px solid var(--red);font-weight:700}
+.cve-vendor{color:var(--text-2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mitre-row{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;cursor:pointer}
+.mitre-row:last-child{border-bottom:none}
+.mitre-row:hover .mitre-id{text-decoration:underline}
+.mitre-id{font-family:var(--font-mono);font-size:11px;color:var(--purple);font-weight:600;min-width:80px}
+.mitre-name{flex:1;color:var(--text-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mitre-tactic{font-size:10px;color:var(--text-3);min-width:90px;text-align:right}
+.severity-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.severity-dot.critical{background:var(--red)}
+.severity-dot.high{background:var(--orange)}
+.severity-dot.medium{background:var(--orange)}
+.severity-dot.low{background:var(--green)}
+.btn-load-more{width:100%;background:var(--bg-4);border:1px solid var(--border);border-radius:var(--radius);padding:6px;font-size:11px;color:var(--text-2);cursor:pointer;margin-top:8px}
+.btn-load-more:hover{border-color:var(--accent);color:var(--accent)}
+
+/* ── Detection Panel ─────────────────────────────────────────────── */
+#panel-detect{padding:20px;overflow-y:auto;gap:16px}
+#panel-detect::-webkit-scrollbar{width:4px}
+#panel-detect::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:4px}
+.detect-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.detect-input{background:var(--bg-4);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;color:var(--text-1);font-size:12px;font-family:var(--font-mono);outline:none;min-width:160px}
+.detect-input:focus{border-color:var(--accent)}
+.detect-input::placeholder{color:var(--text-3)}
+.btn-detect{background:var(--accent);border:none;border-radius:var(--radius);padding:8px 16px;color:#fff;font-size:12px;font-weight:600;cursor:pointer}
+.btn-detect:hover{filter:brightness(1.1)}
+.format-tabs{display:flex;gap:4px}
+.format-tab{padding:5px 12px;border-radius:var(--radius);font-size:11px;font-weight:600;font-family:var(--font-mono);cursor:pointer;color:var(--text-2);border:1px solid var(--border);background:var(--bg-4);transition:.12s}
+.format-tab.active{background:var(--accent-dim);color:var(--accent);border-color:var(--accent)}
+.detect-output{background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden}
+.detect-output-header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);background:var(--bg-3)}
+.detect-output-title{font-size:12px;font-weight:700;color:var(--text-1)}
+.btn-copy-all{background:var(--bg-4);border:1px solid var(--border);border-radius:var(--radius);padding:4px 10px;font-size:11px;color:var(--text-2);cursor:pointer;font-family:var(--font-mono)}
+.btn-copy-all:hover{border-color:var(--accent);color:var(--accent)}
+.detect-code{margin:0;padding:14px;overflow-x:auto;font-family:var(--font-mono);font-size:11.5px;color:var(--text-1);background:var(--bg-1);line-height:1.6;white-space:pre;max-height:520px;overflow-y:auto}
+.technique-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
+.technique-card{background:var(--bg-3);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;cursor:pointer;transition:.12s}
+.technique-card:hover{border-color:var(--accent);background:var(--accent-dim)}
+.technique-card .t-id{font-family:var(--font-mono);font-size:11px;color:var(--purple);font-weight:600}
+.technique-card .t-name{font-size:12px;color:var(--text-1);margin-top:2px}
+.technique-card .t-tactic{font-size:10px;color:var(--text-3);margin-top:2px}
+
+/* ── Simulation Panel ────────────────────────────────────────────── */
+#panel-simulate{padding:20px;overflow-y:auto;gap:16px}
+#panel-simulate::-webkit-scrollbar{width:4px}
+#panel-simulate::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:4px}
+.sim-buttons{display:flex;gap:8px;flex-wrap:wrap}
+.btn-scenario{background:var(--bg-3);border:1px solid var(--border);border-radius:var(--radius-lg);padding:10px 20px;font-size:13px;cursor:pointer;color:var(--text-2);transition:.15s;font-weight:600}
+.btn-scenario:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
+.btn-scenario.ransomware:hover,.btn-scenario.ransomware.active{border-color:var(--red);color:var(--red);background:var(--red-dim)}
+.btn-scenario.apt:hover,.btn-scenario.apt.active{border-color:var(--orange);color:var(--orange);background:var(--orange-dim)}
+.btn-scenario.phishing:hover,.btn-scenario.phishing.active{border-color:var(--purple);color:var(--purple);background:var(--purple-dim)}
+.timeline{display:flex;flex-direction:column;gap:0}
+.timeline-item{display:flex;gap:12px;position:relative}
+.timeline-item:not(:last-child)::after{content:'';position:absolute;left:19px;top:40px;width:2px;height:calc(100% - 10px);background:var(--border)}
+.timeline-icon{width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;z-index:1;border:2px solid var(--border)}
+.timeline-icon.critical{background:var(--red-dim);border-color:var(--red)}
+.timeline-icon.high{background:var(--orange-dim);border-color:var(--orange)}
+.timeline-icon.medium{background:var(--accent-dim);border-color:var(--accent)}
+.timeline-body{flex:1;padding-bottom:16px}
+.timeline-phase{font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.5px}
+.timeline-action{font-size:13px;color:var(--text-1);margin:2px 0}
+.timeline-time{font-size:10px;color:var(--text-3);font-family:var(--font-mono)}
+.timeline-log{background:var(--bg-1);border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;font-family:var(--font-mono);font-size:10.5px;color:var(--text-2);margin-top:6px;overflow-x:auto;max-height:120px;overflow-y:auto;white-space:pre}
+
+/* ── Alerts Panel ────────────────────────────────────────────────── */
+#panel-alerts{padding:20px;overflow-y:auto;gap:16px}
+#panel-alerts::-webkit-scrollbar{width:4px}
+#panel-alerts::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:4px}
+.alert-row{display:flex;align-items:flex-start;gap:12px;background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-lg);padding:12px 14px;transition:.15s}
+.alert-row:hover{border-color:var(--border-2)}
+.alert-row.critical{border-left:3px solid var(--red)}
+.alert-row.high{border-left:3px solid var(--orange)}
+.alert-row.medium{border-left:3px solid var(--accent)}
+.alert-icon{font-size:20px;flex-shrink:0;margin-top:1px}
+.alert-content{flex:1;min-width:0}
+.alert-title{font-size:13px;font-weight:600;color:var(--text-1)}
+.alert-desc{font-size:12px;color:var(--text-2);margin-top:2px}
+.alert-meta{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
+.alert-tag{font-size:10px;padding:1px 6px;border-radius:4px;background:var(--bg-4);color:var(--text-3);border:1px solid var(--border);font-family:var(--font-mono)}
+
+/* ── Stats row ───────────────────────────────────────────────────── */
+.stats-row{display:flex;gap:12px;flex-wrap:wrap}
+.stat-card{background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-lg);padding:12px 16px;min-width:120px;flex:1}
+.stat-label{font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:.5px;font-weight:600}
+.stat-value{font-size:26px;font-weight:700;color:var(--text-1);margin-top:2px;font-family:var(--font-mono)}
+.stat-value.red{color:var(--red)}
+.stat-value.orange{color:var(--orange)}
+.stat-value.green{color:var(--green)}
+.stat-sub{font-size:10px;color:var(--text-3);margin-top:1px}
+
+/* ── Toast ───────────────────────────────────────────────────────── */
+#toast-container{position:fixed;bottom:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px}
+.toast{background:var(--bg-3);border:1px solid var(--border);border-radius:var(--radius);padding:10px 16px;font-size:12px;color:var(--text-1);max-width:320px;animation:toastIn .25s ease;display:flex;align-items:center;gap:8px;box-shadow:var(--shadow)}
+.toast.success{border-color:var(--green)}
+.toast.error{border-color:var(--red)}
+.toast.warn{border-color:var(--orange)}
+@keyframes toastIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+
+/* ── Scrollbars (global) ─────────────────────────────────────────── */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:var(--bg-1)}
+::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:4px}
+
+/* ── Loading ─────────────────────────────────────────────────────── */
+.spinner{display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.section-loading{display:flex;align-items:center;justify-content:center;padding:40px;gap:10px;color:var(--text-2);font-size:13px}
+
+/* ── Highlighted code syntax ─────────────────────────────────────── */
+.hljs-keyword,.hljs-selector-tag{color:#ff7b72}
+.hljs-string,.hljs-attribute{color:#a5d6ff}
+.hljs-comment{color:#8b949e;font-style:italic}
+.hljs-number,.hljs-literal{color:#ffa657}
+.hljs-title,.hljs-section{color:#d2a8ff}
+.hljs-variable{color:#ffa657}
+
+/* ── Responsive ──────────────────────────────────────────────────── */
+@media(max-width:768px){
+  #chat-sidebar{display:none}
+  .intel-grid{grid-template-columns:1fr}
+  .stats-row{flex-direction:column}
+  .nav-tab span{display:none}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- Topbar -->
+  <div id="topbar">
+    <div class="logo"><span class="eye">👁️</span> Wadjet-Eye AI</div>
+    <span id="status-chip" class="status-chip offline">● Connecting…</span>
+    <div class="spacer"></div>
+    <div class="nav-tabs">
+      <button class="nav-tab active" data-panel="chat" onclick="switchPanel('chat',this)">💬 <span>RAKAY Chat</span></button>
+      <button class="nav-tab" data-panel="intel" onclick="switchPanel('intel',this)">🔍 <span>Threat Intel</span></button>
+      <button class="nav-tab" data-panel="detect" onclick="switchPanel('detect',this)">🛡️ <span>Detections</span></button>
+      <button class="nav-tab" data-panel="simulate" onclick="switchPanel('simulate',this)">⚡ <span>Simulation</span></button>
+      <button class="nav-tab" data-panel="alerts" onclick="switchPanel('alerts',this)">🚨 <span>Alerts</span></button>
+    </div>
+  </div>
+
+  <!-- Main content area -->
+  <div id="main">
+
+    <!-- ── Chat Panel ─────────────────────────────────────── -->
+    <div id="panel-chat" class="panel active">
+      <div id="chat-sidebar">
+        <div class="sidebar-header">
+          <span>Sessions</span>
+          <button class="btn-new-chat" onclick="newChat()">+ New</button>
+        </div>
+        <div id="sessions-list"></div>
+      </div>
+      <div id="chat-main">
+        <div id="chat-messages">
+          <div id="chat-welcome">
+            <div style="font-size:48px">🤖</div>
+            <h2>RAKAY SOC Assistant</h2>
+            <p>Your AI-powered SOC analyst, detection engineer, and threat intelligence platform. Ask about CVEs, MITRE techniques, generate Sigma rules, run simulations, and more.</p>
+            <div class="quick-prompts" id="quick-prompts">
+              <div class="quick-prompt" onclick="sendQuick(this)">🛡️ Generate Sigma rule for PowerShell encoded commands (T1059.001)</div>
+              <div class="quick-prompt" onclick="sendQuick(this)">🎯 Explain MITRE ATT&CK T1486 — Ransomware encryption technique</div>
+              <div class="quick-prompt" onclick="sendQuick(this)">🔍 CVE-2021-44228 Log4Shell — CVSS 10 analysis and detection</div>
+              <div class="quick-prompt" onclick="sendQuick(this)">⚡ Simulate a ransomware attack chain with detection opportunities</div>
+              <div class="quick-prompt" onclick="sendQuick(this)">📊 Generate KQL query for LSASS credential dumping (T1003)</div>
+              <div class="quick-prompt" onclick="sendQuick(this)">🌐 Profile APT29 (Cozy Bear) threat actor and TTPs</div>
+            </div>
+          </div>
+        </div>
+        <div id="chat-input-area">
+          <form id="chat-form" onsubmit="return false">
+            <textarea id="chat-input" placeholder="Ask RAKAY about threats, CVEs, Sigma rules, MITRE techniques, incidents…" rows="1" maxlength="8000" onkeydown="handleInputKey(event)" oninput="updateCharCount(this)"></textarea>
+            <button id="btn-send" onclick="sendMessage()">Send ↑</button>
+          </form>
+          <div class="input-meta">
+            <span>Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for newline</span>
+            <span class="spacer" style="flex:1"></span>
+            <span id="char-count">0 / 8000</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Threat Intel Panel ─────────────────────────────── -->
+    <div id="panel-intel" class="panel">
+      <div class="stats-row" id="intel-stats">
+        <div class="stat-card"><div class="stat-label">Total CVEs</div><div class="stat-value" id="stat-cve-total">—</div><div class="stat-sub">In local DB</div></div>
+        <div class="stat-card"><div class="stat-label">Critical CVEs</div><div class="stat-value red" id="stat-cve-critical">—</div><div class="stat-sub">CVSS ≥ 9.0</div></div>
+        <div class="stat-card"><div class="stat-label">Exploited ITW</div><div class="stat-value red" id="stat-cve-exploited">—</div><div class="stat-sub">Active exploitation</div></div>
+        <div class="stat-card"><div class="stat-label">MITRE Techniques</div><div class="stat-value orange" id="stat-mitre-total">—</div><div class="stat-sub">With detection rules</div></div>
+      </div>
+      <div class="intel-grid">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">🔴 Latest Critical CVEs</span>
+            <span class="card-badge" style="background:var(--red-dim);color:var(--red)">CVSS ≥ 9.0</span>
+          </div>
+          <div id="cve-list"><div class="section-loading"><div class="spinner"></div> Loading…</div></div>
+          <button class="btn-load-more" onclick="loadMoreCVEs()">Load more CVEs</button>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">🟠 Exploited in the Wild</span>
+            <span class="card-badge" style="background:var(--orange-dim);color:var(--orange)">CISA KEV</span>
+          </div>
+          <div id="exploited-list"><div class="section-loading"><div class="spinner"></div> Loading…</div></div>
+        </div>
+        <div class="card" style="grid-column:1/-1">
+          <div class="card-header">
+            <span class="card-title">🎯 MITRE ATT&CK High/Critical Techniques</span>
+            <input type="text" class="detect-input" id="mitre-search-input" placeholder="Search techniques…" oninput="searchMITRE(this.value)">
+          </div>
+          <div id="mitre-list"><div class="section-loading"><div class="spinner"></div> Loading…</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Detection Panel ────────────────────────────────── -->
+    <div id="panel-detect" class="panel">
+      <div class="detect-controls">
+        <input type="text" class="detect-input" id="detect-technique" placeholder="T1059.001" value="T1059.001" style="min-width:130px">
+        <div class="format-tabs">
+          <button class="format-tab active" data-fmt="sigma" onclick="selectFormat('sigma',this)">Sigma</button>
+          <button class="format-tab" data-fmt="kql" onclick="selectFormat('kql',this)">KQL</button>
+          <button class="format-tab" data-fmt="spl" onclick="selectFormat('spl',this)">SPL</button>
+          <button class="format-tab" data-fmt="all" onclick="selectFormat('all',this)">All</button>
+        </div>
+        <button class="btn-detect" onclick="generateDetection()">⚡ Generate</button>
+        <button class="btn-detect" style="background:var(--bg-4);color:var(--text-2);border:1px solid var(--border)" onclick="copyDetectionToChat()">💬 Ask RAKAY</button>
+      </div>
+      <div class="detect-output" id="detect-output" style="display:none">
+        <div class="detect-output-header">
+          <span class="detect-output-title" id="detect-output-title">Detection Rule</span>
+          <button class="btn-copy-all" onclick="copyDetection()">📋 Copy</button>
+        </div>
+        <pre class="detect-code" id="detect-code-content"></pre>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">Supported Techniques (click to load)</span></div>
+        <div class="technique-grid" id="technique-grid"><div class="section-loading"><div class="spinner"></div> Loading…</div></div>
+      </div>
+    </div>
+
+    <!-- ── Simulation Panel ───────────────────────────────── -->
+    <div id="panel-simulate" class="panel">
+      <div class="card">
+        <div class="card-header"><span class="card-title">⚡ Incident Simulation Engine</span></div>
+        <p style="font-size:12px;color:var(--text-2);margin-bottom:12px">Simulate realistic attack scenarios with full attack chain, generated logs, detection opportunities, and response playbooks.</p>
+        <div class="sim-buttons">
+          <button class="btn-scenario ransomware" onclick="runSimulation('ransomware',this)">🔴 Ransomware</button>
+          <button class="btn-scenario apt" onclick="runSimulation('apt espionage',this)">🟠 APT Espionage</button>
+          <button class="btn-scenario phishing" onclick="runSimulation('phishing',this)">🟣 Phishing</button>
+          <button class="btn-scenario" onclick="runSimulation('supply chain',this)">🔵 Supply Chain</button>
+        </div>
+      </div>
+      <div id="sim-output"></div>
+    </div>
+
+    <!-- ── Alerts Panel ───────────────────────────────────── -->
+    <div id="panel-alerts" class="panel">
+      <div class="stats-row">
+        <div class="stat-card"><div class="stat-label">Critical Alerts</div><div class="stat-value red">3</div><div class="stat-sub">Require immediate action</div></div>
+        <div class="stat-card"><div class="stat-label">High Alerts</div><div class="stat-value orange">7</div><div class="stat-sub">Investigate within 1hr</div></div>
+        <div class="stat-card"><div class="stat-label">Correlated IOCs</div><div class="stat-value orange">12</div><div class="stat-sub">Cross-source matches</div></div>
+        <div class="stat-card"><div class="stat-label">Detection Coverage</div><div class="stat-value green">85%</div><div class="stat-sub">MITRE techniques</div></div>
+      </div>
+      <div id="alerts-list" style="display:flex;flex-direction:column;gap:10px"></div>
+    </div>
+
+  </div><!-- /main -->
+</div><!-- /app -->
+
+<div id="toast-container"></div>
+
+<script>
+// ══════════════════════════════════════════════════════════════════
+//  RAKAY SOC Dashboard — Frontend v2.0
+// ══════════════════════════════════════════════════════════════════
+'use strict';
+
+// ── Config ────────────────────────────────────────────────────────
+const API_BASE = window.location.origin;
+const SOC_API  = `${API_BASE}/api/soc`;
+const RAKAY_API= `${API_BASE}/api/RAKAY`;
+
+// ── State ─────────────────────────────────────────────────────────
+const STATE = {
+  currentPanel: 'chat',
+  sessions: [],
+  currentSession: null,
+  messages: [],
+  isLoading: false,
+  currentFormat: 'sigma',
+  token: null,
+  detectionOutput: '',
+  backendOnline: false,
+};
+
+// ── Init ──────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', async () => {
+  await _init();
+});
+
+async function _init() {
+  await _checkHealth();
+  await _loadToken();
+  await _loadSessions();
+  _loadIntelData();
+  _loadTechniqueGrid();
+  _loadAlerts();
+  // Auto-focus chat input
+  setTimeout(() => document.getElementById('chat-input')?.focus(), 200);
+}
+
+// ── Auth ──────────────────────────────────────────────────────────
+async function _loadToken() {
+  try {
+    const stored = localStorage.getItem('rakay_demo_token');
+    const exp    = parseInt(localStorage.getItem('rakay_demo_token_exp') || '0');
+    if (stored && Date.now() < exp) { STATE.token = stored; return; }
+    const res = await fetch(`${RAKAY_API}/demo-auth`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.token) {
+      STATE.token = data.token;
+      localStorage.setItem('rakay_demo_token', data.token);
+      localStorage.setItem('rakay_demo_token_exp', (Date.now() + 23 * 3600_000).toString());
+    }
+  } catch(e) { console.warn('Token load failed:', e.message); }
+}
+
+function _headers(extra = {}) {
+  const h = { 'Content-Type': 'application/json', ...extra };
+  if (STATE.token) h['Authorization'] = `Bearer ${STATE.token}`;
+  return h;
+}
+
+// ── Health check ──────────────────────────────────────────────────
+async function _checkHealth() {
+  try {
+    const [rakayRes, socRes] = await Promise.allSettled([
+      fetch(`${RAKAY_API}/health`, { signal: AbortSignal.timeout(5000) }),
+      fetch(`${SOC_API}/health`,   { signal: AbortSignal.timeout(5000) }),
+    ]);
+    const chip = document.getElementById('status-chip');
+    if (rakayRes.status === 'fulfilled' && rakayRes.value.ok) {
+      const data = await rakayRes.value.json();
+      STATE.backendOnline = true;
+      if (data.llm_ready) {
+        chip.className = 'status-chip online'; chip.textContent = '● RAKAY Online';
+      } else {
+        chip.className = 'status-chip degraded'; chip.textContent = '● AI Degraded — Local Intel Active';
+      }
+    } else {
+      chip.className = 'status-chip offline'; chip.textContent = '● Backend Offline';
+    }
+  } catch(e) {
+    document.getElementById('status-chip').className = 'status-chip offline';
+    document.getElementById('status-chip').textContent = '● Offline';
+  }
+  // Re-check every 30s
+  setTimeout(_checkHealth, 30000);
+}
+
+// ── Panel switching ───────────────────────────────────────────────
+function switchPanel(name, btn) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
+  document.getElementById(`panel-${name}`)?.classList.add('active');
+  btn?.classList.add('active');
+  STATE.currentPanel = name;
+}
+
+// ── Sessions ──────────────────────────────────────────────────────
+async function _loadSessions() {
+  try {
+    const res = await fetch(`${RAKAY_API}/session`, { headers: _headers() });
+    if (!res.ok) return;
+    const data = await res.json();
+    STATE.sessions = data.sessions || [];
+    _renderSessions();
+    if (STATE.sessions.length > 0 && !STATE.currentSession) {
+      await selectSession(STATE.sessions[0].id);
+    }
+  } catch(e) { console.warn('Sessions load failed:', e.message); }
+}
+
+function _renderSessions() {
+  const list = document.getElementById('sessions-list');
+  list.innerHTML = '';
+  STATE.sessions.forEach(s => {
+    const el = document.createElement('div');
+    el.className = `session-item ${s.id === STATE.currentSession ? 'active' : ''}`;
+    el.textContent = s.title || 'New Chat';
+    el.onclick = () => selectSession(s.id);
+    list.appendChild(el);
+  });
+}
+
+async function selectSession(id) {
+  STATE.currentSession = id;
+  _renderSessions();
+  try {
+    const res = await fetch(`${RAKAY_API}/session/${id}`, { headers: _headers() });
+    if (!res.ok) return;
+    const data = await res.json();
+    STATE.messages = data.messages || [];
+    _renderMessages();
+  } catch(e) { STATE.messages = []; _renderMessages(); }
+}
+
+async function newChat() {
+  STATE.currentSession = null;
+  STATE.messages = [];
+  _showWelcome();
+}
+
+// ── Message rendering ─────────────────────────────────────────────
+function _renderMessages() {
+  const container = document.getElementById('chat-messages');
+  if (!STATE.messages.length) { _showWelcome(); return; }
+  document.getElementById('chat-welcome').style.display = 'none';
+  container.innerHTML = '';
+  STATE.messages.forEach(m => _appendMessage(m));
+  _scrollToBottom();
+}
+
+function _showWelcome() {
+  const container = document.getElementById('chat-messages');
+  container.innerHTML = '';
+  const welcome = document.createElement('div');
+  welcome.id = 'chat-welcome';
+  welcome.innerHTML = `
+    <div style="font-size:48px">🤖</div>
+    <h2>RAKAY SOC Assistant</h2>
+    <p>Your AI-powered SOC analyst, detection engineer, and threat intelligence platform.</p>
+    <div class="quick-prompts">
+      ${[
+        ['🛡️','Generate Sigma rule for PowerShell encoded commands (T1059.001)'],
+        ['🎯','Explain MITRE ATT&CK T1486 — Ransomware encryption technique'],
+        ['🔍','CVE-2021-44228 Log4Shell — CVSS 10 analysis and detection'],
+        ['⚡','Simulate a ransomware attack chain with detection opportunities'],
+        ['📊','Generate KQL query for LSASS credential dumping (T1003)'],
+        ['🌐','Profile APT29 (Cozy Bear) threat actor and TTPs'],
+      ].map(([icon,text]) =>
+        `<div class="quick-prompt" onclick="sendQuickText('${text.replace(/'/g,"\\'")}'">${icon} ${text}</div>`
+      ).join('')}
+    </div>`;
+  container.appendChild(welcome);
+}
+
+function _appendMessage(msg) {
+  const welcome = document.getElementById('chat-welcome');
+  if (welcome) welcome.style.display = 'none';
+
+  const container = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  div.className = `msg ${msg.role}`;
+  div.id = `msg-${msg.id}`;
+
+  const avatar = msg.role === 'user' ? '👤' : '🤖';
+  const time   = msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
+
+  const rendered = msg.role === 'assistant' ? _renderMarkdown(msg.content || '') : _esc(msg.content || '');
+
+  let badges = `<span class="msg-time">${time}</span>`;
+  if (msg.priority) badges += ` <span class="badge badge-priority-${msg.priority.toLowerCase()}">${msg.priority}</span>`;
+  if (msg.provider) badges += ` <span class="badge badge-provider-${(msg.provider||'').toLowerCase().split('/')[0]}">${msg.provider}</span>`;
+  if (msg.degraded)  badges += ` <span class="badge badge-degraded">⚠️ Local Intel</span>`;
+  if (msg.latency_ms) badges += ` <span class="msg-time">${msg.latency_ms}ms</span>`;
+  if (msg.tokens_used) badges += ` <span class="msg-time">${msg.tokens_used} tokens</span>`;
+
+  div.innerHTML = `
+    <div class="msg-avatar">${avatar}</div>
+    <div class="msg-body">
+      <div class="msg-bubble">${rendered}</div>
+      <div class="msg-meta">${badges}</div>
+    </div>`;
+  container.appendChild(div);
+}
+
+function _renderMarkdown(text) {
+  if (!text) return '';
+  let t = _esc(text);
+  // Code blocks with header
+  t = t.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    const label = lang || 'code';
+    return `<div class="code-header"><span>${label.toUpperCase()}</span><button class="btn-copy-code" onclick="copyCode(this)">Copy</button></div><pre><code class="lang-${label}">${code}</code></pre>`;
+  });
+  // Inline code
+  t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Bold
+  t = t.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  // Italic
+  t = t.replace(/\*(.*?)\*/g, '<em>$1</em>');
+  // Tool indicator
+  t = t.replace(/🔧 \*(Using [^*]+)\*/g, '<span class="tool-indicator">🔧 $1</span>');
+  // H2
+  t = t.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  // H3
+  t = t.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  // H4
+  t = t.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+  // Tables
+  t = t.replace(/\|(.+)\|\n\|[-| :]+\|\n((?:\|.+\|\n)*)/g, (_, header, rows) => {
+    const ths = header.split('|').filter(c=>c.trim()).map(c=>`<th>${c.trim()}</th>`).join('');
+    const trs = rows.trim().split('\n').map(row => {
+      const tds = row.split('|').filter(c=>c.trim()).map(c=>`<td>${c.trim()}</td>`).join('');
+      return `<tr>${tds}</tr>`;
+    }).join('');
+    return `<table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
+  });
+  // Unordered lists
+  t = t.replace(/((?:^[-*•] .+\n?)+)/gm, (block) => {
+    const items = block.trim().split('\n').map(l => `<li>${l.replace(/^[-*•] /,'')}</li>`).join('');
+    return `<ul>${items}</ul>`;
+  });
+  // Ordered lists
+  t = t.replace(/((?:^\d+\. .+\n?)+)/gm, (block) => {
+    const items = block.trim().split('\n').map(l => `<li>${l.replace(/^\d+\. /,'')}</li>`).join('');
+    return `<ol>${items}</ol>`;
+  });
+  // Blockquotes
+  t = t.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+  // Paragraphs
+  t = t.replace(/\n\n+/g, '</p><p>').replace(/^(?!<[a-z])(.+)$/gm, (m) => {
+    if (m.startsWith('<') || !m.trim()) return m;
+    return m;
+  });
+  return t;
+}
+
+function _esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Chat send ─────────────────────────────────────────────────────
+async function sendMessage() {
+  const input = document.getElementById('chat-input');
+  const text  = (input.value || '').trim();
+  if (!text || STATE.isLoading) return;
+
+  input.value = '';
+  updateCharCount(input);
+  STATE.isLoading = true;
+  document.getElementById('btn-send').disabled = true;
+
+  // Append user message
+  const userMsg = { id: `u_${Date.now()}`, role: 'user', content: text, created_at: new Date().toISOString() };
+  STATE.messages.push(userMsg);
+  _appendMessage(userMsg);
+  _scrollToBottom();
+
+  // Show typing indicator
+  const typingId = `typing_${Date.now()}`;
+  _appendTyping(typingId);
+
+  try {
+    if (!STATE.currentSession) {
+      // Create session first
+      const sRes = await fetch(`${RAKAY_API}/session`, {
+        method: 'POST',
+        headers: _headers(),
+        body: JSON.stringify({ title: text.substring(0, 40) }),
+      });
+      if (sRes.ok) {
+        const sData = await sRes.json();
+        STATE.currentSession = sData.session?.id || sData.id;
+        STATE.sessions.unshift(sData.session || { id: STATE.currentSession, title: text.substring(0, 40) });
+        _renderSessions();
+      }
+    }
+
+    // Try SSE streaming first
+    const msgId = _uuid();
+    let streamed = false;
+    let streamText = '';
+    let streamBubbleId = null;
+
+    try {
+      const streamRes = await fetch(`${RAKAY_API}/chat/stream`, {
+        method: 'POST',
+        headers: _headers(),
+        body: JSON.stringify({ message: text, session_id: STATE.currentSession, message_id: msgId }),
+        signal: AbortSignal.timeout(90000),
+      });
+
+      if (streamRes.ok && streamRes.body) {
+        _removeTyping(typingId);
+        const reader  = streamRes.body.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          const lines = decoder.decode(value, { stream: true }).split('\n');
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const ev = JSON.parse(line.slice(6));
+              if (ev.type === 'start') {
+                streamBubbleId = `stream_${msgId}`;
+                _appendStreamBubble(streamBubbleId, ev.provider);
+                streamed = true;
+              } else if (ev.type === 'chunk') {
+                streamText += ev.text || '';
+                _updateStreamBubble(streamBubbleId, streamText);
+                _scrollToBottom();
+              } else if (ev.type === 'done') {
+                _finalizeStreamBubble(streamBubbleId, ev);
+                STATE.messages.push({ id: streamBubbleId, role: 'assistant', content: streamText, ...ev });
+                _renderSessions();
+                break;
+              } else if (ev.type === 'error') {
+                throw new Error(ev.error || 'Stream error');
+              }
+            } catch(_) {}
+          }
+        }
+      }
+    } catch (streamErr) {
+      if (!streamed) {
+        _removeTyping(typingId);
+        // Fall back to non-streaming
+        const res = await fetch(`${RAKAY_API}/chat`, {
+          method: 'POST',
+          headers: _headers(),
+          body: JSON.stringify({ message: text, session_id: STATE.currentSession, message_id: msgId }),
+          signal: AbortSignal.timeout(90000),
+        });
+        const data = await res.json();
+        const reply = data.reply || data.content || '⚠️ No response received';
+        const assistantMsg = { id: `a_${Date.now()}`, role: 'assistant', content: reply, ...data };
+        STATE.messages.push(assistantMsg);
+        _appendMessage(assistantMsg);
+      }
+    }
+
+  } catch(err) {
+    _removeTyping(typingId);
+    _appendMessage({ id: `err_${Date.now()}`, role: 'assistant', content: `⚠️ Using built-in threat intelligence\n\n${err.message}`, created_at: new Date().toISOString(), degraded: true });
+  } finally {
+    STATE.isLoading = false;
+    document.getElementById('btn-send').disabled = false;
+    _scrollToBottom();
+  }
+}
+
+function _appendStreamBubble(id, provider) {
+  const container = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  div.className = 'msg assistant';
+  div.id = `msg-${id}`;
+  div.innerHTML = `
+    <div class="msg-avatar">🤖</div>
+    <div class="msg-body">
+      <div class="msg-bubble" id="bubble-${id}"><span class="badge badge-streaming">⟳ Streaming</span></div>
+      <div class="msg-meta"><span class="badge badge-provider-${(provider||'').toLowerCase().split('/')[0]}">${provider||'AI'}</span></div>
+    </div>`;
+  container.appendChild(div);
+}
+
+function _updateStreamBubble(id, text) {
+  const bubble = document.getElementById(`bubble-${id}`);
+  if (bubble) bubble.innerHTML = _renderMarkdown(text);
+}
+
+function _finalizeStreamBubble(id, data) {
+  const meta = document.querySelector(`#msg-${id} .msg-meta`);
+  if (!meta) return;
+  let badges = `<span class="msg-time">${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>`;
+  if (data.provider) badges += ` <span class="badge badge-provider-${(data.provider||'').toLowerCase().split('/')[0]}">${data.provider}</span>`;
+  if (data.degraded)  badges += ` <span class="badge badge-degraded">⚠️ Local Intel</span>`;
+  if (data.latency_ms) badges += ` <span class="msg-time">${data.latency_ms}ms</span>`;
+  meta.innerHTML = badges;
+}
+
+function _appendTyping(id) {
+  const container = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  div.className = 'msg assistant';
+  div.id = `msg-${id}`;
+  div.innerHTML = `<div class="msg-avatar">🤖</div><div class="msg-body"><div class="msg-bubble"><div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div></div></div>`;
+  container.appendChild(div);
+  _scrollToBottom();
+}
+
+function _removeTyping(id) {
+  document.getElementById(`msg-${id}`)?.remove();
+}
+
+function _scrollToBottom() {
+  const c = document.getElementById('chat-messages');
+  if (c) c.scrollTop = c.scrollHeight;
+}
+
+function sendQuick(el) { sendQuickText(el.textContent.trim().replace(/^[^ ]+ /,'').trim()); }
+function sendQuickText(text) {
+  document.getElementById('chat-input').value = text;
+  sendMessage();
+}
+
+function handleInputKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+}
+
+function updateCharCount(el) {
+  const cc = document.getElementById('char-count');
+  if (!cc) return;
+  const len = (el.value || '').length;
+  cc.textContent = `${len} / 8000`;
+  cc.className = len > 7000 ? 'near' : '';
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+}
+
+// ── Intel Panel ───────────────────────────────────────────────────
+async function _loadIntelData() {
+  await Promise.allSettled([_loadCVEs(), _loadExploited(), _loadMITRE()]);
+  _updateStats();
+}
+
+async function _loadCVEs(limit = 10) {
+  try {
+    const res = await fetch(`${SOC_API}/cves/critical?limit=${limit}`, { headers: _headers() });
+    if (!res.ok) throw new Error('API unavailable');
+    const data = await res.json();
+    _renderCVEList('cve-list', data.cves || []);
+  } catch(e) {
+    // Fallback: render static critical CVEs from known list
+    _renderCVEList('cve-list', _getStaticCVEs(10));
+  }
+}
+
+async function _loadExploited() {
+  try {
+    const res = await fetch(`${SOC_API}/cves/exploited?limit=8`, { headers: _headers() });
+    if (!res.ok) throw new Error('API unavailable');
+    const data = await res.json();
+    _renderCVEList('exploited-list', data.cves || [], true);
+  } catch(e) {
+    _renderCVEList('exploited-list', _getStaticCVEs(8, true), true);
+  }
+}
+
+function _renderCVEList(containerId, cves, showExploitedBadge = false) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  if (!cves.length) { container.innerHTML = '<div style="padding:12px;color:var(--text-3);font-size:12px">No data available</div>'; return; }
+  container.innerHTML = cves.map(c => `
+    <div class="cve-row" onclick="queryCVE('${c.id}')">
+      <span class="cve-id">${c.id}</span>
+      <span class="cve-score ${c.severity || 'high'}">CVSS ${c.cvss_score || c.cvss || '—'}</span>
+      ${(showExploitedBadge || c.exploited) ? '<span class="exploited-badge">🔴 ITW</span>' : ''}
+      <span class="cve-vendor">${c.vendor || ''} ${c.product ? '— ' + c.product.substring(0,30) : ''}</span>
+    </div>`).join('');
+}
+
+async function _loadMITRE() {
+  try {
+    const res = await fetch(`${SOC_API}/mitre/search`, {
+      method: 'POST', headers: _headers(),
+      body: JSON.stringify({ limit: 20 }),
+    });
+    if (!res.ok) throw new Error('API unavailable');
+    const data = await res.json();
+    _renderMITREList(data.results || []);
+  } catch(e) {
+    _renderMITREList(_getStaticMITRE());
+  }
+}
+
+function _renderMITREList(techniques) {
+  const container = document.getElementById('mitre-list');
+  if (!container) return;
+  container.innerHTML = techniques.map(t => `
+    <div class="mitre-row" onclick="queryMITRE('${t.id}')">
+      <div class="severity-dot ${t.severity || 'high'}"></div>
+      <span class="mitre-id">${t.id}</span>
+      <span class="mitre-name">${t.name}</span>
+      <span class="mitre-tactic">${(t.tactic||'').split('/')[0].trim()}</span>
+    </div>`).join('');
+}
+
+function searchMITRE(query) {
+  const rows = document.querySelectorAll('#mitre-list .mitre-row');
+  rows.forEach(row => {
+    row.style.display = row.textContent.toLowerCase().includes(query.toLowerCase()) ? '' : 'none';
+  });
+}
+
+async function loadMoreCVEs() { await _loadCVEs(25); }
+
+async function _updateStats() {
+  try {
+    const res = await fetch(`${SOC_API}/health`, { headers: _headers() });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.db_stats) {
+      document.getElementById('stat-cve-total').textContent = data.db_stats.cve?.total || '—';
+      document.getElementById('stat-cve-critical').textContent = data.db_stats.cve?.critical || '—';
+      document.getElementById('stat-cve-exploited').textContent = data.db_stats.cve?.exploited || '—';
+      document.getElementById('stat-mitre-total').textContent = data.db_stats.mitre?.total || '—';
+    }
+    if (data.rule_count) document.getElementById('stat-mitre-total').textContent = data.rule_count;
+  } catch(e) {
+    document.getElementById('stat-cve-total').textContent = '20+';
+    document.getElementById('stat-cve-critical').textContent = '15+';
+    document.getElementById('stat-cve-exploited').textContent = '17+';
+    document.getElementById('stat-mitre-total').textContent = '15+';
+  }
+}
+
+function queryCVE(id) {
+  sendQuickText(`CVE ${id} — provide full analysis, CVSS details, detection guidance, and mitigation steps`);
+  switchPanel('chat', document.querySelector('[data-panel="chat"]'));
+}
+
+function queryMITRE(id) {
+  sendQuickText(`MITRE ATT&CK ${id} — explain technique, provide Sigma and KQL detection rules, mitigation guidance`);
+  switchPanel('chat', document.querySelector('[data-panel="chat"]'));
+}
+
+// ── Detection Panel ───────────────────────────────────────────────
+async function _loadTechniqueGrid() {
+  try {
+    const res = await fetch(`${SOC_API}/detect/list`, { headers: _headers() });
+    if (!res.ok) throw new Error('API unavailable');
+    const data = await res.json();
+    _renderTechniqueGrid(data.techniques || []);
+  } catch(e) {
+    _renderTechniqueGrid(_getStaticTechniques());
+  }
+}
+
+function _renderTechniqueGrid(techniques) {
+  const grid = document.getElementById('technique-grid');
+  if (!grid) return;
+  grid.innerHTML = techniques.map(t => `
+    <div class="technique-card" onclick="loadTechnique('${t.id}')">
+      <div class="t-id">${t.id}</div>
+      <div class="t-name">${t.name}</div>
+      <div class="t-tactic">${t.tactic}</div>
+    </div>`).join('');
+}
+
+function loadTechnique(id) {
+  document.getElementById('detect-technique').value = id;
+  generateDetection();
+}
+
+function selectFormat(fmt, btn) {
+  STATE.currentFormat = fmt;
+  document.querySelectorAll('.format-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+async function generateDetection() {
+  const technique = (document.getElementById('detect-technique').value || '').trim().toUpperCase();
+  if (!technique) { showToast('Enter a technique ID (e.g. T1059.001)', 'warn'); return; }
+
+  const output = document.getElementById('detect-output');
+  const content = document.getElementById('detect-code-content');
+  const title   = document.getElementById('detect-output-title');
+
+  output.style.display = 'block';
+  content.textContent  = '⟳ Generating detection rules…';
+  title.textContent    = `${technique} — ${STATE.currentFormat.toUpperCase()}`;
+
+  try {
+    const res = await fetch(`${SOC_API}/detect`, {
+      method: 'POST',
+      headers: _headers(),
+      body: JSON.stringify({ technique, format: STATE.currentFormat }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.found === false) {
+      content.textContent = data.message || `No detection template for ${technique}`;
+      return;
+    }
+    STATE.detectionOutput = data.sigma || data.kql || data.spl || data.content || '';
+    if (STATE.currentFormat === 'all') {
+      const parts = [];
+      if (data.sigma) parts.push(`# SIGMA RULE\n${data.sigma}`);
+      if (data.kql)   parts.push(`# KQL QUERY\n${data.kql}`);
+      if (data.spl)   parts.push(`# SPL QUERY\n${data.spl}`);
+      content.textContent = parts.join('\n\n' + '─'.repeat(60) + '\n\n');
+      STATE.detectionOutput = parts.join('\n\n');
+    } else {
+      content.textContent = data.content || 'No content generated';
+    }
+    title.textContent = `${technique} — ${data.name || ''} (${STATE.currentFormat.toUpperCase()})`;
+  } catch(e) {
+    content.textContent = `Error: ${e.message}\n\nTry asking RAKAY directly in the chat panel.`;
+  }
+}
+
+function copyDetection() {
+  const text = document.getElementById('detect-code-content')?.textContent || '';
+  navigator.clipboard.writeText(text).then(() => showToast('Detection rule copied!', 'success')).catch(() => showToast('Copy failed', 'error'));
+}
+
+function copyDetectionToChat() {
+  const tech = document.getElementById('detect-technique')?.value || 'T1059.001';
+  const fmt  = STATE.currentFormat;
+  sendQuickText(`Generate a ${fmt.toUpperCase()} detection rule for MITRE ATT&CK technique ${tech} with SOC analyst guidance`);
+  switchPanel('chat', document.querySelector('[data-panel="chat"]'));
+}
+
+function copyCode(btn) {
+  const pre = btn.closest('.detect-output,.msg-bubble')?.querySelector('code');
+  const text = pre ? pre.textContent : '';
+  navigator.clipboard.writeText(text).then(() => { btn.textContent = '✓ Copied!'; setTimeout(() => btn.textContent = 'Copy', 1500); });
+}
+
+// ── Simulation Panel ──────────────────────────────────────────────
+async function runSimulation(scenario, btn) {
+  document.querySelectorAll('.btn-scenario').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+
+  const output = document.getElementById('sim-output');
+  output.innerHTML = '<div class="section-loading"><div class="spinner"></div> Simulating attack chain…</div>';
+
+  try {
+    const res = await fetch(`${SOC_API}/simulate`, {
+      method: 'POST',
+      headers: _headers(),
+      body: JSON.stringify({ scenario, format: 'structured' }),
+    });
+    if (!res.ok) throw new Error('Simulation API unavailable');
+    const data = await res.json();
+    _renderSimulation(data, output);
+  } catch(e) {
+    // Local fallback
+    output.innerHTML = `<div class="card">
+      <div style="color:var(--text-2);font-size:12px">⚠️ Using built-in threat intelligence
+      <br><br>Simulation available via RAKAY chat.
+      <button class="btn-detect" onclick="sendQuickText('Simulate a ${scenario} attack chain with full timeline, detection opportunities, and response playbook'); switchPanel('chat', document.querySelector('[data-panel=chat]'))" style="margin-top:8px">Ask RAKAY for ${scenario} simulation</button></div>
+    </div>`;
+  }
+}
+
+function _renderSimulation(data, container) {
+  const severityIcon = { CRITICAL: '🔴', HIGH: '🟠', MEDIUM: '🟡', LOW: '🟢' };
+  const timelineHTML = (data.timeline || []).map(ev => `
+    <div class="timeline-item">
+      <div class="timeline-icon ${ev.severity?.toLowerCase() || 'high'}">${severityIcon[ev.severity] || '⚡'}</div>
+      <div class="timeline-body">
+        <div class="timeline-phase">${ev.phase}</div>
+        <div class="timeline-action">${_esc(ev.action)}</div>
+        <div class="timeline-time">${ev.time}</div>
+        ${ev.log ? `<div class="timeline-log">${_esc((ev.log.raw || '').substring(0,300))}</div>` : ''}
+      </div>
+    </div>`).join('');
+
+  container.innerHTML = `
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">⚡ ${_esc(data.displayName || data.scenario)}</span>
+        <span class="card-badge" style="background:var(--red-dim);color:var(--red)">${data.severity}</span>
+      </div>
+      <div style="font-size:12px;color:var(--text-2);margin-bottom:12px">
+        ${_esc(data.summary?.estimatedDamage || '')}
+        ${data.summary?.recommendation ? `<br><strong>${_esc(data.summary.recommendation)}</strong>` : ''}
+      </div>
+      <div class="timeline">${timelineHTML}</div>
+    </div>
+    ${data.detectionOpportunities?.length ? `<div class="card">
+      <div class="card-header"><span class="card-title">🛡️ Detection Opportunities</span></div>
+      ${data.detectionOpportunities.map(d => `
+        <div style="display:flex;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
+          <span style="color:var(--purple);font-family:var(--font-mono);min-width:80px">${d.technique}</span>
+          <span style="flex:1;color:var(--text-1)">${_esc(d.opportunity)}</span>
+          <span style="${d.rule_available ? 'color:var(--green)' : 'color:var(--orange)'}">${d.rule_available ? '✅ Rule' : '⚠️ No rule'}</span>
+        </div>`).join('')}
+    </div>` : ''}
+    ${data.iocs?.length ? `<div class="card">
+      <div class="card-header"><span class="card-title">🔍 Key IOCs</span></div>
+      ${data.iocs.map(ioc => `<div style="font-family:var(--font-mono);font-size:11px;color:var(--cyan);padding:4px 0;border-bottom:1px solid var(--border)">${_esc(ioc)}</div>`).join('')}
+    </div>` : ''}`;
+}
+
+// ── Alerts ────────────────────────────────────────────────────────
+function _loadAlerts() {
+  const alerts = [
+    { severity:'critical', icon:'🔴', title:'Ransomware Indicators Detected', desc:'Shadow copy deletion + mass file encryption events on CORP-WS-042', tags:['T1486','T1490','vssadmin.exe'] },
+    { severity:'critical', icon:'🔴', title:'LSASS Memory Access - Credential Dumping', desc:'Sysmon Event ID 10: procdump.exe accessing lsass.exe with full access rights', tags:['T1003','lsass.exe','Mimikatz'] },
+    { severity:'critical', icon:'🔴', title:'CVE-2024-3400 PAN-OS Exploitation Attempt', desc:'Suspicious SESSID cookie patterns detected on perimeter firewall — possible zero-day exploitation', tags:['CVE-2024-3400','PAN-OS','T1190'] },
+    { severity:'high', icon:'🟠', title:'PowerShell Encoded Command Execution', desc:'Multiple -encodedcommand executions from winword.exe parent process on 3 endpoints', tags:['T1059.001','-enc','Office macro'] },
+    { severity:'high', icon:'🟠', title:'Lateral Movement via SMB Admin Shares', desc:'psexec.exe connections to ADMIN$ share detected from non-administrative workstation', tags:['T1021.002','psexec.exe','SMB'] },
+    { severity:'high', icon:'🟠', title:'Suspicious Scheduled Task Created', desc:'Task mimicking "WindowsBackup" in AppData directory with PowerShell payload', tags:['T1053.005','schtasks.exe','Persistence'] },
+    { severity:'medium', icon:'🟡', title:'DNS Beaconing Pattern', desc:'Regular 60-second interval DNS queries to high-entropy domain from CORP-SRV-012', tags:['T1071.001','DNS','C2'] },
+    { severity:'medium', icon:'🟡', title:'Reconnaissance Commands Burst', desc:'5+ discovery commands (whoami, net user, systeminfo, nltest) in 3-minute window', tags:['T1082','T1069','Discovery'] },
+  ];
+
+  const container = document.getElementById('alerts-list');
+  container.innerHTML = alerts.map(a => `
+    <div class="alert-row ${a.severity}">
+      <div class="alert-icon">${a.icon}</div>
+      <div class="alert-content">
+        <div class="alert-title">${a.title}</div>
+        <div class="alert-desc">${a.desc}</div>
+        <div class="alert-meta">
+          ${a.tags.map(t => `<span class="alert-tag">${t}</span>`).join('')}
+          <button onclick="askAboutAlert('${a.title}')" style="margin-left:auto;background:var(--accent-dim);border:1px solid var(--accent);border-radius:4px;padding:2px 8px;font-size:10px;color:var(--accent);cursor:pointer">Ask RAKAY</button>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+function askAboutAlert(title) {
+  sendQuickText(`Investigate this alert: "${title}" — provide MITRE techniques, detection rules, and response steps`);
+  switchPanel('chat', document.querySelector('[data-panel="chat"]'));
+}
+
+// ── Toast ─────────────────────────────────────────────────────────
+function showToast(msg, type = 'info', duration = 3000) {
+  let container = document.getElementById('toast-container');
+  const icons = { info:'ℹ️', success:'✅', error:'❌', warn:'⚠️' };
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  t.innerHTML = `<span>${icons[type]||'ℹ️'}</span> ${msg}`;
+  container.appendChild(t);
+  setTimeout(() => t.remove(), duration);
+}
+
+// ── Static fallback data ──────────────────────────────────────────
+function _getStaticCVEs(n = 10, exploitedOnly = false) {
+  const all = [
+    { id:'CVE-2025-0282', vendor:'Ivanti', product:'Connect Secure', cvss_score:9.0, severity:'critical', exploited:true, published_date:'2025-01-08' },
+    { id:'CVE-2024-3400', vendor:'Palo Alto', product:'PAN-OS', cvss_score:10.0, severity:'critical', exploited:true, published_date:'2024-04-12' },
+    { id:'CVE-2024-1709', vendor:'ConnectWise', product:'ScreenConnect', cvss_score:10.0, severity:'critical', exploited:true, published_date:'2024-02-21' },
+    { id:'CVE-2023-46604', vendor:'Apache', product:'ActiveMQ', cvss_score:10.0, severity:'critical', exploited:true, published_date:'2023-10-27' },
+    { id:'CVE-2023-34362', vendor:'Progress', product:'MOVEit Transfer', cvss_score:9.8, severity:'critical', exploited:true, published_date:'2023-06-02' },
+    { id:'CVE-2023-4966', vendor:'Citrix', product:'NetScaler ADC/GW', cvss_score:9.4, severity:'critical', exploited:true, published_date:'2023-10-10' },
+    { id:'CVE-2022-41082', vendor:'Microsoft', product:'Exchange Server', cvss_score:8.8, severity:'critical', exploited:true, published_date:'2022-10-03' },
+    { id:'CVE-2022-30190', vendor:'Microsoft', product:'MSDT (Follina)', cvss_score:7.8, severity:'critical', exploited:true, published_date:'2022-05-30' },
+    { id:'CVE-2021-44228', vendor:'Apache', product:'Log4j2 (Log4Shell)', cvss_score:10.0, severity:'critical', exploited:true, published_date:'2021-12-10' },
+    { id:'CVE-2021-34527', vendor:'Microsoft', product:'Print Spooler', cvss_score:8.8, severity:'critical', exploited:true, published_date:'2021-07-01' },
+    { id:'CVE-2020-1472', vendor:'Microsoft', product:'Netlogon (ZeroLogon)', cvss_score:10.0, severity:'critical', exploited:true, published_date:'2020-08-11' },
+  ];
+  const filtered = exploitedOnly ? all.filter(c => c.exploited) : all;
+  return filtered.slice(0, n);
+}
+
+function _getStaticMITRE() {
+  return [
+    { id:'T1059.001', name:'PowerShell', tactic:'Execution', severity:'high' },
+    { id:'T1190', name:'Exploit Public-Facing Application', tactic:'Initial Access', severity:'critical' },
+    { id:'T1486', name:'Data Encrypted for Impact', tactic:'Impact', severity:'critical' },
+    { id:'T1003', name:'OS Credential Dumping', tactic:'Credential Access', severity:'critical' },
+    { id:'T1055', name:'Process Injection', tactic:'Privilege Escalation', severity:'high' },
+    { id:'T1078', name:'Valid Accounts', tactic:'Initial Access', severity:'high' },
+    { id:'T1566.001', name:'Spearphishing Attachment', tactic:'Initial Access', severity:'high' },
+    { id:'T1047', name:'Windows Management Instrumentation', tactic:'Execution', severity:'high' },
+    { id:'T1021.002', name:'SMB/Windows Admin Shares', tactic:'Lateral Movement', severity:'high' },
+    { id:'T1490', name:'Inhibit System Recovery', tactic:'Impact', severity:'critical' },
+  ];
+}
+
+function _getStaticTechniques() {
+  return [
+    {id:'T1059.001',name:'PowerShell',tactic:'Execution',severity:'high'},
+    {id:'T1059.003',name:'Windows CMD Shell',tactic:'Execution',severity:'medium'},
+    {id:'T1190',name:'Exploit Public-Facing App',tactic:'Initial Access',severity:'critical'},
+    {id:'T1566.001',name:'Spearphishing Attachment',tactic:'Initial Access',severity:'high'},
+    {id:'T1078',name:'Valid Accounts',tactic:'Initial Access',severity:'high'},
+    {id:'T1055',name:'Process Injection',tactic:'Priv. Escalation',severity:'high'},
+    {id:'T1003',name:'OS Credential Dumping',tactic:'Credential Access',severity:'critical'},
+    {id:'T1486',name:'Data Encrypted for Impact',tactic:'Impact',severity:'critical'},
+    {id:'T1490',name:'Inhibit System Recovery',tactic:'Impact',severity:'critical'},
+    {id:'T1547.001',name:'Registry Run Keys',tactic:'Persistence',severity:'high'},
+    {id:'T1053.005',name:'Scheduled Task',tactic:'Persistence',severity:'medium'},
+    {id:'T1027',name:'Obfuscated Files',tactic:'Defense Evasion',severity:'medium'},
+    {id:'T1021.001',name:'Remote Desktop Protocol',tactic:'Lateral Movement',severity:'high'},
+    {id:'T1021.002',name:'SMB/Admin Shares',tactic:'Lateral Movement',severity:'high'},
+    {id:'T1082',name:'System Information Discovery',tactic:'Discovery',severity:'low'},
+    {id:'T1046',name:'Network Service Scanning',tactic:'Discovery',severity:'medium'},
+  ];
+}
+
+// ── Utility ───────────────────────────────────────────────────────
+function _uuid() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+</script>
+</body>
+</html>
