@@ -26,7 +26,7 @@
  */
 'use strict';
 
-const { supabase } = require('../config/supabase');
+const { supabase, supabaseAuth, isAbortError } = require('../config/supabase'); // v6.1: supabaseAuth for all auth ops
 
 // ── Token extraction ───────────────────────────────────────────
 // Priority: httpOnly cookie → Authorization header → X-Access-Token header
@@ -98,7 +98,7 @@ async function verifyToken(req, res, next) {
 
   try {
     const { data: { user }, error: authError } = await Promise.race([
-      supabase.auth.getUser(token),
+      supabaseAuth.auth.getUser(token), // v6.1: use supabaseAuth
       _timeoutPromise,
     ]);
     clearTimeout(_verifyTimeoutId);
@@ -166,6 +166,15 @@ async function verifyToken(req, res, next) {
 
   } catch (err) {
     clearTimeout(_verifyTimeoutId);
+    // AbortError from supabaseAuth → return 503 to tell client to retry
+    if (isAbortError(err)) {
+      console.error(`[Auth] 503 verifyToken AbortError reqId=${reqId}: ${err.message}`);
+      return res.status(503).json({
+        error: 'Auth service temporarily unavailable (aborted). Please retry.',
+        code:  'AUTH_SERVICE_UNAVAILABLE',
+        retryAfter: 3,
+      });
+    }
     // Surface timeout as a 503 (service unavailable) so clients retry,
     // rather than silently swallowing it as a 500 (which looks like a bug).
     if (err.message?.includes('timed out')) {
@@ -193,7 +202,7 @@ async function optionalAuth(req, res, next) {
   if (!token) return next();
 
   try {
-    const { data: { user } } = await supabase.auth.getUser(token);
+    const { data: { user } } = await supabaseAuth.auth.getUser(token); // v6.1: use supabaseAuth
     if (user) {
       const { data: profile } = await supabase
         .from('users')
@@ -310,7 +319,7 @@ async function authInfo(req) {
   if (!token) return { authenticated: false, source: null };
 
   try {
-    const { data: { user }, error } = await supabase.auth.getUser(token);
+    const { data: { user }, error } = await supabaseAuth.auth.getUser(token); // v6.1: use supabaseAuth
     if (error || !user) return { authenticated: false, error: error?.message };
 
     return {

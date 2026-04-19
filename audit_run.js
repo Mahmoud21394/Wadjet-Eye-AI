@@ -37,9 +37,13 @@ check('BE-09', '/health is public (before verifyToken)', healthIdx > -1 && healt
 check('BE-10', '/api/ping exists and is public',   server.includes("app.get('/api/ping'") && server.indexOf("app.get('/api/ping'") < vtIdx);
 
 // RC-BACKEND-1: AbortError explicitly caught and returned as 503 (not thrown as 500/401)
+// v6.1 update: now uses isAbortError() utility function instead of inline name check
 check('BE-11-CRIT', 'RC-BACKEND-1: AbortError caught in login → 503 (not re-thrown)',
-  authRoute.includes("supabaseErr.name === 'AbortError'") ||
-  authRoute.includes("supabaseErr.message?.includes('This operation was aborted')"));
+  (authRoute.includes("supabaseErr.name === 'AbortError'") ||
+   authRoute.includes("supabaseErr.message?.includes('This operation was aborted')") ||
+   authRoute.includes('isAbortError(supabaseErr)') ||
+   authRoute.includes('isAbortError(loginError)')) &&
+  authRoute.includes('AUTH_SERVICE_UNAVAILABLE'));
 check('BE-12', 'login handler returns 503 for aborted/timeout Supabase calls',
   authRoute.includes("res.status(503).json") && authRoute.includes('AUTH_SERVICE_UNAVAILABLE'));
 
@@ -64,6 +68,39 @@ check('BE-14', 'login handler maps email-not-confirmed to specific error code',
 // BE-15: diagnostics endpoint exists
 check('BE-15', 'GET /api/auth/diagnostics endpoint exists',
   authRoute.includes("router.get('/diagnostics'"));
+
+// BE-16 NEW: supabaseAuth imported in auth.js (dedicated auth client)
+check('BE-16-CRIT', 'CRITICAL: auth.js imports supabaseAuth (dedicated auth client)',
+  authRoute.includes('supabaseAuth') &&
+  authRoute.includes("require('../config/supabase')") &&
+  /\{\s*supabase\s*,\s*supabaseAuth/.test(authRoute) || /\{\s*supabaseAuth/.test(authRoute));
+
+// BE-17 NEW: signInWithPassword uses supabaseAuth (not supabase DB client)
+check('BE-17-CRIT', 'CRITICAL: signInWithPassword uses supabaseAuth (not supabase DB client)',
+  authRoute.includes('supabaseAuth.auth.signInWithPassword') &&
+  !authRoute.includes('supabase.auth.signInWithPassword'));
+
+// BE-18 NEW: signOut uses supabaseAuth
+check('BE-18-CRIT', 'CRITICAL: signOut uses supabaseAuth (not supabase DB client)',
+  authRoute.includes('supabaseAuth.auth.signOut') &&
+  !authRoute.includes('supabase.auth.signOut'));
+
+// BE-19 NEW: loginError checked for AbortError BEFORE generic 401 mapping
+check('BE-19-CRIT', 'CRITICAL: AbortError in loginError field detected → 503 (not 401)',
+  authRoute.includes('isAbortError(loginError)') &&
+  authRoute.includes("failure_reason: `AbortError:"));
+
+// BE-20 NEW: middleware auth.js uses supabaseAuth for getUser
+check('BE-20-CRIT', 'CRITICAL: verifyToken uses supabaseAuth.auth.getUser (not supabase)',
+  authMW.includes('supabaseAuth.auth.getUser') &&
+  !authMW.includes('supabase.auth.getUser'));
+
+// BE-21 NEW: structured logging in login handler
+check('BE-21', 'Structured logging in login handler (auth:login:start/result/abort/ok)',
+  authRoute.includes('[auth:login:start]') &&
+  authRoute.includes('[auth:login:result]') &&
+  authRoute.includes('[auth:login:abort]') &&
+  authRoute.includes('[auth:login:ok]'));
 
 // ── FRONTEND: api-client.js (top-level) ──────────────────────────────────────
 check('FE-01', 'api-client.js has public auth path list (_isPublicAuthPath)',
