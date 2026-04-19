@@ -278,6 +278,54 @@ check('BE-34', 'v7.1: enrichment.js uses supabaseIngestion (isolated from auth)'
 check('BE-35', 'v7.1: Frontend api-client.js has no AbortController on login fetch',
   !fs.readFileSync('js/api-client.js', 'utf8').includes('new AbortController()'));
 
+// ── BACKEND v7.2: Key fix + isAbortError + DB-timeout → 503 ──────────────────
+
+// BE-36: createLoginClient uses ANON key (not SERVICE key)
+check('BE-36-CRIT', 'v7.2: createLoginClient() uses ANON key (loginKey = SUPABASE_ANON_KEY)',
+  supabaseConf.includes('const loginKey = SUPABASE_ANON_KEY'));
+
+// BE-37: isAbortError detects AuthRetryableFetchError (SDK wrapper)
+check('BE-37-CRIT', 'v7.2: isAbortError() detects AuthRetryableFetchError wrapper',
+  supabaseConf.includes("name === 'AuthRetryableFetchError'"));
+
+// BE-38: isAbortError detects our custom timeout messages
+check('BE-38', 'v7.2: isAbortError() detects custom fetch timeout messages',
+  supabaseConf.includes("msg.includes('fetch timeout exceeded')"));
+
+// BE-39: abort messages in fetch wrappers contain "aborted" keyword
+check('BE-39', 'v7.2: _loginFetchWithTimeout abort message contains "aborted"',
+  supabaseConf.includes("'Login fetch aborted: timeout exceeded (35s)'"));
+
+// BE-40: profile lookup distinguishes abort (503) from genuine 'not found' (403)
+check('BE-40-CRIT', 'v7.2: Profile lookup AbortError returns 503 DB_TIMEOUT (not 403)',
+  authRoute.includes("isAbortError(profileError)") &&
+  authRoute.includes("code:    'DB_TIMEOUT'") &&
+  authRoute.includes('retryIn: 5'));
+
+// BE-41: logActivity has internal 5s timeout (won't block for 15s on slow DB)
+check('BE-41', 'v7.2: logActivity has internal 5s timeout guard',
+  authRoute.includes('LOG_ACTIVITY_TIMEOUT_MS') &&
+  authRoute.includes('5_000'));
+
+// BE-42: post-login DB writes (last_login, tenantMeta) are non-blocking or guarded
+check('BE-42', 'v7.2: last_login update is fire-and-forget (no await on critical path)',
+  (() => {
+    const loginHandler = authRoute.slice(
+      authRoute.indexOf("router.post('/login'"),
+      authRoute.indexOf("router.post('/refresh'")
+    );
+    // The update must not be preceded by 'await' on the same line
+    const lines = loginHandler.split('\n');
+    const lastLoginLine = lines.find(l => l.includes("'users').update({") && l.includes('last_login'));
+    if (!lastLoginLine) return false;
+    return !lastLoginLine.trim().startsWith('await ');
+  })());
+
+// BE-43: checkSupabaseConnection detects AbortError in error field (not just catch)
+check('BE-43', 'v7.2: checkSupabaseConnection handles AbortError in error field',
+  supabaseConf.includes('isAbortError(error)') &&
+  supabaseConf.includes('RC-6 FIX'));
+
 // ── PRINT ─────────────────────────────────────────────────────────────────────
 console.log('\n══════ AUTH FORENSIC AUDIT RESULTS ══════');
 results.forEach(r => {

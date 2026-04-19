@@ -103,15 +103,33 @@ module.exports.LOGIN_FETCH_TIMEOUT_MS = LOGIN_FETCH_TIMEOUT_MS;
 //   { data: null, error: DOMException { name: 'AbortError' } }
 // Must check BOTH thrown AND returned forms.
 // ══════════════════════════════════════════════════════════════════
+/**
+ * isAbortError — detect abort/timeout errors in ALL their forms:
+ *
+ * 1. Native DOMException with name 'AbortError'
+ * 2. AuthRetryableFetchError wrapping an AbortError (Supabase SDK wraps
+ *    DOMException AbortError into AuthRetryableFetchError in _handleRequest)
+ * 3. Our custom timeout messages from _loginFetchWithTimeout,
+ *    _authFetchWithTimeout, _dbFetchWithTimeout, _ingestionFetchWithTimeout
+ * 4. Standard abort/signal messages from Node.js fetch
+ */
 function isAbortError(err) {
   if (!err) return false;
+  const name = err.name || '';
+  const msg  = (err.message || '').toLowerCase();
   return (
-    err.name === 'AbortError' ||
-    (typeof DOMException !== 'undefined' && err instanceof DOMException && err.name === 'AbortError') ||
-    err.message?.includes('This operation was aborted') ||
-    err.message?.includes('signal is aborted') ||
-    err.message?.includes('aborted without reason') ||
-    err.message?.toLowerCase?.().includes('aborted')
+    name === 'AbortError'                            ||
+    name === 'AuthRetryableFetchError'               ||  // Supabase SDK wrapper
+    (typeof DOMException !== 'undefined' && err instanceof DOMException && name === 'AbortError') ||
+    msg.includes('this operation was aborted')       ||
+    msg.includes('signal is aborted')                ||
+    msg.includes('aborted without reason')           ||
+    msg.includes('aborted')                          ||
+    msg.includes('fetch timeout exceeded')           ||  // our custom _*FetchWithTimeout messages
+    msg.includes('login fetch timeout')              ||
+    msg.includes('auth fetch timeout')               ||
+    msg.includes('db fetch timeout')                 ||
+    msg.includes('ingestion fetch timeout')
   );
 }
 
@@ -134,7 +152,14 @@ function isNetworkError(err) {
 
 function isTimeoutError(err) {
   if (!err) return false;
-  return isAbortError(err) || err.message === 'SUPABASE_TIMEOUT';
+  const msg = (err.message || '').toLowerCase();
+  return (
+    isAbortError(err)                      ||
+    err.message === 'SUPABASE_TIMEOUT'     ||
+    err.message === 'REFRESH_TIMEOUT'      ||
+    msg.includes('timed out')              ||
+    msg.includes('timeout exceeded')
+  );
 }
 
 module.exports.isAbortError    = isAbortError;
@@ -152,7 +177,7 @@ module.exports.isTimeoutError  = isTimeoutError;
 function _dbFetchWithTimeout(input, init = {}) {
   const ctrl  = new AbortController();
   const timer = setTimeout(() => {
-    ctrl.abort(new DOMException('DB fetch timeout exceeded', 'AbortError'));
+    ctrl.abort(new DOMException('DB fetch aborted: timeout exceeded (15s)', 'AbortError'));
   }, DB_FETCH_TIMEOUT_MS);
 
   let signal = ctrl.signal;
@@ -177,7 +202,7 @@ function _dbFetchWithTimeout(input, init = {}) {
 function _authFetchWithTimeout(input, init = {}) {
   const ctrl  = new AbortController();
   const timer = setTimeout(() => {
-    ctrl.abort(new DOMException('Auth fetch timeout exceeded (35s)', 'AbortError'));
+    ctrl.abort(new DOMException('Auth fetch aborted: timeout exceeded (35s)', 'AbortError'));
   }, AUTH_FETCH_TIMEOUT_MS);
 
   let signal = ctrl.signal;
@@ -202,7 +227,9 @@ function _authFetchWithTimeout(input, init = {}) {
 function _loginFetchWithTimeout(input, init = {}) {
   const ctrl  = new AbortController();
   const timer = setTimeout(() => {
-    ctrl.abort(new DOMException('Login fetch timeout exceeded (35s)', 'AbortError'));
+    // Message MUST contain 'aborted' so isAbortError() catches it even
+    // when Supabase SDK wraps it in AuthRetryableFetchError
+    ctrl.abort(new DOMException('Login fetch aborted: timeout exceeded (35s)', 'AbortError'));
   }, LOGIN_FETCH_TIMEOUT_MS);
 
   let signal = ctrl.signal;
@@ -227,7 +254,7 @@ function _loginFetchWithTimeout(input, init = {}) {
 function _ingestionFetchWithTimeout(input, init = {}) {
   const ctrl  = new AbortController();
   const timer = setTimeout(() => {
-    ctrl.abort(new DOMException('Ingestion fetch timeout exceeded (30s)', 'AbortError'));
+    ctrl.abort(new DOMException('Ingestion fetch aborted: timeout exceeded (30s)', 'AbortError'));
   }, INGESTION_FETCH_TIMEOUT_MS);
 
   let signal = ctrl.signal;
@@ -294,28 +321,32 @@ const supabaseAuth = createClient(
 // ══════════════════════════════════════════════════════════════════
 // createLoginClient() — PER-REQUEST LOGIN CLIENT FACTORY
 //
-// ROOT CAUSE FIX v7.0:
-// GoTrueClient maintains an internal pendingInLock queue. In Node.js,
-// lockNoOp is used (no Web Locks API), but operations still queue
-// serially. When supabaseAuth.auth.signOut() is called before
-// signInWithPassword, the signOut takes the internal queue first.
-// If signOut stalls (cold-start DNS + TLS), signInWithPassword
-// waits in the queue — the combined wait hits our 25s timeout.
+// ROOT CAUSE FIX v7.0 (queue) + v7.2 (key):
 //
-// SOLUTION: Create a FRESH Supabase client for EACH login attempt.
-// A brand-new client has:
-//   - lockAcquired = false (no active lock)
-//   - pendingInLock = [] (empty queue)
-//   - No prior signOut in the queue
-//   - Clean GoTrueClient state
+// KEY FIX (v7.2): signInWithPassword MUST use the ANON/PUBLISHABLE key.
+// The SupabaseClient sets BOTH Authorization and apikey headers to
+// supabaseKey. Supabase Auth endpoint /auth/v1/token expects the
+// ANON key (sb_publishable_* or legacy eyJ anon JWT) — NOT the
+// service role key (sb_secret_*). Using SERVICE_KEY causes
+// INVALID_CREDENTIALS even with correct user credentials because
+// the API key header identifies the client to Supabase Auth.
 //
-// The caller is responsible for calling this client ONLY for
-// signInWithPassword and NOT calling signOut on it beforehand.
+// QUEUE FIX (v7.0): GoTrueClient maintains an internal pendingInLock
+// queue. Fresh client per login = empty queue = no stall from prior ops.
+//
+// The caller MUST use this client ONLY for signInWithPassword.
 // ══════════════════════════════════════════════════════════════════
 function createLoginClient() {
+  // RC-1 FIX: Use ANON KEY for signInWithPassword.
+  // SERVICE_KEY is for admin/DB ops only. Auth endpoint requires ANON key.
+  const loginKey = SUPABASE_ANON_KEY || SERVICE_KEY;
+  if (!SUPABASE_ANON_KEY) {
+    console.warn('[Supabase] ⚠️  createLoginClient: SUPABASE_ANON_KEY not set — ' +
+      'falling back to SERVICE_KEY for login. Set SUPABASE_ANON_KEY in Render env.');
+  }
   return createClient(
     SUPABASE_URL,
-    SERVICE_KEY,
+    loginKey,
     {
       auth: {
         autoRefreshToken:   false,
@@ -401,6 +432,14 @@ async function checkSupabaseConnection() {
     const ms = Date.now() - start;
 
     if (error) {
+      // RC-6 FIX: AbortError is returned in the error FIELD (not thrown)
+      // when _dbFetchWithTimeout fires. Must detect it explicitly here.
+      if (isAbortError(error)) {
+        console.warn(`[Supabase] ⚠️  DB connection check timed out (${ms}ms) — ` +
+          'Supabase free-tier may be warming up (expected on cold start)');
+        return; // Non-fatal — DB will be available after warmup
+      }
+
       const isKeyError = error.message?.includes('JWT')
                       || error.message?.includes('token')
                       || error.message?.includes('Invalid API key')
