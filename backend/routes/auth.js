@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  Enterprise Auth Routes v5.1 — RLS-Fixed + JWT-Signed
+ *  Enterprise Auth Routes v6.1 — AbortError Root-Cause Fix
  *  backend/routes/auth.js
  *
  *  POST  /api/auth/login          — Email/password login
@@ -12,6 +12,7 @@
  *  DELETE /api/auth/sessions/:id  — Revoke specific session
  *  DELETE /api/auth/sessions      — Revoke all sessions (sign out all devices)
  *  GET   /api/auth/activity       — Login history
+ *  GET   /api/auth/diagnostics    — Supabase health check
  *
  *  Security:
  *   - Refresh token rotation (new token on every use)
@@ -22,16 +23,36 @@
  *   - JWT signed with Supabase JWT_SECRET for proper token validation
  *   - Rate limiting applied at server.js level
  *
- *  v5.1 FIX: refresh endpoint now uses Supabase admin.signInWithEmail
- *  instead of generateLink (magic-link approach was unreliable).
- *  Falls back to signing a custom JWT with the Supabase JWT_SECRET.
+ *  v6.1 ROOT-CAUSE FIX — AbortError leaks into loginError:
+ *  ────────────────────────────────────────────────────────
+ *  PROBLEM: The 401 with message "This operation was aborted (code: undefined)"
+ *  was caused by auth.js using `supabase` (DB client, _dbFetchWithTimeout/15s)
+ *  for ALL auth operations. The DB client's AbortController fired and corrupted
+ *  the GoTrueClient's internal request queue.
+ *
+ *  FIX:
+ *    1. Import `supabaseAuth` (dedicated auth client, _authFetchWithTimeout/25s,
+ *       separate GoTrueClient instance — no shared abort state with DB client).
+ *    2. ALL auth operations (signInWithPassword, signOut, admin.createSession,
+ *       admin.signOut, getUser, admin.createUser, admin.deleteUser) now use
+ *       `supabaseAuth` instead of `supabase`.
+ *    3. `loginError` field is now checked for AbortError BEFORE the generic 401
+ *       handler, so abort errors return 503 instead of being silently masked.
+ *    4. Structured logging added: [auth:login:start], [auth:login:supabase],
+ *       [auth:login:result], [auth:login:abort], [auth:login:ok].
+ *    5. isAbortError() utility imported from supabase.js for consistent detection.
  * ══════════════════════════════════════════════════════════
  */
 'use strict';
 
 const router  = require('express').Router();
 const crypto  = require('crypto');
-const { supabase } = require('../config/supabase');
+const {
+  supabase,
+  supabaseAuth,
+  isAbortError,
+  isNetworkError,
+} = require('../config/supabase');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 
@@ -228,45 +249,47 @@ router.post('/login', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'Email and password are required' });
   }
 
-  // ── Hard-reset: sign out any stale Supabase session before fresh login ──
-  // IMPORTANT: We do NOT await this — awaiting signOut() with the global
-  // _fetchWithTimeout wrapper causes the AbortController for that request to
-  // fire, which can abort the IMMEDIATELY FOLLOWING signInWithPassword call
-  // (seen in logs as "AbortError: This operation was aborted" at auth.js:241).
-  // Fire-and-forget is safe: signOut() failing non-fatally is expected on
-  // first login (no session to revoke).  The important thing is that the
-  // next signInWithPassword starts with a clean slate immediately.
-  supabase.auth.signOut().catch(() => {}); // intentionally NOT awaited
+  // ── Structured logging: mark start of login attempt ──────────────
+  const loginStart = Date.now();
+  console.log(`[auth:login:start] ${email} from ${req.ip || 'unknown'} at ${new Date().toISOString()}`);
 
-  // ── Authenticate via Supabase (with 20s timeout for cold-start / DNS issues) ──
+  // ── Hard-reset: sign out any stale Supabase session before fresh login ──
+  // CRITICAL FIX v6.1: Use supabaseAuth (dedicated client) NOT supabase (DB client).
+  // The DB client uses _dbFetchWithTimeout (15s) which shares internal abort state.
+  // Using supabaseAuth guarantees a clean GoTrueClient queue for signInWithPassword.
+  supabaseAuth.auth.signOut().catch(() => {}); // intentionally NOT awaited
+
+  // ── Authenticate via Supabase ────────────────────────────────────────────────
+  // v6.1: supabaseAuth uses _authFetchWithTimeout (25s) — longer timeout for
+  // Render cold-start delays. Separate client = no shared AbortController state.
+  console.log(`[auth:login:supabase] calling signInWithPassword for ${email}`);
+
   const _supabaseLoginTimeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('SUPABASE_TIMEOUT')), 20_000)
+    setTimeout(() => reject(new Error('SUPABASE_TIMEOUT')), 25_000)
   );
   let loginData, loginError;
   try {
     ({ data: loginData, error: loginError } = await Promise.race([
-      supabase.auth.signInWithPassword({
+      supabaseAuth.auth.signInWithPassword({      // ← FIXED: use supabaseAuth
         email:    email.trim().toLowerCase(),
         password: password.trim(),
       }),
       _supabaseLoginTimeout,
     ]));
+    console.log(`[auth:login:result] elapsed=${Date.now()-loginStart}ms ` +
+      `loginError=${loginError ? loginError.message : 'none'} ` +
+      `session=${loginData?.session ? 'present' : 'absent'}`);
   } catch (supabaseErr) {
-    // RC-BACKEND-1 FIX: Catch AbortError explicitly.
-    // AbortError is thrown when the Supabase _fetchWithTimeout AbortController
-    // fires (15s timeout) or when a prior aborted request leaks its signal.
-    // Previously this fell through to `throw supabaseErr` → unhandled → 500.
-    // Now we return a clean 503 with a retryable message.
-    const isAbort   = supabaseErr.name === 'AbortError' ||
-                      supabaseErr.message?.includes('This operation was aborted') ||
-                      supabaseErr.message?.includes('aborted');
+    // RC-BACKEND-1 FIX: Catch AbortError that is THROWN (not returned in error field).
+    // With supabaseAuth this should be rare, but we keep the guard for robustness.
+    const isAbort   = isAbortError(supabaseErr);
     const isTimeout = supabaseErr.message === 'SUPABASE_TIMEOUT';
-    const isNetwork = supabaseErr.message?.includes('Failed to fetch') ||
-                      supabaseErr.message?.includes('NetworkError') ||
-                      supabaseErr.message?.includes('ECONNREFUSED');
+    const isNetwork = isNetworkError(supabaseErr);
+
+    console.error(`[auth:login:abort] THROWN ${supabaseErr.name}: ${supabaseErr.message} ` +
+      `elapsed=${Date.now()-loginStart}ms`);
 
     if (isAbort || isTimeout || isNetwork) {
-      console.error('[Auth] Supabase login unreachable/aborted:', supabaseErr.message);
       return res.status(503).json({
         error:   'Authentication service temporarily unavailable. Please try again in a few seconds.',
         code:    'AUTH_SERVICE_UNAVAILABLE',
@@ -277,6 +300,23 @@ router.post('/login', asyncHandler(async (req, res) => {
   }
 
   if (loginError) {
+    // v6.1 FIX: Check if loginError IS an AbortError BEFORE treating it as bad credentials.
+    // The Supabase SDK returns AbortError in the error FIELD (not thrown):
+    //   { data: null, error: DOMException { name: 'AbortError', message: 'This operation was aborted' } }
+    // Previously this fell through to the generic 401 handler, masking the real cause.
+    if (isAbortError(loginError)) {
+      console.error(`[auth:login:abort] RETURNED AbortError in loginError: ${loginError.message} ` +
+        `elapsed=${Date.now()-loginStart}ms`);
+      logActivity(null, null, 'LOGIN_FAILED', req, {
+        email, success: false, failure_reason: `AbortError: ${loginError.message}`,
+      }).catch(() => {});
+      return res.status(503).json({
+        error:   'Authentication service temporarily unavailable (request aborted). Please try again in a few seconds.',
+        code:    'AUTH_SERVICE_UNAVAILABLE',
+        retryIn: 5,
+      });
+    }
+
     // Log asynchronously — don't await so we don't hang on Supabase issues
     logActivity(null, null, 'LOGIN_FAILED', req, {
       email,
@@ -284,10 +324,12 @@ router.post('/login', asyncHandler(async (req, res) => {
       failure_reason: loginError.message,
     }).catch(() => {});
 
-    console.warn(`[Auth] LOGIN_FAILED for ${email}: ${loginError.message} (code: ${loginError.status || loginError.code})`);
+    console.warn(`[auth:login:fail] LOGIN_FAILED for ${email}: ` +
+      `"${loginError.message}" (status=${loginError.status} code=${loginError.code}) ` +
+      `elapsed=${Date.now()-loginStart}ms`);
 
     // Map Supabase-specific errors to actionable messages
-    const errMsg = loginError.message?.toLowerCase() || '';
+    const errMsg  = (loginError.message || '').toLowerCase();
     const errCode = loginError.status || loginError.code;
 
     if (errMsg.includes('email not confirmed') || errMsg.includes('not confirmed')) {
@@ -297,11 +339,12 @@ router.post('/login', asyncHandler(async (req, res) => {
       });
     }
 
-    if (errMsg.includes('invalid login credentials') || errMsg.includes('invalid email or password') || errCode === 400) {
+    if (errMsg.includes('invalid login credentials') ||
+        errMsg.includes('invalid email or password') ||
+        errCode === 400) {
       return res.status(401).json({
         error: 'Invalid email or password',
         code:  'INVALID_CREDENTIALS',
-        // Include sanitized Supabase error for debugging (never expose to end-users in prod logs)
         _supabaseMsg: process.env.NODE_ENV !== 'production' ? loginError.message : undefined,
       });
     }
@@ -324,8 +367,11 @@ router.post('/login', asyncHandler(async (req, res) => {
     return res.status(401).json({
       error: 'Invalid email or password',
       code:  'INVALID_CREDENTIALS',
+      _supabaseMsg: process.env.NODE_ENV !== 'production' ? loginError.message : undefined,
     });
   }
+
+  console.log(`[auth:login:ok] Supabase auth OK for ${email} elapsed=${Date.now()-loginStart}ms`);
 
   // ── Fetch user profile ──
   const { data: profile, error: profileError } = await supabase
@@ -473,7 +519,7 @@ router.post('/refresh', asyncHandler(async (req, res) => {
       // Wrap in a 6-second timeout to avoid hanging on Render cold-start / Supabase
       // connectivity issues that produce AbortError in the backend logs.
       const ADMIN_SESSION_TIMEOUT_MS = 6_000;
-      const adminSessionPromise = supabase.auth.admin.createSession({ user_id: authId });
+      const adminSessionPromise = supabaseAuth.auth.admin.createSession({ user_id: authId }); // ← FIXED: use supabaseAuth
       const timeoutPromise = new Promise((_, rej) =>
         setTimeout(() => rej(new Error('admin.createSession timed out')), ADMIN_SESSION_TIMEOUT_MS)
       );
@@ -571,7 +617,7 @@ router.post('/logout', asyncHandler(async (req, res) => {
   // Revoke Supabase session
   if (accessToken) {
     try {
-      await supabase.auth.admin.signOut(accessToken);
+      await supabaseAuth.auth.admin.signOut(accessToken); // ← FIXED: use supabaseAuth
     } catch { /* non-fatal */ }
   }
 
@@ -623,7 +669,7 @@ router.post('/register',
     }
 
     // Create Supabase auth user
-    const { data: authUser, error: authErr } = await supabase.auth.admin.createUser({
+    const { data: authUser, error: authErr } = await supabaseAuth.auth.admin.createUser({ // ← FIXED: use supabaseAuth
       email,
       password,
       email_confirm: true,
@@ -657,7 +703,7 @@ router.post('/register',
 
     if (profileErr) {
       // Rollback Supabase auth user
-      await supabase.auth.admin.deleteUser(authUser.user.id);
+      await supabaseAuth.auth.admin.deleteUser(authUser.user.id); // ← FIXED: use supabaseAuth
       throw new Error(profileErr.message);
     }
 
@@ -750,7 +796,7 @@ router.post('/refresh-from-cookie', asyncHandler(async (req, res) => {
 
   // Validate the cookie token to get the user
   try {
-    const { data: { user }, error: authError } = await supabase.auth.getUser(cookieToken);
+    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser(cookieToken); // ← FIXED: use supabaseAuth
 
     if (authError || !user) {
       return res.status(401).json({
@@ -776,7 +822,7 @@ router.post('/refresh-from-cookie', asyncHandler(async (req, res) => {
 
     // Try to create a fresh Supabase session
     try {
-      const { data: adminSession, error: adminErr } = await supabase.auth.admin.createSession({
+      const { data: adminSession, error: adminErr } = await supabaseAuth.auth.admin.createSession({ // ← FIXED: use supabaseAuth
         user_id: user.id,
       });
       if (!adminErr && adminSession?.session?.access_token) {
@@ -847,7 +893,7 @@ router.get('/diagnostics', asyncHandler(async (req, res) => {
     // Test Supabase auth by doing a no-op sign-in with invalid creds
     // This tells us whether the Supabase Auth service is reachable
     const { error } = await Promise.race([
-      supabase.auth.signInWithPassword({ email: 'diag-probe@noreply.test', password: 'x' }),
+      supabaseAuth.auth.signInWithPassword({ email: 'diag-probe@noreply.test', password: 'x' }), // ← FIXED: use supabaseAuth
       new Promise((_, rej) => setTimeout(() => rej(new Error('DIAG_TIMEOUT')), 8_000)),
     ]);
     diag.supabase.latencyMs = Date.now() - start;
