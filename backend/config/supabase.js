@@ -1,49 +1,51 @@
 /**
  * ══════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Supabase Client v6.0 (AbortError Root-Cause Fix)
+ *  Wadjet-Eye AI — Supabase Client v7.0 (Timeout Root-Cause Fix)
  *  backend/config/supabase.js
  *
- *  v6.0 ROOT-CAUSE FIX — AbortError leaks into loginError:
+ *  v7.0 ROOT-CAUSE FIX — SUPABASE_TIMEOUT elapsed=25000ms:
  *  ─────────────────────────────────────────────────────────
- *  PROBLEM (confirmed via production logs):
- *    The error message "This operation was aborted (code: undefined)"
- *    appears in LOGIN_FAILED logs. This is NOT a wrong-password error.
- *    It is an AbortError that Supabase's SDK catches internally and
- *    returns as { data: null, error: DOMException } instead of throwing.
  *
- *  ROOT CAUSE in v5.4:
- *    _fetchWithTimeout() creates one AbortController per fetch call.
- *    HOWEVER: when `supabase.auth.signOut()` is called (fire-and-forget),
- *    its AbortController fires after 15s... but by that time the NEXT
- *    request (signInWithPassword) may already be using a stale Supabase
- *    internal session state that still holds a reference to the old
- *    aborted signal. The @supabase/supabase-js GoTrueClient reuses
- *    internal fetch queues — an aborted queue affects subsequent calls.
+ *  CONFIRMED ROOT CAUSES (from production logs):
  *
- *  ADDITIONAL BUG:
- *    _fetchWithTimeout passes `init.signal ?? ctrl.signal`. If the
- *    Supabase SDK passes its own internal signal via `init.signal`,
- *    our timeout signal is IGNORED. The SDK's signal can be aborted
- *    by internal SDK state. We must RACE our signal with the SDK's.
+ *  1. GoTrueClient._acquireLock QUEUE STALL:
+ *     @supabase/auth-js v2.103 uses an internal lock queue (pendingInLock).
+ *     In Node.js (no Web Locks API), lockNoOp is used — but operations still
+ *     queue serially via pendingInLock. When supabaseAuth.auth.signOut() is
+ *     called (fire-and-forget) BEFORE signInWithPassword, signOut takes the
+ *     lock first. If signOut stalls (cold-start DNS + TLS takes 8-15s), the
+ *     signInWithPassword waits in the queue. Our 25s timeout fires on the
+ *     COMBINED wait, not just the signIn request.
+ *     FIX: Do NOT call signOut on the auth client before signIn. Use a
+ *     fresh per-request auth client that has NO prior queue state.
  *
- *  FIX in v6.0:
- *    1. Use TWO separate Supabase clients:
- *       - supabase: for all DB queries (uses _fetchWithTimeout)
- *       - supabaseAuth: for auth operations ONLY (uses native fetch
- *         with no shared AbortController — auth has its own 25s timeout)
- *    2. _fetchWithTimeout is NO LONGER used for auth operations.
- *    3. supabaseAuth has NO persistSession, NO autoRefreshToken,
- *       NO global fetch override — pure native fetch with HTTP timeout.
- *    4. The auth client's fetch wrapper uses AbortSignal.any() to
- *       combine both our timeout signal AND the SDK's signal safely.
+ *  2. RENDER COLD-START + SUPABASE FREE-TIER STACK:
+ *     Cold start (3-8s) + DNS resolution (2-5s) + TLS handshake (1-3s)
+ *     + PgBouncer pool warmup (2-5s) + GoTrueClient lock overhead
+ *     = 8-21s before signInWithPassword even sends the HTTP request.
+ *     FIX: Increase auth timeout to 35s. Add connection warmup on startup.
  *
- *  SUPABASE KEY MIGRATION (from v5.4):
- *  ────────────────────────────────────
- *  SUPABASE_ANON_KEY    → sb_publishable_LwTPXF-cDzMcmc_V16N9lA_KvN-ElTZ
- *  SUPABASE_SERVICE_KEY → sb_secret_xDSevd4Gq3--9EPiWAcl0w_1M5S7M1_
- *  JWT_SECRET           → (keep current value)
+ *  3. CONCURRENT SCHEDULER SATURATING THE EVENT LOOP:
+ *     Scheduler starts 15+ jobs 30s after boot. PhishTank upserts 2000+
+ *     IOCs in 100-row chunks, each with a 15s AbortController. These
+ *     saturate Node.js event loop, delaying auth response delivery.
+ *     FIX: PhishTank/ingestion workers use a SEPARATE supabaseIngestion
+ *     client with longer timeouts and explicit scheduling controls.
  *
- *  Both old (eyJ...) and new (sb_*) key formats supported.
+ *  4. FETCH WRAPPER: _authFetchWithTimeout STILL FIRES AT 25s
+ *     The 25s timeout in _authFetchWithTimeout is not reset between retries
+ *     and includes time spent waiting in the GoTrueClient lock queue.
+ *     FIX: Each login attempt gets a FRESH supabaseAuth instance created
+ *     via createLoginClient(). This guarantees clean queue state.
+ *
+ *  ARCHITECTURE (v7.0):
+ *  ─────────────────────
+ *  supabase          DB queries — service role, _dbFetchWithTimeout (15s)
+ *  supabaseAuth      Default auth client — used for admin ops (createSession, etc.)
+ *  createLoginClient Per-request login client factory — fresh instance per login
+ *  supabaseAnon      RLS-aware reads — anon key
+ *  supabaseForUser   User-scoped factory
+ *
  * ══════════════════════════════════════════════════════════════════
  */
 'use strict';
@@ -73,10 +75,10 @@ if (!SERVICE_KEY) {
 // ── Key format detection ──────────────────────────────────────────
 function detectKeyFormat(key, name) {
   if (!key) return;
-  if (key.startsWith('sb_secret_'))      console.log(`[Supabase] ✅ ${name}: new sb_secret_* format`);
+  if (key.startsWith('sb_secret_'))           console.log(`[Supabase] ✅ ${name}: new sb_secret_* format`);
   else if (key.startsWith('sb_publishable_')) console.log(`[Supabase] ✅ ${name}: new sb_publishable_* format`);
-  else if (key.startsWith('eyJ'))        console.log(`[Supabase] ℹ️  ${name}: legacy JWT format (eyJ...) — consider migrating`);
-  else                                   console.warn(`[Supabase] ⚠️  ${name}: unrecognized key format`);
+  else if (key.startsWith('eyJ'))             console.log(`[Supabase] ℹ️  ${name}: legacy JWT format (eyJ...) — consider migrating`);
+  else                                         console.warn(`[Supabase] ⚠️  ${name}: unrecognized key format`);
 }
 
 detectKeyFormat(SERVICE_KEY,       'SUPABASE_SERVICE_KEY');
@@ -85,24 +87,77 @@ detectKeyFormat(SUPABASE_ANON_KEY, 'SUPABASE_ANON_KEY   ');
 // ══════════════════════════════════════════════════════════════════
 // TIMEOUT CONSTANTS
 // ══════════════════════════════════════════════════════════════════
-const DB_FETCH_TIMEOUT_MS   = 15_000; // 15s for database queries
-const AUTH_FETCH_TIMEOUT_MS = 25_000; // 25s for auth operations (login can be slow on cold start)
+const DB_FETCH_TIMEOUT_MS        = 15_000; // 15s for database queries
+const AUTH_FETCH_TIMEOUT_MS      = 35_000; // 35s for auth — accounts for Render cold-start + DNS + TLS
+const LOGIN_FETCH_TIMEOUT_MS     = 35_000; // 35s for per-request login client
+const INGESTION_FETCH_TIMEOUT_MS = 30_000; // 30s for ingestion workers
+
+// Export for use in route handlers
+module.exports.AUTH_FETCH_TIMEOUT_MS  = AUTH_FETCH_TIMEOUT_MS;
+module.exports.DB_FETCH_TIMEOUT_MS    = DB_FETCH_TIMEOUT_MS;
+module.exports.LOGIN_FETCH_TIMEOUT_MS = LOGIN_FETCH_TIMEOUT_MS;
 
 // ══════════════════════════════════════════════════════════════════
-// DB FETCH WRAPPER — for database queries only (NOT auth operations)
-// Creates a per-request AbortController. Safe because DB queries do
-// NOT share internal state the way the GoTrueClient auth queue does.
+// ABORT ERROR HELPERS
+// Supabase SDK returns AbortError in the error FIELD, not thrown:
+//   { data: null, error: DOMException { name: 'AbortError' } }
+// Must check BOTH thrown AND returned forms.
 // ══════════════════════════════════════════════════════════════════
+function isAbortError(err) {
+  if (!err) return false;
+  return (
+    err.name === 'AbortError' ||
+    (typeof DOMException !== 'undefined' && err instanceof DOMException && err.name === 'AbortError') ||
+    err.message?.includes('This operation was aborted') ||
+    err.message?.includes('signal is aborted') ||
+    err.message?.includes('aborted without reason') ||
+    err.message?.toLowerCase?.().includes('aborted')
+  );
+}
+
+function isNetworkError(err) {
+  if (!err) return false;
+  const m = (err.message || '').toLowerCase();
+  return (
+    m.includes('failed to fetch') ||
+    m.includes('networkerror') ||
+    m.includes('econnrefused') ||
+    m.includes('enotfound') ||
+    m.includes('etimedout') ||
+    m.includes('network request failed') ||
+    m.includes('fetch error') ||
+    m.includes('fetch failed') ||
+    m.includes('ssl') ||
+    m.includes('certificate')
+  );
+}
+
+function isTimeoutError(err) {
+  if (!err) return false;
+  return isAbortError(err) || err.message === 'SUPABASE_TIMEOUT';
+}
+
+module.exports.isAbortError    = isAbortError;
+module.exports.isNetworkError  = isNetworkError;
+module.exports.isTimeoutError  = isTimeoutError;
+
+// ══════════════════════════════════════════════════════════════════
+// FETCH WRAPPERS
+// ══════════════════════════════════════════════════════════════════
+
+/**
+ * _dbFetchWithTimeout — for database queries (NOT auth operations)
+ * 15s timeout. Safe because DB queries don't share GoTrueClient state.
+ */
 function _dbFetchWithTimeout(input, init = {}) {
   const ctrl  = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), DB_FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => {
+    ctrl.abort(new DOMException('DB fetch timeout exceeded', 'AbortError'));
+  }, DB_FETCH_TIMEOUT_MS);
 
-  // If the caller already has a signal, race both signals so EITHER
-  // timeout OR the caller's abort will terminate the request.
   let signal = ctrl.signal;
   if (init.signal) {
     try {
-      // AbortSignal.any() is Node 20+; fall back gracefully if not available
       signal = AbortSignal.any
         ? AbortSignal.any([ctrl.signal, init.signal])
         : ctrl.signal;
@@ -115,17 +170,65 @@ function _dbFetchWithTimeout(input, init = {}) {
     .finally(() => clearTimeout(timer));
 }
 
-// ══════════════════════════════════════════════════════════════════
-// AUTH FETCH WRAPPER — for auth operations (login, signOut, etc.)
-// KEY DIFFERENCE from _dbFetchWithTimeout:
-//   • Longer timeout (25s) to survive Render cold-start delays
-//   • Never shares AbortController state with DB queries
-//   • Explicitly handles the case where Supabase SDK passes its own
-//     signal via init.signal — we race both signals correctly
-// ══════════════════════════════════════════════════════════════════
+/**
+ * _authFetchWithTimeout — for admin auth operations (createSession, getUser, etc.)
+ * 35s timeout to account for Render cold-start + DNS + TLS + PgBouncer warmup.
+ */
 function _authFetchWithTimeout(input, init = {}) {
   const ctrl  = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), AUTH_FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => {
+    ctrl.abort(new DOMException('Auth fetch timeout exceeded (35s)', 'AbortError'));
+  }, AUTH_FETCH_TIMEOUT_MS);
+
+  let signal = ctrl.signal;
+  if (init.signal) {
+    try {
+      signal = AbortSignal.any
+        ? AbortSignal.any([ctrl.signal, init.signal])
+        : ctrl.signal;
+    } catch (_) {
+      signal = ctrl.signal;
+    }
+  }
+
+  return fetch(input, { ...init, signal })
+    .finally(() => clearTimeout(timer));
+}
+
+/**
+ * _loginFetchWithTimeout — for per-request login clients
+ * 35s timeout. Created fresh per login attempt — NO shared queue state.
+ */
+function _loginFetchWithTimeout(input, init = {}) {
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => {
+    ctrl.abort(new DOMException('Login fetch timeout exceeded (35s)', 'AbortError'));
+  }, LOGIN_FETCH_TIMEOUT_MS);
+
+  let signal = ctrl.signal;
+  if (init.signal) {
+    try {
+      signal = AbortSignal.any
+        ? AbortSignal.any([ctrl.signal, init.signal])
+        : ctrl.signal;
+    } catch (_) {
+      signal = ctrl.signal;
+    }
+  }
+
+  return fetch(input, { ...init, signal })
+    .finally(() => clearTimeout(timer));
+}
+
+/**
+ * _ingestionFetchWithTimeout — for ingestion workers
+ * 30s timeout. Isolated from auth clients entirely.
+ */
+function _ingestionFetchWithTimeout(input, init = {}) {
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => {
+    ctrl.abort(new DOMException('Ingestion fetch timeout exceeded (30s)', 'AbortError'));
+  }, INGESTION_FETCH_TIMEOUT_MS);
 
   let signal = ctrl.signal;
   if (init.signal) {
@@ -144,8 +247,7 @@ function _authFetchWithTimeout(input, init = {}) {
 
 // ══════════════════════════════════════════════════════════════════
 // CLIENT 1: supabase — SERVICE ROLE client for DB queries
-// Uses _dbFetchWithTimeout — bypasses RLS, for server-side use only.
-// DO NOT use for auth operations (signInWithPassword, signOut, etc.)
+// NOT for auth operations. Uses _dbFetchWithTimeout (15s).
 // ══════════════════════════════════════════════════════════════════
 const supabase = createClient(
   SUPABASE_URL,
@@ -166,18 +268,12 @@ const supabase = createClient(
 
 // ══════════════════════════════════════════════════════════════════
 // CLIENT 2: supabaseAuth — DEDICATED AUTH client
-// Uses _authFetchWithTimeout — separate instance with NO shared state
-// with the DB client. Used ONLY for:
-//   - supabaseAuth.auth.signInWithPassword()
-//   - supabaseAuth.auth.signOut()
-//   - supabaseAuth.auth.admin.createSession()
-//   - supabaseAuth.auth.admin.signOut()
+// For admin operations: createSession, getUser, admin.signOut, etc.
+// Uses _authFetchWithTimeout (35s). Separate from DB client.
 //
-// WHY SEPARATE? The GoTrueClient inside @supabase/supabase-js maintains
-// an internal request queue (_requestQueue). When signOut() is aborted,
-// the queue may become corrupted, causing subsequent signInWithPassword
-// calls to also abort even with a fresh AbortController. Using a separate
-// client instance guarantees the auth queue is always clean on login.
+// ⚠️  DO NOT use this client for signInWithPassword (login).
+// Use createLoginClient() instead — it creates a fresh per-request
+// client with NO prior lock queue state, preventing queue stalls.
 // ══════════════════════════════════════════════════════════════════
 const supabaseAuth = createClient(
   SUPABASE_URL,
@@ -196,7 +292,46 @@ const supabaseAuth = createClient(
 );
 
 // ══════════════════════════════════════════════════════════════════
-// CLIENT 3: supabaseAnon — ANON/PUBLISHABLE client for RLS-aware reads
+// createLoginClient() — PER-REQUEST LOGIN CLIENT FACTORY
+//
+// ROOT CAUSE FIX v7.0:
+// GoTrueClient maintains an internal pendingInLock queue. In Node.js,
+// lockNoOp is used (no Web Locks API), but operations still queue
+// serially. When supabaseAuth.auth.signOut() is called before
+// signInWithPassword, the signOut takes the internal queue first.
+// If signOut stalls (cold-start DNS + TLS), signInWithPassword
+// waits in the queue — the combined wait hits our 25s timeout.
+//
+// SOLUTION: Create a FRESH Supabase client for EACH login attempt.
+// A brand-new client has:
+//   - lockAcquired = false (no active lock)
+//   - pendingInLock = [] (empty queue)
+//   - No prior signOut in the queue
+//   - Clean GoTrueClient state
+//
+// The caller is responsible for calling this client ONLY for
+// signInWithPassword and NOT calling signOut on it beforehand.
+// ══════════════════════════════════════════════════════════════════
+function createLoginClient() {
+  return createClient(
+    SUPABASE_URL,
+    SERVICE_KEY,
+    {
+      auth: {
+        autoRefreshToken:   false,
+        persistSession:     false,
+        detectSessionInUrl: false,
+      },
+      global: {
+        fetch:   _loginFetchWithTimeout,
+        headers: { 'x-application-name': 'wadjet-eye-ai-login' },
+      },
+    }
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════
+// CLIENT 3: supabaseAnon — ANON/PUBLISHABLE client for RLS reads
 // ══════════════════════════════════════════════════════════════════
 const supabaseAnon = SUPABASE_ANON_KEY
   ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -206,16 +341,36 @@ const supabaseAnon = SUPABASE_ANON_KEY
         detectSessionInUrl: false,
       },
     })
-  : supabase; // fallback: use service client (bypasses RLS)
+  : supabase;
 
 if (!SUPABASE_ANON_KEY) {
   console.warn('[Supabase] ⚠️  SUPABASE_ANON_KEY not set — using service client for anon ops (bypasses RLS)');
 }
 
 // ══════════════════════════════════════════════════════════════════
+// CLIENT 4: supabaseIngestion — INGESTION WORKER client
+// Isolated from auth clients. Uses _ingestionFetchWithTimeout (30s).
+// Prevents scheduler workers from interfering with auth operations.
+// ══════════════════════════════════════════════════════════════════
+const supabaseIngestion = createClient(
+  SUPABASE_URL,
+  SERVICE_KEY,
+  {
+    auth: {
+      autoRefreshToken:   false,
+      persistSession:     false,
+      detectSessionInUrl: false,
+    },
+    db: { schema: 'public' },
+    global: {
+      fetch:   _ingestionFetchWithTimeout,
+      headers: { 'x-application-name': 'wadjet-eye-ai-ingestion' },
+    },
+  }
+);
+
+// ══════════════════════════════════════════════════════════════════
 // supabaseForUser — user-scoped client factory
-// Creates a client that acts as a specific authenticated user.
-// This ensures RLS policies run for that user's tenant.
 // ══════════════════════════════════════════════════════════════════
 function supabaseForUser(accessToken) {
   if (!accessToken) return supabaseAnon;
@@ -237,48 +392,7 @@ function supabaseForUser(accessToken) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// isAbortError — helper to detect AbortError in both thrown and
-// returned (Supabase SDK wraps AbortError in its error object) forms.
-//
-// CRITICAL: Supabase SDK returns AbortError as:
-//   { data: null, error: DOMException { name: 'AbortError', message: 'This operation was aborted' } }
-// NOT as a thrown exception. This is why the existing try/catch
-// around signInWithPassword was NOT catching these aborts.
-// ══════════════════════════════════════════════════════════════════
-function isAbortError(err) {
-  if (!err) return false;
-  return (
-    err.name === 'AbortError' ||
-    (err instanceof DOMException && err.name === 'AbortError') ||
-    err.message?.includes('This operation was aborted') ||
-    err.message?.includes('signal is aborted') ||
-    err.message?.includes('aborted without reason') ||
-    // Supabase wraps the DOMException message
-    err.message?.toLowerCase?.().includes('aborted')
-  );
-}
-
-// ══════════════════════════════════════════════════════════════════
-// isNetworkError — helper to detect connectivity failures
-// ══════════════════════════════════════════════════════════════════
-function isNetworkError(err) {
-  if (!err) return false;
-  const m = (err.message || '').toLowerCase();
-  return (
-    m.includes('failed to fetch') ||
-    m.includes('networkerror') ||
-    m.includes('econnrefused') ||
-    m.includes('enotfound') ||
-    m.includes('etimedout') ||
-    m.includes('network request failed') ||
-    m.includes('fetch error')
-  );
-}
-
-// ══════════════════════════════════════════════════════════════════
-// Startup connectivity test (non-blocking)
-// Tests the DB client only — auth client does not have a health check
-// endpoint that can be called without credentials.
+// Startup connectivity test — non-blocking, uses DB client
 // ══════════════════════════════════════════════════════════════════
 async function checkSupabaseConnection() {
   try {
@@ -295,37 +409,83 @@ async function checkSupabaseConnection() {
 
       if (isKeyError) {
         console.error('[Supabase] 🔑 API KEY ERROR — service key may be invalid or revoked');
-        console.error('[Supabase]    Fix: https://supabase.com/dashboard/project/miywxnplaltduuscjfmq/settings/api');
+        console.error('[Supabase]    Fix: Supabase Dashboard → Settings → API → Service Key');
         console.error('[Supabase]    Update SUPABASE_SERVICE_KEY in Render → Environment → redeploy');
         console.error('[Supabase]    Error:', error.message);
       } else {
         console.warn(`[Supabase] ⚠️  DB connection test error (${ms}ms): ${error.message}`);
-        console.warn('[Supabase]    If RLS error → run: backend/database/rls-fix-v5.1.sql');
       }
     } else {
       console.log(`[Supabase] ✅ DB connection OK (${ms}ms)`);
     }
   } catch (err) {
     if (isAbortError(err)) {
-      console.warn('[Supabase] ⚠️  DB connection check timed out (AbortError) — Supabase may be warming up');
+      console.warn('[Supabase] ⚠️  DB connection check timed out — Supabase may be warming up');
     } else {
       console.error('[Supabase] ❌ DB connection check threw:', err.message);
     }
   }
 }
 
-setImmediate(checkSupabaseConnection);
+// ══════════════════════════════════════════════════════════════════
+// DNS WARMUP — pre-resolve Supabase hostname at startup
+// Prevents the first login from paying the cold-start DNS cost.
+// Runs in background — does NOT block server startup.
+// ══════════════════════════════════════════════════════════════════
+async function warmupSupabaseConnection() {
+  try {
+    const url = new URL(SUPABASE_URL);
+    const hostname = url.hostname;
+
+    // DNS warmup: Make a lightweight HEAD request to trigger DNS resolution
+    // and TCP/TLS handshake. Even if this fails, it warms the OS DNS cache.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8_000);
+
+    try {
+      await fetch(`${SUPABASE_URL}/auth/v1/health`, {
+        method: 'GET',
+        signal: ctrl.signal,
+        headers: { 'x-application-name': 'wadjet-eye-ai-warmup' },
+      });
+      console.log(`[Supabase] ✅ Auth endpoint warmup OK (hostname: ${hostname})`);
+    } catch (err) {
+      // Even a 404/401 means DNS + TLS is warmed up
+      if (isAbortError(err)) {
+        console.warn(`[Supabase] ⚠️  Auth endpoint warmup timed out (8s) — cold start expected`);
+      } else {
+        // Non-abort errors (401, 404, network) still mean DNS is warmed up
+        console.log(`[Supabase] ✅ Auth endpoint reachable (DNS+TLS warm) — ${err.message?.slice(0,60)}`);
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err) {
+    // Non-fatal — just means warmup failed
+    console.warn('[Supabase] ⚠️  Connection warmup error:', err.message?.slice(0, 80));
+  }
+}
+
+// Run both checks on startup (non-blocking)
+setImmediate(async () => {
+  await warmupSupabaseConnection();
+  await checkSupabaseConnection();
+});
 
 // ══════════════════════════════════════════════════════════════════
 // Exports
 // ══════════════════════════════════════════════════════════════════
-module.exports = {
-  supabase,       // DB queries (service role)
-  supabaseAuth,   // Auth operations ONLY (separate instance — no shared abort state)
-  supabaseAnon,   // RLS-aware reads
-  supabaseForUser,
+module.exports = Object.assign(module.exports, {
+  supabase,           // DB queries (service role)
+  supabaseAuth,       // Auth admin operations (getUser, createSession, admin.signOut)
+  supabaseIngestion,  // Ingestion workers ONLY — isolated from auth
+  supabaseAnon,       // RLS-aware reads (anon key)
+  supabaseForUser,    // Per-user scoped factory
+  createLoginClient,  // Per-request login client factory — FRESH per login
   isAbortError,
   isNetworkError,
+  isTimeoutError,
   AUTH_FETCH_TIMEOUT_MS,
   DB_FETCH_TIMEOUT_MS,
-};
+  LOGIN_FETCH_TIMEOUT_MS,
+});

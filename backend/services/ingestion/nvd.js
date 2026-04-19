@@ -12,7 +12,8 @@
 'use strict';
 
 const axios = require('axios');
-const { supabase } = require('../../config/supabase');
+// v7.0: Use supabaseIngestion — isolated from auth clients
+const { supabaseIngestion: supabase } = require('../../config/supabase');
 
 const DEFAULT_TENANT = process.env.DEFAULT_TENANT || '00000000-0000-0000-0000-000000000001';
 

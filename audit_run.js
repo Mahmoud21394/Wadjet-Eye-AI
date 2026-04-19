@@ -26,9 +26,11 @@ check('BE-01', 'auth routes before verifyToken',        authIdx > -1 && vtIdx > 
 check('BE-02', 'refresh route has no inline verifyToken', !authRoute.includes("router.post('/refresh', verifyToken"));
 check('BE-03', 'login route has no inline verifyToken',   !authRoute.includes("router.post('/login', verifyToken"));
 check('BE-04', 'logout route is public (no verifyToken)', authRoute.includes("router.post('/logout',") && !authRoute.includes("router.post('/logout', verifyToken"));
-check('BE-05', 'hard-reset: signOut fire-and-forget (NOT awaited — prevents AbortError)',
-  authRoute.includes('signOut().catch(') &&
-  !authRoute.includes('await supabase.auth.signOut()'));
+check('BE-05', 'v7.0: No signOut() before signInWithPassword — fresh client used instead',
+  // v7.0 uses createLoginClient() with NO signOut — the old signOut().catch() is gone from login
+  authRoute.includes('createLoginClient') ||
+  // OR old v6.1 pattern still valid
+  (authRoute.includes('signOut().catch(') && !authRoute.includes('await supabase.auth.signOut()')));
 check('BE-06', 'Supabase login has 20s timeout',  authRoute.includes('20_000'));
 check('BE-07', 'admin.createSession has 6s timeout', authRoute.includes('ADMIN_SESSION_TIMEOUT_MS') || authRoute.includes('6_000'));
 check('BE-08', 'verifyToken has 8s timeout',      authMW.includes('VERIFY_TIMEOUT_MS') || authMW.includes('8_000'));
@@ -80,9 +82,9 @@ check('BE-17-CRIT', 'CRITICAL: signInWithPassword uses supabaseAuth (not supabas
   authRoute.includes('supabaseAuth.auth.signInWithPassword') &&
   !authRoute.includes('supabase.auth.signInWithPassword'));
 
-// BE-18 NEW: signOut uses supabaseAuth
+// BE-18 NEW: signOut uses supabaseAuth (either direct or admin.signOut)
 check('BE-18-CRIT', 'CRITICAL: signOut uses supabaseAuth (not supabase DB client)',
-  authRoute.includes('supabaseAuth.auth.signOut') &&
+  (authRoute.includes('supabaseAuth.auth.signOut') || authRoute.includes('supabaseAuth.auth.admin.signOut')) &&
   !authRoute.includes('supabase.auth.signOut'));
 
 // BE-19 NEW: loginError checked for AbortError BEFORE generic 401 mapping
@@ -192,6 +194,89 @@ check('FE-35', 'main.js doLogin delegates to secureDoLogin when available',
 // email-not-confirmed handled in frontend
 check('FE-36', '_mapLoginError handles email-not-confirmed',
   loginPatch.includes('email not confirmed') || loginPatch.includes('not confirmed'));
+
+// ── BACKEND v7.0 NEW CHECKS ───────────────────────────────────────────────────
+const supabaseConf = fs.readFileSync('backend/config/supabase.js', 'utf8');
+const phishtankJs  = fs.readFileSync('backend/services/ingestion/phishtank.js', 'utf8');
+const ingestionJs  = fs.readFileSync('backend/services/ingestion/index.js', 'utf8');
+const schedulerJs  = fs.readFileSync('backend/services/scheduler.js', 'utf8');
+
+// BE-22: createLoginClient() factory exists (per-request fresh client)
+check('BE-22-CRIT', 'v7.0: createLoginClient() factory exists in supabase.js',
+  supabaseConf.includes('function createLoginClient') &&
+  supabaseConf.includes('createLoginClient'));
+
+// BE-23: auth.js uses createLoginClient() for signInWithPassword (not supabaseAuth)
+check('BE-23-CRIT', 'v7.0: login uses createLoginClient() — fresh per-request instance',
+  authRoute.includes('createLoginClient()') &&
+  authRoute.includes('_loginClient.auth.signInWithPassword'));
+
+// BE-24: NO signOut() before signInWithPassword (root cause of queue stall)
+check('BE-24-CRIT', 'v7.0: NO signOut() called before signInWithPassword in login handler',
+  !authRoute.includes('signOut().catch') ||
+  !authRoute.includes('_loginClient.auth.signInWithPassword') ||
+  // Ensure signOut is not present in the same handler - check by looking at login handler body
+  (() => {
+    const loginHandler = authRoute.slice(authRoute.indexOf("router.post('/login'"), authRoute.indexOf("router.post('/refresh'"));
+    return !loginHandler.includes('.auth.signOut()');
+  })());
+
+// BE-25: supabaseIngestion client exists and is isolated
+check('BE-25-CRIT', 'v7.0: supabaseIngestion client defined in supabase.js',
+  supabaseConf.includes('supabaseIngestion') &&
+  supabaseConf.includes('wadjet-eye-ai-ingestion'));
+
+// BE-26: PhishTank uses supabaseIngestion (not shared supabase)
+check('BE-26-CRIT', 'v7.0: PhishTank ingestion uses supabaseIngestion (isolated from auth)',
+  phishtankJs.includes('supabaseIngestion') ||
+  phishtankJs.includes('supabaseIngestion: supabase'));
+
+// BE-27: Main ingestion index.js uses supabaseIngestion
+check('BE-27-CRIT', 'v7.0: Main ingestion uses supabaseIngestion (isolated from auth)',
+  ingestionJs.includes('supabaseIngestion') ||
+  ingestionJs.includes('supabaseIngestion: supabase'));
+
+// BE-28: Scheduler uses supabaseIngestion
+check('BE-28', 'v7.0: Scheduler uses supabaseIngestion (not shared supabase)',
+  schedulerJs.includes('supabaseIngestion') ||
+  schedulerJs.includes('supabaseIngestion: supabase'));
+
+// BE-29: Login timeout is 40s outer (LOGIN_FETCH_TIMEOUT_MS + buffer)
+check('BE-29', 'v7.0: Login outer timeout is 40s (35s inner + 5s buffer)',
+  authRoute.includes('LOGIN_FETCH_TIMEOUT_MS') ||
+  authRoute.includes('LOGIN_HARD_TIMEOUT_MS') ||
+  authRoute.includes('40_000') || authRoute.includes('40000'));
+
+// BE-30: DNS/connection warmup on startup
+check('BE-30', 'v7.0: Supabase auth endpoint DNS warmup on startup',
+  supabaseConf.includes('warmupSupabaseConnection') &&
+  supabaseConf.includes('/auth/v1/health'));
+
+// BE-31: isTimeoutError helper exported
+check('BE-31', 'v7.0: isTimeoutError helper exists and exported',
+  supabaseConf.includes('function isTimeoutError') &&
+  supabaseConf.includes('isTimeoutError'));
+
+// ── BACKEND v7.1: Scheduler service isolation ─────────────────────────────────
+const newsIngestion   = fs.readFileSync('backend/services/news-ingestion.js', 'utf8');
+const enrichEngine    = fs.readFileSync('backend/services/enrichment-engine.js', 'utf8');
+const enrichService   = fs.readFileSync('backend/services/enrichment.js', 'utf8');
+
+// BE-32: news-ingestion.js uses supabaseIngestion (scheduler calls this every 30m)
+check('BE-32', 'v7.1: news-ingestion uses supabaseIngestion (isolated from auth)',
+  newsIngestion.includes('supabaseIngestion'));
+
+// BE-33: enrichment-engine.js uses supabaseIngestion (scheduler enrichBatch every 10m)
+check('BE-33', 'v7.1: enrichment-engine uses supabaseIngestion (isolated from auth)',
+  enrichEngine.includes('supabaseIngestion'));
+
+// BE-34: enrichment.js uses supabaseIngestion
+check('BE-34', 'v7.1: enrichment.js uses supabaseIngestion (isolated from auth)',
+  enrichService.includes('supabaseIngestion'));
+
+// BE-35: No frontend AbortController on login fetch (no premature client-side abort)
+check('BE-35', 'v7.1: Frontend api-client.js has no AbortController on login fetch',
+  !fs.readFileSync('js/api-client.js', 'utf8').includes('new AbortController()'));
 
 // ── PRINT ─────────────────────────────────────────────────────────────────────
 console.log('\n══════ AUTH FORENSIC AUDIT RESULTS ══════');

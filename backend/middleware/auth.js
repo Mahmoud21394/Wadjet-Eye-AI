@@ -26,7 +26,7 @@
  */
 'use strict';
 
-const { supabase, supabaseAuth, isAbortError } = require('../config/supabase'); // v6.1: supabaseAuth for all auth ops
+const { supabase, supabaseAuth, isAbortError, isTimeoutError } = require('../config/supabase'); // v7.0
 
 // ── Token extraction ───────────────────────────────────────────
 // Priority: httpOnly cookie → Authorization header → X-Access-Token header

@@ -25,7 +25,8 @@
  */
 'use strict';
 
-const { supabase } = require('../config/supabase');
+// v7.0: Use supabaseIngestion — isolated from auth clients
+const { supabaseIngestion: supabase } = require('../config/supabase');
 
 // ── Lazy-load ingestion modules to avoid circular deps ──────
 let _ingestion = null;

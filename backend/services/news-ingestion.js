@@ -33,8 +33,10 @@
 const axios = require('axios');
 
 // Supabase (optional — works without it)
+// v7.0: Use supabaseIngestion — isolated from auth clients, prevents event-loop
+// saturation from news upserts interfering with Supabase auth operations.
 let supabase;
-try { ({ supabase } = require('../config/supabase')); } catch (_) {}
+try { ({ supabaseIngestion: supabase } = require('../config/supabase')); } catch (_) {}
 
 const DEFAULT_TENANT = process.env.DEFAULT_TENANT_ID || '00000000-0000-0000-0000-000000000001';
 

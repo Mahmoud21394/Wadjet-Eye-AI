@@ -10,7 +10,8 @@
  */
 'use strict';
 
-const { supabase } = require('../config/supabase');
+const { supabaseIngestion: supabase } = require('../config/supabase');
+// v7.0: Use supabaseIngestion — isolated from auth clients
 const {
   enrichWithVirusTotal,
   enrichWithAbuseIPDB,

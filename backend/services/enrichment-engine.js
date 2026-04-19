@@ -20,7 +20,9 @@
 'use strict';
 
 const axios      = require('axios');
-const { supabase } = require('../config/supabase');
+// v7.0: Use supabaseIngestion — isolated from auth clients, prevents event-loop
+// saturation during enrichment batch runs from interfering with auth operations.
+const { supabaseIngestion: supabase } = require('../config/supabase');
 
 // ── API Keys from environment ─────────────────────────────────
 const VT_KEY       = process.env.VIRUSTOTAL_API_KEY;

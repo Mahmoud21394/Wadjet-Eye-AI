@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  Enterprise Auth Routes v6.1 — AbortError Root-Cause Fix
+ *  Enterprise Auth Routes v7.0 — Timeout Root-Cause Fix
  *  backend/routes/auth.js
  *
  *  POST  /api/auth/login          — Email/password login
@@ -50,8 +50,12 @@ const crypto  = require('crypto');
 const {
   supabase,
   supabaseAuth,
+  supabaseIngestion,
+  createLoginClient,
   isAbortError,
   isNetworkError,
+  isTimeoutError,
+  LOGIN_FETCH_TIMEOUT_MS,
 } = require('../config/supabase');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
@@ -253,24 +257,30 @@ router.post('/login', asyncHandler(async (req, res) => {
   const loginStart = Date.now();
   console.log(`[auth:login:start] ${email} from ${req.ip || 'unknown'} at ${new Date().toISOString()}`);
 
-  // ── Hard-reset: sign out any stale Supabase session before fresh login ──
-  // CRITICAL FIX v6.1: Use supabaseAuth (dedicated client) NOT supabase (DB client).
-  // The DB client uses _dbFetchWithTimeout (15s) which shares internal abort state.
-  // Using supabaseAuth guarantees a clean GoTrueClient queue for signInWithPassword.
-  supabaseAuth.auth.signOut().catch(() => {}); // intentionally NOT awaited
+  // ── v7.0 FIX: Create a FRESH per-request Supabase client for login ─────────
+  // ROOT CAUSE: GoTrueClient._acquireLock uses an internal pendingInLock queue.
+  // In Node.js (no Web Locks API), operations queue serially. When signOut()
+  // is called before signInWithPassword on the SAME client instance, signOut
+  // takes the lock first. If signOut stalls (DNS + TLS cold-start: 8-15s),
+  // signInWithPassword waits in queue — combined wait hits our 25s timeout.
+  //
+  // SOLUTION: Fresh client per login = empty pendingInLock queue = no queue stall.
+  // DO NOT call signOut() on this client — that is the whole point of a fresh instance.
+  const _loginClient = createLoginClient();
+  console.log(`[auth:login:supabase] created fresh login client for ${email}`);
 
   // ── Authenticate via Supabase ────────────────────────────────────────────────
-  // v6.1: supabaseAuth uses _authFetchWithTimeout (25s) — longer timeout for
-  // Render cold-start delays. Separate client = no shared AbortController state.
-  console.log(`[auth:login:supabase] calling signInWithPassword for ${email}`);
-
+  // 35s timeout = Render cold-start (8s) + DNS (5s) + TLS (3s) + PgBouncer (5s)
+  //              + network latency (2s) + signInWithPassword processing (5s)
+  //              + 7s safety margin
+  const LOGIN_HARD_TIMEOUT_MS = LOGIN_FETCH_TIMEOUT_MS + 5_000; // 40s hard outer timeout
   const _supabaseLoginTimeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('SUPABASE_TIMEOUT')), 25_000)
+    setTimeout(() => reject(new Error('SUPABASE_TIMEOUT')), LOGIN_HARD_TIMEOUT_MS)
   );
   let loginData, loginError;
   try {
     ({ data: loginData, error: loginError } = await Promise.race([
-      supabaseAuth.auth.signInWithPassword({      // ← FIXED: use supabaseAuth
+      _loginClient.auth.signInWithPassword({  // ← v7.0: fresh per-request client
         email:    email.trim().toLowerCase(),
         password: password.trim(),
       }),
@@ -280,19 +290,28 @@ router.post('/login', asyncHandler(async (req, res) => {
       `loginError=${loginError ? loginError.message : 'none'} ` +
       `session=${loginData?.session ? 'present' : 'absent'}`);
   } catch (supabaseErr) {
-    // RC-BACKEND-1 FIX: Catch AbortError that is THROWN (not returned in error field).
-    // With supabaseAuth this should be rare, but we keep the guard for robustness.
+    // Catch AbortError/timeout/network in THROWN form.
+    // AbortError returned in ERROR FIELD is handled below (loginError check).
     const isAbort   = isAbortError(supabaseErr);
     const isTimeout = supabaseErr.message === 'SUPABASE_TIMEOUT';
     const isNetwork = isNetworkError(supabaseErr);
 
-    console.error(`[auth:login:abort] THROWN ${supabaseErr.name}: ${supabaseErr.message} ` +
-      `elapsed=${Date.now()-loginStart}ms`);
+    const elapsed = Date.now() - loginStart;
+    console.error(`[auth:login:abort] THROWN ${supabaseErr.name}: ${supabaseErr.message} elapsed=${elapsed}ms`);
 
     if (isAbort || isTimeout || isNetwork) {
+      const reason = isTimeout ? `timeout after ${elapsed}ms` :
+                     isAbort   ? `aborted after ${elapsed}ms` :
+                                 `network error after ${elapsed}ms`;
+      console.error(`[auth:login:503] Returning 503 — ${reason}`);
+      logActivity(null, null, 'LOGIN_FAILED', req, {
+        email, success: false,
+        failure_reason: `${supabaseErr.name}: ${supabaseErr.message} (${reason})`,
+      }).catch(() => {});
       return res.status(503).json({
         error:   'Authentication service temporarily unavailable. Please try again in a few seconds.',
         code:    'AUTH_SERVICE_UNAVAILABLE',
+        detail:  process.env.NODE_ENV !== 'production' ? reason : undefined,
         retryIn: 5,
       });
     }

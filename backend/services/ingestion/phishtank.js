@@ -14,7 +14,9 @@
 'use strict';
 
 const axios    = require('axios');
-const { supabase } = require('../../config/supabase');
+// v7.0: Use supabaseIngestion (isolated client) — prevents ingestion workers
+// from interfering with auth operations via shared GoTrueClient state/timeouts.
+const { supabaseIngestion: supabase } = require('../../config/supabase');
 
 const DEFAULT_TENANT = process.env.DEFAULT_TENANT_ID || '00000000-0000-0000-0000-000000000001';
 const TIMEOUT = 25000;
