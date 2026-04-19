@@ -47,9 +47,11 @@ window.addEventListener('DOMContentLoaded', function () {
    If the server is down, the user cannot log in. Full stop.
 ════════════════════════════════════════════════════════════════ */
 async function secureDoLogin() {
-  if (window.UnifiedTokenStore) {
-  UnifiedTokenStore.clear();
-}
+  // Clear any stale tokens before attempting login.
+  // Guard prevents ReferenceError when auth-interceptor.js is not yet loaded.
+  if (typeof window.UnifiedTokenStore !== 'undefined') {
+    window.UnifiedTokenStore.clear();
+  }
   const emailEl  = document.getElementById('loginEmail');
   const passEl   = document.getElementById('loginPassword');
   const tenantEl = document.getElementById('loginTenant');
@@ -104,6 +106,24 @@ async function secureDoLogin() {
 
     _showLoginError(errEl, display);
     console.warn('[SecureLogin] Authentication failed:', msg);
+
+    // ── Auto-retry for 503 AUTH_SERVICE_UNAVAILABLE (Supabase AbortError) ──
+    // When the backend returns 503 it means Supabase is warming up (first
+    // request on Render cold-start aborts due to the 15s fetch timeout).
+    // The second attempt almost always succeeds.
+    const isTransient = msg.toLowerCase().includes('temporarily unavailable') ||
+                        msg.toLowerCase().includes('auth_service_unavailable') ||
+                        msg.toLowerCase().includes('try again in');
+    if (isTransient && !secureDoLogin._retrying) {
+      secureDoLogin._retrying = true;
+      _showLoginError(errEl, '⏳ Server warming up… retrying in 5 seconds.');
+      setTimeout(() => {
+        secureDoLogin._retrying = false;
+        secureDoLogin();
+      }, 5000);
+      return;
+    }
+    secureDoLogin._retrying = false;
 
     // ── NO FALLBACK. No emergency accounts. No offline mode. ─
     // If the server is unreachable, the user sees a clear message.
@@ -373,10 +393,14 @@ function _mapLoginError(msg) {
     return '⚠️ User profile not found. Contact your administrator to set up your account.';
   if (m.includes('network') || m.includes('failed to fetch') || m.includes('err_connection') || m.includes('load failed'))
     return '🔌 Cannot reach the authentication server. Check your network and try again.';
-  if (m.includes('timeout'))
+  if (m.includes('timeout') || m.includes('timed out'))
     return '⏱ Request timed out. The server may be starting up — try again in 30 seconds.';
   if (m.includes('api client not loaded'))
     return '🔌 Cannot reach the server. Check your network connection and refresh the page.';
+  // RC-BACKEND-1: Supabase AbortError → backend returns 503 AUTH_SERVICE_UNAVAILABLE
+  if (m.includes('temporarily unavailable') || m.includes('auth_service_unavailable') ||
+      m.includes('aborted') || m.includes('503'))
+    return '⏱ Authentication service temporarily unavailable. Please try again in a few seconds.';
   return `❌ ${msg}`;
 }
 
