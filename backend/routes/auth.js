@@ -229,8 +229,14 @@ router.post('/login', asyncHandler(async (req, res) => {
   }
 
   // ── Hard-reset: sign out any stale Supabase session before fresh login ──
-  // Ensures previous session cookie is cleared; non-fatal if no active session.
-  try { await supabase.auth.signOut(); } catch { /* non-fatal */ }
+  // IMPORTANT: We do NOT await this — awaiting signOut() with the global
+  // _fetchWithTimeout wrapper causes the AbortController for that request to
+  // fire, which can abort the IMMEDIATELY FOLLOWING signInWithPassword call
+  // (seen in logs as "AbortError: This operation was aborted" at auth.js:241).
+  // Fire-and-forget is safe: signOut() failing non-fatally is expected on
+  // first login (no session to revoke).  The important thing is that the
+  // next signInWithPassword starts with a clean slate immediately.
+  supabase.auth.signOut().catch(() => {}); // intentionally NOT awaited
 
   // ── Authenticate via Supabase (with 20s timeout for cold-start / DNS issues) ──
   const _supabaseLoginTimeout = new Promise((_, reject) =>
@@ -246,18 +252,28 @@ router.post('/login', asyncHandler(async (req, res) => {
       _supabaseLoginTimeout,
     ]));
   } catch (supabaseErr) {
-    if (supabaseErr.message === 'SUPABASE_TIMEOUT' ||
-        supabaseErr.message?.includes('Failed to fetch') ||
-        supabaseErr.message?.includes('NetworkError') ||
-        supabaseErr.message?.includes('ECONNREFUSED')) {
-      console.error('[Auth] Supabase login unreachable:', supabaseErr.message);
+    // RC-BACKEND-1 FIX: Catch AbortError explicitly.
+    // AbortError is thrown when the Supabase _fetchWithTimeout AbortController
+    // fires (15s timeout) or when a prior aborted request leaks its signal.
+    // Previously this fell through to `throw supabaseErr` → unhandled → 500.
+    // Now we return a clean 503 with a retryable message.
+    const isAbort   = supabaseErr.name === 'AbortError' ||
+                      supabaseErr.message?.includes('This operation was aborted') ||
+                      supabaseErr.message?.includes('aborted');
+    const isTimeout = supabaseErr.message === 'SUPABASE_TIMEOUT';
+    const isNetwork = supabaseErr.message?.includes('Failed to fetch') ||
+                      supabaseErr.message?.includes('NetworkError') ||
+                      supabaseErr.message?.includes('ECONNREFUSED');
+
+    if (isAbort || isTimeout || isNetwork) {
+      console.error('[Auth] Supabase login unreachable/aborted:', supabaseErr.message);
       return res.status(503).json({
         error:   'Authentication service temporarily unavailable. Please try again in a few seconds.',
         code:    'AUTH_SERVICE_UNAVAILABLE',
         retryIn: 5,
       });
     }
-    throw supabaseErr; // re-throw unexpected errors
+    throw supabaseErr; // re-throw truly unexpected errors
   }
 
   if (loginError) {

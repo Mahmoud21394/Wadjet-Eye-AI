@@ -26,15 +26,22 @@ check('BE-01', 'auth routes before verifyToken',        authIdx > -1 && vtIdx > 
 check('BE-02', 'refresh route has no inline verifyToken', !authRoute.includes("router.post('/refresh', verifyToken"));
 check('BE-03', 'login route has no inline verifyToken',   !authRoute.includes("router.post('/login', verifyToken"));
 check('BE-04', 'logout route is public (no verifyToken)', authRoute.includes("router.post('/logout',") && !authRoute.includes("router.post('/logout', verifyToken"));
-check('BE-05', 'hard-reset: signOut before signInWithPassword',
-  authRoute.includes('supabase.auth.signOut()') &&
-  authRoute.indexOf('signOut()') < authRoute.indexOf('signInWithPassword'));
+check('BE-05', 'hard-reset: signOut fire-and-forget (NOT awaited — prevents AbortError)',
+  authRoute.includes('signOut().catch(') &&
+  !authRoute.includes('await supabase.auth.signOut()'));
 check('BE-06', 'Supabase login has 20s timeout',  authRoute.includes('20_000'));
 check('BE-07', 'admin.createSession has 6s timeout', authRoute.includes('ADMIN_SESSION_TIMEOUT_MS') || authRoute.includes('6_000'));
 check('BE-08', 'verifyToken has 8s timeout',      authMW.includes('VERIFY_TIMEOUT_MS') || authMW.includes('8_000'));
 const healthIdx = server.indexOf("app.get('/health'");
 check('BE-09', '/health is public (before verifyToken)', healthIdx > -1 && healthIdx < vtIdx);
 check('BE-10', '/api/ping exists and is public',   server.includes("app.get('/api/ping'") && server.indexOf("app.get('/api/ping'") < vtIdx);
+
+// RC-BACKEND-1: AbortError explicitly caught and returned as 503 (not thrown as 500/401)
+check('BE-11-CRIT', 'RC-BACKEND-1: AbortError caught in login → 503 (not re-thrown)',
+  authRoute.includes("supabaseErr.name === 'AbortError'") ||
+  authRoute.includes("supabaseErr.message?.includes('This operation was aborted')"));
+check('BE-12', 'login handler returns 503 for aborted/timeout Supabase calls',
+  authRoute.includes("res.status(503).json") && authRoute.includes('AUTH_SERVICE_UNAVAILABLE'));
 
 // ── FRONTEND: api-client/index.js ─────────────────────────────────────────────
 check('FE-01', 'api-client login uses skipAuth:true',   apiClient.includes('skipAuth: true') || apiClient.includes('skipAuth:true'));
@@ -110,6 +117,15 @@ check('FE-30', 'api-client.js _AUTH_PUBLIC_PATHS includes login/refresh/logout',
   oldApiClient.includes("'/auth/login'") &&
   oldApiClient.includes("'/auth/refresh'") &&
   oldApiClient.includes("'/auth/logout'"));
+
+// ── login-secure-patch.js additional checks ───────────────────────────────────
+check('FE-31-CRIT', 'secureDoLogin UnifiedTokenStore.clear scope fixed (typeof guard)',
+  loginPatch.includes("typeof window.UnifiedTokenStore !== 'undefined'") &&
+  loginPatch.includes('window.UnifiedTokenStore.clear()'));
+check('FE-32', '_mapLoginError handles temporarily unavailable / 503',
+  loginPatch.includes('temporarily unavailable') && loginPatch.includes('auth_service_unavailable'));
+check('FE-33', 'secureDoLogin auto-retries on 503 transient error',
+  loginPatch.includes('isTransient') && loginPatch.includes('secureDoLogin._retrying') && loginPatch.includes('setTimeout'));
 
 // ── PRINT ─────────────────────────────────────────────────────────────────────
 console.log('\n══════ AUTH FORENSIC AUDIT RESULTS ══════');
