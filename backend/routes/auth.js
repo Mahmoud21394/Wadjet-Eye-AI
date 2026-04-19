@@ -277,12 +277,54 @@ router.post('/login', asyncHandler(async (req, res) => {
   }
 
   if (loginError) {
-    await logActivity(null, null, 'LOGIN_FAILED', req, {
+    // Log asynchronously — don't await so we don't hang on Supabase issues
+    logActivity(null, null, 'LOGIN_FAILED', req, {
       email,
       success: false,
       failure_reason: loginError.message,
+    }).catch(() => {});
+
+    console.warn(`[Auth] LOGIN_FAILED for ${email}: ${loginError.message} (code: ${loginError.status || loginError.code})`);
+
+    // Map Supabase-specific errors to actionable messages
+    const errMsg = loginError.message?.toLowerCase() || '';
+    const errCode = loginError.status || loginError.code;
+
+    if (errMsg.includes('email not confirmed') || errMsg.includes('not confirmed')) {
+      return res.status(401).json({
+        error: 'Email not confirmed. Please check your inbox and confirm your email address before logging in.',
+        code:  'EMAIL_NOT_CONFIRMED',
+      });
+    }
+
+    if (errMsg.includes('invalid login credentials') || errMsg.includes('invalid email or password') || errCode === 400) {
+      return res.status(401).json({
+        error: 'Invalid email or password',
+        code:  'INVALID_CREDENTIALS',
+        // Include sanitized Supabase error for debugging (never expose to end-users in prod logs)
+        _supabaseMsg: process.env.NODE_ENV !== 'production' ? loginError.message : undefined,
+      });
+    }
+
+    if (errMsg.includes('too many requests') || errCode === 429) {
+      return res.status(429).json({
+        error: 'Too many login attempts. Please wait a few minutes and try again.',
+        code:  'RATE_LIMITED',
+      });
+    }
+
+    if (errMsg.includes('user not found') || errMsg.includes('no user found')) {
+      return res.status(401).json({
+        error: 'Invalid email or password',
+        code:  'INVALID_CREDENTIALS',
+      });
+    }
+
+    // Generic 401 for any other Supabase auth failure
+    return res.status(401).json({
+      error: 'Invalid email or password',
+      code:  'INVALID_CREDENTIALS',
     });
-    return res.status(401).json({ error: 'Invalid email or password' });
   }
 
   // ── Fetch user profile ──
@@ -779,6 +821,64 @@ router.post('/refresh-from-cookie', asyncHandler(async (req, res) => {
       code:  'REFRESH_FAILED',
     });
   }
+}));
+
+/* ════════════════════════════════════════════════
+   GET /api/auth/diagnostics
+   Public endpoint — returns Supabase auth health
+   Used to diagnose login failures without exposing secrets
+═══════════════════════════════════════════════ */
+router.get('/diagnostics', asyncHandler(async (req, res) => {
+  const start = Date.now();
+  const diag  = {
+    timestamp: new Date().toISOString(),
+    supabase: { reachable: false, latencyMs: null, error: null },
+    config: {
+      hasJwtSecret:     !!JWT_SECRET,
+      hasSupabaseUrl:   !!process.env.SUPABASE_URL,
+      hasServiceKey:    !!(process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SECRET_KEY),
+      hasAnonKey:       !!process.env.SUPABASE_ANON_KEY,
+    },
+    authRoutePublic: true,
+    version: '5.1',
+  };
+
+  try {
+    // Test Supabase auth by doing a no-op sign-in with invalid creds
+    // This tells us whether the Supabase Auth service is reachable
+    const { error } = await Promise.race([
+      supabase.auth.signInWithPassword({ email: 'diag-probe@noreply.test', password: 'x' }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('DIAG_TIMEOUT')), 8_000)),
+    ]);
+    diag.supabase.latencyMs = Date.now() - start;
+
+    if (error) {
+      // If we get an auth error (Invalid credentials, etc.), Supabase IS reachable
+      // Only timeout / network / abort = not reachable
+      const msg = error.message?.toLowerCase() || '';
+      if (msg.includes('invalid') || msg.includes('not found') || msg.includes('credentials')) {
+        diag.supabase.reachable = true;
+        diag.supabase.authService = 'operational';
+      } else {
+        diag.supabase.reachable = false;
+        diag.supabase.error = error.message;
+        diag.supabase.authService = 'error';
+      }
+    } else {
+      diag.supabase.reachable = true;
+      diag.supabase.authService = 'operational';
+    }
+  } catch (err) {
+    diag.supabase.latencyMs = Date.now() - start;
+    diag.supabase.reachable = false;
+    diag.supabase.error     = err.message;
+    diag.supabase.authService = 'unreachable';
+  }
+
+  const status = diag.supabase.reachable && diag.config.hasSupabaseUrl && diag.config.hasServiceKey
+    ? 200 : 503;
+
+  return res.status(status).json(diag);
 }));
 
 module.exports = router;

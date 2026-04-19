@@ -16,18 +16,42 @@ if (!window.WADJET_API_URL) {
 let CURRENT_USER = null;
 
 /* ════════════════════════════════════════════════════════════════
-   LOGIN — v4.0 Enterprise Edition
-   Priority order:
-     1. Real backend authentication (Supabase JWT)
-     2. Emergency fallback for known accounts when backend is DOWN
-   No demo bypass — real credentials required
+   LOGIN — v5.0 Secure Edition
+   ─────────────────────────────────────────────────────────────
+   SECURITY FIX v5.0:
+   • _EMERGENCY_ACCOUNTS removed — hardcoded credentials are a
+     critical security vulnerability (offline tokens bypass all
+     server-side RBAC, tenant isolation, and audit logging).
+   • Emergency / break-glass access is handled server-side via
+     POST /api/auth/break-glass (requires TOTP + admin approval).
+   • This function now DELEGATES to secureDoLogin() from
+     login-secure-patch.js when it is available (it should always
+     be available since that script loads after this one).
+   • If secureDoLogin is somehow not loaded yet, it falls back to
+     a minimal real-auth-only implementation with NO bypass paths.
+   No demo bypass. No offline tokens. Real credentials required.
 ════════════════════════════════════════════════════════════════ */
 async function doLogin() {
-  const email    = document.getElementById('loginEmail')?.value?.trim();
-  const password = document.getElementById('loginPassword')?.value?.trim();
-  const tenant   = document.getElementById('loginTenant')?.value || 'mssp-global';
+  // ── Primary path: delegate to secure implementation ──────────
+  // login-secure-patch.js sets window.doLogin = secureDoLogin on
+  // DOMContentLoaded. After that the onclick calls secureDoLogin.
+  // During the brief window before DOMContentLoaded (should never
+  // happen in practice since onclick fires after DOM is ready),
+  // fall through to the safe minimal implementation below.
+  if (typeof secureDoLogin === 'function' && secureDoLogin !== doLogin) {
+    return secureDoLogin();
+  }
+
+  // ── Safe minimal fallback (no emergency accounts) ────────────
+  const emailEl  = document.getElementById('loginEmail');
+  const passEl   = document.getElementById('loginPassword');
+  const tenantEl = document.getElementById('loginTenant');
   const errEl    = document.getElementById('loginError');
   const btn      = document.querySelector('.login-btn');
+
+  const email    = emailEl?.value?.trim()?.toLowerCase();
+  const password = passEl?.value;
+  const tenant   = tenantEl?.value || 'mssp-global';
 
   if (!email || !password) {
     if (errEl) { errEl.textContent = '⚠️ Please enter your email and password.'; errEl.style.display = 'block'; }
@@ -38,112 +62,16 @@ async function doLogin() {
   if (btn) { btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Signing in…'; btn.disabled = true; }
   if (errEl) errEl.style.display = 'none';
 
-  /* ── Helper: animate into app ───────────────────────────── */
-  function _enterApp() {
-    const loginScreen = document.getElementById('loginScreen');
-    if (loginScreen) {
-      loginScreen.style.opacity    = '0';
-      loginScreen.style.transition = 'opacity 0.4s ease';
-      setTimeout(() => {
-        loginScreen.style.display = 'none';
-        const mainApp = document.getElementById('mainApp');
-        if (mainApp) mainApp.style.display = 'flex';
-        if (btn) { btn.innerHTML = originalBtnText; btn.disabled = false; }
-        if (typeof initApp === 'function') initApp();
-      }, 400);
-    }
-  }
-
-  /* ── Emergency fallback accounts (used when backend is unreachable OR profile not found) ── */
-  const _EMERGENCY_ACCOUNTS = {
-    'mahmoud.osman@wadjet.ai': { id:'super-admin-mo', name:'Mahmoud Osman', role:'super_admin', tenant_slug:'mssp-global', tenant_name:'MSSP Global Operations', permissions:['read','write','admin','super_admin','manage_tenants','manage_users','manage_billing','manage_integrations','view_audit_logs','delete_records','export_data','configure_platform'] },
-    'mahmoud@mssp.com':        { id:'super-admin-mo', name:'Mahmoud Osman', role:'super_admin', tenant_slug:'mssp-global', tenant_name:'MSSP Global Operations', permissions:['read','write','admin','super_admin','manage_tenants','manage_users','manage_billing','manage_integrations','view_audit_logs','delete_records','export_data','configure_platform'] },
-    'admin@mssp.com':          { id:'admin-001',      name:'Admin User',    role:'admin',       tenant_slug:'mssp-global', tenant_name:'MSSP Global Operations', permissions:['read','write','admin','manage_users','view_audit_logs','export_data'] },
-    'analyst@mssp.com':        { id:'analyst-001',    name:'SOC Analyst',   role:'analyst',     tenant_slug:'mssp-global', tenant_name:'MSSP Global Operations', permissions:['read','write'] },
-  };
-
-  function _doEmergencyLogin(profile, reason) {
-    const offlineToken = 'offline_emergency_' + Date.now().toString(36);
-    CURRENT_USER = {
-      id:          profile.id,       email,
-      name:        profile.name,     role:        profile.role,
-      tenant:      profile.tenant_slug,           tenant_name: profile.tenant_name,
-      tenant_id:   profile.tenant_slug,           avatar:      profile.name.split(' ').map(n=>n[0]).join('').toUpperCase().slice(0,2),
-      permissions: profile.permissions,           mfa_enabled: false,
-      _offline:    true,             is_super_admin: profile.role === 'super_admin',
-    };
-    // Store in PersistentTokenStore (survives page refresh)
-    if (typeof window.PersistentAuth_onLogin === 'function') {
-      window.PersistentAuth_onLogin(CURRENT_USER, offlineToken, null, null, true);
-    } else if (typeof TokenStore !== 'undefined') {
-      TokenStore.set(offlineToken, null, null);
-      TokenStore.setUser(CURRENT_USER);
-    }
-    // Also notify PersistentAuth hook if available
-    if (typeof window.PersistentAuth_onEmergencyLogin === 'function') {
-      window.PersistentAuth_onEmergencyLogin(CURRENT_USER, offlineToken);
-    }
-    const reasonLabel = reason === 'profile' ? '(offline — profile not seeded in DB)' : '(offline — backend unreachable)';
-    if (typeof showToast === 'function')
-      showToast(`⭐ Welcome, ${profile.name} ${reasonLabel}`, 'warning', 5000);
-    console.warn('[Login] ⚠️ Emergency offline session for', email, '—', reason);
-    _enterApp();
-  }
-
-  /* ── Helper: is this a "known admin" that should always be able to login? ── */
-  function _getEmergencyProfile(emailLower) {
-    return _EMERGENCY_ACCOUNTS[emailLower] || null;
-  }
-
   try {
-    if (typeof API === 'undefined') {
-      // API client not loaded — try emergency fallback immediately
-      const emergencyProfile = _getEmergencyProfile(email.toLowerCase());
-      if (emergencyProfile && password.length >= 6) {
-        _doEmergencyLogin(emergencyProfile, 'network');
-        return;
-      }
-      throw new Error('API client not loaded — check network connection.');
+    if (typeof API === 'undefined' || typeof API.auth?.login !== 'function') {
+      throw new Error('API client not loaded. Check your network connection and refresh the page.');
     }
 
-    // ── STEP 1: Try real backend authentication ────────────
-    let data;
-    try {
-      data = await API.auth.login(email, password, tenant);
-    } catch (apiErr) {
-      const msg = (apiErr.message || '').toLowerCase();
+    const data = await API.auth.login(email, password, tenant);
 
-      // Network / connectivity failure → emergency fallback for known admins
-      const isNetworkError = msg.includes('network') || msg.includes('cannot reach') ||
-                             msg.includes('failed to fetch') || msg.includes('err_connection') ||
-                             msg.includes('timeout') || msg.includes('load failed');
+    if (!data?.user) throw new Error('Invalid response from authentication server. Please try again.');
 
-      // Profile not found in DB → emergency fallback for known admins (DB not seeded yet)
-      const isProfileMissing = msg.includes('profile') || msg.includes('user not found') ||
-                               msg.includes('not found') || msg.includes('no rows') ||
-                               msg.includes('does not exist');
-
-      // Account not in Supabase auth yet → emergency fallback for known admins
-      const isAuthUserMissing = msg.includes('invalid login') || msg.includes('email not confirmed') ||
-                                msg.includes('user not registered') || msg.includes('invalid credentials') && isProfileMissing;
-
-      const needsFallback = isNetworkError || isProfileMissing || isAuthUserMissing;
-
-      if (needsFallback) {
-        const emergencyProfile = _getEmergencyProfile(email.toLowerCase());
-        if (emergencyProfile && password.length >= 6) {
-          _doEmergencyLogin(emergencyProfile, isNetworkError ? 'network' : 'profile');
-          return;
-        }
-      }
-
-      // For other real auth errors (wrong password, suspended, etc.) — surface the error
-      throw apiErr;
-    }
-
-    if (!data?.user) throw new Error('Invalid response from authentication server.');
-
-    // ── STEP 2: Build CURRENT_USER from real JWT response ──
+    // Build CURRENT_USER from real JWT response
     CURRENT_USER = {
       id:          data.user.id,
       email:       data.user.email,
@@ -160,7 +88,6 @@ async function doLogin() {
       _offline:    false,
     };
 
-    // Persist to PersistentTokenStore so session survives page refresh
     if (typeof window.PersistentAuth_onLogin === 'function') {
       window.PersistentAuth_onLogin(
         CURRENT_USER,
@@ -171,43 +98,46 @@ async function doLogin() {
       );
     }
 
-    if (typeof showToast === 'function')
-      showToast(`✅ Welcome, ${CURRENT_USER.name}`, 'success');
+    if (typeof showToast === 'function') showToast(`✅ Welcome, ${CURRENT_USER.name}`, 'success');
 
-    _enterApp();
-
-  } catch (err) {
-    const msg = err.message || 'Login failed';
-    console.warn('[Login] Failed:', msg);
-
-    // ── FINAL SAFETY NET: if backend failed for any reason and this is a known admin account ──
-    const msgLow = msg.toLowerCase();
-    const isKnownAccount = _getEmergencyProfile(email.toLowerCase());
-    const isSoftError = msgLow.includes('profile') || msgLow.includes('not found') ||
-                        msgLow.includes('network') || msgLow.includes('unreachable') ||
-                        msgLow.includes('failed to fetch') || msgLow.includes('timeout') ||
-                        msgLow.includes('no rows') || msgLow.includes('does not exist') ||
-                        msgLow.includes('user not') || msgLow.includes('cannot reach');
-
-    if (isKnownAccount && password.length >= 6 && isSoftError) {
-      _doEmergencyLogin(isKnownAccount, 'profile');
-      return;
+    // Animate into app
+    const loginScreen = document.getElementById('loginScreen');
+    if (loginScreen) {
+      loginScreen.style.opacity    = '0';
+      loginScreen.style.transition = 'opacity 0.4s ease';
+      setTimeout(() => {
+        loginScreen.style.display = 'none';
+        const mainApp = document.getElementById('mainApp');
+        if (mainApp) mainApp.style.display = 'flex';
+        if (btn) { btn.innerHTML = originalBtnText; btn.disabled = false; }
+        if (typeof initApp === 'function') initApp();
+      }, 400);
     }
 
+  } catch (err) {
     if (btn) { btn.innerHTML = originalBtnText; btn.disabled = false; }
+    const msg    = err.message || 'Login failed';
+    const msgLow = msg.toLowerCase();
+    console.warn('[Login] Failed:', msg);
 
     const display =
-      msgLow.includes('invalid email') || msgLow.includes('invalid credentials') || msgLow.includes('wrong password')
+      msgLow.includes('invalid email') || msgLow.includes('invalid credentials') ||
+      msgLow.includes('wrong password') || msgLow.includes('invalid email or password')
         ? '❌ Invalid email or password. Please try again.'
-        : msgLow.includes('suspended')
+      : msgLow.includes('email not confirmed')
+        ? '⚠️ Email not confirmed. Please check your inbox.'
+      : msgLow.includes('suspended') || msgLow.includes('inactive')
         ? '⚠️ Account suspended. Contact your administrator.'
-        : msgLow.includes('tenant')
-        ? '⚠️ You do not have access to this tenant.'
-        : msgLow.includes('profile') || msgLow.includes('not found')
+      : msgLow.includes('tenant')
+        ? '⚠️ You do not have access to this workspace.'
+      : msgLow.includes('profile') || msgLow.includes('not found')
         ? '⚠️ User profile not found. Contact your administrator.'
-        : msgLow.includes('unreachable') || msgLow.includes('network') || msgLow.includes('connection')
+      : msgLow.includes('unreachable') || msgLow.includes('network') || msgLow.includes('connection') ||
+        msgLow.includes('failed to fetch')
         ? '🔌 Cannot reach backend. Check your network connection.'
-        : `❌ ${msg}`;
+      : msgLow.includes('temporarily unavailable') || msgLow.includes('503')
+        ? '⏱ Authentication service temporarily unavailable. Please try again in a few seconds.'
+      : `❌ ${msg}`;
 
     if (errEl) { errEl.textContent = display; errEl.style.display = 'block'; }
   }
