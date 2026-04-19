@@ -383,8 +383,10 @@ function _setBtnLoading(btn, loading) {
 
 function _mapLoginError(msg) {
   const m = (msg || '').toLowerCase();
-  if (m.includes('invalid email') || m.includes('invalid credentials') || m.includes('wrong password') || m.includes('invalid login'))
+  if (m.includes('invalid email') || m.includes('invalid credentials') || m.includes('wrong password') || m.includes('invalid login') || m.includes('invalid email or password'))
     return '❌ Invalid email or password. Please try again.';
+  if (m.includes('email not confirmed') || m.includes('not confirmed') || m.includes('email_not_confirmed'))
+    return '⚠️ Email not confirmed. Please check your inbox and click the confirmation link before logging in.';
   if (m.includes('suspended') || m.includes('inactive'))
     return '⚠️ This account has been suspended. Contact your administrator.';
   if (m.includes('tenant'))
