@@ -121,15 +121,8 @@
           <i class="fas fa-broadcast-tower"></i><span>Live Detections</span>
           <span class="nav-child-badge badge-green blink">LIVE</span>
         </a>
-        <a href="#" class="nav-child" data-page="threat-actors">
-          <i class="fas fa-user-secret"></i><span>Threat Actors</span>
-        </a>
         <a href="#" class="nav-child" data-page="dark-web">
           <i class="fas fa-spider"></i><span>Dark Web Intelligence</span>
-        </a>
-        <a href="#" class="nav-child" data-page="exposure">
-          <i class="fas fa-bug"></i><span>CVE Intelligence Engine</span>
-          <span class="nav-child-badge" style="background:linear-gradient(90deg,#ef4444,#dc2626);color:#fff;font-size:8px;padding:1px 5px;border-radius:8px;">NVD</span>
         </a>
       </div>
     </div>
@@ -278,11 +271,9 @@
         <a href="#" class="nav-child" data-page="case-management">
           <i class="fas fa-folder-open"></i><span>Case Management</span>
         </a>
-        <a href="#" class="nav-child" data-page="threat-hunting">
-          <i class="fas fa-search"></i><span>Threat Hunting Workspace</span>
-        </a>
-        <a href="#" class="nav-child" data-page="detection-engineering">
-          <i class="fas fa-code"></i><span>Detection Engineering</span>
+        <a href="#" class="nav-child" data-page="raykan">
+          <i class="fas fa-crosshairs"></i><span>RAYKAN Threat Hunting</span>
+          <span class="nav-child-badge" style="background:linear-gradient(90deg,#dc2626,#b91c1c);color:#fff;font-size:8px;padding:1px 5px;border-radius:8px;">AI</span>
         </a>
         <a href="#" class="nav-child" data-page="soar">
           <i class="fas fa-bolt"></i><span>SOAR Automation</span>
@@ -290,14 +281,8 @@
         <a href="#" class="nav-child" data-page="live-feeds">
           <i class="fas fa-rss"></i><span>Live Threat Intel Feeds</span>
         </a>
-        <a href="#" class="nav-child" data-page="sysmon">
-          <i class="fas fa-file-code"></i><span>Sysmon Log Analyzer</span>
-        </a>
         <a href="#" class="nav-child" data-page="cyber-news">
           <i class="fas fa-newspaper"></i><span>Cyber News</span>
-        </a>
-        <a href="#" class="nav-child" data-page="mitre-attack">
-          <i class="fas fa-th"></i><span>MITRE ATT&amp;CK Navigator</span>
         </a>
         <a href="#" class="nav-child" data-page="geo-threats">
           <i class="fas fa-globe"></i><span>Live Cyber Threat Map</span>
@@ -598,18 +583,8 @@
       </div>
     </div>
 
-    <!-- ======= THREAT ACTORS ======= -->
-    <div class="page" id="page-threat-actors">
-      <div id="threatActorsLiveContainer" style="padding:8px 0"></div>
-    </div>
-
     <!-- ======= DARK WEB ======= -->
     <div class="page" id="page-dark-web" style="padding:0"></div>
-
-    <!-- ======= EXPOSURE ======= -->
-    <div class="page" id="page-exposure">
-      <div id="exposureLiveContainer" style="padding:8px 0"></div>
-    </div>
 
     <!-- ======= IOC REGISTRY ======= -->
     <!-- IOC Registry REMOVED in v25.0 — replaced by IOC Database in PLATFORM -->
@@ -715,11 +690,6 @@
       <div id="socOperationsWrap" style="display:flex;flex-direction:column;height:100%;overflow:hidden;"></div>
     </div>
 
-    <!-- ======= SYSMON ANALYZER ======= -->
-    <div class="page" id="page-sysmon">
-      <div id="sysmonWrap"></div>
-    </div>
-
     <!-- ======= TENANTS ======= -->
     <div class="page" id="page-customers">
       <div class="customers-grid" id="customersGrid"></div>
@@ -751,14 +721,9 @@
       <div id="caseManagementWrap" style="display:none"></div>
     </div>
 
-    <!-- ======= THREAT HUNTING ======= -->
-    <div class="page" id="page-threat-hunting">
-      <div id="threatHuntingWrap" style="min-height:400px"></div>
-    </div>
-
-    <!-- ======= DETECTION ENGINEERING ======= -->
-    <div class="page" id="page-detection-engineering">
-      <div id="detectionEngineeringWrap" style="min-height:400px"></div>
+    <!-- ======= RAYKAN AI THREAT HUNTING & DFIR ENGINE ======= -->
+    <div class="page" id="page-raykan" style="padding:0;height:100%;overflow:hidden;">
+      <div id="raykanWrap" style="height:100%;overflow:auto;"></div>
     </div>
 
     <!-- ======= SOAR AUTOMATION ======= -->
@@ -774,12 +739,6 @@
     <!-- ======= CYBER NEWS ======= -->
     <div class="page" id="page-cyber-news">
       <div id="cyberNewsWrap" style="padding:4px;"></div>
-    </div>
-
-    <!-- ======= MITRE ATT&CK NAVIGATOR ======= -->
-    <div class="page" id="page-mitre-attack">
-      <div id="mitreCoverageLiveContainer" style="padding:8px 0"></div>
-      <div id="mitreAttackWrap"></div>
     </div>
 
     <!-- ======= IOC DATABASE ======= -->
@@ -944,12 +903,8 @@
 <script src="js/features.js"></script>
 <script src="js/ai-orchestrator.js"></script>
 <script src="js/geo-map.js"></script>
-<script src="js/sysmon.js"></script>
 <script src="js/playbooks-data.js"></script>
 <script src="js/playbooks-ui.js"></script>
-<script src="js/threat-hunting.js"></script>
-<script src="js/detection-engineering.js"></script>
-<script src="js/mitre-navigator.js"></script>
 <!-- darkweb.js uses const _DW_DATA at global scope — expose as window._ to prevent re-declare -->
 <script>window.__DW_PRELOAD_GUARD__ = true;</script>
 <script src="js/darkweb.js"></script>
@@ -979,7 +934,6 @@
 <script src="js/module-router.js"></script>
 <!-- v5.3 Threat Actors v2 — real API, full detail panel, OTX+MITRE ingest -->
 <!-- MUST load AFTER main.js and live-pages-patch.js to override renderThreatActors -->
-<script src="js/threat-actors-v2.js"></script>
 
 <!-- ══════════════════════════════════════════════════════════
      SOC v3.0 — Active Campaigns & Live Detections (2026-04-02)
@@ -1343,12 +1297,13 @@
      v25.0 NEW MODULES — CVE Intelligence, Adversary Sim Lab v2,
      Threat Graph Brain v2, Tenant Mgmt v2, What-If v3
 ═══════════════════════════════════════════════════════════ -->
-<script src="js/cve-intelligence.js"></script>
 <script src="js/adversary-sim-lab.js"></script>
 
 <!-- ════ RAKAY AI Analyst Module v1.0 ════ -->
 <script src="js/rakay-module.js"></script>
 <script src="js/whatif-simulator-v3.js"></script>
+<!-- ════ RAYKAN AI Threat Hunting & DFIR Engine v1.0 ════ -->
+<script src="js/raykan.js"></script>
 <script src="js/tenant-management-v2.js"></script>
 
 <!-- Cyber Defense Brain — PAGE_CONFIG Wiring & Feature Flags -->

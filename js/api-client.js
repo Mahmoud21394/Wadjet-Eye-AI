@@ -257,7 +257,14 @@ async function apiRequest(method, path, body = null, opts = {}) {
 
   if (!response.ok) {
     const errMsg = data?.error || data?.message || `API Error ${response.status}`;
-    throw new Error(errMsg);
+    const err = new Error(errMsg);
+    // v7.4 FIX: Propagate structured error fields so callers can read retryIn,
+    // code, etc. from the thrown error object without re-parsing the response.
+    err.code      = data?.code      || null;
+    err._retryIn  = data?.retryIn   || data?.retryAfter || null;
+    err._status   = response.status;
+    err._response = data;
+    throw err;
   }
 
   return data;
@@ -318,6 +325,9 @@ const API = {
   /* ── Auth ── */
   auth: {
     async login(email, password, tenant_id) {
+      // v7.4 FIX: POST now throws with structured err.code + err._retryIn on error
+      // responses (401, 503, etc.). Those fields are used by login-secure-patch.js
+      // for UX decisions (retry delay, error message selection).
       const data = await POST('/auth/login', { email, password, tenant_id });
       if (!data?.token) throw new Error('No token in login response');
       TokenStore.set(data.token, data.refreshToken, data.expiresAt || data.expiresIn);

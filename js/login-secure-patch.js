@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Secure Login Patch v6.1
+ *  Wadjet-Eye AI — Secure Login Patch v6.2 (v7.4 retryIn fix)
  *  js/login-secure-patch.js
  *
  *  v6.1 FIX — Auth Token NOT FOUND after login (root cause):
@@ -39,7 +39,6 @@
 window.addEventListener('DOMContentLoaded', function () {
   // Replace the potentially vulnerable doLogin with the secure version
   window.doLogin = secureDoLogin;
-  console.info('[SecureLogin v6.0] ✅ Secure login function installed — no client-side emergency accounts');
 });
 
 /* ══════════════════════════════════════════════════════════════════
@@ -48,6 +47,11 @@ window.addEventListener('DOMContentLoaded', function () {
    If the server is down, the user cannot log in. Full stop.
 ════════════════════════════════════════════════════════════════ */
 async function secureDoLogin() {
+  // Clear any stale tokens before attempting login.
+  // Guard prevents ReferenceError when auth-interceptor.js is not yet loaded.
+  if (typeof window.UnifiedTokenStore !== 'undefined') {
+    window.UnifiedTokenStore.clear();
+  }
   const emailEl  = document.getElementById('loginEmail');
   const passEl   = document.getElementById('loginPassword');
   const tenantEl = document.getElementById('loginTenant');
@@ -93,15 +97,65 @@ async function secureDoLogin() {
     }
 
     await _finalizeLogin(data);
+    // Reset retry counter on success
+    secureDoLogin._autoRetryCount = 0;
+    secureDoLogin._retrying = false;
 
   } catch (err) {
     _setBtnLoading(btn, false);
 
     const msg = err.message || 'Login failed';
+    // v7.4 FIX: Parse retryIn from API response if available
+    const serverRetryIn = err._retryIn || null;
     const display = _mapLoginError(msg);
 
     _showLoginError(errEl, display);
     console.warn('[SecureLogin] Authentication failed:', msg);
+
+    // ── Auto-retry for 503 AUTH_SERVICE_UNAVAILABLE ────────────────────────
+    // v7.4: The backend returns retryIn: 5 in the response body.
+    // Frontend respects that value (clamped: min 5s, max 20s).
+    // Cap at 2 total auto-retries to prevent infinite loops.
+    const isTransient = msg.toLowerCase().includes('temporarily unavailable') ||
+                        msg.toLowerCase().includes('auth_service_unavailable') ||
+                        msg.toLowerCase().includes('db_timeout')               ||
+                        msg.toLowerCase().includes('request aborted')          ||
+                        msg.toLowerCase().includes('service unavailable')      ||
+                        msg.toLowerCase().includes('try again in');
+
+    secureDoLogin._autoRetryCount = (secureDoLogin._autoRetryCount || 0);
+
+    if (isTransient && secureDoLogin._autoRetryCount < 2 && !secureDoLogin._retrying) {
+      secureDoLogin._autoRetryCount += 1;
+      secureDoLogin._retrying = true;
+      // v7.4 FIX: Respect server's retryIn guidance (clamped 5–20s)
+      const defaultDelay = secureDoLogin._autoRetryCount === 1 ? 8 : 15;
+      const retryIn = serverRetryIn
+        ? Math.min(Math.max(serverRetryIn, 5), 20)
+        : defaultDelay;
+      _showLoginError(errEl,
+        `⏳ Server warming up (attempt ${secureDoLogin._autoRetryCount}/2)… retrying in ${retryIn}s.`
+      );
+      setTimeout(() => {
+        secureDoLogin._retrying = false;
+        secureDoLogin();
+      }, retryIn * 1000);
+      return;
+    }
+
+    // Reset counter on final failure or non-transient error
+    secureDoLogin._retrying = false;
+    if (!isTransient) secureDoLogin._autoRetryCount = 0;
+
+    // On persistent 503, show actionable guidance
+    if (isTransient) {
+      _showLoginError(errEl,
+        '❌ Authentication service is currently unavailable. ' +
+        'This may be a temporary Render/Supabase cold-start issue. ' +
+        'Please wait 30 seconds and try again manually, or contact support.'
+      );
+      secureDoLogin._autoRetryCount = 0;
+    }
 
     // ── NO FALLBACK. No emergency accounts. No offline mode. ─
     // If the server is unreachable, the user sees a clear message.
@@ -224,35 +278,19 @@ async function _finalizeLogin(data) {
   const expiresAt      = data.expiresAt || data.expires_at      || null;
   const expiresIn      = data.expiresIn || data.expires_in      || null;
 
-  // ── STEP 1: Save JWT token to storage (fixes 401 on all API calls) ──
+  // ── STEP 1: Token storage — handled via PersistentAuth_onLogin in STEP 5 ──
   //
-  // Priority A: Use UnifiedTokenStore from auth-interceptor.js
-  // It writes to ALL known keys so every module finds its token.
-  if (typeof window.UnifiedTokenStore !== 'undefined' &&
-      typeof window.UnifiedTokenStore.save === 'function') {
-    window.UnifiedTokenStore.save({
-      token:        accessToken,
-      refreshToken: refreshToken,
-      expiresAt:    expiresAt,
-      expiresIn:    expiresIn,
-      user:         displayUser,
-      offline:      false,
-    });
-    console.info('[SecureLogin v6.1] ✅ Token saved via UnifiedTokenStore');
-
-  // Priority B: Use PersistentAuth_onLogin from auth-persistent.js
-  } else if (typeof window.PersistentAuth_onLogin === 'function') {
-    window.PersistentAuth_onLogin(
-      displayUser,
-      accessToken,
-      refreshToken,
-      expiresAt || expiresIn,
-      false
-    );
-    console.info('[SecureLogin v6.1] ✅ Token saved via PersistentAuth_onLogin');
-
-  // Priority C: Direct localStorage write (absolute fallback)
-  } else if (accessToken) {
+  // ROOT-CAUSE FIX v6.2: PersistentAuth_onLogin (auth-interceptor.js) is now
+  // the SINGLE point of truth for all token storage + StateSync coordination.
+  // It calls UnifiedTokenStore.save() internally, schedules proactive refresh,
+  // and calls StateSync.markAuthReady(). We do NOT call UnifiedTokenStore.save()
+  // directly here anymore to avoid bypassing the StateSync coordination step.
+  //
+  // Absolute fallback: only write direct if BOTH PersistentAuth_onLogin AND
+  // UnifiedTokenStore are unavailable (e.g., interceptor script failed to load).
+  if (typeof window.PersistentAuth_onLogin !== 'function' &&
+      typeof window.UnifiedTokenStore?.save !== 'function' &&
+      accessToken) {
     const TOKEN_KEYS = [
       'wadjet_access_token', 'we_access_token', 'tp_access_token',
     ];
@@ -264,7 +302,6 @@ async function _finalizeLogin(data) {
       localStorage.setItem('wadjet_refresh_token', refreshToken);
       localStorage.setItem('we_refresh_token', refreshToken);
     }
-    // Set expiry
     const exp = expiresAt ||
       (expiresIn ? new Date(Date.now() + Number(expiresIn) * 1000).toISOString()
                  : new Date(Date.now() + 900 * 1000).toISOString());
@@ -274,7 +311,6 @@ async function _finalizeLogin(data) {
       localStorage.setItem('wadjet_user_profile', userJson);
       localStorage.setItem('we_user', userJson);
     }
-    console.info('[SecureLogin v6.1] ✅ Token saved via direct localStorage (fallback)');
   }
 
   // ── STEP 2: Sync with legacy TokenStore (api-client.js) ──────────
@@ -305,22 +341,34 @@ async function _finalizeLogin(data) {
     _offline:    false,
   };
 
-  // ── STEP 5: Dispatch events ───────────────────────────────────────
-  window.dispatchEvent(new CustomEvent('auth:login', { detail: window.CURRENT_USER }));
+  // ── STEP 5: Notify auth-interceptor (handles StateSync + proactive refresh) ──
+  // ROOT-CAUSE FIX v6.2: _finalizeLogin MUST call PersistentAuth_onLogin so that
+  //  1. auth-interceptor schedules the proactive refresh
+  //  2. StateSync.markAuthReady() is called (unblocks orchestrator + WS + RAKAY)
+  //  3. Window.isAuthenticated() returns true immediately after login
+  // Previously UnifiedTokenStore.save() was called directly — this bypassed the
+  // StateSync coordination step, leaving all awaiting modules blocked.
+  if (typeof window.PersistentAuth_onLogin === 'function') {
+    window.PersistentAuth_onLogin(
+      displayUser,
+      accessToken,
+      refreshToken,
+      expiresAt || expiresIn,
+      false,
+    );
+  }
+
+  // ── STEP 6: Dispatch DOM events ──────────────────────────────────
+  window.dispatchEvent(new CustomEvent('auth:login',    { detail: window.CURRENT_USER }));
+  // Also dispatch auth:restored so _onAuthReady() in ai-orchestrator fires
+  // (it listens to BOTH auth:login AND auth:restored)
+  window.dispatchEvent(new CustomEvent('auth:restored', { detail: window.CURRENT_USER }));
 
   if (typeof showToast === 'function') {
     showToast(`✅ Welcome, ${window.CURRENT_USER.name}`, 'success');
   }
 
-  // Verify token was saved correctly (debug log)
-  const savedToken = localStorage.getItem('wadjet_access_token');
-  if (savedToken) {
-    console.info('[SecureLogin v6.1] ✅ Token verified in localStorage —', savedToken.slice(0, 20) + '…');
-  } else {
-    console.warn('[SecureLogin v6.1] ⚠️ Token not found in localStorage after save — check UnifiedTokenStore');
-  }
-
-  // ── STEP 6: Animate into app ──────────────────────────────────────
+  // ── STEP 7: Animate into app ──────────────────────────────────────
   _enterApp();
 }
 
@@ -367,8 +415,10 @@ function _setBtnLoading(btn, loading) {
 
 function _mapLoginError(msg) {
   const m = (msg || '').toLowerCase();
-  if (m.includes('invalid email') || m.includes('invalid credentials') || m.includes('wrong password') || m.includes('invalid login'))
+  if (m.includes('invalid email') || m.includes('invalid credentials') || m.includes('wrong password') || m.includes('invalid login') || m.includes('invalid email or password'))
     return '❌ Invalid email or password. Please try again.';
+  if (m.includes('email not confirmed') || m.includes('not confirmed') || m.includes('email_not_confirmed'))
+    return '⚠️ Email not confirmed. Please check your inbox and click the confirmation link before logging in.';
   if (m.includes('suspended') || m.includes('inactive'))
     return '⚠️ This account has been suspended. Contact your administrator.';
   if (m.includes('tenant'))
@@ -377,15 +427,17 @@ function _mapLoginError(msg) {
     return '⚠️ User profile not found. Contact your administrator to set up your account.';
   if (m.includes('network') || m.includes('failed to fetch') || m.includes('err_connection') || m.includes('load failed'))
     return '🔌 Cannot reach the authentication server. Check your network and try again.';
-  if (m.includes('timeout'))
+  if (m.includes('timeout') || m.includes('timed out'))
     return '⏱ Request timed out. The server may be starting up — try again in 30 seconds.';
   if (m.includes('api client not loaded'))
     return '🔌 Cannot reach the server. Check your network connection and refresh the page.';
+  // RC-BACKEND-1: Supabase AbortError → backend returns 503 AUTH_SERVICE_UNAVAILABLE
+  if (m.includes('temporarily unavailable') || m.includes('auth_service_unavailable') ||
+      m.includes('aborted') || m.includes('503'))
+    return '⏱ Authentication service temporarily unavailable. Please try again in a few seconds.';
   return `❌ ${msg}`;
 }
 
 function _escapeHtml(str) {
   return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
-
-console.info('[SecureLogin v6.1] Loaded — token-to-storage bridge active, emergency bypass removed, MFA wired');
