@@ -1,0 +1,185 @@
+# ══════════════════════════════════════════════════════════════════
+#  RAYKAN Engine — Kubernetes Deployment
+#  Wadjet-Eye AI Platform
+#
+#  Namespace: wadjet-eye
+#  Components:
+#   • Deployment: raykan-api
+#   • Service: raykan-api-svc
+#   • HPA: auto-scale 2-10 replicas
+#   • ConfigMap: raykan-config
+#   • Secret: raykan-secrets (populate separately)
+#
+#  Apply: kubectl apply -f infra/raykan/k8s-deployment.yaml
+# ══════════════════════════════════════════════════════════════════
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wadjet-eye
+  labels:
+    app.kubernetes.io/name: wadjet-eye
+    app.kubernetes.io/component: raykan
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: raykan-config
+  namespace: wadjet-eye
+data:
+  NODE_ENV: "production"
+  RAYKAN_ENABLED: "true"
+  RAYKAN_AI_MODE: "openai"
+  LOG_LEVEL: "info"
+  MAX_EVENTS_PER_REQUEST: "10000"
+  RULE_UPDATE_INTERVAL_HOURS: "24"
+  UEBA_BASELINE_DAYS: "30"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: raykan-api
+  namespace: wadjet-eye
+  labels:
+    app: raykan-api
+    component: threat-hunting
+    version: "1.0.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: raykan-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: raykan-api
+        version: "1.0.0"
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: raykan-api
+          image: wadjet-eye/backend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3001
+              name: http
+          envFrom:
+            - configMapRef:
+                name: raykan-config
+            - secretRef:
+                name: raykan-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          readinessProbe:
+            httpGet:
+              path: /api/raykan/health
+              port: 3001
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3001
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: tmp-vol
+              mountPath: /tmp
+            - name: logs-vol
+              mountPath: /app/logs
+      volumes:
+        - name: tmp-vol
+          emptyDir: {}
+        - name: logs-vol
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: raykan-api-svc
+  namespace: wadjet-eye
+  labels:
+    app: raykan-api
+spec:
+  selector:
+    app: raykan-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3001
+      protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: raykan-api-hpa
+  namespace: wadjet-eye
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: raykan-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+
+---
+# Secret template — populate with actual values
+apiVersion: v1
+kind: Secret
+metadata:
+  name: raykan-secrets
+  namespace: wadjet-eye
+type: Opaque
+stringData:
+  JWT_SECRET: "REPLACE_WITH_SECURE_JWT_SECRET_32_CHARS_MIN"
+  SUPABASE_URL: "REPLACE_WITH_SUPABASE_URL"
+  SUPABASE_SERVICE_KEY: "REPLACE_WITH_SERVICE_KEY"
+  SUPABASE_ANON_KEY: "REPLACE_WITH_ANON_KEY"
+  OPENAI_API_KEY: ""
+  VIRUSTOTAL_API_KEY: ""
+  ABUSEIPDB_API_KEY: ""

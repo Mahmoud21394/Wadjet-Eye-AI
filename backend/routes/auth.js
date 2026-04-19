@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  Enterprise Auth Routes v5.1 — RLS-Fixed + JWT-Signed
+ *  Enterprise Auth Routes v7.4 — Timeout Root-Cause Fix
  *  backend/routes/auth.js
  *
  *  POST  /api/auth/login          — Email/password login
@@ -12,6 +12,7 @@
  *  DELETE /api/auth/sessions/:id  — Revoke specific session
  *  DELETE /api/auth/sessions      — Revoke all sessions (sign out all devices)
  *  GET   /api/auth/activity       — Login history
+ *  GET   /api/auth/diagnostics    — Supabase health check
  *
  *  Security:
  *   - Refresh token rotation (new token on every use)
@@ -22,16 +23,41 @@
  *   - JWT signed with Supabase JWT_SECRET for proper token validation
  *   - Rate limiting applied at server.js level
  *
- *  v5.1 FIX: refresh endpoint now uses Supabase admin.signInWithEmail
- *  instead of generateLink (magic-link approach was unreliable).
- *  Falls back to signing a custom JWT with the Supabase JWT_SECRET.
+ *  v6.1 ROOT-CAUSE FIX — AbortError leaks into loginError:
+ *  ────────────────────────────────────────────────────────
+ *  PROBLEM: The 401 with message "This operation was aborted (code: undefined)"
+ *  was caused by auth.js using `supabase` (DB client, _dbFetchWithTimeout/15s)
+ *  for ALL auth operations. The DB client's AbortController fired and corrupted
+ *  the GoTrueClient's internal request queue.
+ *
+ *  FIX:
+ *    1. Import `supabaseAuth` (dedicated auth client, _authFetchWithTimeout/25s,
+ *       separate GoTrueClient instance — no shared abort state with DB client).
+ *    2. ALL auth operations (signInWithPassword, signOut, admin.createSession,
+ *       admin.signOut, getUser, admin.createUser, admin.deleteUser) now use
+ *       `supabaseAuth` instead of `supabase`.
+ *    3. `loginError` field is now checked for AbortError BEFORE the generic 401
+ *       handler, so abort errors return 503 instead of being silently masked.
+ *    4. Structured logging added: [auth:login:start], [auth:login:supabase],
+ *       [auth:login:result], [auth:login:abort], [auth:login:ok].
+ *    5. isAbortError() utility imported from supabase.js for consistent detection.
  * ══════════════════════════════════════════════════════════
  */
 'use strict';
 
 const router  = require('express').Router();
 const crypto  = require('crypto');
-const { supabase } = require('../config/supabase');
+const {
+  supabase,
+  supabaseAuth,
+  supabaseIngestion,
+  createLoginClient,
+  signInWithPasswordDirect,
+  isAbortError,
+  isNetworkError,
+  isTimeoutError,
+  LOGIN_FETCH_TIMEOUT_MS,
+} = require('../config/supabase');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 
@@ -92,32 +118,54 @@ function getDeviceInfo(req) {
   };
 }
 
-/** Log login activity — completely non-fatal */
+/**
+ * logActivity — fire-and-forget audit logging.
+ *
+ * RC-4 FIX: This function MUST be called without await on the hot login path,
+ * or with .catch(() => {}) to prevent blocking the response. It has its own
+ * internal 5s timeout so it never blocks for 15s on a slow DB.
+ * Never throws — all errors are silently swallowed.
+ */
+const LOG_ACTIVITY_TIMEOUT_MS = 5_000;
 async function logActivity(userId, tenantId, action, req, extras = {}) {
-  try {
-    const { error } = await supabase.from('login_activity').insert({
-      user_id:        userId   || null,
-      tenant_id:      tenantId || null,
-      email:          extras.email || null,
-      action,
-      ip_address:     req.ip || null,
-      user_agent:     (req.headers['user-agent'] || '').slice(0, 256),
-      device_info:    getDeviceInfo(req),
-      success:        extras.success !== false,
-      failure_reason: extras.failure_reason || null,
-      session_id:     extras.session_id || null,
-    });
-    if (error) {
-      // Silently ignore RLS / missing table errors for audit log
-      if (!error.message?.includes('row-level security') &&
-          !error.message?.includes('does not exist')) {
-        console.warn('[Auth] Failed to log activity:', error.message);
+  // Internal timeout so DB latency never delays the response
+  const logTimer = new Promise((resolve) =>
+    setTimeout(resolve, LOG_ACTIVITY_TIMEOUT_MS)
+  );
+
+  const logPromise = (async () => {
+    try {
+      const { error } = await supabase.from('login_activity').insert({
+        user_id:        userId   || null,
+        tenant_id:      tenantId || null,
+        email:          extras.email || null,
+        action,
+        ip_address:     req.ip || null,
+        user_agent:     (req.headers['user-agent'] || '').slice(0, 256),
+        device_info:    getDeviceInfo(req),
+        success:        extras.success !== false,
+        failure_reason: extras.failure_reason || null,
+        session_id:     extras.session_id || null,
+      });
+      if (error) {
+        // RC-4 FIX: AbortError returned in error field — treat as non-fatal
+        if (isAbortError(error)) return;
+        // Silently ignore RLS / missing table errors for audit log
+        if (!error.message?.includes('row-level security') &&
+            !error.message?.includes('does not exist')) {
+          console.warn('[Auth] Failed to log activity:', error.message);
+        }
+      }
+    } catch (err) {
+      // Non-fatal — never block login if audit logging fails
+      if (!isAbortError(err)) {
+        console.warn('[Auth] logActivity error:', err.message);
       }
     }
-  } catch (err) {
-    // Non-fatal — never block login if audit logging fails
-    console.warn('[Auth] logActivity error:', err.message);
-  }
+  })();
+
+  // Race: complete within 5s or give up silently
+  await Promise.race([logPromise, logTimer]);
 }
 
 /** Store a new refresh token in DB
@@ -228,43 +276,224 @@ router.post('/login', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'Email and password are required' });
   }
 
-  // ── Authenticate via Supabase ──
-  const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({
-    email:    email.trim().toLowerCase(),
-    password: password.trim(),
-  });
+  // ── Structured logging: mark start of login attempt ──────────────
+  const loginStart = Date.now();
+  console.log(`[auth:login:start] ${email} from ${req.ip || 'unknown'} at ${new Date().toISOString()}`);
+
+  // ── v7.3 FIX: Use direct axios call instead of GoTrueClient ───────────────
+  // ROOT CAUSE: On Render free-tier, Node.js native fetch / GoTrueClient TCP
+  // connection to Supabase Auth HANGS for exactly 35s. The TCP connects + TLS
+  // handshakes, but the HTTP response body never arrives before our timeout.
+  // GoTrueClient uses undici (Node built-in fetch) which lacks socket-level
+  // keepalive timeout control.
+  //
+  // FIX: signInWithPasswordDirect uses axios with its own socket timeout
+  // (12s per attempt, 3 retries with 2s backoff = max 42s total but typically
+  // succeeds on attempt 1 in < 500ms when Supabase is healthy).
+  // Axios uses Node.js http.Agent directly, bypassing undici.
+  console.log(`[auth:login:supabase] using direct axios login for ${email}`);
+
+  let loginData, loginError;
+  try {
+    ({ data: loginData, error: loginError } = await signInWithPasswordDirect(
+      email.trim().toLowerCase(),
+      password.trim()
+    ));
+    console.log(`[auth:login:result] elapsed=${Date.now()-loginStart}ms ` +
+      `loginError=${loginError ? loginError.message : 'none'} ` +
+      `session=${loginData?.session ? 'present' : 'absent'}`);
+  } catch (supabaseErr) {
+    // signInWithPasswordDirect should not throw (it returns errors), but
+    // catch any unexpected throws here
+    const isAbort   = isAbortError(supabaseErr);
+    const isTimeout = supabaseErr.message === 'SUPABASE_TIMEOUT';
+    const isNetwork = isNetworkError(supabaseErr);
+
+    const elapsed = Date.now() - loginStart;
+    console.error(`[auth:login:abort] THROWN ${supabaseErr.name}: ${supabaseErr.message} elapsed=${elapsed}ms`);
+
+    if (isAbort || isTimeout || isNetwork) {
+      const reason = isTimeout ? `timeout after ${elapsed}ms` :
+                     isAbort   ? `aborted after ${elapsed}ms` :
+                                 `network error after ${elapsed}ms`;
+      console.error(`[auth:login:503] Returning 503 — ${reason}`);
+      logActivity(null, null, 'LOGIN_FAILED', req, {
+        email, success: false,
+        failure_reason: `${supabaseErr.name}: ${supabaseErr.message} (${reason})`,
+      }).catch(() => {});
+      return res.status(503).json({
+        error:   'Authentication service temporarily unavailable. Please try again in a few seconds.',
+        code:    'AUTH_SERVICE_UNAVAILABLE',
+        detail:  process.env.NODE_ENV !== 'production' ? reason : undefined,
+        retryIn: 5,
+      });
+    }
+    throw supabaseErr; // re-throw truly unexpected errors
+  }
 
   if (loginError) {
-    await logActivity(null, null, 'LOGIN_FAILED', req, {
+    // v7.4 FIX: Check for timeout/abort/network/server errors BEFORE credential checks.
+    // signInWithPasswordDirect returns these in the error object with matching names/codes.
+    // isAbortError() now catches AUTH_SERVICE_UNAVAILABLE + SERVER_ERROR (v7.4).
+    if (isAbortError(loginError) || isNetworkError(loginError) ||
+        loginError.code === 'ECONNABORTED' || loginError.code === 'ETIMEDOUT' ||
+        loginError.code === 'ECONNREFUSED'  || loginError.code === 'ECONNRESET'  ||
+        loginError.code === 'AUTH_SERVICE_UNAVAILABLE' ||
+        loginError.code === 'SERVER_ERROR') {
+      const elapsed = Date.now() - loginStart;
+      console.error(`[auth:login:abort] RETURNED error in loginError: ${loginError.message} ` +
+        `code=${loginError.code} elapsed=${elapsed}ms`);
+      logActivity(null, null, 'LOGIN_FAILED', req, {
+        email, success: false,
+        failure_reason: `ServiceError: ${loginError.message} (code:${loginError.code})`,
+      }).catch(() => {});
+      return res.status(503).json({
+        error:   'Authentication service temporarily unavailable. Please try again in a few seconds.',
+        code:    'AUTH_SERVICE_UNAVAILABLE',
+        detail:  process.env.NODE_ENV !== 'production' ? loginError.message : undefined,
+        retryIn: 5,
+      });
+    }
+
+    // Log asynchronously — don't await so we don't hang on Supabase issues
+    logActivity(null, null, 'LOGIN_FAILED', req, {
       email,
       success: false,
       failure_reason: loginError.message,
+    }).catch(() => {});
+
+    console.warn(`[auth:login:fail] LOGIN_FAILED for ${email}: ` +
+      `"${loginError.message}" (status=${loginError.status} code=${loginError.code}) ` +
+      `elapsed=${Date.now()-loginStart}ms`);
+
+    // Map Supabase-specific errors to actionable messages
+    const errMsg  = (loginError.message || '').toLowerCase();
+    const errCode = loginError.status || loginError.code;
+
+    if (errMsg.includes('email not confirmed') || errMsg.includes('not confirmed')) {
+      return res.status(401).json({
+        error: 'Email not confirmed. Please check your inbox and confirm your email address before logging in.',
+        code:  'EMAIL_NOT_CONFIRMED',
+      });
+    }
+
+    if (errMsg.includes('invalid login credentials') ||
+        errMsg.includes('invalid email or password') ||
+        errMsg.includes('invalid credentials')       ||
+        errCode === 400) {
+      return res.status(401).json({
+        error: 'Invalid email or password',
+        code:  'INVALID_CREDENTIALS',
+        _supabaseMsg: process.env.NODE_ENV !== 'production' ? loginError.message : undefined,
+      });
+    }
+
+    if (errMsg.includes('too many requests') || errCode === 429) {
+      return res.status(429).json({
+        error: 'Too many login attempts. Please wait a few minutes and try again.',
+        code:  'RATE_LIMITED',
+      });
+    }
+
+    if (errMsg.includes('user not found') || errMsg.includes('no user found')) {
+      return res.status(401).json({
+        error: 'Invalid email or password',
+        code:  'INVALID_CREDENTIALS',
+      });
+    }
+
+    // v7.4 FIX: Detect Supabase 5xx / unexpected errors that should be 503, not 401.
+    // Only return 401 INVALID_CREDENTIALS when we are confident this is a real auth failure.
+    // IMPORTANT: Match only SPECIFIC credential-failure phrases, not generic words like "wrong"
+    // (which could appear in unrelated error messages like "Something went wrong").
+    const isDefiniteAuthError =
+      errMsg.includes('invalid login') ||
+      errMsg.includes('invalid email') ||
+      errMsg.includes('invalid password') ||
+      errMsg.includes('invalid credentials') ||
+      errMsg.includes('wrong password') ||
+      errMsg.includes('wrong email') ||
+      errMsg.includes('incorrect password') ||
+      errMsg.includes('user not found') ||
+      errMsg.includes('no user found') ||
+      errMsg.includes('not confirmed') ||
+      errMsg.includes('not verified') ||
+      errCode === 400 || errCode === 401;
+
+    if (!isDefiniteAuthError) {
+      // Unknown Supabase error — safer to return 503 than a misleading 401
+      const elapsed503 = Date.now() - loginStart;
+      console.error(`[auth:login:503-fallback] Unknown loginError: "${loginError.message}" ` +
+        `code=${loginError.code} status=${loginError.status} elapsed=${elapsed503}ms`);
+      logActivity(null, null, 'LOGIN_FAILED', req, {
+        email, success: false,
+        failure_reason: `UnknownError: ${loginError.message}`,
+      }).catch(() => {});
+      return res.status(503).json({
+        error:   'Authentication service temporarily unavailable. Please try again in a few seconds.',
+        code:    'AUTH_SERVICE_UNAVAILABLE',
+        retryIn: 5,
+      });
+    }
+
+    // Generic 401 for definitive credential failures only
+    return res.status(401).json({
+      error: 'Invalid email or password',
+      code:  'INVALID_CREDENTIALS',
+      _supabaseMsg: process.env.NODE_ENV !== 'production' ? loginError.message : undefined,
     });
-    return res.status(401).json({ error: 'Invalid email or password' });
   }
 
+  console.log(`[auth:login:ok] Supabase auth OK for ${email} elapsed=${Date.now()-loginStart}ms`);
+
   // ── Fetch user profile ──
+  // RC-3 FIX: If DB times out, the Supabase client returns AbortError in the
+  // error FIELD (not thrown). Must check for abort BEFORE treating as
+  // 'profile not found'. An abort means the DB is slow/cold, not that
+  // the user doesn't exist. Return 503 so the client can retry.
   const { data: profile, error: profileError } = await supabase
     .from('users')
     .select('id, name, email, role, tenant_id, avatar, permissions, status, mfa_enabled')
     .eq('auth_id', loginData.user.id)
     .single();
 
-  if (profileError || !profile) {
-    await logActivity(null, null, 'LOGIN_FAILED', req, {
-      email,
-      success: false,
-      failure_reason: 'Profile not found',
-    });
+  if (profileError) {
+    // RC-3: Distinguish timeout/abort from genuine 'not found'
+    if (isAbortError(profileError)) {
+      const profileMs = Date.now() - loginStart;
+      console.error(`[auth:login:db-timeout] Profile lookup timed out after ${profileMs}ms for ${email}`);
+      logActivity(null, null, 'LOGIN_FAILED', req, {
+        email, success: false,
+        failure_reason: `DB timeout on profile lookup: ${profileError.message}`,
+      }).catch(() => {});
+      return res.status(503).json({
+        error:   'Database temporarily unavailable. Your credentials were accepted — please try again in a few seconds.',
+        code:    'DB_TIMEOUT',
+        retryIn: 5,
+      });
+    }
+    // Genuine profile error (e.g., auth_id not in users table)
+    logActivity(null, null, 'LOGIN_FAILED', req, {
+      email, success: false,
+      failure_reason: `Profile error: ${profileError.message}`,
+    }).catch(() => {});
+    console.warn(`[auth:login:no-profile] No users row for auth_id=${loginData.user.id} email=${email}: ${profileError.message}`);
+    return res.status(403).json({ error: 'User profile not found. Contact your administrator.' });
+  }
+
+  if (!profile) {
+    logActivity(null, null, 'LOGIN_FAILED', req, {
+      email, success: false,
+      failure_reason: 'Profile not found (null)',
+    }).catch(() => {});
     return res.status(403).json({ error: 'User profile not found. Contact your administrator.' });
   }
 
   if (profile.status !== 'active') {
-    await logActivity(profile.id, profile.tenant_id, 'LOGIN_FAILED', req, {
-      email,
-      success: false,
+    logActivity(profile.id, profile.tenant_id, 'LOGIN_FAILED', req, {
+      email, success: false,
       failure_reason: 'Account suspended',
-    });
+    }).catch(() => {});
     return res.status(403).json({ error: 'Your account has been suspended.' });
   }
 
@@ -291,19 +520,33 @@ router.post('/login', asyncHandler(async (req, res) => {
   const refreshToken = generateRefreshToken();
   const sessionId    = await storeRefreshToken(profile.id, profile.tenant_id, refreshToken, req);
 
-  // ── Update last login ──
-  await supabase.from('users').update({ last_login: new Date().toISOString() }).eq('id', profile.id);
+  // ── Update last login (fire-and-forget — non-critical) ──
+  // RC-7 FIX: Don't await non-critical DB writes on the login response path.
+  supabase.from('users').update({ last_login: new Date().toISOString() }).eq('id', profile.id)
+    .then(({ error: ulErr }) => {
+      if (ulErr && !isAbortError(ulErr)) console.warn('[auth:login] last_login update failed:', ulErr.message);
+    }).catch(() => {});
 
-  // ── Fetch tenant meta ──
-  const { data: tenantMeta } = await supabase
-    .from('tenants')
-    .select('short_name, name')
-    .eq('id', profile.tenant_id)
-    .single();
+  // ── Fetch tenant meta (with fallback on timeout) ──
+  let tenantMeta = null;
+  try {
+    const { data: tm, error: tmErr } = await supabase
+      .from('tenants')
+      .select('short_name, name')
+      .eq('id', profile.tenant_id)
+      .single();
+    if (tmErr && !isAbortError(tmErr)) {
+      console.warn('[auth:login] tenantMeta fetch error:', tmErr.message);
+    }
+    tenantMeta = tm || null;
+  } catch (_) {
+    // Non-fatal — tenant slug/name will be empty strings
+  }
 
-  await logActivity(profile.id, profile.tenant_id, 'LOGIN_SUCCESS', req, {
+  // Fire-and-forget login success audit
+  logActivity(profile.id, profile.tenant_id, 'LOGIN_SUCCESS', req, {
     email, session_id: sessionId,
-  });
+  }).catch(() => {});
 
   res.json({
     token:        loginData.session.access_token,
@@ -339,13 +582,42 @@ router.post('/refresh', asyncHandler(async (req, res) => {
 
   let rotated;
   try {
-    rotated = await rotateRefreshToken(oldRefreshToken, req);
+    const _rotateTimeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('REFRESH_TIMEOUT')), 20_000)
+    );
+    rotated = await Promise.race([
+      rotateRefreshToken(oldRefreshToken, req),
+      _rotateTimeout,
+    ]);
   } catch (err) {
+    const isTimeout  = err.message === 'REFRESH_TIMEOUT';
+    const isNetwork  = err.message?.includes('Failed to fetch') ||
+                       err.message?.includes('ECONNREFUSED');
+    if (isTimeout || isNetwork) {
+      return res.status(503).json({
+        error:   'Token refresh service temporarily unavailable. Please try again.',
+        code:    'REFRESH_SERVICE_UNAVAILABLE',
+        retryIn: 5,
+      });
+    }
+    // v7.4 FIX: Return structured 401 with code field so frontend can distinguish
+    // refresh-token-expired from invalid-token and show appropriate UX.
+    const refreshErrCode = err.message?.includes('expired')
+      ? 'REFRESH_TOKEN_EXPIRED'
+      : err.message?.includes('suspended')
+      ? 'ACCOUNT_SUSPENDED'
+      : err.message?.includes('Session validation')
+      ? 'SESSION_VALIDATION_UNAVAILABLE'
+      : 'INVALID_REFRESH_TOKEN';
+
     await logActivity(null, null, 'TOKEN_REFRESH_FAILED', req, {
       success: false,
       failure_reason: err.message,
     });
-    return res.status(401).json({ error: err.message });
+    return res.status(401).json({
+      error: err.message,
+      code:  refreshErrCode,
+    });
   }
 
   const { newToken, newSessionId, user, tenantId } = rotated;
@@ -369,18 +641,25 @@ router.post('/refresh', asyncHandler(async (req, res) => {
 
   if (authId) {
     try {
-      // Strategy 1: Try Supabase admin to create a session for the auth user
-      // This gives us a proper Supabase JWT the middleware can validate
-      const { data: adminSession, error: adminErr } = await supabase.auth.admin.createSession({
-        user_id: authId,
-      });
+      // Strategy 1: Try Supabase admin to create a session for the auth user.
+      // Wrap in a 6-second timeout to avoid hanging on Render cold-start / Supabase
+      // connectivity issues that produce AbortError in the backend logs.
+      const ADMIN_SESSION_TIMEOUT_MS = 6_000;
+      const adminSessionPromise = supabaseAuth.auth.admin.createSession({ user_id: authId }); // ← FIXED: use supabaseAuth
+      const timeoutPromise = new Promise((_, rej) =>
+        setTimeout(() => rej(new Error('admin.createSession timed out')), ADMIN_SESSION_TIMEOUT_MS)
+      );
+
+      const { data: adminSession, error: adminErr } = await Promise.race([
+        adminSessionPromise,
+        timeoutPromise,
+      ]);
 
       if (!adminErr && adminSession?.session?.access_token) {
         accessToken = adminSession.session.access_token;
         expiresAt   = adminSession.session.expires_at
           ? new Date(adminSession.session.expires_at * 1000).toISOString()
           : expiresAt;
-        console.log('[Auth] ✅ Refresh: Supabase admin.createSession succeeded');
       } else {
         throw new Error(adminErr?.message || 'admin.createSession returned no token');
       }
@@ -464,7 +743,7 @@ router.post('/logout', asyncHandler(async (req, res) => {
   // Revoke Supabase session
   if (accessToken) {
     try {
-      await supabase.auth.admin.signOut(accessToken);
+      await supabaseAuth.auth.admin.signOut(accessToken); // ← FIXED: use supabaseAuth
     } catch { /* non-fatal */ }
   }
 
@@ -516,7 +795,7 @@ router.post('/register',
     }
 
     // Create Supabase auth user
-    const { data: authUser, error: authErr } = await supabase.auth.admin.createUser({
+    const { data: authUser, error: authErr } = await supabaseAuth.auth.admin.createUser({ // ← FIXED: use supabaseAuth
       email,
       password,
       email_confirm: true,
@@ -550,7 +829,7 @@ router.post('/register',
 
     if (profileErr) {
       // Rollback Supabase auth user
-      await supabase.auth.admin.deleteUser(authUser.user.id);
+      await supabaseAuth.auth.admin.deleteUser(authUser.user.id); // ← FIXED: use supabaseAuth
       throw new Error(profileErr.message);
     }
 
@@ -619,6 +898,165 @@ router.get('/activity', verifyToken, asyncHandler(async (req, res) => {
 
   if (error) throw new Error(error.message);
   res.json({ activity: data || [] });
+}));
+
+/* ════════════════════════════════════════════════
+   POST /api/auth/refresh-from-cookie
+   Cookie-based token refresh (no body needed).
+   Called by auth-interceptor.js when:
+     - No refresh token is found in localStorage
+     - The browser may still hold an httpOnly session cookie
+   Strategy: Use the httpOnly session cookie (set by Supabase/login)
+   to get a new access token via Supabase's admin createSession.
+═══════════════════════════════════════════════ */
+router.post('/refresh-from-cookie', asyncHandler(async (req, res) => {
+  // Try to find a Supabase session token in the httpOnly cookie
+  const cookieToken = req.cookies?.access_token || req.cookies?.token || req.cookies?.sb_access_token;
+
+  if (!cookieToken) {
+    return res.status(400).json({
+      error: 'No session cookie found. Please log in again.',
+      code:  'NO_COOKIE',
+    });
+  }
+
+  // Validate the cookie token to get the user
+  try {
+    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser(cookieToken); // ← FIXED: use supabaseAuth
+
+    if (authError || !user) {
+      return res.status(401).json({
+        error: 'Cookie session expired. Please log in again.',
+        code:  'COOKIE_EXPIRED',
+      });
+    }
+
+    // Fetch user profile
+    const { data: profile } = await supabase
+      .from('users')
+      .select('id, name, email, role, tenant_id, auth_id, permissions, status')
+      .eq('auth_id', user.id)
+      .single();
+
+    if (!profile || profile.status !== 'active') {
+      return res.status(403).json({ error: 'Account inactive or not found.', code: 'ACCOUNT_INACTIVE' });
+    }
+
+    // Issue new tokens: access + refresh
+    let accessToken = cookieToken; // reuse the valid cookie token as access token
+    let expiresAt   = new Date(Date.now() + ACCESS_TOKEN_EXPIRY_SEC * 1000).toISOString();
+
+    // Try to create a fresh Supabase session
+    try {
+      const { data: adminSession, error: adminErr } = await supabaseAuth.auth.admin.createSession({ // ← FIXED: use supabaseAuth
+        user_id: user.id,
+      });
+      if (!adminErr && adminSession?.session?.access_token) {
+        accessToken = adminSession.session.access_token;
+        expiresAt   = adminSession.session.expires_at
+          ? new Date(adminSession.session.expires_at * 1000).toISOString()
+          : expiresAt;
+      }
+    } catch (adminErr) {
+      // Fall back to the cookie token — it's still valid per getUser() above
+      console.warn('[Auth] refresh-from-cookie: admin.createSession failed, using cookie token:', adminErr.message);
+    }
+
+    // Issue a new refresh token
+    const refreshToken = generateRefreshToken();
+    const sessionId    = await storeRefreshToken(profile.id, profile.tenant_id, refreshToken, req);
+
+    await logActivity(profile.id, profile.tenant_id, 'TOKEN_REFRESH_FROM_COOKIE', req, { session_id: sessionId });
+
+    console.log('[Auth] ✅ refresh-from-cookie succeeded for', profile.email);
+
+    return res.json({
+      token:        accessToken,
+      refreshToken,
+      expiresIn:    ACCESS_TOKEN_EXPIRY_SEC,
+      expiresAt,
+      sessionId,
+      user: {
+        id:          profile.id,
+        name:        profile.name,
+        email:       profile.email,
+        role:        profile.role,
+        tenant_id:   profile.tenant_id,
+        permissions: profile.permissions,
+      },
+    });
+
+  } catch (err) {
+    console.warn('[Auth] refresh-from-cookie error:', err.message);
+    return res.status(401).json({
+      error: 'Session restoration failed. Please log in again.',
+      code:  'REFRESH_FAILED',
+    });
+  }
+}));
+
+/* ════════════════════════════════════════════════
+   GET /api/auth/diagnostics
+   Public endpoint — returns Supabase auth health
+   Used to diagnose login failures without exposing secrets
+═══════════════════════════════════════════════ */
+router.get('/diagnostics', asyncHandler(async (req, res) => {
+  const start = Date.now();
+  const diag  = {
+    timestamp: new Date().toISOString(),
+    supabase: { reachable: false, latencyMs: null, error: null, method: 'direct-axios' },
+    config: {
+      hasJwtSecret:     !!JWT_SECRET,
+      hasSupabaseUrl:   !!process.env.SUPABASE_URL,
+      hasServiceKey:    !!(process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SECRET_KEY),
+      hasAnonKey:       !!process.env.SUPABASE_ANON_KEY,
+    },
+    authRoutePublic: true,
+    version: '7.4',
+  };
+
+  try {
+    // v7.3: Use direct axios to test Supabase reachability (not GoTrueClient)
+    // This tells us whether the auth endpoint responds within 8s via axios
+    const ax = require('axios');
+    const loginKey = process.env.SUPABASE_ANON_KEY ||
+                     process.env.SUPABASE_SERVICE_KEY ||
+                     process.env.SUPABASE_SECRET_KEY || '';
+    const supabaseUrl = process.env.SUPABASE_URL || '';
+
+    const diagResp = await ax.get(`${supabaseUrl}/auth/v1/health`, {
+      timeout: 8_000,
+      headers: { 'apikey': loginKey, 'Content-Type': 'application/json' },
+      validateStatus: () => true,
+    });
+
+    diag.supabase.latencyMs = Date.now() - start;
+
+    if (diagResp.status === 200) {
+      diag.supabase.reachable    = true;
+      diag.supabase.authService  = 'operational';
+    } else if (diagResp.status === 401) {
+      // 401 = auth service IS up but key is invalid/missing
+      diag.supabase.reachable    = true;
+      diag.supabase.authService  = diag.config.hasAnonKey ? 'operational' : 'key-missing';
+      diag.supabase.error        = `Auth endpoint returned 401 — check SUPABASE_ANON_KEY`;
+    } else {
+      diag.supabase.reachable    = false;
+      diag.supabase.error        = `Unexpected status ${diagResp.status}`;
+      diag.supabase.authService  = 'error';
+    }
+  } catch (err) {
+    diag.supabase.latencyMs   = Date.now() - start;
+    diag.supabase.reachable   = false;
+    diag.supabase.error       = err.message;
+    diag.supabase.authService = 'unreachable';
+    diag.supabase.errorCode   = err.code;
+  }
+
+  const status = diag.supabase.reachable && diag.config.hasSupabaseUrl && diag.config.hasServiceKey
+    ? 200 : 503;
+
+  return res.status(status).json(diag);
 }));
 
 module.exports = router;

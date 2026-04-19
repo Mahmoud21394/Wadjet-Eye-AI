@@ -1,0 +1,126 @@
+# ══════════════════════════════════════════════════════════════════
+#  RAYKAN Engine — Docker Compose (Production)
+#  Wadjet-Eye AI Platform
+#
+#  Services:
+#   • raykan-api      — Express API + RAYKAN Engine
+#   • raykan-worker   — Background analysis worker
+#   • redis           — Cache + rate limiting + queue
+#   • ollama          — Local LLM (optional, GPU)
+#
+#  Usage:
+#   docker compose -f infra/raykan/docker-compose.yml up -d
+# ══════════════════════════════════════════════════════════════════
+
+version: '3.9'
+
+networks:
+  raykan-net:
+    driver: bridge
+
+volumes:
+  redis-data:
+  ollama-models:
+  raykan-logs:
+
+services:
+
+  # ── RAYKAN API (Express + Engine) ──────────────────────────────
+  raykan-api:
+    image: node:20-alpine
+    container_name: raykan-api
+    working_dir: /app
+    volumes:
+      - ../../backend:/app
+      - raykan-logs:/app/logs
+    env_file:
+      - ../../backend/.env
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      # RAYKAN-specific
+      RAYKAN_ENABLED: 'true'
+      RAYKAN_AI_MODE: 'openai'   # openai | ollama | gemini
+      OLLAMA_URL: http://ollama:11434
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "3001:3001"
+    depends_on:
+      - redis
+    networks:
+      - raykan-net
+    restart: unless-stopped
+    command: node server.js
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+
+  # ── RAYKAN Worker (background analysis) ─────────────────────────
+  raykan-worker:
+    image: node:20-alpine
+    container_name: raykan-worker
+    working_dir: /app
+    volumes:
+      - ../../backend:/app
+      - raykan-logs:/app/logs
+    env_file:
+      - ../../backend/.env
+    environment:
+      NODE_ENV: production
+      RAYKAN_WORKER_MODE: 'true'
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+      - raykan-api
+    networks:
+      - raykan-net
+    restart: unless-stopped
+    command: node workers/raykan-worker.js
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  # ── Redis (cache + queue) ────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: raykan-redis
+    volumes:
+      - redis-data:/data
+    networks:
+      - raykan-net
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── Ollama (local LLM — optional, uncomment for GPU support) ────
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: raykan-ollama
+  #   volumes:
+  #     - ollama-models:/root/.ollama
+  #   networks:
+  #     - raykan-net
+  #   restart: unless-stopped
+  #   ports:
+  #     - "11434:11434"
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]

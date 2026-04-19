@@ -296,9 +296,7 @@ const PAGE_CONFIG = {
       else if (typeof stopDetections === 'function') stopDetections();
     }
   },
-  'threat-actors':   { title:'Threat Actors',           breadcrumb:'Intelligence / Threat Actors',          onEnter:()=>renderThreatActors(),   onLeave:()=>{} },
   'dark-web':        { title:'Dark Web Intelligence',   breadcrumb:'Intelligence / Dark Web',               onEnter:()=>{ if(typeof window.renderDarkWeb==='function') window.renderDarkWeb(); else { const p=document.getElementById('page-dark-web'); if(p) p.innerHTML='<div style="padding:40px;text-align:center;color:#8b949e">Dark web module loading...</div>'; } }, onLeave:()=>{} },
-  'exposure':        { title:'CVE Intelligence Engine', breadcrumb:'Intelligence / CVE Intelligence',       onEnter:()=>{ if(typeof renderCVEIntelligence==='function') renderCVEIntelligence(); else if(typeof renderExposureLive==='function') renderExposureLive().catch(e=>console.warn('[CVE]',e)); }, onLeave:()=>{} },
   'ai-orchestrator': { title:'AI Orchestrator',         breadcrumb:'AI Operations / Agentic Investigation', onEnter:()=>renderAIOrchestrator(), onLeave:()=>{} },
   'collectors':      { title:'Threat Collectors',       breadcrumb:'AI Operations / Collectors',            onEnter:()=>renderCollectors(),     onLeave:()=>{} },
   'playbooks':       { title:'Response Playbooks',      breadcrumb:'AI Operations / Playbooks',             onEnter:()=>{ 
@@ -333,7 +331,6 @@ const PAGE_CONFIG = {
     }
   },
   'edr-siem':        { title:'EDR / SIEM Webhooks',     breadcrumb:'Phase 2 / Webhook Ingestion',           onEnter:()=>renderEDRSIEM(),        onLeave:()=>{} },
-  'sysmon':          { title:'Sysmon Log Analyzer',   breadcrumb:'Advanced SOC / Sysmon Investigation',   onEnter:()=>{ if(typeof renderSysmonAnalyzer==='function') renderSysmonAnalyzer(); else if(typeof renderSysmon==='function') renderSysmon(); }, onLeave:()=>{} },
   'customers':       { title:'Tenant Management',       breadcrumb:'Platform / Tenants',                    onEnter:()=>{ if(typeof renderTenantsPage==='function') renderTenantsPage(); else if(typeof renderCustomers==='function') renderCustomers(); }, onLeave:()=>{} },
   'reports':         { title:'Reports & Exports',       breadcrumb:'Management / Reports',                  onEnter:()=>renderReports(),        onLeave:()=>{} },
   'settings':        { title:'Platform Settings',       breadcrumb:'Management / Settings',                 onEnter:()=>renderSettings(),       onLeave:()=>{} },
@@ -344,27 +341,13 @@ const PAGE_CONFIG = {
     else { const c=document.getElementById('killChainWrap'); if(c) c.innerHTML='<div style="padding:40px;text-align:center;color:#8b949e">Kill chain module loading…</div>'; }
   }, onLeave:()=>{} },
   'case-management': { title:'Case Management',         breadcrumb:'Advanced SOC / Cases & Incidents',     onEnter:()=>{ if(typeof renderCaseManagement==='function') renderCaseManagement(); }, onLeave:()=>{} },
-  'threat-hunting':  { title:'Threat Hunting Workspace', breadcrumb:'Advanced SOC / Threat Hunting',       onEnter:()=>{ 
-    if(typeof window.renderThreatHunting==='function') { 
-      try { window.renderThreatHunting(); } catch(e) { console.warn('[ThreatHunting]',e); } 
-    } else { 
-      const c=document.getElementById('threatHuntingWrap'); 
-      if(c) c.innerHTML='<div style="padding:40px;text-align:center;color:#8b949e"><i class="fas fa-spinner fa-spin fa-2x"></i><div style="margin-top:12px">Loading threat hunting module…</div></div>'; 
-    } 
-  }, onLeave:()=>{} },
-  'detection-engineering':{ title:'Detection Engineering', breadcrumb:'Advanced SOC / Sigma Rules & KQL', onEnter:()=>{ 
-    if(typeof window.renderDetectionEngineering==='function') { 
-      try { window.renderDetectionEngineering(); } catch(e) { console.warn('[DetEngineering]',e); } 
-    } else { 
-      const c=document.getElementById('detectionEngineeringWrap'); 
-      if(c) c.innerHTML='<div style="padding:40px;text-align:center;color:#8b949e"><i class="fas fa-spinner fa-spin fa-2x"></i><div style="margin-top:12px">Loading detection engineering module…</div></div>'; 
-    } 
-  }, onLeave:()=>{} },
+
+
+  'raykan':          { title:'RAYKAN — AI Threat Hunting', breadcrumb:'Advanced SOC / RAYKAN DFIR Engine',  onEnter:()=>{ if(typeof window.renderRAYKAN==='function') { try { window.renderRAYKAN(); } catch(e) { console.warn('[RAYKAN]',e); } } else { const c=document.getElementById('raykanWrap'); if(c) c.innerHTML='<div style="padding:40px;text-align:center;color:#8b949e"><i class="fas fa-spinner fa-spin fa-2x"></i><div style="margin-top:12px">Loading RAYKAN Engine…</div></div>'; } }, onLeave:()=>{} },
   'soar':            { title:'SOAR Automation',         breadcrumb:'Advanced SOC / Automated Response',    onEnter:()=>{ if(typeof renderSOARLive==='function') renderSOARLive(); else if(typeof renderSOAR==='function') renderSOAR(); }, onLeave:()=>{} },
   'live-feeds':      { title:'Live Threat Intel Feeds', breadcrumb:'Advanced SOC / Real-time Intelligence', onEnter:()=>renderLiveFeeds(),     onLeave:()=>stopLiveFeeds() },
   /* ── INTEL HUB ── */
   'cyber-news':      { title:'Threat Intelligence Feed',breadcrumb:'Intel Hub / Cyber News',                onEnter:()=>renderCyberNews(),      onLeave:()=>{} },
-  'mitre-attack':    { title:'MITRE ATT&CK Navigator',  breadcrumb:'Intel Hub / MITRE ATT&CK v14',          onEnter:()=>{ if(typeof window.renderMITRENavigator==='function') window.renderMITRENavigator(); else if(typeof renderMITRECoverage==='function') renderMITRECoverage(); }, onLeave:()=>{} },
   'ioc-database':    { title:'IOC Database',            breadcrumb:'Intel Hub / Threat Indicators',          onEnter:()=>{
     // Always call the LATEST window.renderIOCDatabase (patched by ioc-intelligence.js at load time).
     // CRITICAL: Do NOT reference the bare 'IOCDB' variable here — it lives in ioc-intelligence.js

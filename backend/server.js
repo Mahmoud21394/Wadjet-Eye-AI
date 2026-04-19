@@ -21,23 +21,58 @@
 // ── Load .env FIRST before any other module ─────────────────────
 require('dotenv').config();
 
-// ── Validate required environment variables on startup ───────────
-const REQUIRED_ENV = [
-  'SUPABASE_URL',
-  'SUPABASE_SERVICE_KEY',
-  'SUPABASE_ANON_KEY',
+// ── Environment validation (Phase 0+1 security hardening) ───────
+// CRITICAL env vars — fail-fast in production only:
+const CRITICAL_ENV = ['JWT_SECRET'];
+// Recommended (warn-only — AI routes work without Supabase):
+const RECOMMENDED_ENV = ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY', 'SUPABASE_ANON_KEY'];
+// AI providers — warn if ALL are absent (platform falls back to mock):
+const AI_PROVIDER_ENV = [
+  'OPENAI_API_KEY', 'CLAUDE_API_KEY', 'GEMINI_API_KEY',
+  'DEEPSEEK_API_KEY', 'RAKAY_OPENAI_KEY', 'ANTHROPIC_API_KEY',
 ];
-const missingEnv = REQUIRED_ENV.filter(k => !process.env[k]);
-if (missingEnv.length > 0) {
-  console.error(`\n❌ [Server] Missing required environment variables:\n   ${missingEnv.join(', ')}`);
-  console.error('   Copy backend/.env.example → backend/.env and fill in your values.\n');
-  process.exit(1);
+
+// Fail-fast for truly critical vars in production
+if (process.env.NODE_ENV === 'production') {
+  const missingCritical = CRITICAL_ENV.filter(k => !process.env[k]);
+  if (missingCritical.length) {
+    console.error(`\n🚨 [Server] CRITICAL: Missing required env vars in production:\n   ${missingCritical.join(', ')}`);
+    console.error('   Set these in Render Dashboard → Environment → Add Environment Variable\n');
+    process.exit(1);
+  }
 }
+
+const missingRecommended = RECOMMENDED_ENV.filter(k => !process.env[k]);
+if (missingRecommended.length > 0) {
+  console.warn(`\n⚠️  [Server] Missing recommended env vars:\n   ${missingRecommended.join(', ')}`);
+  console.warn('   DB-dependent routes may fail. AI routes work if AI keys are set.');
+  console.warn('   Copy backend/.env.example → backend/.env and fill in your values.\n');
+}
+
+const hasAnyAIKey = AI_PROVIDER_ENV.some(k => !!process.env[k]);
+if (!hasAnyAIKey) {
+  console.warn('⚠️  [Server] No AI provider keys detected. RAKAY will operate in Local Intelligence Mode.');
+  console.warn('   Set OPENAI_API_KEY, CLAUDE_API_KEY, GEMINI_API_KEY, or DEEPSEEK_API_KEY to enable external AI.');
+}
+
+// Phase 0 security audit — detect hardcoded key patterns at startup
+(function _securityAudit() {
+  const SUSPICIOUS_PATTERNS = [/sk-proj-[A-Za-z0-9_-]{20,}/, /sk-ant-api03-/, /AIzaSy[A-Za-z0-9_-]{33}/];
+  const envValues = Object.values(process.env);
+  for (const pattern of SUSPICIOUS_PATTERNS) {
+    if (envValues.some(v => pattern.test(v))) {
+      console.warn('[Security] ⚠️  AI key detected in environment — ensure these are set via secure env vars, not committed to source control.');
+      break;
+    }
+  }
+})();
 
 // ── Core imports (after env validation) ──────────────────────────
 const express        = require('express');
-const cors           = require('cors');          // ← Single declaration (was duplicated in v2.0.0)
+const cors           = require('cors');
 const helmet         = require('helmet');
+const cookieParser   = require('cookie-parser');
+const crypto         = require('crypto');
 const morgan         = require('morgan');
 const rateLimit      = require('express-rate-limit');
 const compression    = require('compression');
@@ -63,7 +98,6 @@ const playbookRoutes    = require('./routes/playbooks');
 const collectorRoutes   = require('./routes/collectors');
 const ctiRoutes         = require('./routes/cti');
 const vulnRoutes        = require('./routes/vulnerabilities');
-const sysmonRoutes      = require('./routes/sysmon');
 const reportRoutes      = require('./routes/reports');
 // ── v5.1 New Routes ───────────────────────────────────────────────
 const exposureRoutes    = require('./routes/exposure');
@@ -74,13 +108,11 @@ const settingsRoutes    = require('./routes/settings');
 // ── v5.2 New Routes ───────────────────────────────────────────────
 const newsRoutes          = require('./routes/news');
 // ── v5.3 New Routes ───────────────────────────────────────────────
-const threatActorRoutes   = require('./routes/threat-actors');
 // ── v6.0 New Routes ───────────────────────────────────────────────
-const cveIntelRoutes      = require('./routes/cve-intelligence');
-const adversarySimRoutes  = require('./routes/adversary-sim');
-const threatGraphRoutes   = require('./routes/threat-graph');
-const whatifRoutes        = require('./routes/whatif');
 const rakayRoutes         = require('./routes/rakay');
+const socIntelRoutes      = require('./routes/soc-intelligence');   // ← SOC v2.0
+// ── RAYKAN AI Threat Hunting & DFIR Engine v1.0 ──────────────────
+const raykanEngineRoutes  = require('./routes/raykan-engine');       // ← RAYKAN v1.0
 
 // ── Realtime ─────────────────────────────────────────────────────
 const { initWebSockets } = require('./realtime/websockets');
@@ -119,6 +151,13 @@ const allowedOrigins = (
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
+
+// ── Wildcard: allow all e2b/genspark sandbox preview origins ─────────────────
+// These are the *.e2b.dev preview URLs used during development in GenSpark AI
+const _sandboxOriginRegex = /^https?:\/\/[^.]+\.(e2b\.dev|genspark\.ai|vercel\.app|render\.com)$/;
+function _isSandboxOrigin(origin) {
+  return _sandboxOriginRegex.test(origin);
+}
 
 console.log('[CORS] Allowed origins:', allowedOrigins);
 
@@ -188,7 +227,9 @@ const corsOptions = {
     if (!origin) return callback(null, true);
 
     // Allow if origin is in the whitelist OR we're in local development
-    if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
+    if (allowedOrigins.includes(origin) ||
+        _isSandboxOrigin(origin) ||
+        process.env.NODE_ENV === 'development') {
       return callback(null, true);
     }
 
@@ -249,6 +290,19 @@ const authLimiter = rateLimit({
   message:  { error: 'Too many login attempts. Please wait 15 minutes.' },
   standardHeaders: true,
   legacyHeaders:   false,
+  // Only apply strict limit to login and register (not to refresh/me)
+  skip: (req) => ['/api/auth/refresh', '/api/auth/refresh-from-cookie', '/api/auth/me', '/api/auth/logout'].includes(req.path),
+});
+
+// Separate, more permissive limiter for token-refresh endpoints.
+// Silent refresh fires proactively at 80% TTL, so it should be allowed
+// up to ~20x per 15-min window (much less than login spam).
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max:      30,                    // 30 refresh attempts per 15 min per IP
+  message:  { error: 'Too many token refresh requests. Please wait before retrying.' },
+  standardHeaders: true,
+  legacyHeaders:   false,
 });
 
 const intelLimiter = rateLimit({
@@ -265,6 +319,16 @@ app.use(globalLimiter);
 app.use(compression());
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
+
+// ── httpOnly cookie parser (Phase 1: secure token storage) ───────
+app.use(cookieParser());
+
+// ── Request ID middleware (Phase 5: observability) ───────────────
+// Assigns a unique correlation ID to every request for log tracing.
+app.use((req, _res, next) => {
+  req.id = req.headers['x-request-id'] || crypto.randomUUID();
+  next();
+});
 
 // ── Request logging ───────────────────────────────────────────────
 // In production use 'combined' (Apache-style), dev use 'dev' (colorful)
@@ -319,15 +383,64 @@ app.get('/api/health', async (req, res) => {
   res.status(200).json(health);
 });
 
+// ── /api/ping — ultra-fast liveness check, no DB, no JWT ────────────────────
+// Used by the frontend wake-up pinger on page load to trigger Render warm-up.
+app.get('/api/ping', (req, res) => {
+  res.status(200).json({ ok: true, t: Date.now() });
+});
+
+
 // ════════════════════════════════════════════════════════════════
 //  PUBLIC ROUTES — No JWT required
 // ════════════════════════════════════════════════════════════════
+// Apply strict login limiter for login/register, permissive refresh limiter for refresh endpoints
+app.use('/api/auth/refresh', refreshLimiter);
+app.use('/api/auth/refresh-from-cookie', refreshLimiter);
 app.use('/api/auth', authLimiter, authRoutes);
 
 // ── v5.4 RAKAY AI Analyst Module (self-contained auth — must be BEFORE global verifyToken) ──
 // RAKAY handles its own 3-tier auth: JWT | RAKAY service key | demo token
 // Do NOT move below app.use(verifyToken) — the global JWT guard blocks demo auth.
 app.use('/api/RAKAY', rakayRoutes);
+// ── v6.1 SOC Intelligence API (no JWT required — uses RAKAY demo auth) ──────
+app.use('/api/soc', socIntelRoutes);
+
+// ── v7.0 Specific public GET endpoints (no JWT required) ─────────────────────
+// These MUST be registered BEFORE app.use(verifyToken).
+// /api/rbac/health  — returns platform role schema (no sensitive data)
+app.get('/api/rbac/health', (req, res) => {
+  const roles = [
+    { id: 'super_admin', name: 'Super Admin',       slug: 'super_admin', level: 10, color: '#ef4444' },
+    { id: 'admin',       name: 'Admin',             slug: 'admin',       level: 9,  color: '#f97316' },
+    { id: 'soc_l3',      name: 'SOC Analyst L3',    slug: 'soc_l3',      level: 7,  color: '#dc2626' },
+    { id: 'soc_l2',      name: 'SOC Analyst L2',    slug: 'soc_l2',      level: 6,  color: '#3b82f6' },
+    { id: 'soc_l1',      name: 'SOC Analyst L1',    slug: 'soc_l1',      level: 5,  color: '#22d3ee' },
+    { id: 'ir',          name: 'Incident Responder', slug: 'ir',          level: 7,  color: '#7c3aed' },
+    { id: 'threat_hunter', name: 'Threat Hunter',   slug: 'threat_hunter', level: 7, color: '#10b981' },
+    { id: 'viewer',      name: 'Viewer (Read-Only)', slug: 'viewer',      level: 1,  color: '#6b7280' },
+  ];
+  const permissions = ['read','write','delete','export','investigate','hunt','build_detections','contain','manage_users','manage_roles','manage_settings'];
+  const modules = ['dashboard','alerts','iocs','cases','reports','users','settings','collectors',
+                   'threat-hunting','detection-engineering','playbooks','mitre-attack','forensics',
+                   'threat-intel','vulnerabilities','exposure','soar','ai','news','rbac'];
+  res.json({
+    status:          'operational',
+    roles,
+    roleCount:       roles.length,
+    permissions,
+    permissionCount: permissions.length,
+    moduleCount:     modules.length,
+    modules,
+    schemaVersion:   '3.0',
+    timestamp:       new Date().toISOString(),
+  });
+});
+
+// /api/news — Cyber News is public (no user-specific data in news articles).
+// Registered before verifyToken so unauthenticated clients (demo mode, public
+// dashboard) can read news. The POST /ingest endpoint inside newsRoutes does its
+// own role-check, so it's safe to expose the whole router publicly.
+app.use('/api/news', newsRoutes);
 
 // ════════════════════════════════════════════════════════════════
 //  PROTECTED ROUTES — JWT required
@@ -348,7 +461,6 @@ app.use('/api/intel',      intelLimiter, intelRoutes);
 app.use('/api/collectors', collectorRoutes);
 app.use('/api/cti',            ctiRoutes);
 app.use('/api/vulnerabilities', vulnRoutes);
-app.use('/api/sysmon',          sysmonRoutes);
 app.use('/api/reports',         reportRoutes);
 // ── v5.1 New Routes ───────────────────────────────────────────────
 app.use('/api/exposure',  exposureRoutes);
@@ -357,13 +469,14 @@ app.use('/api/ai',        aiRoutes);
 app.use('/api/ingest',    ingestRoutes);
 app.use('/api/settings',  settingsRoutes);
 // ── v5.2 New Routes ───────────────────────────────────────────────
-app.use('/api/news',           newsRoutes);
+// NOTE: /api/news is mounted BEFORE verifyToken (see PUBLIC ROUTES section above)
+//       so it is accessible without JWT.  Do NOT re-mount here.
 // ── v5.3 New Routes ───────────────────────────────────────────────
-app.use('/api/threat-actors',  threatActorRoutes);
-app.use('/api/cve',            cveIntelRoutes);
-app.use('/api/adversary-sim',  adversarySimRoutes);
-app.use('/api/threat-graph',   threatGraphRoutes);
-app.use('/api/whatif',         whatifRoutes);
+// ── v7.0 New Routes ───────────────────────────────────────────────
+const rbacRoutes = require('./routes/rbac');
+app.use('/api/rbac',           rbacRoutes);
+// ── RAYKAN v1.0 — AI Threat Hunting & DFIR Engine ────────────────
+app.use('/api/raykan',         raykanEngineRoutes);
 // ════════════════════════════════════════════════════════════════
 //  404 HANDLER — catches all unmatched routes
 //  Must be placed AFTER all route registrations
@@ -430,6 +543,48 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`║  Supabase:    ${(process.env.SUPABASE_URL ? 'Connected ✓' : '⚠️  Not configured').padEnd(39)}║`);
   console.log(`║  CORS:        ${allowedOrigins.join(', ').slice(0,38).padEnd(39)}║`);
   console.log('╚══════════════════════════════════════════════════════╝\n');
+
+  // ── AI Provider Key Diagnostics (startup) ─────────────────────────────────
+  const _mask = (k) => k ? k.slice(0, 12) + '...[MASKED]' : '⚠️  NOT SET';
+  const openaiKey   = process.env.OPENAI_API_KEY   || process.env.RAKAY_OPENAI_KEY   || '';
+  const claudeKey   = process.env.CLAUDE_API_KEY   || process.env.ANTHROPIC_API_KEY  || process.env.RAKAY_API_KEY || '';
+  const geminiKey   = process.env.GEMINI_API_KEY   || '';
+  const deepseekKey = process.env.DEEPSEEK_API_KEY || process.env.deepseek_API_KEY   || '';
+  const hasAny      = !!(openaiKey || claudeKey || geminiKey || deepseekKey);
+
+  console.log('┌─ AI Provider Keys (startup diagnostic) ─────────────┐');
+  console.log(`│  OPENAI_API_KEY:   ${_mask(openaiKey).padEnd(36)}│`);
+  console.log(`│  CLAUDE_API_KEY:   ${_mask(claudeKey).padEnd(36)}│`);
+  console.log(`│  GEMINI_API_KEY:   ${_mask(geminiKey).padEnd(36)}│`);
+  console.log(`│  DEEPSEEK_API_KEY: ${_mask(deepseekKey).padEnd(36)}│`);
+  console.log(`│  hasRealLLM:       ${String(hasAny).padEnd(36)}│`);
+  console.log(`│  Mode:             ${(hasAny ? 'EXTERNAL AI PROVIDERS' : '⚠️  LOCAL INTELLIGENCE ONLY').padEnd(36)}│`);
+  console.log('└──────────────────────────────────────────────────────┘');
+  if (!hasAny) {
+    console.warn('[STARTUP] ❌ NO AI provider keys detected! RAKAY will use Local Intelligence Mode for ALL requests.');
+    console.warn('[STARTUP]    Add OPENAI_API_KEY / CLAUDE_API_KEY / GEMINI_API_KEY to Render Dashboard environment.');
+    console.warn('[STARTUP]    Diagnostic: GET /api/RAKAY/diag (no auth required)');
+  } else {
+    console.log('[STARTUP] ✅ AI provider keys detected — external LLM providers will be used.');
+  }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  KEEP-ALIVE SELF-PINGER
+//  Render free tier spins down after 15 min of inactivity.
+//  This pings /api/ping every 14 minutes to keep the server warm.
+//  NOTE: This only helps if the server is already running (won't wake from
+//        cold start by itself). Use an external uptime monitor (e.g. UptimeRobot)
+//        to also ping the service from outside.
+// ═══════════════════════════════════════════════════════════════════════════
+if (process.env.NODE_ENV === 'production') {
+  const _keepAliveInterval = 14 * 60 * 1000;  // 14 min
+  setInterval(() => {
+    const selfUrl = `http://localhost:${process.env.PORT || 4000}/api/ping`;
+    fetch(selfUrl, { signal: AbortSignal.timeout(5000) })
+      .then(() => {})
+      .catch(() => {}); // Silent — if we're down we can't self-ping anyway
+  }, _keepAliveInterval);
+}
 
 module.exports = { app, httpServer, io };
