@@ -473,6 +473,13 @@ app.use('/api/news', newsRoutes);
 const cveRoutes = require('./routes/cve-intelligence');
 app.use('/api/cve', cveRoutes);
 
+// ── Malware Analysis Lab v3.0 — PUBLIC proxy (API keys supplied per-request via X-* headers)
+// All actual API keys are passed by the browser in request headers and forwarded
+// server-side to avoid CORS restrictions. No keys are stored server-side.
+// Registered before verifyToken so unauthenticated users can submit samples.
+const malwareAnalysisRoutes = require('./routes/malware-analysis');
+app.use('/api/malware', malwareAnalysisRoutes);
+
 // ════════════════════════════════════════════════════════════════
 //  PROTECTED ROUTES — JWT required
 //  verifyToken attaches req.user + req.tenantId to every request
