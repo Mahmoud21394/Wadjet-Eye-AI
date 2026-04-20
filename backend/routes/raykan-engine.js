@@ -248,10 +248,13 @@ router.post('/rule/generate', asyncHandler(async (req, res) => {
   const result = await engine.generateRule(description, examples || []);
 
   res.json({
-    success   : true,
-    rule      : result.rule,
-    validation: result.validation,
-    timestamp : new Date().toISOString(),
+    success    : true,
+    rule       : result.rule,
+    yaml       : result.yaml,
+    validation : result.validation,
+    quality    : result.quality,
+    builderMeta: result.builderMeta,
+    timestamp  : new Date().toISOString(),
   });
 }));
 

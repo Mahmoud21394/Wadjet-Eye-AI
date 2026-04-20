@@ -260,15 +260,34 @@ class RaykanEngine extends EventEmitter {
     };
   }
 
-  // ── Generate AI-Powered Detection Rule ───────────────────────────
+  // ── Generate AI-Powered Detection Rule (v2.0 — prompt-safe) ─────
   async generateRule(description, examples = []) {
+    const { buildRule, validateRuleOutput, sigmaQualityCheck, toSigmaYaml } =
+      require('./sigma-rule-builder');
+
+    // The AI detector now returns a fully validated rule (or safe template)
     const rule = await this.ai.generateSigmaRule(description, examples);
+
+    // Post-process: Sigma structural validation via SigmaEngine
     const validated = await this.sigma.validateRule(rule);
     if (validated.valid) {
       await this.sigma.loadRuleFromObject(validated.rule);
       this._stats.rulesLoaded++;
     }
-    return { rule, validation: validated };
+
+    // Quality check
+    const quality = sigmaQualityCheck(rule);
+
+    // Generate YAML if not already present
+    const yaml = rule._yaml || toSigmaYaml(rule);
+
+    return {
+      rule,
+      yaml,
+      validation : validated,
+      quality,
+      builderMeta: rule._builderMeta || null,
+    };
   }
 
   // ── Forensic Investigation ────────────────────────────────────────
