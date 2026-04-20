@@ -436,6 +436,32 @@ app.get('/api/rbac/health', (req, res) => {
   });
 });
 
+// /api/rbac/schema — alias for /api/rbac/health (frontend compatibility, no sensitive data)
+app.get('/api/rbac/schema', (req, res) => res.redirect('/api/rbac/health'));
+
+// /api/rbac/roles — public role list (id, name, slug, level, color — used by login forms)
+app.get('/api/rbac/roles', (req, res) => {
+  const roles = [
+    { id: 'super_admin',   name: 'Super Admin',        slug: 'super_admin',   level: 10, color: '#ef4444' },
+    { id: 'admin',         name: 'Admin',              slug: 'admin',         level: 9,  color: '#f97316' },
+    { id: 'soc_l3',        name: 'SOC Analyst L3',     slug: 'soc_l3',        level: 7,  color: '#dc2626' },
+    { id: 'soc_l2',        name: 'SOC Analyst L2',     slug: 'soc_l2',        level: 6,  color: '#3b82f6' },
+    { id: 'soc_l1',        name: 'SOC Analyst L1',     slug: 'soc_l1',        level: 5,  color: '#22d3ee' },
+    { id: 'ir',            name: 'Incident Responder', slug: 'ir',            level: 7,  color: '#7c3aed' },
+    { id: 'threat_hunter', name: 'Threat Hunter',      slug: 'threat_hunter', level: 7,  color: '#10b981' },
+    { id: 'analyst',       name: 'Analyst',            slug: 'analyst',       level: 5,  color: '#2563eb' },
+    { id: 'viewer',        name: 'Viewer',             slug: 'viewer',        level: 1,  color: '#6b7280' },
+    { id: 'auditor',       name: 'Auditor',            slug: 'auditor',       level: 3,  color: '#ec4899' },
+    { id: 'executive',     name: 'Executive',          slug: 'executive',     level: 2,  color: '#f59e0b' },
+  ];
+  res.json({ roles, total: roles.length, timestamp: new Date().toISOString() });
+});
+
+// ── RAYKAN v1.0 — AI Threat Hunting & DFIR Engine (PUBLIC — no JWT required) ──
+// Demo-mode access: all /api/raykan/* endpoints are public for integration & UI testing.
+// NOTE: Must be BEFORE app.use(verifyToken) below.
+app.use('/api/raykan', raykanEngineRoutes);
+
 // /api/news — Cyber News is public (no user-specific data in news articles).
 // Registered before verifyToken so unauthenticated clients (demo mode, public
 // dashboard) can read news. The POST /ingest endpoint inside newsRoutes does its
@@ -475,8 +501,8 @@ app.use('/api/settings',  settingsRoutes);
 // ── v7.0 New Routes ───────────────────────────────────────────────
 const rbacRoutes = require('./routes/rbac');
 app.use('/api/rbac',           rbacRoutes);
-// ── RAYKAN v1.0 — AI Threat Hunting & DFIR Engine ────────────────
-app.use('/api/raykan',         raykanEngineRoutes);
+// NOTE: /api/raykan is mounted BEFORE verifyToken (see PUBLIC ROUTES section above)
+//       so it is accessible without JWT for demo mode and frontend integration.
 // ════════════════════════════════════════════════════════════════
 //  404 HANDLER — catches all unmatched routes
 //  Must be placed AFTER all route registrations

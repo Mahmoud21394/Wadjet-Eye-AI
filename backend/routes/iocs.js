@@ -40,11 +40,13 @@ const { enrichIOC }  = require('../services/enrichment');
 // ── CRITICAL FIX: Use service_role client (bypasses RLS) ──────────────────
 // The anon client is blocked by RLS when no SELECT policy exists.
 // Backend enforces tenant isolation via .eq('tenant_id', tenantId) instead.
-const supabaseAdmin = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SECRET_KEY,
-  { auth: { autoRefreshToken: false, persistSession: false } }
-);
+const supabaseAdmin = (process.env.SUPABASE_URL && (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SECRET_KEY))
+  ? createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SECRET_KEY,
+      { auth: { autoRefreshToken: false, persistSession: false } }
+    )
+  : null;
 
 // Fallback tenant ID (matches the tenant used by ingestion pipeline)
 const DEFAULT_TENANT = process.env.DEFAULT_TENANT_ID || '00000000-0000-0000-0000-000000000001';

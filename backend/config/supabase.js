@@ -59,17 +59,23 @@ const SERVICE_KEY       = process.env.SUPABASE_SERVICE_KEY
                        || process.env.SUPABASE_SECRET_KEY;
 
 // ── Startup validation ────────────────────────────────────────────
+// NOTE: In development/demo mode we operate with a null Supabase client.
+// Routes that need Supabase will check for null and return appropriate errors.
 if (!SUPABASE_URL) {
   console.error('[Supabase] ❌ MISSING: SUPABASE_URL is not set in environment');
   console.error('[Supabase]    Add to Render Dashboard → Environment');
-  process.exit(1);
+  if (process.env.NODE_ENV === 'production') process.exit(1);
+  // In development: continue with null client (demo mode)
 }
 
 if (!SERVICE_KEY) {
-  console.error('[Supabase] ❌ MISSING: SUPABASE_SERVICE_KEY is not set in environment');
-  console.error('[Supabase]    Get the "Secret Key" (sb_secret_...) from:');
-  console.error('[Supabase]    https://supabase.com/dashboard/project/_/settings/api');
-  process.exit(1);
+  if (SUPABASE_URL) {
+    console.error('[Supabase] ❌ MISSING: SUPABASE_SERVICE_KEY is not set in environment');
+    console.error('[Supabase]    Get the "Secret Key" (sb_secret_...) from:');
+    console.error('[Supabase]    https://supabase.com/dashboard/project/_/settings/api');
+    if (process.env.NODE_ENV === 'production') process.exit(1);
+  }
+  // In development: continue with null client (demo mode)
 }
 
 // ── Key format detection ──────────────────────────────────────────
@@ -293,8 +299,9 @@ function _ingestionFetchWithTimeout(input, init = {}) {
 // ══════════════════════════════════════════════════════════════════
 // CLIENT 1: supabase — SERVICE ROLE client for DB queries
 // NOT for auth operations. Uses _dbFetchWithTimeout (15s).
+// null when SUPABASE_URL/SERVICE_KEY are not set (development/demo mode).
 // ══════════════════════════════════════════════════════════════════
-const supabase = createClient(
+const supabase = (SUPABASE_URL && SERVICE_KEY) ? createClient(
   SUPABASE_URL,
   SERVICE_KEY,
   {
@@ -309,7 +316,7 @@ const supabase = createClient(
       headers: { 'x-application-name': 'wadjet-eye-ai-backend' },
     },
   }
-);
+) : null;
 
 // ══════════════════════════════════════════════════════════════════
 // CLIENT 2: supabaseAuth — DEDICATED AUTH client
@@ -320,7 +327,7 @@ const supabase = createClient(
 // Use createLoginClient() instead — it creates a fresh per-request
 // client with NO prior lock queue state, preventing queue stalls.
 // ══════════════════════════════════════════════════════════════════
-const supabaseAuth = createClient(
+const supabaseAuth = (SUPABASE_URL && SERVICE_KEY) ? createClient(
   SUPABASE_URL,
   SERVICE_KEY,
   {
@@ -334,7 +341,7 @@ const supabaseAuth = createClient(
       headers: { 'x-application-name': 'wadjet-eye-ai-auth' },
     },
   }
-);
+) : null;
 
 // ══════════════════════════════════════════════════════════════════
 // createLoginClient() — PER-REQUEST LOGIN CLIENT FACTORY
@@ -401,7 +408,7 @@ if (!SUPABASE_ANON_KEY) {
 // Isolated from auth clients. Uses _ingestionFetchWithTimeout (30s).
 // Prevents scheduler workers from interfering with auth operations.
 // ══════════════════════════════════════════════════════════════════
-const supabaseIngestion = createClient(
+const supabaseIngestion = (SUPABASE_URL && SERVICE_KEY) ? createClient(
   SUPABASE_URL,
   SERVICE_KEY,
   {
@@ -416,7 +423,7 @@ const supabaseIngestion = createClient(
       headers: { 'x-application-name': 'wadjet-eye-ai-ingestion' },
     },
   }
-);
+) : null;
 
 // ══════════════════════════════════════════════════════════════════
 // supabaseForUser — user-scoped client factory

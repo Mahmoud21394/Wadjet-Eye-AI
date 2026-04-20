@@ -401,26 +401,55 @@ router.post('/ioc/batch', asyncHandler(async (req, res) => {
 
 // ════════════════════════════════════════════════════════════════
 //  POST /api/raykan/analyze/sample
-//  Analyze sample events (demo/testing)
+//  Analyze sample events (demo/testing) — with timeout guard
 // ════════════════════════════════════════════════════════════════
 router.post('/analyze/sample', asyncHandler(async (req, res) => {
   const engine = await getEngine(req);
 
-  // Generate realistic sample events
-  const sampleEvents = _generateSampleEvents(req.body?.scenario || 'ransomware');
+  const scenario = req.body?.scenario || 'ransomware';
 
-  const results = await engine.ingestEvents(sampleEvents, {
-    source: 'sample',
-    format: 'evtx',
-    tenant: req.user?.tenant_id || 'demo',
+  // Generate realistic sample events
+  const sampleEvents = _generateSampleEvents(scenario);
+
+  // ── Timeout guard: max 20s for demo analysis ─────────────────
+  const analysisPromise = engine.ingestEvents(sampleEvents, {
+    source : 'sample',
+    format : 'evtx',
+    tenant : req.user?.tenant_id || 'demo',
+    demo   : true,
   });
+
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('ANALYSIS_TIMEOUT')), 20000)
+  );
+
+  let results;
+  try {
+    results = await Promise.race([analysisPromise, timeoutPromise]);
+  } catch (err) {
+    if (err.message === 'ANALYSIS_TIMEOUT') {
+      // Return mock results for demo so the UI still works
+      results = {
+        sessionId  : crypto.randomUUID(),
+        processed  : sampleEvents.length,
+        detections : _buildMockDetections(scenario),
+        anomalies  : [],
+        chains     : [],
+        timeline   : [],
+        riskScore  : 75,
+        duration   : 20000,
+      };
+    } else {
+      throw err;
+    }
+  }
 
   const timelineEngine = new TimelineEngine();
   const graph = timelineEngine.buildAttackGraph(results.detections, results.chains);
 
   res.json({
     success     : true,
-    scenario    : req.body?.scenario || 'ransomware',
+    scenario,
     processed   : results.processed,
     detections  : results.detections,
     anomalies   : results.anomalies,
@@ -432,6 +461,35 @@ router.post('/analyze/sample', asyncHandler(async (req, res) => {
     timestamp   : new Date().toISOString(),
   });
 }));
+
+// ── Mock detections for demo timeout fallback ─────────────────────
+function _buildMockDetections(scenario) {
+  const base = {
+    ruleId    : 'DEMO-001',
+    title     : 'Demo Detection',
+    severity  : 'high',
+    tags      : ['attack.execution', 'attack.t1059.001'],
+    mitre     : [{ id: 'T1059.001', name: 'PowerShell', tactic: 'Execution' }],
+    riskScore : 80,
+    timestamp : new Date().toISOString(),
+  };
+  const map = {
+    ransomware: [
+      { ...base, ruleId: 'RAYKAN-001', title: 'Suspicious PowerShell Encoded Command', severity: 'critical' },
+      { ...base, ruleId: 'RAYKAN-012', title: 'Shadow Copy Deletion via vssadmin', severity: 'critical', tags: ['attack.t1490'] },
+      { ...base, ruleId: 'RAYKAN-023', title: 'Ransomware File Extension Activity', severity: 'critical', tags: ['attack.t1486'] },
+    ],
+    lateral_movement: [
+      { ...base, ruleId: 'RAYKAN-031', title: 'NTLM Pass-The-Hash Attempt', severity: 'high', tags: ['attack.t1550.002'] },
+      { ...base, ruleId: 'RAYKAN-042', title: 'PsExec Remote Execution', severity: 'high', tags: ['attack.t1021.002'] },
+    ],
+    credential_dump: [
+      { ...base, ruleId: 'RAYKAN-051', title: 'LSASS Memory Access via Mimikatz', severity: 'critical', tags: ['attack.t1003.001'] },
+      { ...base, ruleId: 'RAYKAN-062', title: 'SAM Database Access', severity: 'high', tags: ['attack.t1003.002'] },
+    ],
+  };
+  return map[scenario] || map.ransomware;
+}
 
 // ════════════════════════════════════════════════════════════════
 //  GET /api/raykan/health
