@@ -7,10 +7,17 @@
  */
 
 /* ════════════════════════════════════════════
-   CYBER NEWS — Threat Intelligence Feed v3.0
-   Card-style layout with severity-coded design
+   CYBER NEWS — Threat Intelligence Feed v7.0
+   Delegated to cyber-news-hub.js (THN-inspired full redesign).
+   This stub is kept for backward compatibility with main.js.
 ═════════════════════════════════════════════ */
 function renderCyberNews() {
+  // Delegate to the new Cyber News Hub module if available
+  if (typeof window.renderCyberNews_v7 === 'function') {
+    return window.renderCyberNews_v7();
+  }
+  // cyber-news-hub.js defines window.renderCyberNews and overrides this function.
+  // If we're here it means cyber-news-hub.js hasn't loaded yet — proceed with legacy.
   const wrap = document.getElementById('cyberNewsWrap');
   if (!wrap) return;
 
