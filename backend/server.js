@@ -468,6 +468,11 @@ app.use('/api/raykan', raykanEngineRoutes);
 // own role-check, so it's safe to expose the whole router publicly.
 app.use('/api/news', newsRoutes);
 
+// /api/cve — CVE Threat Engine is public; results come from NVD, not tenant data.
+// API keys are kept server-side; the frontend never sees them.
+const cveRoutes = require('./routes/cve-intelligence');
+app.use('/api/cve', cveRoutes);
+
 // ════════════════════════════════════════════════════════════════
 //  PROTECTED ROUTES — JWT required
 //  verifyToken attaches req.user + req.tenantId to every request
