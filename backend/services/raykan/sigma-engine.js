@@ -27,6 +27,25 @@ const crypto       = require('crypto');
 // as JS objects so no YAML parser dependency is needed.
 const BUILTIN_RULES = require('./rules/builtin-rules');
 
+// ── Extended Rules (100+ additional Sigma/Hayabusa rules) ─────────
+let EXTENDED_RULES = [];
+try {
+  EXTENDED_RULES = require('./rules/extended-rules');
+} catch (e) {
+  console.warn('[Sigma] Extended rules not found — using builtin only');
+}
+
+// ── Large-Scale Rules (6000+ auto-generated Sigma/Hayabusa rules) ─
+let LARGE_SCALE_RULES = [];
+try {
+  LARGE_SCALE_RULES = require('./rules/large-scale-rules');
+} catch (e) {
+  console.warn('[Sigma] Large-scale rules not found — using builtin + extended only');
+}
+
+// ── All Rules combined ────────────────────────────────────────────
+const ALL_RULES = [...BUILTIN_RULES, ...EXTENDED_RULES, ...LARGE_SCALE_RULES];
+
 // ── Field Mappings (Sigma → Normalized fields) ────────────────────
 const FIELD_MAPS = {
   // Windows Event Log
@@ -76,7 +95,7 @@ class SigmaEngine extends EventEmitter {
   // ── Load Rules ───────────────────────────────────────────────────
   async loadRules() {
     let loaded = 0;
-    for (const rule of BUILTIN_RULES) {
+    for (const rule of ALL_RULES) {
       try {
         const compiled = this._compileRule(rule);
         this._indexRule(compiled);
@@ -107,12 +126,23 @@ class SigmaEngine extends EventEmitter {
   }
 
   // ── Detection ────────────────────────────────────────────────────
-  async detect(normalizedEvents) {
+  /**
+   * detect — Run all candidate rules against normalized events.
+   * @param {Array}  normalizedEvents
+   * @param {Object} opts — { maxCandidates: number (default 2000) }
+   */
+  async detect(normalizedEvents, opts = {}) {
     const detections = [];
+    const MAX_CANDIDATES = opts.maxCandidates || 2000; // cap prevents O(n*m) blow-up with large rule sets
 
     for (const evt of normalizedEvents) {
       this._stats.evaluated++;
-      const candidates = this._getCandidateRules(evt);
+      const candidateSet = this._getCandidateRules(evt);
+
+      // If candidate set is huge (e.g., all wildcard rules), cap to avoid timeouts
+      const candidates = candidateSet.size > MAX_CANDIDATES
+        ? Array.from(candidateSet).slice(0, MAX_CANDIDATES)
+        : candidateSet;
 
       for (const ruleId of candidates) {
         const rule = this._rules.get(ruleId);
