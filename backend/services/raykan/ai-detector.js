@@ -17,8 +17,9 @@
 
 'use strict';
 
-const EventEmitter = require('events');
-const crypto       = require('crypto');
+const EventEmitter   = require('events');
+const crypto         = require('crypto');
+const SigmaBuilder   = require('./sigma-rule-builder');   // v2.0 safe builder
 
 // ── MITRE → LLM Context map ───────────────────────────────────────
 const TECHNIQUE_DESCRIPTIONS = {
@@ -84,12 +85,20 @@ Respond in JSON:
   generateSigmaRule: (description, examples) => `
 You are a Sigma rule expert. Create a production-grade Sigma detection rule for the following threat.
 
-Description: ${description}
+IMPORTANT CONSTRAINTS:
+- CommandLine values MUST match real attacker commands or LOLBins (vssadmin, certutil, bitsadmin, psexec, etc.)
+- NEVER insert any words from the user description into CommandLine values
+- The detection block MUST have multiple named selections (e.g. selection_backup_deletion, selection_log_clearing)
+- The condition MUST combine selections with AND/OR logic (e.g. "1 of selection_*")
+- Level must be one of: critical, high, medium, low
+
+Threat to detect: ${description}
 ${examples.length > 0 ? 'Example events:\n' + JSON.stringify(examples, null, 2) : ''}
 
 Generate a complete Sigma rule in JSON format (not YAML) with fields:
 id, title, description, author, level (critical/high/medium/low), status (stable/test/experimental),
-tags (MITRE ATT&CK), logsource (category, product), detection (selections + condition).
+tags (MITRE ATT&CK), logsource (category, product), detection (named selections + condition),
+falsepositives (array), references (array).
 
 Respond with only valid JSON.`,
 
@@ -207,24 +216,65 @@ class AIDetector extends EventEmitter {
     return result?.rql || this._keywordToRQL(nlQuery);
   }
 
-  // ── Generate Sigma Rule ───────────────────────────────────────────
+  // ── Generate Sigma Rule (v2.0 — prompt-safe, template-backed) ─────
   async generateSigmaRule(description, examples = []) {
+    // Step 1: Always sanitize the input first (removes instruction verbs,
+    // extracts security keywords, enforces ≤3-word phrase rule)
+    const { keywords, intent, sanitized } = SigmaBuilder.sanitizeDescription(description);
+    console.log(`[RAYKAN/AI] Rule gen — intent=${intent} keywords=[${keywords.join(',')}]`);
+
+    let rule;
+
+    // Step 2: If no AI provider, go straight to the safe behavioral template
     if (!this._ready) {
-      return this._generateRuleTemplate(description);
+      return this._safeBuildFromTemplate(description, intent, keywords);
     }
 
-    const prompt = PROMPTS.generateSigmaRule(description, examples);
-    const rule   = await this._callLLM(prompt);
+    // Step 3: Ask the LLM, but pass the sanitized description (no raw user text)
+    const prompt = PROMPTS.generateSigmaRule(sanitized || description, examples);
+    const llmRule = await this._callLLM(prompt);
 
-    if (!rule || !rule.detection) {
-      return this._generateRuleTemplate(description);
+    if (llmRule && llmRule.detection) {
+      // Step 4: Validate LLM output — reject prompt leakage, meta words, bad CommandLine
+      const validation = SigmaBuilder.validateRuleOutput(llmRule, description);
+      if (validation.valid) {
+        rule = {
+          ...llmRule,
+          id    : llmRule.id || `RAYKAN-AI-${Date.now()}`,
+          author: `RAYKAN AI (${this._provider?.name || 'local'})`,
+          status: llmRule.status || 'experimental',
+        };
+        console.log('[RAYKAN/AI] LLM rule passed validation');
+      } else {
+        console.warn('[RAYKAN/AI] LLM rule failed validation — regenerating from template:', validation.errors.slice(0,3));
+        rule = null;
+      }
     }
+
+    // Step 5: Fall back to behavioral template if LLM failed or validation failed
+    if (!rule) {
+      rule = this._safeBuildFromTemplate(description, intent, keywords);
+    }
+
+    return rule;
+  }
+
+  // ── Safe Rule Builder (template-based, no user text in CommandLine) ──
+  _safeBuildFromTemplate(description, intent, keywords) {
+    const result = SigmaBuilder.buildRule(description, {
+      author   : 'RAYKAN Behavioral Engine',
+      extraTags: [],
+    });
+
+    // Run quality check
+    const quality = SigmaBuilder.sigmaQualityCheck(result.rule);
+    console.log(`[RAYKAN/AI] Template rule quality: ${quality.grade} (${quality.score}/100)`);
 
     return {
-      ...rule,
-      id     : rule.id || `RAYKAN-AI-${Date.now()}`,
-      author : `RAYKAN AI (${this._provider?.name || 'local'})`,
-      status : 'experimental',
+      ...result.rule,
+      _yaml       : result.yaml,
+      _quality    : quality,
+      _builderMeta: result.meta,
     };
   }
 
@@ -338,21 +388,10 @@ class AIDetector extends EventEmitter {
     return terms.length > 0 ? terms.join(' OR ') : nlQuery;
   }
 
+  // Kept as safety stub — delegates to SigmaBuilder
   _generateRuleTemplate(description) {
-    return {
-      id         : `RAYKAN-AI-${Date.now()}`,
-      title      : `AI Generated: ${description.slice(0, 60)}`,
-      description,
-      author     : 'RAYKAN AI (template)',
-      level      : 'medium',
-      status     : 'experimental',
-      tags       : [],
-      logsource  : { category: 'process_creation', product: 'windows' },
-      detection  : {
-        selection: { CommandLine: ['*' + description.slice(0, 20) + '*'] },
-        condition: 'selection',
-      },
-    };
+    const result = SigmaBuilder.buildRule(description);
+    return result.rule;
   }
 
   // ── Provider selection ─────────────────────────────────────────────
@@ -393,9 +432,10 @@ class AIDetector extends EventEmitter {
 
   getStatus() {
     return {
-      ready    : this._ready,
-      provider : this._provider?.name || 'none',
-      stats    : this._stats,
+      ready       : this._ready,
+      provider    : this._provider?.name || 'none',
+      stats       : this._stats,
+      sigmaBuilder: 'v2.0 (behavioral templates, prompt-safe)',
     };
   }
 }
