@@ -163,15 +163,70 @@ function parseRSS(xmlText) {
 
     const title       = getTag('title');
     const link        = getTag('link') || (block.match(/<link>([^<]+)<\/link>/) || [])[1] || '';
-    const description = getTag('description');
-    const pubDate     = getTag('pubDate');
+    const description = getTag('description') || getTag('content:encoded') || '';
+    const pubDate     = getTag('pubDate') || getTag('dc:date') || '';
     const guid        = getTag('guid') || link;
 
     if (title && link) {
-      // Extract image from description (for card thumbnails)
-      const imgMatch = description.match(/<img[^>]+src=["']([^"']+)["']/i);
-      const imageUrl = imgMatch ? imgMatch[1] : null;
-      const cleanDesc = description.replace(/<[^>]+>/g, '').trim().slice(0, 500);
+      // ── Multi-source image extraction (priority order) ──────────────
+      let imageUrl = null;
+
+      // 1) <media:content url="..." medium="image"> — used by THN, SecurityWeek
+      const mediaContent = block.match(/<media:content[^>]+url=["']([^"']+)["'][^>]*medium=["']image["']/i)
+                        || block.match(/<media:content[^>]+medium=["']image["'][^>]+url=["']([^"']+)["']/i)
+                        || block.match(/<media:content[^>]+url=["'](https?:\/\/[^"']+\.(jpg|jpeg|png|webp|gif)[^"']*)["']/i);
+      if (mediaContent) imageUrl = mediaContent[1];
+
+      // 2) <media:thumbnail url="..."> — BleepingComputer, others
+      if (!imageUrl) {
+        const mediaThumbnail = block.match(/<media:thumbnail[^>]+url=["']([^"']+)["']/i);
+        if (mediaThumbnail) imageUrl = mediaThumbnail[1];
+      }
+
+      // 3) <enclosure url="..." type="image/..."> — podcast-style feeds
+      if (!imageUrl) {
+        const enclosure = block.match(/<enclosure[^>]+url=["']([^"']+)["'][^>]*type=["']image\//i)
+                       || block.match(/<enclosure[^>]+type=["']image\/[^"']*["'][^>]+url=["']([^"']+)["']/i);
+        if (enclosure) imageUrl = enclosure[1];
+      }
+
+      // 4) <img src="..."> inside description/content
+      if (!imageUrl) {
+        const imgMatch = description.match(/<img[^>]+src=["']([^"']+)["']/i);
+        if (imgMatch) imageUrl = imgMatch[1];
+      }
+
+      // 5) og:image meta tag inside content
+      if (!imageUrl) {
+        const ogImg = block.match(/og:image[^>]*content=["']([^"']+)["']/i)
+                   || block.match(/content=["'](https?:\/\/[^"']+\.(jpg|jpeg|png|webp)[^"']*)["']/i);
+        if (ogImg) imageUrl = ogImg[1];
+      }
+
+      // 6) Any direct image URL in block
+      if (!imageUrl) {
+        const anyImg = block.match(/https?:\/\/[^\s"'<>]+\.(jpg|jpeg|png|webp)(\?[^\s"'<>]*)?/i);
+        if (anyImg) imageUrl = anyImg[0];
+      }
+
+      // Validate image URL — must be absolute and point to an image
+      if (imageUrl && !/^https?:\/\//i.test(imageUrl)) imageUrl = null;
+      // Reject tracking pixels and tiny images
+      if (imageUrl && /1x1|pixel|track|beacon/i.test(imageUrl)) imageUrl = null;
+
+      // Clean HTML entities from description
+      const cleanDesc = description
+        .replace(/<[^>]+>/g, ' ')          // strip HTML tags
+        .replace(/&nbsp;/g, ' ')           // non-breaking space
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&[a-z]+;/gi, '')         // remaining HTML entities
+        .replace(/\s{2,}/g, ' ')           // collapse whitespace
+        .trim()
+        .slice(0, 600);
 
       items.push({ title, link: link.trim(), description: cleanDesc, imageUrl, pubDate, guid });
     }

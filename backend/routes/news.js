@@ -46,6 +46,31 @@ function tid(req) {
     || '00000000-0000-0000-0000-000000000001';
 }
 
+// ── Clean HTML entities + strip tags from text ────────────────────────
+function cleanText(t) {
+  return String(t == null ? '' : t)
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&[a-z]{2,8};/gi, '')
+    .replace(/&#\d+;/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+// ── Validate image URL is a real image ───────────────────────────────
+function validateImageUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  if (!/^https?:\/\//i.test(url)) return null;
+  if (/1x1|pixel|track|beacon|spacer/i.test(url)) return null;
+  return url;
+}
+
 // ════════════════════════════════════════════════════════════════
 //  GET /api/news — list news with optional filters
 //  Query: category, severity, search, page, limit, source
@@ -86,18 +111,18 @@ router.get('/', async (req, res) => {
 
     // Normalize article shape for frontend
     const normalized = articles.map(a => ({
-      id:          a.id           || a.external_guid || a.guid,
-      title:       a.title        || '',
+      id:          a.id           || a.external_guid || a.guid || a.link,
+      title:       cleanText(a.title || ''),
       url:         a.url          || a.link          || '#',
-      source:      a.source       || a.source_name   || 'Unknown',
+      source:      cleanText(a.source || a.source_name || 'Unknown'),
       category:    a.category     || 'threat-intelligence',
-      summary:     a.summary      || a.description   || '',
-      imageUrl:    a.image_url    || a.imageUrl       || null,
+      summary:     cleanText(a.summary || a.description || '').slice(0, 600),
+      imageUrl:    validateImageUrl(a.image_url || a.imageUrl || null),
       severity:    a.severity     || 'medium',
-      cves:        a.cves         || [],
-      threatActors: a.threat_actors || a.actors || [],
-      malware:     a.malware_families || a.malware  || [],
-      tags:        a.tags         || [],
+      cves:        Array.isArray(a.cves) ? a.cves : [],
+      threatActors: Array.isArray(a.threat_actors) ? a.threat_actors : (Array.isArray(a.actors) ? a.actors : []),
+      malware:     Array.isArray(a.malware_families) ? a.malware_families : (Array.isArray(a.malware) ? a.malware : []),
+      tags:        Array.isArray(a.tags) ? a.tags : [],
       publishedAt: a.published_at || a.pubDate || new Date().toISOString(),
     }));
 

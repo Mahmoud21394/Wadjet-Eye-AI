@@ -152,9 +152,9 @@ const allowedOrigins = (
   .map(s => s.trim())
   .filter(Boolean);
 
-// ── Wildcard: allow all e2b/genspark sandbox preview origins ─────────────────
-// These are the *.e2b.dev preview URLs used during development in GenSpark AI
-const _sandboxOriginRegex = /^https?:\/\/[^.]+\.(e2b\.dev|genspark\.ai|vercel\.app|render\.com)$/;
+// ── Wildcard: allow all e2b/genspark/novita sandbox preview origins ──────────
+// These are the *.e2b.dev and *.novita.ai preview URLs used during development
+const _sandboxOriginRegex = /^https?:\/\/[^/]*\.(e2b\.dev|genspark\.ai|vercel\.app|render\.com|novita\.ai|sandbox\.novita\.ai)$/;
 function _isSandboxOrigin(origin) {
   return _sandboxOriginRegex.test(origin);
 }
