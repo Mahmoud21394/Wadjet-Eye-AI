@@ -258,6 +258,12 @@ const corsOptions = {
     'X-Requested-With',
     'Cache-Control',
     'Pragma',
+    // Malware Analysis Lab — API key passthrough headers
+    'X-VT-Key',
+    'X-HA-Key',
+    'X-Intezer-Key',
+    'X-Anyrun-Key',
+    'X-Debug-Mode',
   ],
   exposedHeaders: ['X-RateLimit-Remaining', 'X-Request-ID'],
   optionsSuccessStatus: 200,   // 200 avoids IE11 / some proxy issues with 204
