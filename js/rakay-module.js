@@ -446,7 +446,9 @@
 
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
-        log.debug('Health check OK. LLM ready:', data.llm_ready, '| Provider:', data.provider);
+        // v3.0: multi-provider health format
+        const activeProviders = data.active_providers || (data.provider && data.provider !== 'mock' ? [data.provider] : []);
+        log.debug('Health check OK. LLM ready:', data.llm_ready, '| Active providers:', activeProviders.join(', ') || 'none (mock mode)');
 
         // If we just came online, re-auth and reload
         if (wasOnline === false) {
@@ -751,18 +753,46 @@
       return;
     }
 
-    // ── 503 LLM provider busy (rate-limited BY provider, not by us) ────────
-    // This is a transient provider-side issue — NOT a user error.
-    // Do NOT show "wait 60s" or lock the UI.
-    if (err.status === 503 || err.code === 'LLM_PROVIDER_BUSY') {
-      _appendError('The AI provider is temporarily busy. Please try again in a few seconds — your message was not rate-limited.');
+    // ── ALL_PROVIDERS_FAILED — orchestrator tried all providers and none worked ──
+    // This replaces the old generic "provider busy" message with actionable info.
+    if (err.code === 'ALL_PROVIDERS_FAILED' || err.status === 503) {
+      const body  = err.body || {};
+      const tried = Array.isArray(body.tried)   ? body.tried   : [];
+      const details = Array.isArray(body.details) ? body.details : [];
+      const hint  = body.hint || '';
+
+      let msg = '';
+      if (body.code === 'ALL_PROVIDERS_FAILED') {
+        msg = [
+          `**All AI providers failed** after trying: ${tried.length ? tried.join(', ') : 'none configured'}.`,
+          '',
+          details.length ? `**Error details:**\n${details.map(d => `- ${d}`).join('\n')}` : '',
+          '',
+          hint ? `**What to do:** ${hint}` : '**What to do:** Configure at least one provider key in server environment variables.',
+          '',
+          '**Required keys** (set at least one):',
+          '- `GEMINI_API_KEY` — Google Gemini (recommended)',
+          '- `CLAUDE_API_KEY` — Anthropic Claude',
+          '- `DEEPSEEK_API_KEY` — DeepSeek',
+          '- `OPENAI_API_KEY` — OpenAI GPT-4',
+        ].filter(l => l !== '').join('\n');
+      } else if (body.code === 'LLM_UNAVAILABLE') {
+        msg = `**AI provider key invalid or missing.**\n\n${body.error || err.message || ''}\n\nCheck server environment variables: \`GEMINI_API_KEY\`, \`CLAUDE_API_KEY\`, \`DEEPSEEK_API_KEY\`, \`OPENAI_API_KEY\`.`;
+      } else if (body.code === 'LLM_RATE_LIMITED') {
+        msg = `**All AI providers are rate-limited.**\n\nThe orchestrator tried all configured providers and all are currently rate-limited. Please wait 30 seconds and try again.\n\n${body.error || ''}`;
+      } else {
+        // Generic 503 — show what the server actually says
+        msg = `**AI service unavailable (503).**\n\n${body.error || err.message || 'Unknown error'}\n\nIf this persists, check server logs and provider API key configuration.`;
+      }
+
+      _appendError(msg);
       return;
     }
 
-    // ── 503 LLM unavailable (missing API key) ─────────────────────────────
+    // ── 503 LLM unavailable (missing API key) — legacy code path ─────────
     if (err.code === 'LLM_UNAVAILABLE') {
       const detail = err.body?.error || err.message || '';
-      _appendError(`AI provider unavailable: ${detail}. Check server env vars (OPENAI_API_KEY / CLAUDE_API_KEY).`);
+      _appendError(`**AI provider key invalid or missing.**\n\n${detail}\n\nCheck server environment variables: \`GEMINI_API_KEY\`, \`CLAUDE_API_KEY\`, \`DEEPSEEK_API_KEY\`, \`OPENAI_API_KEY\`.`);
       return;
     }
 
