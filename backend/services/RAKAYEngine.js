@@ -27,7 +27,7 @@
  */
 'use strict';
 
-const { createLLMProvider } = require('./llm-provider');
+const { createLLMProvider, getOrchestrator, getProviderMetrics } = require('./llm-provider');
 const store                 = require('./rakay-store');
 const { executeTool, TOOL_SCHEMAS } = require('./rakay-tools');
 
@@ -35,7 +35,7 @@ const { executeTool, TOOL_SCHEMAS } = require('./rakay-tools');
 const MAX_TOOL_ITERATIONS  = 5;   // Max agentic loops before forcing response
 const CONTEXT_WINDOW_MSGS  = 20;  // Messages to include in context
 const MAX_RESPONSE_TOKENS  = 4096;
-const DEFAULT_MODEL        = 'gpt-4o';
+const DEFAULT_MODEL        = 'auto'; // 'auto' = use multi-provider orchestrator
 
 // ── System prompt template ─────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are RAKAY, an elite AI security analyst and detection engineering assistant built into the Wadjet-Eye AI cybersecurity platform.
@@ -75,29 +75,55 @@ Platform context: Wadjet-Eye AI — https://wadjet-eye-ai.vercel.app`;
 class RAKAYEngine {
   /**
    * @param {object} config
-   * @param {string} config.provider   — 'openai' | 'anthropic' | 'mock'
-   * @param {string} [config.model]    — model name override
-   * @param {string} [config.apiKey]   — API key (falls back to env)
-   * @param {string} [config.baseUrl]  — base URL for compatible endpoints
+   * @param {string} [config.provider]     — 'auto' (default) | 'gemini' | 'anthropic' | 'deepseek' | 'openai' | 'mock'
+   * @param {string} [config.model]        — model override (applied to selected provider)
+   * @param {string} [config.apiKey]       — single API key (legacy single-provider mode)
+   * @param {object} [config.apiKeys]      — { gemini, anthropic, deepseek, openai } multi-key config
+   * @param {string[]} [config.providerOrder] — override provider priority order
    */
   constructor(config = {}) {
-    this.providerName = config.provider || _detectProvider();
-    this.model        = config.model   || process.env.RAKAY_MODEL   || DEFAULT_MODEL;
-    this.apiKey       = config.apiKey  || _getApiKey(this.providerName);
-    this.baseUrl      = config.baseUrl || process.env.RAKAY_BASE_URL;
+    // 'auto' or unset → use multi-provider orchestrator
+    const providerArg = (config.provider || process.env.RAKAY_PROVIDER || 'auto').toLowerCase();
+    this.providerName = providerArg === 'auto' ? 'multi' : providerArg;
+    this.model        = config.model || process.env.RAKAY_MODEL || null;
+    this.apiKeys      = config.apiKeys || {};
+    this.providerOrder = config.providerOrder || null;
+
+    // Legacy single-key mode: if a single apiKey is passed, map it
+    if (config.apiKey && !this.apiKeys.gemini) {
+      // Detect which provider the key belongs to by format or explicit provider name
+      if (this.providerName === 'gemini')   this.apiKeys.gemini    = config.apiKey;
+      else if (this.providerName === 'anthropic' || this.providerName === 'claude') this.apiKeys.anthropic = config.apiKey;
+      else if (this.providerName === 'deepseek') this.apiKeys.deepseek  = config.apiKey;
+      else if (this.providerName === 'openai')   this.apiKeys.openai    = config.apiKey;
+      // For 'multi', the key might be for any provider — try all env vars too
+    }
 
     this._provider = null; // lazy-init
   }
 
-  // ── Lazy provider initialisation ──────────────────────────────────────────
+  // ── Lazy provider / orchestrator initialisation ───────────────────────────
   _getProvider() {
     if (!this._provider) {
-      this._provider = createLLMProvider({
-        provider: this.providerName,
-        model:    this.model,
-        apiKey:   this.apiKey,
-        baseUrl:  this.baseUrl,
-      });
+      if (this.providerName === 'multi' || this.providerName === 'auto') {
+        // Use the global multi-provider orchestrator singleton
+        this._provider = getOrchestrator({
+          apiKeys:       this.apiKeys,
+          providerOrder: this.providerOrder,
+          debug:         process.env.RAKAY_DEBUG === '1',
+        });
+      } else {
+        // Single-provider mode (explicit provider name passed)
+        const providerConfig = {
+          provider: this.providerName,
+          apiKey:   this.apiKeys[this.providerName] ||
+                    this.apiKeys.openai || this.apiKeys.anthropic ||
+                    this.apiKeys.gemini || this.apiKeys.deepseek,
+        };
+        if (this.model) providerConfig.model = this.model;
+        this._provider = createLLMProvider(providerConfig);
+        console.log(`[RAKAYEngine] Single-provider mode: ${this.providerName}`);
+      }
     }
     return this._provider;
   }
@@ -122,7 +148,9 @@ class RAKAYEngine {
     const toolTrace   = [];  // execution trace of tool calls
     let   totalTokens = 0;
 
-    console.log(`[RAKAYEngine] RAKAY processing started session=${sessionId?.slice(0,12)} userId=${userId} provider=${this.providerName} model=${this.model} len=${message?.length}`);
+    const provider = this._getProvider();
+    const activeProviderName = provider.name || this.providerName;
+    console.log(`[RAKAYEngine] START session=${sessionId?.slice(0,12)} userId=${userId} provider=${activeProviderName} len=${message?.length}`);
 
     // ── 1. Validate session — AUTO-CREATE if missing ─────────────────────────
     let session = await store.getSession({ sessionId, tenantId });
@@ -155,7 +183,6 @@ class RAKAYEngine {
     let   msgHistory = [systemMsg, ...history];
 
     // ── 5. Agentic tool-calling loop ─────────────────────────────────────────
-    const provider = this._getProvider();
     let   iteration = 0;
     let   finalText = '';
 
@@ -245,6 +272,8 @@ class RAKAYEngine {
     }
 
     // ── 6. Persist assistant response ────────────────────────────────────────
+    // Determine which provider actually answered (from orchestrator metadata)
+    const actualProvider = this.providerName;
     const assistantMsg = await store.appendMessage({
       sessionId,
       role:        'assistant',
@@ -263,8 +292,8 @@ class RAKAYEngine {
       role:         'assistant',
       tool_trace:   toolTrace,
       tokens_used:  totalTokens,
-      model:        this.model,
-      provider:     this.providerName,
+      model:        this.model || 'auto',
+      provider:     actualProvider,
       latency_ms:   Date.now() - startTime,
       created_at:   assistantMsg.created_at,
     };
@@ -342,9 +371,12 @@ class RAKAYEngine {
    * Return the list of available tools (for API consumers / UI).
    */
   getCapabilities() {
+    const provider = this._getProvider();
+    const orchCaps = provider.getCapabilities ? provider.getCapabilities() : {};
     return {
       provider:    this.providerName,
-      model:       this.model,
+      model:       this.model || 'auto',
+      orchestrator: orchCaps,
       tools:       TOOL_SCHEMAS.map(t => ({
         name:        t.function.name,
         description: t.function.description,
@@ -353,32 +385,23 @@ class RAKAYEngine {
       max_iterations: MAX_TOOL_ITERATIONS,
     };
   }
+
+  /**
+   * Validate all configured API keys by making test calls.
+   * Returns per-provider status.
+   */
+  async validateProviders() {
+    const provider = this._getProvider();
+    if (provider.validateProviders) {
+      return provider.validateProviders();
+    }
+    return [{ provider: this.providerName, status: 'unknown', note: 'Single-provider mode' }];
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  INTERNAL HELPERS
 // ══════════════════════════════════════════════════════════════════════════════
-
-function _detectProvider() {
-  if (process.env.OPENAI_API_KEY  || process.env.RAKAY_OPENAI_KEY)    return 'openai';
-  if (process.env.ANTHROPIC_API_KEY || process.env.RAKAY_ANTHROPIC_KEY
-      || process.env.CLAUDE_API_KEY || process.env.RAKAY_API_KEY)     return 'anthropic';
-  return 'mock'; // fallback — no LLM keys configured
-}
-
-function _getApiKey(provider) {
-  if (provider === 'openai') {
-    return process.env.RAKAY_OPENAI_KEY || process.env.OPENAI_API_KEY || null;
-  }
-  if (provider === 'anthropic') {
-    return process.env.RAKAY_ANTHROPIC_KEY
-        || process.env.ANTHROPIC_API_KEY
-        || process.env.CLAUDE_API_KEY
-        || process.env.RAKAY_API_KEY
-        || null;
-  }
-  return null;
-}
 
 function _buildSystemPrompt(context = {}) {
   let prompt = SYSTEM_PROMPT;

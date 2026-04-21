@@ -210,49 +210,23 @@ async function _queueChat(opts) {
 
   console.log(`[RAKAY] LLM_QUEUE_START session=${shortSid} userId=${userId} len=${message.length}`);
 
+  // The orchestrator handles its own retries + fallback internally.
+  // We do ONE call here — no outer retry loop needed (would double-retry).
   const engine = _getEngine(req, ctxApiKeys);
 
-  let lastErr;
+  console.log(`[RAKAY] LLM_CALL session=${shortSid} provider=${engine.providerName || 'multi'}`);
 
-  // 🔁 Provider-aware retry (handles OpenAI / Anthropic 429 correctly)
-  for (let attempt = 0; attempt < 4; attempt++) {
-    try {
-      console.log(`[RAKAY] LLM_CALL attempt=${attempt + 1} session=${shortSid}`);
+  const result = await engine.chat({
+    message,
+    sessionId,
+    tenantId,
+    userId,
+    context,
+    useTools,
+  });
 
-      const result = await engine.chat({
-        message,
-        sessionId,
-        tenantId,
-        userId,
-        context,
-        useTools,
-      });
-
-      console.log(`[RAKAY] LLM_CALL_COMPLETE session=${shortSid} tokens=${result.tokens_used || 0}`);
-      return result;
-
-    } catch (err) {
-      lastErr = err;
-      const msg = String(err.message || '').toLowerCase();
-
-      const isRateLimit =
-        msg.includes('429') ||
-        msg.includes('rate limit') ||
-        msg.includes('quota') ||
-        msg.includes('too many requests');
-
-      if (!isRateLimit) {
-        throw err; // real error
-      }
-
-      const delay = 1200 * (attempt + 1);
-      console.warn(`[RAKAY] LLM_429_BACKOFF session=${shortSid} waiting ${delay}ms`);
-      await new Promise(r => setTimeout(r, delay));
-    }
-  }
-
-  console.error(`[RAKAY] LLM_FAILED_AFTER_RETRIES session=${shortSid}`);
-  throw lastErr;
+  console.log(`[RAKAY] LLM_CALL_COMPLETE session=${shortSid} tokens=${result.tokens_used || 0} provider=${result.provider || 'unknown'}`);
+  return result;
 }
 
 // ── Auth middleware: JWT required OR RAKAY service key OR demo token ──────────
@@ -314,33 +288,34 @@ function _getEngine(req, ctxApiKeys = {}) {
   const ctxOpenAI   = ctxApiKeys.openai_key;
   const ctxClaude   = ctxApiKeys.claude_key;
 
-  let provider = process.env.RAKAY_PROVIDER;
-  if (!provider) {
-    if (serverKey || ctxOpenAI) provider = 'openai';
-    else if (serverAnth || ctxClaude) provider = 'anthropic';
-    else provider = 'mock';
-  }
+  // Build a composite cache key from all available keys.
+  // The orchestrator will auto-detect and prioritise all configured providers.
+  const cacheKey = [
+    serverKey, serverAnth, ctxOpenAI, ctxClaude,
+    process.env.GEMINI_API_KEY, process.env.DEEPSEEK_API_KEY,
+    process.env.RAKAY_GEMINI_KEY, process.env.RAKAY_DEEPSEEK_KEY,
+    process.env.RAKAY_PROVIDER,
+  ].filter(Boolean).join(':');
 
-  const apiKey = provider === 'anthropic'
-    ? (serverAnth || ctxClaude)
-    : (serverKey || ctxOpenAI);
-
-  // 🔑 cache key ensures we only rebuild if key/provider changes
-  const key = `${provider}:${apiKey}`;
-
-  if (_engineSingleton && _engineKey === key) {
+  if (_engineSingleton && _engineKey === cacheKey) {
     return _engineSingleton;
   }
 
-  console.log(`[RAKAY] ENGINE_INIT provider=${provider} (once per container)`);
+  console.log(`[RAKAY] ENGINE_INIT — multi-provider orchestrator (once per config change)`);
 
+  // Pass all keys to the engine; it will use whichever are available
   _engineSingleton = new RAKAYEngine({
-    provider,
-    model: process.env.RAKAY_MODEL,
-    apiKey,
+    provider: process.env.RAKAY_PROVIDER || 'auto',
+    model:    process.env.RAKAY_MODEL,
+    apiKeys: {
+      gemini:    process.env.GEMINI_API_KEY    || process.env.RAKAY_GEMINI_KEY    || '',
+      anthropic: serverAnth || ctxClaude       || '',
+      deepseek:  process.env.DEEPSEEK_API_KEY  || process.env.RAKAY_DEEPSEEK_KEY  || '',
+      openai:    serverKey  || ctxOpenAI        || '',
+    },
   });
 
-  _engineKey = key;
+  _engineKey = cacheKey;
   return _engineSingleton;
 }
 
@@ -359,31 +334,72 @@ function _getUserCtx(req) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 /**
- * GET /api/RAKAY/health  — public health probe
+ * GET /api/RAKAY/health  — public health probe with multi-provider status
  */
 router.get('/health', (req, res) => {
-  const hasOpenAI    = !!(process.env.RAKAY_OPENAI_KEY   || process.env.OPENAI_API_KEY);
-  const hasAnthropic = !!(process.env.RAKAY_ANTHROPIC_KEY || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY);
+  const hasGemini    = !!(process.env.GEMINI_API_KEY     || process.env.RAKAY_GEMINI_KEY);
+  const hasAnthropic = !!(process.env.CLAUDE_API_KEY     || process.env.ANTHROPIC_API_KEY || process.env.RAKAY_ANTHROPIC_KEY || process.env.RAKAY_API_KEY);
+  const hasDeepSeek  = !!(process.env.DEEPSEEK_API_KEY   || process.env.RAKAY_DEEPSEEK_KEY);
+  const hasOpenAI    = !!(process.env.OPENAI_API_KEY      || process.env.RAKAY_OPENAI_KEY);
+  const hasAny       = hasGemini || hasAnthropic || hasDeepSeek || hasOpenAI;
 
-  const provider = process.env.RAKAY_PROVIDER ||
-    (hasOpenAI ? 'openai' : hasAnthropic ? 'anthropic' : 'mock');
+  const { getProviderMetrics } = require('../services/llm-provider');
+
+  const activeProviders = [
+    hasGemini    && 'gemini',
+    hasAnthropic && 'anthropic',
+    hasDeepSeek  && 'deepseek',
+    hasOpenAI    && 'openai',
+  ].filter(Boolean);
 
   res.json({
     status:       'ok',
     module:       'RAKAY',
-    version:      '2.0',
+    version:      '3.0',
     timestamp:    new Date().toISOString(),
-    provider,
-    llm_ready:    hasOpenAI || hasAnthropic,
-    openai:       hasOpenAI,
-    anthropic:    hasAnthropic,
-    mock_mode:    !hasOpenAI && !hasAnthropic,
+    orchestration: 'multi-provider',
+    provider_order: ['gemini', 'anthropic', 'deepseek', 'openai', 'mock'],
+    active_providers: activeProviders,
+    llm_ready:     hasAny,
+    mock_mode:     !hasAny,
+    providers: {
+      gemini:    { configured: hasGemini,    priority: 1 },
+      anthropic: { configured: hasAnthropic, priority: 2 },
+      deepseek:  { configured: hasDeepSeek,  priority: 3 },
+      openai:    { configured: hasOpenAI,    priority: 4 },
+      mock:      { configured: true,         priority: 5, note: 'Always available' },
+    },
+    metrics:      getProviderMetrics(),
     auth_modes:   ['jwt', 'demo', 'service-key'],
     demo_auth_url: '/api/RAKAY/demo-auth',
-    note:         (!hasOpenAI && !hasAnthropic)
-      ? 'No LLM API key configured. Set OPENAI_API_KEY or ANTHROPIC_API_KEY (CLAUDE_API_KEY) on the server, or pass via frontend settings.'
-      : undefined,
+    note: !hasAny
+      ? 'No AI provider keys configured. Set GEMINI_API_KEY, CLAUDE_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY.'
+      : `${activeProviders.length} provider(s) active: ${activeProviders.join(', ')}`,
   });
+});
+
+/**
+ * POST /api/RAKAY/validate-providers  — test all providers with a live call
+ * Body: optional { providers: ['gemini', 'anthropic'] }
+ */
+router.post('/validate-providers', generalLimiter, async (req, res) => {
+  try {
+    const engine = _getEngine(req, {});
+    const results = await engine.validateProviders();
+    const anyOk = results.some(r => r.status === 'ok');
+    res.json({
+      success: anyOk,
+      results,
+      summary: {
+        total: results.length,
+        ok:    results.filter(r => r.status === 'ok').length,
+        failed: results.filter(r => r.status === 'error').length,
+        no_key: results.filter(r => r.status === 'no_key').length,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 /**
@@ -621,10 +637,25 @@ router.post('/chat', chatLimiter, optionalAuth, requireRAKAYAuth, async (req, re
         code:    'LLM_UNAVAILABLE',
       });
     }
+    // ALL_PROVIDERS_FAILED — all providers in the orchestrator were tried and failed
+    if (err.code === 'ALL_PROVIDERS_FAILED') {
+      return res.status(503).json({
+        success:  false,
+        error:    err.message,
+        code:     'ALL_PROVIDERS_FAILED',
+        tried:    err.tried     || [],
+        details:  err.errors    || [],
+        hint:     'Configure at least one provider: GEMINI_API_KEY, CLAUDE_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY',
+        metrics:  require('../services/llm-provider').getProviderMetrics(),
+      });
+    }
+
     if (err.message?.includes('rate limit') || err.message?.includes('429')) {
+      // Rate limit from a single provider — but the orchestrator should have tried others.
+      // This should only happen if ALL providers are rate-limited simultaneously.
       return res.status(503).json({
         success: false,
-        error:   'AI provider rate-limited. Please retry in 30 seconds.',
+        error:   `All AI providers are rate-limited. Please retry in 30 seconds. Details: ${err.message}`,
         code:    'LLM_RATE_LIMITED',
       });
     }
