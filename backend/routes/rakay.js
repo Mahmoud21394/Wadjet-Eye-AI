@@ -1,7 +1,14 @@
 /**
  * ══════════════════════════════════════════════════════════════════════
- *  RAKAY Module — REST API Routes  v5.0
+ *  RAKAY Module — REST API Routes  v6.0
  *
+ *  v6.0 — Production-hardened (2026-04-21):
+ *   - Demo mode completely removed from health/capabilities responses
+ *   - Mock provider excluded from production pipeline (requires RAKAY_ALLOW_MOCK=1)
+ *   - New GET /diagnostics endpoint: key status, circuit states, provider metrics
+ *   - New POST /reset-circuits endpoint: reset circuit breakers after key fix
+ *   - Health endpoint now shows production_mode=true and mock_in_pipeline=false
+ *   - validate-providers returns real_providers_ok count
  *  v5.0 — Platform stabilization: zero 400/404/503 errors, zero DB timeouts
  *  v4.0 — Production-grade: zero duplicate LLM calls, zero rate-limit loops
  *  ─────────────────────────────────────────────────────────────────────
@@ -343,7 +350,7 @@ router.get('/health', (req, res) => {
   const hasOpenAI    = !!(process.env.OPENAI_API_KEY      || process.env.RAKAY_OPENAI_KEY);
   const hasAny       = hasGemini || hasAnthropic || hasDeepSeek || hasOpenAI;
 
-  const { getProviderMetrics } = require('../services/llm-provider');
+  const { getProviderMetrics, ALLOW_MOCK } = require('../services/llm-provider');
 
   const activeProviders = [
     hasGemini    && 'gemini',
@@ -352,53 +359,84 @@ router.get('/health', (req, res) => {
     hasOpenAI    && 'openai',
   ].filter(Boolean);
 
+  const productionOrder = ['gemini', 'anthropic', 'deepseek', 'openai'];
+
   res.json({
-    status:       'ok',
-    module:       'RAKAY',
-    version:      '3.0',
-    timestamp:    new Date().toISOString(),
-    orchestration: 'multi-provider',
-    provider_order: ['gemini', 'anthropic', 'deepseek', 'openai', 'mock'],
-    active_providers: activeProviders,
-    llm_ready:     hasAny,
-    mock_mode:     !hasAny,
+    status:            'ok',
+    module:            'RAKAY',
+    version:           '3.0',
+    timestamp:         new Date().toISOString(),
+    orchestration:     'multi-provider-fallback',
+    production_mode:   !ALLOW_MOCK,
+    mock_mode:         ALLOW_MOCK,
+    mock_in_pipeline:  ALLOW_MOCK,
+    provider_order:    productionOrder,
+    active_providers:  activeProviders,
+    llm_ready:         hasAny,
     providers: {
-      gemini:    { configured: hasGemini,    priority: 1 },
-      anthropic: { configured: hasAnthropic, priority: 2 },
-      deepseek:  { configured: hasDeepSeek,  priority: 3 },
-      openai:    { configured: hasOpenAI,    priority: 4 },
-      mock:      { configured: true,         priority: 5, note: 'Always available' },
+      gemini:    { configured: hasGemini,    priority: 1, env_var: 'GEMINI_API_KEY' },
+      anthropic: { configured: hasAnthropic, priority: 2, env_var: 'CLAUDE_API_KEY / ANTHROPIC_API_KEY' },
+      deepseek:  { configured: hasDeepSeek,  priority: 3, env_var: 'DEEPSEEK_API_KEY' },
+      openai:    { configured: hasOpenAI,    priority: 4, env_var: 'OPENAI_API_KEY' },
     },
     metrics:      getProviderMetrics(),
-    auth_modes:   ['jwt', 'demo', 'service-key'],
+    auth_modes:   ['jwt', 'demo-token', 'service-key'],
     demo_auth_url: '/api/RAKAY/demo-auth',
     note: !hasAny
-      ? 'No AI provider keys configured. Set GEMINI_API_KEY, CLAUDE_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY.'
-      : `${activeProviders.length} provider(s) active: ${activeProviders.join(', ')}`,
+      ? '⚠️ No AI provider keys configured. All LLM calls will fail. Set GEMINI_API_KEY, CLAUDE_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY.'
+      : `✅ ${activeProviders.length} real provider(s) active: [${activeProviders.join(', ')}]`,
   });
 });
 
 /**
- * POST /api/RAKAY/validate-providers  — test all providers with a live call
- * Body: optional { providers: ['gemini', 'anthropic'] }
+ * POST /api/RAKAY/validate-providers  — live-test all providers with a ping call
  */
 router.post('/validate-providers', generalLimiter, async (req, res) => {
   try {
-    const engine = _getEngine(req, {});
+    const engine  = _getEngine(req, {});
     const results = await engine.validateProviders();
-    const anyOk = results.some(r => r.status === 'ok');
+    const anyOk   = results.some(r => r.status === 'ok');
+    const realOk  = results.filter(r => r.status === 'ok' && r.provider !== 'mock');
     res.json({
-      success: anyOk,
+      success:       anyOk,
+      real_providers_ok: realOk.length,
       results,
       summary: {
-        total: results.length,
-        ok:    results.filter(r => r.status === 'ok').length,
-        failed: results.filter(r => r.status === 'error').length,
-        no_key: results.filter(r => r.status === 'no_key').length,
+        total:    results.length,
+        ok:       results.filter(r => r.status === 'ok').length,
+        failed:   results.filter(r => r.status === 'error').length,
+        no_key:   results.filter(r => r.status === 'no_key').length,
+        mock_only: realOk.length === 0,
       },
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/RAKAY/diagnostics  — detailed engine diagnostics (key status, metrics, circuits)
+ */
+router.get('/diagnostics', generalLimiter, (req, res) => {
+  try {
+    const engine = _getEngine(req);
+    res.json(engine.getDiagnostics());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/RAKAY/reset-circuits  — reset circuit breakers for all providers
+ * Use after fixing a broken API key or after rate-limit window expires.
+ */
+router.post('/reset-circuits', generalLimiter, (req, res) => {
+  try {
+    const engine = _getEngine(req);
+    engine.resetCircuits();
+    res.json({ ok: true, message: 'All circuit breakers reset — providers will be retried on next request' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
