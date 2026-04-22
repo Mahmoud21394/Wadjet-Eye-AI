@@ -21,6 +21,10 @@
 // ── Load .env FIRST before any other module ─────────────────────
 require('dotenv').config();
 
+// ── Centralized logger — must be imported AFTER dotenv.config() ──
+const logger = require('./utils/logger');
+const _SRV   = 'Server';
+
 // ── Environment validation (Phase 0+1 security hardening) ───────
 // CRITICAL env vars — fail-fast in production only:
 const CRITICAL_ENV = ['JWT_SECRET'];
@@ -36,23 +40,21 @@ const AI_PROVIDER_ENV = [
 if (process.env.NODE_ENV === 'production') {
   const missingCritical = CRITICAL_ENV.filter(k => !process.env[k]);
   if (missingCritical.length) {
-    console.error(`\n🚨 [Server] CRITICAL: Missing required env vars in production:\n   ${missingCritical.join(', ')}`);
-    console.error('   Set these in Render Dashboard → Environment → Add Environment Variable\n');
+    logger.error(_SRV, `🚨 CRITICAL: Missing required env vars in production: ${missingCritical.join(', ')}`);
+    logger.error(_SRV, 'Set these in Render Dashboard → Environment → Add Environment Variable');
     process.exit(1);
   }
 }
 
 const missingRecommended = RECOMMENDED_ENV.filter(k => !process.env[k]);
 if (missingRecommended.length > 0) {
-  console.warn(`\n⚠️  [Server] Missing recommended env vars:\n   ${missingRecommended.join(', ')}`);
-  console.warn('   DB-dependent routes may fail. AI routes work if AI keys are set.');
-  console.warn('   Copy backend/.env.example → backend/.env and fill in your values.\n');
+  logger.warn(_SRV, `Missing recommended env vars: ${missingRecommended.join(', ')}`);
+  logger.warn(_SRV, 'DB-dependent routes may fail. Copy backend/.env.example → backend/.env');
 }
 
 const hasAnyAIKey = AI_PROVIDER_ENV.some(k => !!process.env[k]);
 if (!hasAnyAIKey) {
-  console.warn('⚠️  [Server] No AI provider keys detected. RAKAY will operate in Local Intelligence Mode.');
-  console.warn('   Set OPENAI_API_KEY, CLAUDE_API_KEY, GEMINI_API_KEY, or DEEPSEEK_API_KEY to enable external AI.');
+  logger.warn(_SRV, 'No AI provider keys detected — RAKAY will use Local Intelligence Mode.');
 }
 
 // Phase 0 security audit — detect hardcoded key patterns at startup
@@ -61,7 +63,7 @@ if (!hasAnyAIKey) {
   const envValues = Object.values(process.env);
   for (const pattern of SUSPICIOUS_PATTERNS) {
     if (envValues.some(v => pattern.test(v))) {
-      console.warn('[Security] ⚠️  AI key detected in environment — ensure these are set via secure env vars, not committed to source control.');
+      logger.warn('Security', '⚠️  AI key pattern detected in env — ensure keys are not committed to source control.');
       break;
     }
   }
@@ -125,16 +127,12 @@ const { startScheduler } = require('./services/scheduler');
 //  callback that wasn't wrapped with asyncHandler.
 // ════════════════════════════════════════════════════════════════
 process.on('uncaughtException', (err) => {
-  console.error('[FATAL] Uncaught Exception — server will continue:', err.message);
-  console.error(err.stack);
-  // Do NOT exit — Render will restart automatically if we do
-  // In production, alert your monitoring (e.g. Sentry) here
+  logger.error('FATAL', `Uncaught Exception — server will continue: ${err.message}`);
+  logger.error('FATAL', err.stack || err.message);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('[FATAL] Unhandled Promise Rejection at:', promise);
-  console.error('[FATAL] Reason:', reason);
-  // Same — log and continue; don't crash in production
+  logger.error('FATAL', `Unhandled Promise Rejection: ${reason}`);
 });
 
 // ════════════════════════════════════════════════════════════════
@@ -159,7 +157,7 @@ function _isSandboxOrigin(origin) {
   return _sandboxOriginRegex.test(origin);
 }
 
-console.log('[CORS] Allowed origins:', allowedOrigins);
+logger.info(_SRV, `CORS allowed origins: ${allowedOrigins.join(', ')}`);
 
 // ── Socket.IO — configured BEFORE middleware ─────────────────────
 const io = new Server(httpServer, {
@@ -236,8 +234,8 @@ const corsOptions = {
     // Reject — log and return false so Express sends a proper CORS error
     // (returning false causes the cors middleware to omit ACAO header → browser
     //  shows a CORS block, but Express still returns 200/204 not 500)
-    console.warn(`[CORS] Blocked origin: "${origin}" — not in ALLOWED_ORIGINS`);
-    console.warn(`[CORS] Current whitelist: ${allowedOrigins.join(', ')}`);
+    logger.warn('CORS', `Blocked origin: "${origin}" — not in ALLOWED_ORIGINS`);
+    logger.warn('CORS', `Current whitelist: ${allowedOrigins.join(', ')}`);
     return callback(null, false);
   },
   credentials:    true,
@@ -553,20 +551,20 @@ startScheduler();
 //  cleanly instead of dropping in-flight requests.
 // ════════════════════════════════════════════════════════════════
 function gracefulShutdown(signal) {
-  console.log(`\n[Server] ${signal} received — starting graceful shutdown...`);
+  logger.warn(_SRV, `${signal} received — starting graceful shutdown...`);
 
   httpServer.close((err) => {
     if (err) {
-      console.error('[Server] Error during shutdown:', err.message);
+      logger.error(_SRV, `Error during shutdown: ${err.message}`);
       process.exit(1);
     }
-    console.log('[Server] HTTP server closed — exiting cleanly.');
+    logger.warn(_SRV, 'HTTP server closed — exiting cleanly.');
     process.exit(0);
   });
 
   // Force-kill if shutdown takes longer than 10 seconds
   setTimeout(() => {
-    console.error('[Server] Forced shutdown after timeout.');
+    logger.error(_SRV, 'Forced shutdown after timeout.');
     process.exit(1);
   }, 10_000);
 }
@@ -580,36 +578,24 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 const PORT = parseInt(process.env.PORT, 10) || 4000;
 
 httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log('\n╔══════════════════════════════════════════════════════╗');
-  console.log(`║  Wadjet-Eye AI Backend v4.0.0 (Enterprise)           ║`);  // updated
-  console.log(`║  Port:        ${String(PORT).padEnd(39)}║`);
-  console.log(`║  Environment: ${(process.env.NODE_ENV || 'development').padEnd(39)}║`);
-  console.log(`║  Supabase:    ${(process.env.SUPABASE_URL ? 'Connected ✓' : '⚠️  Not configured').padEnd(39)}║`);
-  console.log(`║  CORS:        ${allowedOrigins.join(', ').slice(0,38).padEnd(39)}║`);
-  console.log('╚══════════════════════════════════════════════════════╝\n');
+  // ── Startup summary: INFO level (visible in dev, suppressed in production) ──
+  const env     = process.env.NODE_ENV || 'development';
+  const supaOk  = !!process.env.SUPABASE_URL;
 
-  // ── AI Provider Key Diagnostics (startup) ─────────────────────────────────
-  const _mask = (k) => k ? k.slice(0, 12) + '...[MASKED]' : '⚠️  NOT SET';
+  logger.info(_SRV, `Wadjet-Eye AI Backend v4.1.0 — port ${PORT} — env: ${env} — supabase: ${supaOk ? 'configured' : 'not configured'}`);
+
+  // ── AI Provider Key Diagnostics — INFO level ──────────────────────────────
   const openaiKey   = process.env.OPENAI_API_KEY   || process.env.RAKAY_OPENAI_KEY   || '';
   const claudeKey   = process.env.CLAUDE_API_KEY   || process.env.ANTHROPIC_API_KEY  || process.env.RAKAY_API_KEY || '';
   const geminiKey   = process.env.GEMINI_API_KEY   || '';
   const deepseekKey = process.env.DEEPSEEK_API_KEY || process.env.deepseek_API_KEY   || '';
   const hasAny      = !!(openaiKey || claudeKey || geminiKey || deepseekKey);
 
-  console.log('┌─ AI Provider Keys (startup diagnostic) ─────────────┐');
-  console.log(`│  OPENAI_API_KEY:   ${_mask(openaiKey).padEnd(36)}│`);
-  console.log(`│  CLAUDE_API_KEY:   ${_mask(claudeKey).padEnd(36)}│`);
-  console.log(`│  GEMINI_API_KEY:   ${_mask(geminiKey).padEnd(36)}│`);
-  console.log(`│  DEEPSEEK_API_KEY: ${_mask(deepseekKey).padEnd(36)}│`);
-  console.log(`│  hasRealLLM:       ${String(hasAny).padEnd(36)}│`);
-  console.log(`│  Mode:             ${(hasAny ? 'EXTERNAL AI PROVIDERS' : '⚠️  LOCAL INTELLIGENCE ONLY').padEnd(36)}│`);
-  console.log('└──────────────────────────────────────────────────────┘');
   if (!hasAny) {
-    console.warn('[STARTUP] ❌ NO AI provider keys detected! RAKAY will use Local Intelligence Mode for ALL requests.');
-    console.warn('[STARTUP]    Add OPENAI_API_KEY / CLAUDE_API_KEY / GEMINI_API_KEY to Render Dashboard environment.');
-    console.warn('[STARTUP]    Diagnostic: GET /api/RAKAY/diag (no auth required)');
+    // WARN level — operator needs to know even in production
+    logger.warn('STARTUP', 'No AI provider keys detected — RAKAY will use Local Intelligence Mode. Add OPENAI_API_KEY / CLAUDE_API_KEY / GEMINI_API_KEY to env.');
   } else {
-    console.log('[STARTUP] ✅ AI provider keys detected — external LLM providers will be used.');
+    logger.info('STARTUP', `AI providers active — mode: EXTERNAL LLM`);
   }
 });
 
