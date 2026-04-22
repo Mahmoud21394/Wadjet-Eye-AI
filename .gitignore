@@ -82,3 +82,4 @@ pnpm-lock.yaml
 *.crt
 *.p12
 *.pfx
+*.bak
