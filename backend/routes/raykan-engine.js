@@ -32,14 +32,23 @@
 
 'use strict';
 
-const express       = require('express');
-const rateLimit     = require('express-rate-limit');
-const crypto        = require('crypto');
-const RaykanEngine  = require('../services/raykan/engine');
+const express        = require('express');
+const rateLimit      = require('express-rate-limit');
+const crypto         = require('crypto');
+const RaykanEngine   = require('../services/raykan/engine');
 const TimelineEngine = require('../services/raykan/timeline-engine');
-const MitreMapper   = require('../services/raykan/mitre-mapper');
-const IOCEnricher   = require('../services/raykan/ioc-enricher');
+const MitreMapper    = require('../services/raykan/mitre-mapper');
+const IOCEnricher    = require('../services/raykan/ioc-enricher');
 const { asyncHandler } = require('../middleware/errorHandler');
+// Import from the dedicated normalizer module so there is a single source of truth
+const {
+  normalizeDetections,
+  parseSyslogLine,
+  parseCEFLine,
+  parseRawInput,
+  processEvent,
+  metrics: normalizerMetrics,
+} = require('../services/raykan/ingestion-normalizer');
 
 const router = express.Router();
 
@@ -104,16 +113,41 @@ async function getEngine(req) {
 // ── Apply rate limiter to all RAYKAN routes ───────────────────────
 router.use(raykanLimiter);
 
+// NOTE: normalizeDetections, parseSyslogLine, parseCEFLine, parseRawInput, processEvent
+// are imported from backend/services/raykan/ingestion-normalizer.js (single source of truth).
+// The inline _ingestMetrics alias below maps to the module-level metrics object.
+const _ingestMetrics = normalizerMetrics;
+
 // ════════════════════════════════════════════════════════════════
 //  POST /api/raykan/ingest
 //  Ingest log events for full analysis pipeline
 // ════════════════════════════════════════════════════════════════
 router.post('/ingest', asyncHandler(async (req, res) => {
   const engine = await getEngine(req);
-  const { events, source, format, caseId } = req.body;
 
-  if (!events || !Array.isArray(events)) {
-    return res.status(400).json({ error: 'events must be an array', code: 'INVALID_INPUT' });
+  // Support both legacy flat body { events, source, format }
+  // and newer nested body { events, context: { format, source } }
+  const body   = req.body || {};
+  const ctx    = body.context || {};
+  const source = body.source  || ctx.source  || 'api';
+  const format = body.format  || ctx.format  || 'json';
+  const caseId = body.caseId  || ctx.caseId  || null;
+  let   events = body.events;
+
+  // ── Input coercion ────────────────────────────────────────────────
+  if (events == null) {
+    return res.status(400).json({ error: 'events field is required', code: 'MISSING_EVENTS' });
+  }
+
+  // Coerce events to array — handles object, string, raw log blobs
+  if (!Array.isArray(events)) {
+    console.warn(`[RAYKAN] /ingest received non-array events (${typeof events}) — normalizing`);
+    _ingestMetrics.invalid_detection_format_count++;
+    events = parseRawInput(events, format);
+  }
+
+  if (events.length === 0) {
+    return res.status(400).json({ error: 'events array is empty after parsing', code: 'EMPTY_EVENTS' });
   }
 
   if (events.length > 10000) {
@@ -121,8 +155,8 @@ router.post('/ingest', asyncHandler(async (req, res) => {
   }
 
   const context = {
-    source : source || 'api',
-    format : format || 'json',
+    source,
+    format,
     tenant : req.user?.tenant_id || 'default',
     userId : req.user?.id,
     caseId,
@@ -130,29 +164,39 @@ router.post('/ingest', asyncHandler(async (req, res) => {
 
   const results = await engine.ingestEvents(events, context);
 
+  // ── Type-safe array normalization before any iteration ────────────
+  const dets  = normalizeDetections(results.detections, 'ingest.detections');
+  const anoms = normalizeDetections(results.anomalies,  'ingest.anomalies');
+  const chs   = normalizeDetections(results.chains,     'ingest.chains');
+  const tl    = normalizeDetections(results.timeline,   'ingest.timeline');
+
   res.json({
-    success  : true,
-    sessionId: results.sessionId,
-    processed: results.processed,
-    detections: {
-      count      : results.detections.length,
-      critical   : results.detections.filter(d => d.severity === 'critical').length,
-      high       : results.detections.filter(d => d.severity === 'high').length,
-      medium     : results.detections.filter(d => d.severity === 'medium').length,
-      items      : results.detections.slice(0, 100), // cap at 100 in response
+    success   : true,
+    sessionId : results.sessionId,
+    processed : results.processed,
+
+    // FIX: flat array — frontend uses [...(r.detections || []), ...S.detections]
+    detections : dets.filter(d => d && typeof d === 'object').slice(0, 500),
+
+    // Legacy nested summary kept for backward-compatible API consumers
+    detectionsSummary: {
+      count   : dets.length,
+      critical: dets.filter(d => d && d.severity === 'critical').length,
+      high    : dets.filter(d => d && d.severity === 'high').length,
+      medium  : dets.filter(d => d && d.severity === 'medium').length,
     },
-    anomalies: {
-      count: results.anomalies.length,
-      items: results.anomalies,
-    },
-    chains: {
-      count: results.chains.length,
-      items: results.chains,
-    },
-    timeline    : results.timeline.slice(0, 500),
-    riskScore   : results.riskScore,
-    duration    : results.duration,
-    timestamp   : new Date().toISOString(),
+
+    // FIX: flat arrays for anomalies and chains (were nested objects before)
+    anomalies : anoms.filter(a => a && typeof a === 'object'),
+    chains    : chs.filter(c => c && typeof c === 'object'),
+    timeline  : tl.filter(t => t && typeof t === 'object').slice(0, 500),
+
+    riskScore : results.riskScore,
+    duration  : results.duration,
+    timestamp : new Date().toISOString(),
+
+    // Observability counters
+    _metrics  : { ..._ingestMetrics },
   });
 }));
 
@@ -448,16 +492,21 @@ router.post('/analyze/sample', asyncHandler(async (req, res) => {
   }
 
   const timelineEngine = new TimelineEngine();
-  const graph = timelineEngine.buildAttackGraph(results.detections, results.chains);
+  // FIX: normalizeDetections before passing to buildAttackGraph to prevent crashes
+  const _sDets  = normalizeDetections(results.detections, 'sample.detections');
+  const _sChs   = normalizeDetections(results.chains,     'sample.chains');
+  const _sAnoms = normalizeDetections(results.anomalies,  'sample.anomalies');
+  const _sTl    = normalizeDetections(results.timeline,   'sample.timeline');
+  const graph   = timelineEngine.buildAttackGraph(_sDets, _sChs);
 
   res.json({
     success     : true,
     scenario,
     processed   : results.processed,
-    detections  : results.detections,
-    anomalies   : results.anomalies,
-    chains      : results.chains,
-    timeline    : results.timeline,
+    detections  : _sDets.filter(d => d && typeof d === 'object'),
+    anomalies   : _sAnoms.filter(a => a && typeof a === 'object'),
+    chains      : _sChs.filter(c => c && typeof c === 'object'),
+    timeline    : _sTl.filter(t => t && typeof t === 'object'),
     graph,
     riskScore   : results.riskScore,
     duration    : results.duration,

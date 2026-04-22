@@ -27,8 +27,14 @@
 
 'use strict';
 
-const EventEmitter = require('events');
-const crypto       = require('crypto');
+const EventEmitter   = require('events');
+const crypto         = require('crypto');
+const {
+  normalizeDetections,
+  parseRawInput,
+  processEvent,
+  metrics: normalizerMetrics,
+} = require('./ingestion-normalizer');
 
 // ── Sub-engines ──────────────────────────────────────────────────
 const SigmaEngine    = require('./sigma-engine');
@@ -127,11 +133,11 @@ class RaykanEngine extends EventEmitter {
   // ── Primary Ingestion Pipeline ────────────────────────────────────
   /**
    * ingestEvents — Main entry point for log data.
-   * Accepts structured events, normalizes them, runs full detection pipeline.
+   * Schema-tolerant: rawEvents may be array, object, string, null, or undefined.
    *
-   * @param {Array<Object>} rawEvents   — array of raw log events
-   * @param {Object}        context     — { source, format, tenant, caseId }
-   * @returns {Object}                  — { processed, detections, anomalies, timeline }
+   * @param {*}      rawEvents   — events (any shape; normalized internally)
+   * @param {Object} context     — { source, format, tenant, caseId }
+   * @returns {Object}           — { processed, detections, anomalies, timeline }
    */
   async ingestEvents(rawEvents, context = {}) {
     const startTs   = Date.now();
@@ -146,10 +152,16 @@ class RaykanEngine extends EventEmitter {
       duration   : 0,
     };
 
-    if (!rawEvents?.length) return results;
+    // ── Guard: accept any input shape for rawEvents ──────────────
+    // parseRawInput converts null/object/string/array → Array<Object>
+    const safeEvents = Array.isArray(rawEvents)
+      ? rawEvents
+      : parseRawInput(rawEvents, context.format || 'auto');
 
-    // ── Phase 1: Normalize ────────────────────────────────────────
-    const normalized = this._normalizeEvents(rawEvents, context);
+    if (!safeEvents.length) return results;
+
+    // ── Phase 1: Normalize (schema-tolerant) ────────────────────────
+    const normalized = this._normalizeEvents(safeEvents, context);
     results.processed = normalized.length;
     this._stats.eventsProcessed += normalized.length;
 
@@ -186,23 +198,23 @@ class RaykanEngine extends EventEmitter {
     // ── Phase 8: Timeline building ────────────────────────────────
     const timelineEvents = this.timeline.buildTimeline(normalized, scored);
 
-    // ── Aggregate results ─────────────────────────────────────────
-    results.detections = scored;
-    results.anomalies  = anomalies;
-    results.chains     = chains;
-    results.timeline   = timelineEvents;
+    // ── Aggregate results — always plain arrays (never null/object) ──
+    results.detections = normalizeDetections(scored,         'engine.scored');
+    results.anomalies  = normalizeDetections(anomalies,      'engine.anomalies');
+    results.chains     = normalizeDetections(chains,         'engine.chains');
+    results.timeline   = normalizeDetections(timelineEvents, 'engine.timeline');
     results.riskScore  = this.scorer.aggregateRisk(scored);
     results.duration   = Date.now() - startTs;
 
-    this._stats.detectionsTriggered += scored.length;
-    this._stats.anomaliesFound      += anomalies.length;
-    this._stats.chainsBuilt         += chains.length;
+    this._stats.detectionsTriggered += results.detections.length;
+    this._stats.anomaliesFound      += results.anomalies.length;
+    this._stats.chainsBuilt         += results.chains.length;
 
-    // ── Emit real-time events ─────────────────────────────────────
-    scored.forEach(det  => this.emit('detection', det));
-    anomalies.forEach(a => this.emit('anomaly',   a));
-    chains.forEach(c    => this.emit('chain:found', c));
-    timelineEvents.forEach(t => this.emit('timeline:event', t));
+    // ── Emit real-time events — safe iteration on guaranteed arrays ──
+    results.detections.forEach(det => this.emit('detection', det));
+    results.anomalies.forEach(a    => this.emit('anomaly',   a));
+    results.chains.forEach(c       => this.emit('chain:found', c));
+    results.timeline.forEach(t     => this.emit('timeline:event', t));
 
     // ── Persist to Supabase if configured ────────────────────────
     if (this.config.supabase) {
@@ -330,8 +342,17 @@ class RaykanEngine extends EventEmitter {
   }
 
   // ── Internal: Normalize Events ───────────────────────────────────
+  // Schema-tolerant: skips null/non-object entries without crashing
   _normalizeEvents(rawEvents, context) {
-    return rawEvents.map((evt, idx) => {
+    return rawEvents
+      .filter((evt) => {
+        if (evt == null || typeof evt !== 'object') {
+          console.warn('[RAYKAN][engine._normalizeEvents] skipping non-object event entry');
+          return false;
+        }
+        return true;
+      })
+      .map((evt, idx) => {
       const normalized = {
         id         : evt.id         || crypto.randomUUID(),
         timestamp  : this._parseTimestamp(evt.timestamp || evt.ts || evt.TimeCreated || Date.now()),
@@ -400,7 +421,9 @@ class RaykanEngine extends EventEmitter {
   async _persistResults(results, context) {
     if (!this.config.supabase) return;
     const { supabase } = this.config;
-    const insertions = results.detections.map(det => ({
+    // normalizeDetections guarantees safe iteration even if shape changes
+    const safeDets = normalizeDetections(results.detections, 'persist.detections');
+    const insertions = safeDets.map(det => ({
       session_id   : this._sessionId,
       tenant_id    : context.tenant || 'default',
       case_id      : context.caseId || null,
@@ -419,5 +442,13 @@ class RaykanEngine extends EventEmitter {
     }
   }
 }
+
+// ── Static exports: normalizer utilities accessible as engine properties ──
+// Allows route files and tests to use RaykanEngine.normalizeDetections()
+// without a separate require, keeping the API surface minimal.
+RaykanEngine.normalizeDetections = normalizeDetections;
+RaykanEngine.parseRawInput       = parseRawInput;
+RaykanEngine.processEvent        = processEvent;
+RaykanEngine.normalizerMetrics   = normalizerMetrics;
 
 module.exports = RaykanEngine;
