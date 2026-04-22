@@ -29,6 +29,25 @@
 'use strict';
 
 /* ─────────────────────────────────────────────
+   PRODUCTION-AWARE LOGGER (live-pages.js)
+   In production: only errors bubble up.
+   In dev (localhost / wadjet_debug=1): full logging.
+───────────────────────────────────────────── */
+const _lpProd = !(() => {
+  try {
+    return location.hostname === 'localhost' ||
+           location.hostname === '127.0.0.1' ||
+           localStorage.getItem('wadjet_debug') === '1';
+  } catch { return false; }
+})();
+const _lpLog = {
+  info  : (...a) => { if (!_lpProd || window.DEBUG_MODE) _lpLog.info('', ...a); },
+  warn  : (...a) => { if (!_lpProd || window.DEBUG_MODE) _lpLog.warn('', ...a); },
+  error : (...a) => _lpLog.error('', ...a),
+  debug : (...a) => { if (!_lpProd) console.log('[LivePages]', ...a); },
+};
+
+/* ─────────────────────────────────────────────
    GLOBAL CONFIG
 ───────────────────────────────────────────── */
 const LP_REFRESH_MS  = 45_000;  // KPI auto-refresh interval
@@ -140,7 +159,7 @@ async function _fetch(path, options = {}) {
     return resp.json();
   } catch (netErr) {
     if (netErr.message.startsWith('AUTH_EXPIRED')) throw netErr;
-    console.warn('[LP] Network error for', path, '—', netErr.message);
+    _lpLog.warn('Network error for', path, '—', netErr.message);
     return { data: [], total: 0, page: 1, limit: 25, _offline: true };
   }
 }
@@ -198,7 +217,7 @@ function _paginator(total, current, onPage, domId) {
 async function renderCommandCenterLive() {
   // Guard against concurrent calls — e.g. initApp + initLivePages firing simultaneously
   if (renderCommandCenterLive._running) {
-    console.info('[LivePages] renderCommandCenterLive already in progress — skipping duplicate call');
+    _lpLog.info(' renderCommandCenterLive already in progress — skipping duplicate call');
     return;
   }
   renderCommandCenterLive._running = true;
@@ -270,9 +289,9 @@ async function _loadKPIs() {
       window._iocDistChart.update();
     }
 
-    console.info('[LivePages] KPIs refreshed @', new Date().toLocaleTimeString());
+    _lpLog.info(' KPIs refreshed @', new Date().toLocaleTimeString());
   } catch (err) {
-    console.warn('[LivePages] KPI error:', err.message);
+    _lpLog.warn(' KPI error:', err.message);
     if (typeof showToast==='function') showToast('Dashboard data unavailable — check backend', 'warning');
     ['m-critical','m-high','m-findings','m-feeds','m-iocs','m-ai'].forEach(id => {
       const el = document.getElementById(id); if (el) el.textContent = '—';
@@ -525,7 +544,7 @@ async function _cfLoad() {
     rows  = data?.data || data || [];
     total = data?.total || rows.length;
   } catch(e) {
-    console.warn('[Campaigns] API error:', e.message);
+    _lpLog.warn('[Campaigns] API error:', e.message);
     body.innerHTML = `<div style="text-align:center;padding:40px;color:#8b949e">
       <i class="fas fa-exclamation-triangle" style="font-size:1.8em;color:#f59e0b;display:block;margin-bottom:12px"></i>
       <div style="font-size:.9em">Could not load campaigns. Check backend connection.</div>
@@ -853,7 +872,7 @@ async function _detLoad() {
         <span style="font-size:.75em;color:#8b949e;white-space:nowrap">${_ago(a.created_at)}</span>
         <button onclick="_ffAI('${_esc(a.id)}','${_esc(a.ioc_value||'')}')" style="${_btn('#1d6ae5')}" title="AI Investigate"><i class="fas fa-robot"></i></button>
       </div>`).join('');
-  } catch(e){ console.warn('[LivePages] detections error:',e.message); }
+  } catch(e){ _lpLog.warn(' detections error:',e.message); }
 }
 
 /* ─────────────────────────────────────────────
@@ -905,7 +924,7 @@ async function _taLoad(nation='', motivation='') {
     actors = data?.data||data||[];
     total  = data?.total||actors.length;
   } catch(e) {
-    console.warn('[ThreatActors] API error, using demo data:', e.message);
+    _lpLog.warn('[ThreatActors] API error, using demo data:', e.message);
     usingMock = true;
     let filtered = _MOCK_ACTORS.filter(a => {
       if (nation     && !(a.origin_country||'').toLowerCase().includes(nation.toLowerCase())) return false;
@@ -1890,7 +1909,7 @@ async function _iocdbLoad() {
     rows  = data?.data||data||[];
     total = data?.total||rows.length;
   } catch(e) {
-    console.warn('[IOCDatabase] API error, using demo data:', e.message);
+    _lpLog.warn('[IOCDatabase] API error, using demo data:', e.message);
     usingMock = true;
     let filtered = _MOCK_IOCS.filter(i => {
       if (_idbQ    && !JSON.stringify(i).toLowerCase().includes(_idbQ.toLowerCase())) return false;
@@ -2043,7 +2062,7 @@ window._collSyncAll = async function _collSyncAll() {
       const txt = await resp.text().catch(() => '');
       // Graceful degradation — some deployments may not have this endpoint yet
       if (resp.status === 404) {
-        console.warn('[Sync] POST /api/cti/ingest/all not yet deployed — trying fallback endpoints');
+        _lpLog.warn('[Sync] POST /api/cti/ingest/all not yet deployed — trying fallback endpoints');
         // Try alternate endpoints
         const altEndpoints = [
           '/cti/ingest/all',
@@ -2080,7 +2099,7 @@ window._collSyncAll = async function _collSyncAll() {
     setTimeout(() => { if (typeof renderLiveFeedsLive === 'function') renderLiveFeedsLive(); }, 4000);
 
   } catch (err) {
-    console.error('[Sync] Failed:', err.message);
+    _lpLog.error('[Sync] Failed:', err.message);
     if (typeof showToast === 'function') showToast(`Sync failed: ${err.message}`, 'error');
   } finally {
     document.querySelectorAll('[onclick*="_collSyncAll"]').forEach(b => { b.disabled = false; b.style.opacity = ''; });
@@ -2169,36 +2188,36 @@ function _showIngestModal() {
    PAGE RENDER OVERRIDES  (window.renderXxx)
    Called by PAGE_CONFIG onEnter in main.js
 ───────────────────────────────────────────── */
-window.renderCommandCenter      = (opts) => renderCommandCenterLive().catch(e=>console.warn('[LP]',e.message));
-window.renderFindings           = (opts) => renderFindingsLive(opts||{}).catch(e=>console.warn('[LP]',e.message));
-window.renderCampaigns          = (opts) => renderCampaignsLive(opts||{}).catch(e=>console.warn('[LP]',e.message));
-window.renderDetections         = ()     => renderDetectionsLive().catch(e=>console.warn('[LP]',e.message));
+window.renderCommandCenter      = (opts) => renderCommandCenterLive().catch(e=>_lpLog.warn(e.message));
+window.renderFindings           = (opts) => renderFindingsLive(opts||{}).catch(e=>_lpLog.warn(e.message));
+window.renderCampaigns          = (opts) => renderCampaignsLive(opts||{}).catch(e=>_lpLog.warn(e.message));
+window.renderDetections         = ()     => renderDetectionsLive().catch(e=>_lpLog.warn(e.message));
 window.stopDetections           = ()     => stopDetections();
-window.renderThreatActors       = ()     => renderThreatActorsLive().catch(e=>console.warn('[LP]',e.message));
-window.renderIOCRegistry        = (opts) => renderIOCRegistryLive(opts||{}).catch(e=>console.warn('[LP]',e.message));
-window.renderCollectors         = ()     => renderCollectorsLive().catch(e=>console.warn('[LP]',e.message));
-window.renderCaseManagement     = ()     => renderCasesLive().catch(e=>console.warn('[LP]',e.message));
-window.renderExecutiveDashboard = ()     => renderExecutiveDashboardLive().catch(e=>console.warn('[LP]',e.message));
-window.renderLiveFeeds          = ()     => renderLiveFeedsLive().catch(e=>console.warn('[LP]',e.message));
+window.renderThreatActors       = ()     => renderThreatActorsLive().catch(e=>_lpLog.warn(e.message));
+window.renderIOCRegistry        = (opts) => renderIOCRegistryLive(opts||{}).catch(e=>_lpLog.warn(e.message));
+window.renderCollectors         = ()     => renderCollectorsLive().catch(e=>_lpLog.warn(e.message));
+window.renderCaseManagement     = ()     => renderCasesLive().catch(e=>_lpLog.warn(e.message));
+window.renderExecutiveDashboard = ()     => renderExecutiveDashboardLive().catch(e=>_lpLog.warn(e.message));
+window.renderLiveFeeds          = ()     => renderLiveFeedsLive().catch(e=>_lpLog.warn(e.message));
 window.stopLiveFeeds            = ()     => {};
-window.renderVulnerabilities    = ()     => renderVulnerabilitiesLive().catch(e=>console.warn('[LP]',e.message));
-window.renderDetectionTimeline  = ()     => renderDetectionTimelineLive().catch(e=>console.warn('[LP]',e.message));
-window.renderMITRECoverage      = ()     => { if(typeof window.renderMITRENavigator==='function') window.renderMITRENavigator(); else renderMITRECoverageLive().catch(e=>console.warn('[LP]',e.message)); };
-window.renderAIInvestigations   = ()     => renderAIInvestigationsLive().catch(e=>console.warn('[LP]',e.message));
+window.renderVulnerabilities    = ()     => renderVulnerabilitiesLive().catch(e=>_lpLog.warn(e.message));
+window.renderDetectionTimeline  = ()     => renderDetectionTimelineLive().catch(e=>_lpLog.warn(e.message));
+window.renderMITRECoverage      = ()     => { if(typeof window.renderMITRENavigator==='function') window.renderMITRENavigator(); else renderMITRECoverageLive().catch(e=>_lpLog.warn(e.message)); };
+window.renderAIInvestigations   = ()     => renderAIInvestigationsLive().catch(e=>_lpLog.warn(e.message));
 // NOTE: This registration is a FALLBACK only.
 // js/ioc-intelligence.js loads AFTER this file and will override window.renderIOCDatabase
 // with the full production version (real API + debug panel + RLS banner).
 // Do NOT change this to a permanent assignment — guard with typeof check instead.
 if (typeof window._iocIntelligenceLoaded === 'undefined') {
   // ioc-intelligence.js hasn't loaded yet — set a temporary shim
-  window.renderIOCDatabase = () => renderIOCDatabaseLive().catch(e => console.warn('[LP] IOC fallback render error:', e.message));
+  window.renderIOCDatabase = () => renderIOCDatabaseLive().catch(e => _lpLog.warn('IOC fallback render error:', e.message));
 }
 // Store a reference so ioc-intelligence.js can call this as a fallback if needed
-window.renderIOCDatabaseLegacy  = ()     => renderIOCDatabaseLive().catch(e=>console.warn('[LP]',e.message));
-window.renderSOARLive           = ()     => _renderSOARLive().catch(e=>console.warn('[LP]',e.message));
-window.renderExposureLive       = ()     => renderExposureLive().catch(e=>console.warn('[LP]',e.message));
-window.renderExposure           = ()     => renderExposureLive().catch(e=>console.warn('[LP]',e.message));
-window.renderKillChainLive      = ()     => renderKillChainLive().catch(e=>console.warn('[LP]',e.message));
+window.renderIOCDatabaseLegacy  = ()     => renderIOCDatabaseLive().catch(e=>_lpLog.warn(e.message));
+window.renderSOARLive           = ()     => _renderSOARLive().catch(e=>_lpLog.warn(e.message));
+window.renderExposureLive       = ()     => renderExposureLive().catch(e=>_lpLog.warn(e.message));
+window.renderExposure           = ()     => renderExposureLive().catch(e=>_lpLog.warn(e.message));
+window.renderKillChainLive      = ()     => renderKillChainLive().catch(e=>_lpLog.warn(e.message));
 // New module shims — these are OVERRIDDEN by playbooks-ui.js / threat-hunting.js / detection-engineering.js
 // The shims below only fire if those files fail to load
 if (typeof window.renderPlaybooks !== 'function') {
@@ -2601,7 +2620,7 @@ async function _expLoad() {
     rows  = data?.cves || data?.data || data || [];
     total = data?.total || rows.length;
   } catch(e) {
-    console.warn('[Exposure] Load failed:', e.message);
+    _lpLog.warn('[Exposure] Load failed:', e.message);
     // Show empty state with guidance instead of error
     body.innerHTML = `
     <div style="text-align:center;padding:60px;color:#8b949e">
@@ -3024,7 +3043,7 @@ function _initAutoRefresh() {
       await _loadKPIs();
       _loadMiniFeedStatus();
     });
-    console.info('[LivePages] KPI subscriber registered in AutoRefresh');
+    _lpLog.info(' KPI subscriber registered in AutoRefresh');
     return;
   }
   // Fallback own timer
@@ -3036,14 +3055,14 @@ function _initAutoRefresh() {
     subscribe(){}
   };
   window.AutoRefresh=AR; AR.start();
-  console.info('[LivePages] AutoRefresh fallback started ('+LP_REFRESH_MS/1000+'s)');
+  _lpLog.info(' AutoRefresh fallback started ('+LP_REFRESH_MS/1000+'s)');
 }
 
 /* ─────────────────────────────────────────────
    INIT  — called from main.js initApp()
 ───────────────────────────────────────────── */
 async function initLivePages() {
-  console.info('[LivePages] v5.0 (Wadjet-Eye AI) initialising…');
+  _lpLog.info(' v5.0 (Wadjet-Eye AI) initialising…');
 
   // Guard: main.js already calls renderCommandCenter() which is overridden to
   // renderCommandCenterLive(). Calling it again here would trigger a duplicate
@@ -3054,7 +3073,7 @@ async function initLivePages() {
   if (!alreadyLoaded) {
     await renderCommandCenterLive();
   } else {
-    console.info('[LivePages] Command center already loaded — skipping duplicate render');
+    _lpLog.info(' Command center already loaded — skipping duplicate render');
   }
   _updateCollectorCount();
 
@@ -3068,7 +3087,7 @@ async function initLivePages() {
     if (typeof orig === 'function') orig();
   };
 
-  console.info('[LivePages] Ready — Wadjet-Eye AI CTI Platform');
+  _lpLog.info(' Ready — Wadjet-Eye AI CTI Platform');
 }
 
 /* ─────────────────────────────────────────────
