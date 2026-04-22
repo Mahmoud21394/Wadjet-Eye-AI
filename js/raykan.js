@@ -27,6 +27,125 @@
 (function(window) {
   'use strict';
 
+  // ════════════════════════════════════════════════════════════════
+  //  normalizeDetections — client-side type-safe coercion to Array
+  //
+  //  Fixes: TypeError: (r.detections || []) is not iterable
+  //
+  //  The /api/raykan/ingest endpoint may return detections as:
+  //    • Array<Object>  — correct (new backend)
+  //    • { count, items, ... } — old nested shape
+  //    • null / undefined     — no results
+  //    • JSON string          — edge case
+  //
+  //  This function guarantees the caller always gets an iterable
+  //  array of plain objects regardless of the server shape.
+  // ════════════════════════════════════════════════════════════════
+  function normalizeDetections(input) {
+    if (input == null) return [];
+    if (Array.isArray(input)) return input;
+
+    // Old nested shape: { count, items, critical, high, medium }
+    if (typeof input === 'object') {
+      if (Array.isArray(input.items)) return input.items;
+      if (Array.isArray(input.detections)) return input.detections;
+      // Generic object → values
+      const vals = Object.values(input);
+      if (vals.length > 0 && typeof vals[0] === 'object') return vals;
+      return [];
+    }
+
+    if (typeof input === 'string') {
+      try {
+        const parsed = JSON.parse(input);
+        return normalizeDetections(parsed);
+      } catch { return []; }
+    }
+
+    return [];
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  Client-side multi-format log parsers
+  //  Used by ingestPasted() before sending to the backend so that
+  //  Syslog / CEF lines become structured JSON events.
+  // ════════════════════════════════════════════════════════════════
+
+  /** Parse a single RFC 3164 / RFC 5424 syslog line → event object */
+  function _parseSyslogLine(line) {
+    if (!line) return { raw: line, _format: 'syslog_bare' };
+    // RFC 5424: <PRI>VERSION TS HOST APP PROCID MSGID SD MSG
+    const r5 = line.match(/^<(\d+)>(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\[.*?\]|-)\s*(.*)$/);
+    if (r5) {
+      const pri = parseInt(r5[1], 10);
+      return { _format:'syslog_rfc5424', priority:pri, facility:Math.floor(pri/8),
+               severity_num:pri%8, timestamp:r5[3], hostname:r5[4]!=='-'?r5[4]:null,
+               app_name:r5[5]!=='-'?r5[5]:null, message:r5[9]||'', raw:line };
+    }
+    // RFC 3164: <PRI>TIMESTAMP HOSTNAME TAG: MSG
+    const r3 = line.match(/^<(\d+)>([A-Za-z]{3}\s+\d+\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+(\S+):\s*(.*)$/);
+    if (r3) {
+      const pri = parseInt(r3[1], 10);
+      return { _format:'syslog_rfc3164', priority:pri, facility:Math.floor(pri/8),
+               severity_num:pri%8, timestamp:r3[2], hostname:r3[3], tag:r3[4],
+               message:r3[5]||'', raw:line };
+    }
+    return { _format:'syslog_bare', message:line, raw:line };
+  }
+
+  /** Parse a single CEF line → event object */
+  function _parseCEFLine(line) {
+    if (!line || !line.startsWith('CEF:')) return null;
+    let pipes=0, headerEnd=-1;
+    for (let i=0;i<line.length;i++) {
+      if (line[i]==='|' && (i===0||line[i-1]!=='\\')) pipes++;
+      if (pipes===7) { headerEnd=i; break; }
+    }
+    const headerStr = headerEnd>0 ? line.slice(0,headerEnd) : line;
+    const extStr    = headerEnd>0 ? line.slice(headerEnd+1) : '';
+    const parts     = headerStr.split(/(?<!\\)\|/);
+    const ext = {};
+    const pairs = extStr.match(/(\w+)=((?:[^=\\]|\\.)*?)(?=\s+\w+=|$)/g) || [];
+    for (const p of pairs) {
+      const eq=p.indexOf('=');
+      if (eq>0) ext[p.slice(0,eq).trim()] = p.slice(eq+1).replace(/\\=/g,'=').trim();
+    }
+    return { _format:'cef', cef_version:(parts[0]||'CEF:0').replace('CEF:',''),
+             device_vendor:parts[1]||'', device_product:parts[2]||'',
+             signature_id:parts[4]||'', name:parts[5]||'', severity:parts[6]||'',
+             extensions:ext, src:ext.src||null, dst:ext.dst||null,
+             user:ext.suser||ext.duser||null, message:ext.msg||null, raw:line };
+  }
+
+  /**
+   * _parseLogInput — converts raw pasted text to a JSON events array.
+   * Dispatches by format hint: json | syslog | cef | auto
+   */
+  function _parseLogInput(raw, fmt) {
+    if (!raw) return [];
+    const trimmed = raw.trim();
+
+    // JSON mode (or auto — try JSON first)
+    if (fmt !== 'syslog' && fmt !== 'cef') {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed))         return parsed;
+        if (parsed && typeof parsed==='object') return [parsed];
+      } catch { /* fall through to line-by-line */ }
+    }
+
+    // Line-by-line parsing
+    return trimmed.split(/\r?\n/)
+      .map(l => l.trim()).filter(Boolean)
+      .map(line => {
+        if (fmt==='cef'    || line.startsWith('CEF:')) return _parseCEFLine(line) || { raw:line, _format:'cef_malformed' };
+        if (fmt==='syslog' || line.startsWith('<'))    return _parseSyslogLine(line);
+        // Auto: try JSON, then syslog
+        try { const p=JSON.parse(line); return { ...p, _format:'json', raw:line }; } catch {}
+        return _parseSyslogLine(line);
+      });
+  }
+
   // ── Constants ──────────────────────────────────────────────────
   const RAYKAN_VERSION = '2.0.0';
   const API_BASE       = window.BACKEND_URL?.() || 'https://wadjet-eye-ai.onrender.com';
@@ -982,10 +1101,11 @@
 
     try {
       const result = await _api('POST', '/analyze/sample', { scenario });
-      S.detections  = result.detections  || [];
-      S.timeline    = result.timeline    || [];
-      S.chains      = result.chains      || [];
-      S.anomalies   = result.anomalies   || [];
+      // FIX: normalizeDetections — guard against any non-array shape
+      S.detections  = normalizeDetections(result.detections);
+      S.timeline    = normalizeDetections(result.timeline);
+      S.chains      = normalizeDetections(result.chains);
+      S.anomalies   = normalizeDetections(result.anomalies);
       S.riskScore   = result.riskScore   || 0;
       S.sessionId   = result.sessionId   || null;
       S.lastUpdated = new Date();
@@ -1105,23 +1225,31 @@
 
   async function ingestPasted() {
     const raw = document.getElementById('rk-paste-events')?.value?.trim();
-    if (!raw) return _showToast('Paste JSON events first', 'warning');
+    if (!raw) return _showToast('Paste events first (JSON, Syslog, or CEF)', 'warning');
     const fmt = document.getElementById('rk-paste-fmt')?.value || 'json';
     const res = document.getElementById('rk-ingest-result');
     if (res) res.innerHTML = `<div style="padding:20px;text-align:center;">${_spinner('Analyzing events…')}</div>`;
     try {
-      let events;
-      try { events = JSON.parse(raw); } catch { events = [{ raw }]; }
-      if (!Array.isArray(events)) events = [events];
+      // FIX: Use multi-format parser — supports JSON array/object, Syslog RFC3164/RFC5424, CEF
+      const events = _parseLogInput(raw, fmt);
+      if (!events.length) return _showToast('No parseable events found. Check format selection.', 'warning');
+
       const r = await _api('POST', '/ingest', { events, context: { format: fmt } });
-      S.detections  = [...(r.detections  || []), ...S.detections];
-      S.timeline    = [...(r.timeline    || []), ...S.timeline];
-      S.chains      = [...(r.chains      || []), ...S.chains];
-      S.anomalies   = [...(r.anomalies   || []), ...S.anomalies];
+
+      // FIX: normalizeDetections — guaranteed iterable array regardless of response shape
+      const dets  = normalizeDetections(r.detections);
+      const tl    = normalizeDetections(r.timeline);
+      const chs   = normalizeDetections(r.chains);
+      const anoms = normalizeDetections(r.anomalies);
+
+      S.detections  = [...dets,  ...S.detections];
+      S.timeline    = [...tl,    ...S.timeline];
+      S.chains      = [...chs,   ...S.chains];
+      S.anomalies   = [...anoms, ...S.anomalies];
       S.riskScore   = r.riskScore || S.riskScore;
       S.lastUpdated = new Date();
       _updateStats(r);
-      _showToast(`Analyzed ${events.length} events: ${r.detections?.length||0} detections`, 'success');
+      _showToast(`Analyzed ${events.length} events — ${dets.length} detections`, 'success');
       if (res) res.innerHTML = _ingestSummaryCard(r);
     } catch(e) {
       if (res) res.innerHTML = `<div style="color:#ef4444;padding:20px;">${e.message}</div>`;
@@ -1130,13 +1258,17 @@
   }
 
   function _ingestSummaryCard(r) {
+    // FIX: normalizeDetections before .length access — response shape may vary
+    const detsLen  = normalizeDetections(r.detections).length;
+    const anomsLen = normalizeDetections(r.anomalies).length;
+    const chsLen   = normalizeDetections(r.chains).length;
     return `<div class="rk-card" style="padding:16px;">
   <div style="font-size:13px;font-weight:600;color:#34d399;margin-bottom:12px;">✓ Analysis Complete</div>
   <div class="rk-grid-3" style="gap:8px;">
     ${_miniStat('Events',      r.processed   || 0, '#60a5fa')}
-    ${_miniStat('Detections',  r.detections?.length||0, '#ef4444')}
-    ${_miniStat('Anomalies',   r.anomalies?.length||0, '#f59e0b')}
-    ${_miniStat('Chains',      r.chains?.length||0, '#a78bfa')}
+    ${_miniStat('Detections',  detsLen,             '#ef4444')}
+    ${_miniStat('Anomalies',   anomsLen,            '#f59e0b')}
+    ${_miniStat('Chains',      chsLen,              '#a78bfa')}
     ${_miniStat('Risk Score',  r.riskScore||0, '#ef4444')}
     ${_miniStat('Duration',    (r.duration||0) + 'ms', '#6b7280')}
   </div>
@@ -1192,19 +1324,26 @@
 
       const r = await _api('POST', '/ingest', { events: events.slice(0, 5000), context: { source: 'file', fileName: file.name } });
       if (bar) bar.style.width = '100%';
-      if (msg) msg.textContent = `✓ Done — ${r.detections?.length||0} detections`;
 
-      S.detections  = [...(r.detections  || []), ...S.detections];
-      S.timeline    = [...(r.timeline    || []), ...S.timeline];
-      S.chains      = [...(r.chains      || []), ...S.chains];
-      S.anomalies   = [...(r.anomalies   || []), ...S.anomalies];
+      // FIX: normalizeDetections — guaranteed iterable array regardless of response shape
+      const dets  = normalizeDetections(r.detections);
+      const tl    = normalizeDetections(r.timeline);
+      const chs   = normalizeDetections(r.chains);
+      const anoms = normalizeDetections(r.anomalies);
+
+      if (msg) msg.textContent = `✓ Done — ${dets.length} detections`;
+
+      S.detections  = [...dets,  ...S.detections];
+      S.timeline    = [...tl,    ...S.timeline];
+      S.chains      = [...chs,   ...S.chains];
+      S.anomalies   = [...anoms, ...S.anomalies];
       S.riskScore   = r.riskScore || S.riskScore;
       S.lastUpdated = new Date();
       _updateStats(r);
 
       const res = document.getElementById('rk-ingest-result');
       if (res) res.innerHTML = _ingestSummaryCard(r);
-      _showToast(`${file.name}: ${r.detections?.length||0} detections found`, 'success');
+      _showToast(`${file.name}: ${dets.length} detections found`, 'success');
     } catch(e) {
       if (msg) msg.textContent = '✗ Error: ' + e.message;
       _showToast('Upload failed: ' + e.message, 'error');
