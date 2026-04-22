@@ -292,8 +292,28 @@ async function storeArticles(articles, tenantId) {
         .select('id, created_at');
 
       if (error) {
-        console.warn('[News] DB upsert error:', error.message);
-        updatedCount += chunk.length;
+        // FIX: If image_url column doesn't exist yet (schema drift), retry without it.
+        if (error.message && error.message.toLowerCase().includes('image_url')) {
+          console.warn('[News] image_url column missing — retrying without image_url field');
+          const chunkNoImg = chunk.map(r => { const { image_url, ...rest } = r; return rest; });
+          const { data: data2, error: err2 } = await supabaseClient
+            .from('news_articles')
+            .upsert(chunkNoImg, { onConflict: 'tenant_id,external_guid', ignoreDuplicates: false })
+            .select('id, created_at');
+          if (!err2 && data2) {
+            const cutoff = Date.now() - 15000;
+            for (const row of data2) {
+              if (new Date(row.created_at).getTime() > cutoff) newCount++;
+              else updatedCount++;
+            }
+          } else {
+            console.warn('[News] DB upsert retry error:', err2?.message);
+            updatedCount += chunk.length;
+          }
+        } else {
+          console.warn('[News] DB upsert error:', error.message);
+          updatedCount += chunk.length;
+        }
       } else if (data) {
         const cutoff = Date.now() - 15000;
         for (const row of data) {

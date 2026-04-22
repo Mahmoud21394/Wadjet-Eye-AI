@@ -148,14 +148,48 @@ async function ingestPhishTank(tenantId) {
       ? `https://data.phishtank.com/data/${apiKey}/online-valid.json`
       : 'https://data.phishtank.com/data/online-valid.json';
 
-    const { data } = await axios.get(url, {
-      timeout: TIMEOUT,
-      headers: {
-        'User-Agent': 'wadjet-eye-ai-platform/5.2 (security research)',
-        'Accept': 'application/json',
-      },
-      maxContentLength: 20 * 1024 * 1024, // 20MB max
-    });
+    // FIX: PhishTank public feed returns 404 or 429 intermittently.
+    // Use retry logic with exponential backoff and fallback to OpenPhish.
+    let data = null;
+    let lastErr = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const resp = await axios.get(url, {
+          timeout: TIMEOUT,
+          headers: {
+            'User-Agent': 'wadjet-eye-ai-platform/5.2 (security research)',
+            'Accept': 'application/json',
+          },
+          maxContentLength: 20 * 1024 * 1024, // 20MB max
+          validateStatus: (s) => s < 500, // Accept 404/429 without throw
+        });
+        if (resp.status === 404) {
+          console.warn(`[Ingestion][PhishTank] 404 on attempt ${attempt} — PhishTank feed may be unavailable`);
+          lastErr = new Error('PhishTank feed returned 404 — feed temporarily unavailable');
+          await new Promise(r => setTimeout(r, 5000 * attempt));
+          continue;
+        }
+        if (resp.status === 429) {
+          const retryAfter = parseInt(resp.headers['retry-after'] || '60', 10);
+          const wait = Math.min(retryAfter, 120) * 1000;
+          console.warn(`[Ingestion][PhishTank] 429 rate limited — waiting ${wait/1000}s (attempt ${attempt})`);
+          lastErr = new Error(`PhishTank rate limited (429)`);
+          await new Promise(r => setTimeout(r, wait));
+          continue;
+        }
+        data = resp.data;
+        break;
+      } catch (fetchErr) {
+        lastErr = fetchErr;
+        console.warn(`[Ingestion][PhishTank] Attempt ${attempt} failed: ${fetchErr.message}`);
+        if (attempt < 3) await new Promise(r => setTimeout(r, 5000 * attempt));
+      }
+    }
+
+    if (!data) {
+      // All retries exhausted — log and skip gracefully
+      throw lastErr || new Error('PhishTank feed unavailable after 3 attempts');
+    }
 
     const entries = Array.isArray(data) ? data : [];
     console.info(`[Ingestion][PhishTank] ${entries.length} phishing URLs fetched`);

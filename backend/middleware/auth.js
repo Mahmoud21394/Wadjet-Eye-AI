@@ -74,6 +74,19 @@ async function verifyToken(req, res, next) {
   const { token, source } = extractToken(req);
   const reqId = req.id || req.headers['x-request-id'] || '-';
 
+  // ── Guard: Supabase not configured (no env vars set) ──────────────
+  // In development/demo mode the Supabase client is null.
+  // Rather than crashing with "Cannot read properties of null", return a
+  // clear 503 so callers know to configure the backend.
+  if (!supabaseAuth) {
+    console.warn(`[Auth] 503 SUPABASE_NOT_CONFIGURED reqId=${reqId} ${req.method} ${req.path}`);
+    return res.status(503).json({
+      error:   'Authentication service not configured. Set SUPABASE_URL and SUPABASE_SERVICE_KEY in environment.',
+      code:    'SUPABASE_NOT_CONFIGURED',
+      hint:    'Copy backend/.env.example → backend/.env and fill in Supabase credentials.',
+    });
+  }
+
   if (!token) {
     console.warn(`[Auth] 401 MISSING_TOKEN reqId=${reqId} ${req.method} ${req.path} ip=${_ip(req)}`);
     return res.status(401).json({
@@ -210,7 +223,7 @@ async function verifyToken(req, res, next) {
  */
 async function optionalAuth(req, res, next) {
   const { token } = extractToken(req);
-  if (!token) return next();
+  if (!token || !supabaseAuth) return next();
 
   try {
     const { data: { user } } = await supabaseAuth.auth.getUser(token); // v6.1: use supabaseAuth
@@ -328,6 +341,7 @@ function requireTenant() {
 async function authInfo(req) {
   const { token, source } = extractToken(req);
   if (!token) return { authenticated: false, source: null };
+  if (!supabaseAuth) return { authenticated: false, source: null, error: 'Supabase not configured' };
 
   try {
     const { data: { user }, error } = await supabaseAuth.auth.getUser(token); // v6.1: use supabaseAuth

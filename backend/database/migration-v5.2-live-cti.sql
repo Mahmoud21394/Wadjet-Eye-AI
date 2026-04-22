@@ -134,6 +134,9 @@ CREATE TABLE IF NOT EXISTS news_articles (
   malware_families TEXT[]  DEFAULT '{}',
   tags             TEXT[]  DEFAULT '{}',
 
+  -- Media
+  image_url        TEXT,            -- optional thumbnail/preview image from RSS feed
+
   -- Metadata
   published_at     TIMESTAMPTZ DEFAULT NOW(),
   external_guid    TEXT,            -- RSS guid / URL for dedup

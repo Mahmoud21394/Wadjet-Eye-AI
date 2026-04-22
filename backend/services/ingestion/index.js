@@ -217,11 +217,35 @@ async function ingestOTX(tenantId) {
     let page = 1, hasMore = true;
 
     while (hasMore && page <= 3) { // max 3 pages = 60 pulses
-      const { data } = await axios.get('https://otx.alienvault.com/api/v1/pulses/subscribed', {
-        params: { modified_since: since, page, limit: 20 },
-        headers: { 'X-OTX-API-KEY': KEY },
-        timeout: 20000,
-      });
+      // FIX: OTX can timeout on slow connections — use 30s and retry once on timeout.
+      let otxData = null;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const resp = await axios.get('https://otx.alienvault.com/api/v1/pulses/subscribed', {
+            params: { modified_since: since, page, limit: 20 },
+            headers: { 'X-OTX-API-KEY': KEY },
+            timeout: 30000,
+            validateStatus: s => s < 500,
+          });
+          if (resp.status === 429) {
+            const wait = parseInt(resp.headers['retry-after'] || '60', 10) * 1000;
+            console.warn(`[Ingestion][OTX] 429 rate limited page ${page} — waiting ${wait/1000}s`);
+            await _sleep(Math.min(wait, 60000));
+            continue;
+          }
+          if (resp.status === 401 || resp.status === 403) {
+            throw new Error(`OTX auth error: HTTP ${resp.status} — check OTX_API_KEY`);
+          }
+          otxData = resp.data;
+          break;
+        } catch (e) {
+          if (e.message.includes('auth error')) throw e;
+          console.warn(`[Ingestion][OTX] Page ${page} attempt ${attempt} failed: ${e.message}`);
+          if (attempt < 2) await _sleep(5000);
+        }
+      }
+      if (!otxData) { console.warn(`[Ingestion][OTX] Skipping page ${page} after retries`); break; }
+      const data = otxData;
 
       const pulses = data.results || [];
       hasMore = !!data.next && pulses.length === 20;
@@ -307,11 +331,39 @@ async function ingestAbuseIPDB(tenantId) {
   try {
     console.info('[Ingestion][AbuseIPDB] Starting...');
 
-    const { data } = await axios.get('https://api.abuseipdb.com/api/v2/blacklist', {
-      params: { confidenceMinimum: 80, limit: 500, plaintext: false },
-      headers: { Key: KEY, Accept: 'application/json' },
-      timeout: 20000,
-    });
+    // FIX: AbuseIPDB returns 429 when rate limit is hit.
+    // Retry up to 3 times with exponential backoff, respecting Retry-After header.
+    let data = null;
+    let lastErr = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const resp = await axios.get('https://api.abuseipdb.com/api/v2/blacklist', {
+          params: { confidenceMinimum: 80, limit: 500, plaintext: false },
+          headers: { Key: KEY, Accept: 'application/json' },
+          timeout: 25000,
+          validateStatus: s => s < 500,
+        });
+        if (resp.status === 429) {
+          const retryAfter = parseInt(resp.headers['retry-after'] || '120', 10);
+          const wait = Math.min(retryAfter, 300) * 1000;
+          console.warn(`[Ingestion][AbuseIPDB] 429 rate limited — waiting ${wait/1000}s (attempt ${attempt})`);
+          lastErr = new Error('AbuseIPDB rate limited (429)');
+          await _sleep(wait);
+          continue;
+        }
+        if (resp.status === 401 || resp.status === 403) {
+          throw new Error(`AbuseIPDB auth error: HTTP ${resp.status} — check ABUSEIPDB_API_KEY`);
+        }
+        data = resp.data;
+        break;
+      } catch (fetchErr) {
+        lastErr = fetchErr;
+        if (fetchErr.message.includes('auth error')) throw fetchErr; // don't retry auth failures
+        console.warn(`[Ingestion][AbuseIPDB] Attempt ${attempt} failed: ${fetchErr.message}`);
+        if (attempt < 3) await _sleep(10000 * attempt);
+      }
+    }
+    if (!data) throw lastErr || new Error('AbuseIPDB unavailable after 3 attempts');
 
     for (const entry of (data.data || [])) {
       if (!entry.ipAddress) continue;
@@ -464,13 +516,42 @@ async function ingestThreatFox(tenantId) {
   try {
     console.info('[Ingestion][ThreatFox] Starting...');
 
-    const { data } = await axios.post('https://threatfox-api.abuse.ch/api/v1/', {
-      query: 'get_iocs',
-      days:  1,
-    }, {
-      timeout: 20000,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    // FIX: ThreatFox public API can return 401/429 on abuse.ch servers.
+    // Retry up to 3 times with backoff; respect Retry-After on 429.
+    let data = null;
+    let lastErr = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const resp = await axios.post('https://threatfox-api.abuse.ch/api/v1/',
+          { query: 'get_iocs', days: 1 },
+          {
+            timeout: 25000,
+            headers: { 'Content-Type': 'application/json' },
+            validateStatus: s => s < 500,
+          }
+        );
+        if (resp.status === 429) {
+          const wait = parseInt(resp.headers['retry-after'] || '60', 10) * 1000;
+          console.warn(`[Ingestion][ThreatFox] 429 rate limited — waiting ${wait/1000}s (attempt ${attempt})`);
+          lastErr = new Error('ThreatFox rate limited (429)');
+          await _sleep(Math.min(wait, 120000));
+          continue;
+        }
+        if (resp.status === 401 || resp.status === 403) {
+          // ThreatFox is public (no auth needed) — 401 means IP-blocked; skip gracefully
+          console.warn(`[Ingestion][ThreatFox] HTTP ${resp.status} — possibly IP-blocked, skipping`);
+          await finishFeedLog(logId, { error: `HTTP ${resp.status}`, duration_ms: Date.now() - t0 });
+          return { source: 'threatfox', skipped: true, reason: `HTTP ${resp.status}` };
+        }
+        data = resp.data;
+        break;
+      } catch (fetchErr) {
+        lastErr = fetchErr;
+        console.warn(`[Ingestion][ThreatFox] Attempt ${attempt} failed: ${fetchErr.message}`);
+        if (attempt < 3) await _sleep(5000 * attempt);
+      }
+    }
+    if (!data) throw lastErr || new Error('ThreatFox unavailable after 3 attempts');
 
     // FIX-4: 'no_results' is a valid empty response — not an error.
     //   Only throw on genuine API failures.
@@ -812,12 +893,43 @@ async function ingestMalwareBazaar(tenantId) {
   const t0    = Date.now();
   const logId = await startFeedLog('MalwareBazaar', 'malwarebazaar', tenantId);
   try {
-    const resp = await axios.post(
-      'https://mb-api.abuse.ch/api/v1/',
-      'query=get_recent&selector=100',
-      { timeout: 20000, headers: { 'Content-Type':'application/x-www-form-urlencoded', 'User-Agent':'Wadjet-Eye-AI/3.1 CTI-Collector' } }
-    );
-    const samples = resp.data?.data || [];
+    // FIX: MalwareBazaar (abuse.ch) can return 401/429 on rate limit or IP block.
+    // Use retry logic with backoff.
+    let mbData = null;
+    let lastMBErr = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const resp = await axios.post(
+          'https://mb-api.abuse.ch/api/v1/',
+          'query=get_recent&selector=100',
+          {
+            timeout: 25000,
+            headers: { 'Content-Type':'application/x-www-form-urlencoded', 'User-Agent':'Wadjet-Eye-AI/3.1 CTI-Collector' },
+            validateStatus: s => s < 500,
+          }
+        );
+        if (resp.status === 429) {
+          const wait = parseInt(resp.headers['retry-after'] || '60', 10) * 1000;
+          console.warn(`[Ingestion][MalwareBazaar] 429 rate limited — waiting ${wait/1000}s (attempt ${attempt})`);
+          lastMBErr = new Error('MalwareBazaar rate limited (429)');
+          await _sleep(Math.min(wait, 120000));
+          continue;
+        }
+        if (resp.status === 401 || resp.status === 403) {
+          console.warn(`[Ingestion][MalwareBazaar] HTTP ${resp.status} — possibly IP-blocked, skipping`);
+          await finishFeedLog(logId, { error: `HTTP ${resp.status}`, duration_ms: Date.now() - t0 });
+          return { source: 'malwarebazaar', skipped: true, reason: `HTTP ${resp.status}` };
+        }
+        mbData = resp.data;
+        break;
+      } catch (fetchErr) {
+        lastMBErr = fetchErr;
+        console.warn(`[Ingestion][MalwareBazaar] Attempt ${attempt} failed: ${fetchErr.message}`);
+        if (attempt < 3) await _sleep(5000 * attempt);
+      }
+    }
+    if (!mbData) throw lastMBErr || new Error('MalwareBazaar unavailable after 3 attempts');
+    const samples = mbData?.data || [];
     const iocs    = [];
     for (const s of samples) {
       if (s.sha256_hash) iocs.push({ type:'hash_sha256', value:s.sha256_hash, reputation:'malicious', risk_score:85, confidence:90, source:'MalwareBazaar', feed_source:'MalwareBazaar', tags:['malware', s.file_type, s.signature].filter(Boolean), malware_family:s.signature||null });
@@ -889,6 +1001,69 @@ async function ingestRansomwareLive(tenantId) {
 }
 
 // ══════════════════════════════════════════════
+//  WORKER 11: Emerging Threats (Snort / ET rules block-list)
+//  No API key required — public text feed
+// ══════════════════════════════════════════════
+async function ingestEmergingThreats(tenantId) {
+  const t0    = Date.now();
+  const logId = await startFeedLog('Emerging Threats', 'emerging_threats', tenantId);
+  const iocs  = [];
+  try {
+    console.info('[Ingestion][EmergingThreats] Starting...');
+
+    // Emerging Threats compromised-ips feed
+    const resp = await axios.get(
+      'https://rules.emergingthreats.net/blockrules/compromised-ips.txt',
+      { timeout: 30000, headers: { 'User-Agent': 'Wadjet-Eye-AI/3.1 CTI-Collector' } }
+    );
+
+    const lines = resp.data.split('\n')
+      .map(l => l.trim())
+      .filter(l => l && !l.startsWith('#'));
+
+    for (const line of lines.slice(0, 2000)) {
+      // Each line is an IP address
+      const ip = line.split(/\s+/)[0].trim();
+      if (!ip || !/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) continue;
+      iocs.push({
+        type:        'ip',
+        value:       ip,
+        reputation:  'malicious',
+        risk_score:  75,
+        confidence:  80,
+        source:      'Emerging Threats',
+        feed_source: 'emerging_threats',
+        tags:        ['emerging-threats', 'compromised', 'c2'],
+      });
+    }
+
+    const result = await upsertIOCs(tenantId, iocs);
+    await finishFeedLog(logId, {
+      iocs_fetched:  iocs.length,
+      iocs_new:      result.new,
+      iocs_updated:  result.updated,
+      iocs_duplicate:result.duplicate,
+      duration_ms:   Date.now() - t0,
+    });
+
+    if (result.new > 0) {
+      await logTimelineEvent(tenantId, 'ioc_batch',
+        `Emerging Threats: ${result.new} new malicious IPs`,
+        `${iocs.length} compromised IPs fetched from Emerging Threats`,
+        'HIGH', { feed: 'emerging_threats', total: iocs.length }
+      );
+    }
+
+    console.info(`[Ingestion][EmergingThreats] Done: ${iocs.length} IPs, ${result.new} new in ${Date.now()-t0}ms`);
+    return { source: 'emerging_threats', fetched: iocs.length, ...result, duration_ms: Date.now() - t0 };
+  } catch (err) {
+    console.error('[Ingestion][EmergingThreats] Error:', err.message);
+    await finishFeedLog(logId, { error: err.message, duration_ms: Date.now() - t0 });
+    return { source: 'emerging_threats', error: err.message };
+  }
+}
+
+// ══════════════════════════════════════════════
 //  RUN ALL WORKERS (used by scheduler)
 // ══════════════════════════════════════════════
 async function runAllIngestion(tenantId) {
@@ -905,8 +1080,9 @@ async function runAllIngestion(tenantId) {
   results.feodo         = await ingestFeodoTracker(tenantId);   await _sleep(800);
   results.cisa_kev      = await ingestCISAKEV(tenantId);        await _sleep(800);
   results.openphish     = await ingestOpenPhish(tenantId);      await _sleep(800);
-  results.malwarebazaar = await ingestMalwareBazaar(tenantId);  await _sleep(800);
-  results.ransomware    = await ingestRansomwareLive(tenantId);
+  results.malwarebazaar    = await ingestMalwareBazaar(tenantId);    await _sleep(800);
+  results.ransomware       = await ingestRansomwareLive(tenantId);   await _sleep(800);
+  results.emerging_threats = await ingestEmergingThreats(tenantId);
 
   const total = Object.values(results)
     .reduce((sum, r) => sum + (r.new || r.inserted || 0), 0);
@@ -932,8 +1108,10 @@ async function runIngestion(feedName, tenantId) {
     openphish:     ingestOpenPhish,
     malwarebazaar: ingestMalwareBazaar,
     bazaar:        ingestMalwareBazaar, // alias
-    ransomware:    ingestRansomwareLive,
-    all:           runAllIngestion,
+    ransomware:        ingestRansomwareLive,
+    emerging_threats:  ingestEmergingThreats,
+    emerging:          ingestEmergingThreats, // alias
+    all:               runAllIngestion,
   };
   const fn = feedMap[feedName?.toLowerCase()];
   if (!fn) throw new Error(`Unknown feed: ${feedName}. Valid: ${Object.keys(feedMap).join(', ')}`);
@@ -951,6 +1129,7 @@ module.exports = {
   ingestOpenPhish,
   ingestMalwareBazaar,
   ingestRansomwareLive,
+  ingestEmergingThreats,
   runAllIngestion,
   runIngestion,
 };
