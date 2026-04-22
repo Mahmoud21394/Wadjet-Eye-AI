@@ -19,6 +19,24 @@
 
 'use strict';
 
+/* ── Production-aware logger ───────────────────────────────── */
+(function _initLiveDLogger() {
+  const _prod = !(
+    typeof location !== 'undefined' && (
+      location.hostname === 'localhost' ||
+      location.hostname === '127.0.0.1' ||
+      (typeof localStorage !== 'undefined' && localStorage.getItem('wadjet_debug') === '1')
+    )
+  );
+  window._ldLog = {
+    info  : (...a) => { if (!_prod || window.DEBUG_MODE) console.info('[LiveData]', ...a); },
+    warn  : (...a) => { if (!_prod || window.DEBUG_MODE) console.warn('[LiveData]', ...a); },
+    error : (...a) => console.error('[LiveData]', ...a),
+    debug : (...a) => { if (!_prod) console.log('[LiveData]', ...a); },
+  };
+})();
+const _ldLog = window._ldLog;
+
 /* ════════════════════════════════════════════
    LIVE DATA CACHE (in-memory, TTL-based)
 ═════════════════════════════════════════════ */
@@ -66,7 +84,7 @@ async function checkBackendOnline() {
   } catch {
     _backendOnline = false;
   }
-  console.info(`[LiveData] Backend online: ${_backendOnline}`);
+  _ldLog.info(`Backend online: ${_backendOnline}`);
   return _backendOnline;
 }
 
@@ -110,7 +128,7 @@ const DashboardData = {
       LiveCache.set('dashboard', data);
       return data;
     } catch (err) {
-      console.warn('[LiveData][Dashboard] API error, using fallback:', err.message);
+      _ldLog.warn('[Dashboard] API error, using fallback:', err.message);
       return DashboardData._fallback();
     }
   },
@@ -212,7 +230,7 @@ const LiveAlerts = {
       LiveCache.set('alerts', result);
       return { ...result, source: 'live' };
     } catch (err) {
-      console.warn('[LiveData][Alerts] load error:', err.message);
+      _ldLog.warn('[Alerts] load error:', err.message);
       const cached = LiveCache.get('alerts');
       return cached ? { ...cached, source: 'cached' } : { data: [], total: 0, source: 'error' };
     }
@@ -595,7 +613,7 @@ const LiveCollectors = {
     } catch (err) {
       if (statusEl) statusEl.innerHTML = `<span style="color:#ff4444"><i class="fas fa-times"></i> Error</span>`;
       showToast(`${feed.name} pull failed: ${err.message}`, 'error');
-      console.error(`[Collectors][${feedId}]`, err);
+      _ldLog.error(`[Collectors][${feedId}]`, err);
     }
   },
 
@@ -680,7 +698,7 @@ const AutoRefresh = {
     const fn = this._subscribers[this._activeTab];
     if (typeof fn === 'function') {
       try { await fn(); } catch (err) {
-        console.warn('[AutoRefresh] tick error:', err.message);
+        _ldLog.warn('[AutoRefresh] tick error:', err.message);
       }
     }
     // Update live clock
@@ -690,7 +708,7 @@ const AutoRefresh = {
 
   start() {
     this._restartTimer();
-    console.info('[AutoRefresh] Started — interval:', this._intervalMs, 'ms');
+    _ldLog.info('[AutoRefresh] Started — interval:', this._intervalMs, 'ms');
   },
 
   stop() {
@@ -758,7 +776,7 @@ function sleep(ms) {
    INIT — called after login
 ═════════════════════════════════════════════ */
 async function initLiveData() {
-  console.info('[LiveData] Initialising real-time data module…');
+  _ldLog.info('Initialising real-time data module…');
 
   // Wire up auto-refresh subscribers
   AutoRefresh.subscribe('command-center', () => DashboardData.render());
@@ -785,7 +803,7 @@ async function initLiveData() {
   setupLiveSearch('alert-search',  'alerts', LiveAlerts.render.bind(LiveAlerts), 'alerts-table-body');
   setupLiveSearch('ioc-search',    'iocs',   LiveIOCs.render.bind(LiveIOCs),     'iocs-table-body');
 
-  console.info('[LiveData] Ready');
+  _ldLog.info('Ready');
 }
 
 /* ════════════════════════════════════════════

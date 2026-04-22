@@ -21,6 +21,17 @@
 // ── Load .env FIRST before any other module ─────────────────────
 require('dotenv').config();
 
+// ── Production console silence (drop_console equivalent) ─────────
+// In production, override console.log/info/debug to no-ops.
+// Only error and warn pass through (captured by centralized logger).
+// This blocks: module-load banners, health-check spam, debug traces.
+if (process.env.NODE_ENV === 'production') {
+  console.log   = () => {};
+  console.info  = () => {};
+  console.debug = () => {};
+  // console.warn and console.error are preserved — surfaced via logger
+}
+
 // ── Centralized logger — must be imported AFTER dotenv.config() ──
 const logger = require('./utils/logger');
 const _SRV   = 'Server';

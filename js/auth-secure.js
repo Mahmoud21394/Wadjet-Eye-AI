@@ -23,6 +23,19 @@
 'use strict';
 
 (function (global) {
+  /* ── Minimal production-aware logger (delegates to _malLogger if present) ── */
+  const _isProd = !(
+    location.hostname === 'localhost' ||
+    location.hostname === '127.0.0.1' ||
+    location.hostname.includes('.e2b.dev') ||
+    localStorage.getItem('wadjet_debug') === '1'
+  );
+  const _L = {
+    info  : (...a) => { if (!_isProd || global.DEBUG_MODE) console.info('[SecureAuth]', ...a); },
+    warn  : (...a) => { if (!_isProd || global.DEBUG_MODE) console.warn('[SecureAuth]', ...a); },
+    error : (...a) => console.error('[SecureAuth]', ...a), // always
+    debug : (...a) => { if (!_isProd && global.DEBUG_MODE !== false) console.log('[SecureAuth]', ...a); },
+  };
 
   // ── API base URL ────────────────────────────────────────────────
   function API_BASE() {
@@ -66,9 +79,9 @@
         };
         // sessionStorage clears when tab is closed — appropriate for high-privilege platform
         sessionStorage.setItem(DISPLAY_KEY, JSON.stringify(display));
-        console.info('[SecureSession] ✅ Display session saved (no tokens stored)');
+        _L.debug('✅ Display session saved (no tokens stored)');
       } catch (e) {
-        console.warn('[SecureSession] Failed to save display session:', e.message);
+        _L.warn('Failed to save display session:', e.message);
       }
     },
 
@@ -84,7 +97,7 @@
     clear() {
       sessionStorage.removeItem(DISPLAY_KEY);
       this.clearLegacyKeys();
-      console.info('[SecureSession] Session cleared');
+      _L.debug('Session cleared');
     },
 
     /** Remove all v5.x localStorage/sessionStorage token keys */
@@ -94,9 +107,7 @@
         if (localStorage.getItem(k))   { localStorage.removeItem(k);   removed++; }
         if (sessionStorage.getItem(k)) { sessionStorage.removeItem(k); removed++; }
       });
-      if (removed > 0) {
-        console.info(`[SecureSession] Cleaned up ${removed} legacy token storage keys`);
-      }
+      if (removed > 0) _L.debug(`Cleaned up ${removed} legacy token storage keys`);
     },
   };
 
@@ -142,7 +153,7 @@
     try {
       response = await fetch(url, fetchOpts);
     } catch (networkErr) {
-      console.warn('[authFetch] Network error:', networkErr.message);
+      _L.warn('Network error:', networkErr.message);
       throw new Error(`Network error: ${networkErr.message}`);
     }
 
@@ -171,7 +182,7 @@
             }
           }
         } catch (refreshErr) {
-          console.warn('[authFetch] Silent refresh failed:', refreshErr.message);
+          _L.warn('Silent refresh failed:', refreshErr.message);
         } finally {
           _refreshInProgress = false;
         }
@@ -236,21 +247,26 @@
             });
             if (data.refreshToken || data.refresh_token)
               localStorage.setItem('wadjet_refresh_token', data.refreshToken || data.refresh_token);
-            console.info('[SecureSession] ✅ Bearer token refreshed');
+            _L.debug('✅ Bearer token refreshed');
             return true;
           }
+          // requires_reauth=true means no new token was issued — force re-login
+          if (data.requires_reauth) { _L.warn('requires_reauth=true — forcing re-login'); return false; }
         }
+        // 401 on the refresh itself means the refresh token is invalid — force re-login immediately
+        if (resp.status === 401) { _L.warn('Refresh endpoint returned 401 — session invalid'); return false; }
       } catch (e) { /* fall through */ }
     }
-    // Fallback: cookie-based refresh
+    // Fallback: cookie-based refresh (backend reads HTTP-only cookie)
     try {
       const resp = await fetch(`${API_BASE()}/api/auth/refresh`, {
         method: 'POST', credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
       });
-      if (resp.ok) { console.info('[SecureSession] ✅ Cookie refresh ok'); return true; }
+      if (resp.ok) { _L.debug('✅ Cookie refresh ok'); return true; }
+      if (resp.status === 401) { _L.warn('Cookie refresh returned 401 — session invalid'); return false; }
       return false;
-    } catch (e) { console.warn('[SecureSession] Silent refresh error:', e.message); return false; }
+    } catch (e) { _L.warn('Silent refresh error:', e.message); return false; }
   }
 
   function _handleHard401() {
@@ -301,7 +317,7 @@
   // ══════════════════════════════════════════════════════════════
   function migrateFromV5() {
     // REMOVED: SecureSession.clearLegacyKeys() — was wiping valid tokens
-    console.info('[SecureAuth v6.1] Startup: token keys preserved (no auto-cleanup)');
+    _L.debug('Startup: token keys preserved (no auto-cleanup)');
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -313,7 +329,7 @@
     const hasDisplaySession = SecureSession.exists();
 
     if (!hasDisplaySession && !hasToken) {
-      console.info('[SecureSession] No session — showing login screen');
+      _L.debug('No session — showing login screen');
       return false;
     }
 
@@ -335,34 +351,34 @@
           SecureSession.save(data.user || data);
           global.CURRENT_USER = data.user || data;
           global.dispatchEvent(new CustomEvent('auth:restored', { detail: global.CURRENT_USER }));
-          console.info('[SecureSession] ✅ Session restored for:', global.CURRENT_USER?.email);
+          _L.debug('✅ Session restored for:', global.CURRENT_USER?.email);
           return true;
         }
 
         if (resp.status === 401) {
-          // Cookie expired — clear display session, show login
+          // 401 = definitive session expiry — do NOT retry, clear and return false
           SecureSession.clear();
-          console.info('[SecureSession] Cookie expired — cleared session, showing login');
+          _L.debug('Cookie expired — cleared session, showing login');
           return false;
         }
 
-        // Server error — retry with backoff
+        // Server error (5xx) — retry with backoff (max 3 attempts only)
         if (attempt < maxRetries - 1) {
           const delay = baseDelayMs * Math.pow(2, attempt);
-          console.warn(`[SecureSession] /api/auth/me returned ${resp.status} — retrying in ${delay}ms`);
+          _L.warn(`/api/auth/me returned ${resp.status} — retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
           await new Promise(r => setTimeout(r, delay));
         }
       } catch (err) {
         if (attempt < maxRetries - 1) {
           const delay = baseDelayMs * Math.pow(2, attempt);
-          console.warn(`[SecureSession] Network error on restore attempt ${attempt + 1}: ${err.message}. Retrying in ${delay}ms`);
+          _L.warn(`Network error on restore attempt ${attempt + 1}: ${err.message}. Retrying in ${delay}ms`);
           await new Promise(r => setTimeout(r, delay));
         }
       }
     }
 
-    // All retries failed — assume offline or server down
-    console.warn('[SecureSession] Could not restore session after retries');
+    // All retries exhausted — assume offline or server down (do NOT loop indefinitely)
+    _L.warn('Could not restore session after retries — showing login');
     return false;
   }
 
@@ -414,6 +430,6 @@
     migrateFromV5();
   });
 
-  console.log('[SecureAuth v6.1] ✅ Loaded — Bearer+cookie bridge active. Tokens preserved in localStorage.');
+  _L.debug('✅ Loaded — Bearer+cookie bridge active. Tokens preserved in localStorage.');
 
 })(window);

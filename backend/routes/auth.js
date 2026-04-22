@@ -47,6 +47,7 @@
 
 const router  = require('express').Router();
 const crypto  = require('crypto');
+const logger  = require('../utils/logger');
 const {
   supabase,
   supabaseAuth,
@@ -67,8 +68,7 @@ let jwt = null;
 try {
   jwt = require('jsonwebtoken');
 } catch (_) {
-  console.warn('[Auth] jsonwebtoken not installed — custom JWT fallback disabled.');
-  console.warn('[Auth] Run: cd backend && npm install jsonwebtoken');
+  logger.warn('Auth', 'jsonwebtoken not installed — custom JWT fallback disabled. Run: cd backend && npm install jsonwebtoken');
 }
 
 /* ════════════════════════════════════════════════
@@ -82,10 +82,18 @@ const ACCESS_TOKEN_EXPIRY_SEC   = parseInt(process.env.ACCESS_TOKEN_TTL || '900'
 const JWT_SECRET = process.env.JWT_SECRET || null;
 
 if (!JWT_SECRET) {
-  console.warn('[Auth] ⚠️  JWT_SECRET not set in .env!');
-  console.warn('[Auth]    Get it from: Supabase Dashboard → Settings → API → JWT Settings');
-  console.warn('[Auth]    Add to backend/.env:  JWT_SECRET=<your-supabase-jwt-secret>');
+  logger.warn('Auth', '⚠️  JWT_SECRET not set in .env! Get it from Supabase Dashboard → Settings → API → JWT Settings. Add: JWT_SECRET=<your-supabase-jwt-secret>');
 }
+
+/* ── HTTP-only cookie name for refresh token ──────────────────── */
+const RT_COOKIE = 'waj_rt';
+const RT_COOKIE_OPTS = {
+  httpOnly : true,
+  secure   : process.env.NODE_ENV === 'production',
+  sameSite : 'strict',
+  maxAge   : parseInt(process.env.REFRESH_TOKEN_EXPIRY_DAYS || '30') * 86400 * 1000,
+  path     : '/api/auth',
+};
 
 /* ════════════════════════════════════════════════
    HELPERS
@@ -153,13 +161,13 @@ async function logActivity(userId, tenantId, action, req, extras = {}) {
         // Silently ignore RLS / missing table errors for audit log
         if (!error.message?.includes('row-level security') &&
             !error.message?.includes('does not exist')) {
-          console.warn('[Auth] Failed to log activity:', error.message);
+          logger.warn('Auth', 'Failed to log activity:', error.message);
         }
       }
     } catch (err) {
       // Non-fatal — never block login if audit logging fails
       if (!isAbortError(err)) {
-        console.warn('[Auth] logActivity error:', err.message);
+        logger.warn('Auth', 'logActivity error:', err.message);
       }
     }
   })();
@@ -195,14 +203,11 @@ async function storeRefreshToken(userId, tenantId, token, req) {
                         error.code === '42P01';
 
       if (isRLS) {
-        console.warn('[Auth] ⚠️  refresh_tokens RLS blocked insert.');
-        console.warn('[Auth]    FIX: Run backend/database/rls-fix-v5.1.sql in Supabase SQL Editor');
-        console.warn('[Auth]    Login will proceed without persisted refresh token.');
+        logger.warn('Auth', '⚠️  refresh_tokens RLS blocked insert. FIX: Run backend/database/rls-fix-v5.1.sql. Login proceeds without persisted refresh token.');
         return crypto.randomUUID(); // Return a fake session ID so login continues
       }
       if (noTable) {
-        console.warn('[Auth] ⚠️  refresh_tokens table missing.');
-        console.warn('[Auth]    FIX: Run backend/database/migration-v5.0-auth-tables.sql first.');
+        logger.warn('Auth', '⚠️  refresh_tokens table missing. FIX: Run backend/database/migration-v5.0-auth-tables.sql first.');
         return crypto.randomUUID();
       }
       // Other errors — throw to surface them
@@ -213,7 +218,7 @@ async function storeRefreshToken(userId, tenantId, token, req) {
   } catch (err) {
     // Catch network errors too
     if (err.message?.includes('Failed to store refresh token')) throw err;
-    console.warn('[Auth] storeRefreshToken unexpected error:', err.message);
+    logger.warn('Auth', 'storeRefreshToken unexpected error:', err.message);
     return crypto.randomUUID(); // Non-fatal fallback
   }
 }
@@ -278,7 +283,7 @@ router.post('/login', asyncHandler(async (req, res) => {
 
   // ── Structured logging: mark start of login attempt ──────────────
   const loginStart = Date.now();
-  console.log(`[auth:login:start] ${email} from ${req.ip || 'unknown'} at ${new Date().toISOString()}`);
+  logger.info('Auth:Login', `${email} from ${req.ip || 'unknown'}`);
 
   // ── v7.3 FIX: Use direct axios call instead of GoTrueClient ───────────────
   // ROOT CAUSE: On Render free-tier, Node.js native fetch / GoTrueClient TCP
@@ -291,7 +296,7 @@ router.post('/login', asyncHandler(async (req, res) => {
   // (12s per attempt, 3 retries with 2s backoff = max 42s total but typically
   // succeeds on attempt 1 in < 500ms when Supabase is healthy).
   // Axios uses Node.js http.Agent directly, bypassing undici.
-  console.log(`[auth:login:supabase] using direct axios login for ${email}`);
+  logger.debug('Auth:Login', `using direct axios login for ${email}`);
 
   let loginData, loginError;
   try {
@@ -299,9 +304,7 @@ router.post('/login', asyncHandler(async (req, res) => {
       email.trim().toLowerCase(),
       password.trim()
     ));
-    console.log(`[auth:login:result] elapsed=${Date.now()-loginStart}ms ` +
-      `loginError=${loginError ? loginError.message : 'none'} ` +
-      `session=${loginData?.session ? 'present' : 'absent'}`);
+    logger.debug('Auth:Login', `result elapsed=${Date.now()-loginStart}ms loginError=${loginError ? loginError.message : 'none'} session=${loginData?.session ? 'present' : 'absent'}`);
   } catch (supabaseErr) {
     // signInWithPasswordDirect should not throw (it returns errors), but
     // catch any unexpected throws here
@@ -310,13 +313,13 @@ router.post('/login', asyncHandler(async (req, res) => {
     const isNetwork = isNetworkError(supabaseErr);
 
     const elapsed = Date.now() - loginStart;
-    console.error(`[auth:login:abort] THROWN ${supabaseErr.name}: ${supabaseErr.message} elapsed=${elapsed}ms`);
+    logger.error('Auth:Login', `THROWN ${supabaseErr.name}: ${supabaseErr.message} elapsed=${elapsed}ms`);
 
     if (isAbort || isTimeout || isNetwork) {
       const reason = isTimeout ? `timeout after ${elapsed}ms` :
                      isAbort   ? `aborted after ${elapsed}ms` :
                                  `network error after ${elapsed}ms`;
-      console.error(`[auth:login:503] Returning 503 — ${reason}`);
+      logger.error('Auth:Login', `Returning 503 — ${reason}`);
       logActivity(null, null, 'LOGIN_FAILED', req, {
         email, success: false,
         failure_reason: `${supabaseErr.name}: ${supabaseErr.message} (${reason})`,
@@ -341,8 +344,7 @@ router.post('/login', asyncHandler(async (req, res) => {
         loginError.code === 'AUTH_SERVICE_UNAVAILABLE' ||
         loginError.code === 'SERVER_ERROR') {
       const elapsed = Date.now() - loginStart;
-      console.error(`[auth:login:abort] RETURNED error in loginError: ${loginError.message} ` +
-        `code=${loginError.code} elapsed=${elapsed}ms`);
+      logger.error('Auth:Login', `RETURNED error in loginError: ${loginError.message} code=${loginError.code} elapsed=${elapsed}ms`);
       logActivity(null, null, 'LOGIN_FAILED', req, {
         email, success: false,
         failure_reason: `ServiceError: ${loginError.message} (code:${loginError.code})`,
@@ -362,9 +364,7 @@ router.post('/login', asyncHandler(async (req, res) => {
       failure_reason: loginError.message,
     }).catch(() => {});
 
-    console.warn(`[auth:login:fail] LOGIN_FAILED for ${email}: ` +
-      `"${loginError.message}" (status=${loginError.status} code=${loginError.code}) ` +
-      `elapsed=${Date.now()-loginStart}ms`);
+    logger.warn('Auth:Login', `LOGIN_FAILED for ${email}: "${loginError.message}" (status=${loginError.status} code=${loginError.code}) elapsed=${Date.now()-loginStart}ms`);
 
     // Map Supabase-specific errors to actionable messages
     const errMsg  = (loginError.message || '').toLowerCase();
@@ -423,8 +423,7 @@ router.post('/login', asyncHandler(async (req, res) => {
     if (!isDefiniteAuthError) {
       // Unknown Supabase error — safer to return 503 than a misleading 401
       const elapsed503 = Date.now() - loginStart;
-      console.error(`[auth:login:503-fallback] Unknown loginError: "${loginError.message}" ` +
-        `code=${loginError.code} status=${loginError.status} elapsed=${elapsed503}ms`);
+      logger.error('Auth:Login', `503-fallback: Unknown loginError: "${loginError.message}" code=${loginError.code} status=${loginError.status} elapsed=${elapsed503}ms`);
       logActivity(null, null, 'LOGIN_FAILED', req, {
         email, success: false,
         failure_reason: `UnknownError: ${loginError.message}`,
@@ -444,7 +443,7 @@ router.post('/login', asyncHandler(async (req, res) => {
     });
   }
 
-  console.log(`[auth:login:ok] Supabase auth OK for ${email} elapsed=${Date.now()-loginStart}ms`);
+  logger.info('Auth:Login', `✅ Supabase auth OK for ${email} elapsed=${Date.now()-loginStart}ms`);
 
   // ── Fetch user profile ──
   // RC-3 FIX: If DB times out, the Supabase client returns AbortError in the
@@ -461,7 +460,7 @@ router.post('/login', asyncHandler(async (req, res) => {
     // RC-3: Distinguish timeout/abort from genuine 'not found'
     if (isAbortError(profileError)) {
       const profileMs = Date.now() - loginStart;
-      console.error(`[auth:login:db-timeout] Profile lookup timed out after ${profileMs}ms for ${email}`);
+      logger.error('Auth:Login', `DB timeout on profile lookup after ${profileMs}ms for ${email}`);
       logActivity(null, null, 'LOGIN_FAILED', req, {
         email, success: false,
         failure_reason: `DB timeout on profile lookup: ${profileError.message}`,
@@ -477,7 +476,7 @@ router.post('/login', asyncHandler(async (req, res) => {
       email, success: false,
       failure_reason: `Profile error: ${profileError.message}`,
     }).catch(() => {});
-    console.warn(`[auth:login:no-profile] No users row for auth_id=${loginData.user.id} email=${email}: ${profileError.message}`);
+    logger.warn('Auth:Login', `No users row for auth_id=${loginData.user.id} email=${email}: ${profileError.message}`);
     return res.status(403).json({ error: 'User profile not found. Contact your administrator.' });
   }
 
@@ -524,7 +523,7 @@ router.post('/login', asyncHandler(async (req, res) => {
   // RC-7 FIX: Don't await non-critical DB writes on the login response path.
   supabase.from('users').update({ last_login: new Date().toISOString() }).eq('id', profile.id)
     .then(({ error: ulErr }) => {
-      if (ulErr && !isAbortError(ulErr)) console.warn('[auth:login] last_login update failed:', ulErr.message);
+      if (ulErr && !isAbortError(ulErr)) logger.warn('Auth:Login', 'last_login update failed:', ulErr.message);
     }).catch(() => {});
 
   // ── Fetch tenant meta (with fallback on timeout) ──
@@ -536,7 +535,7 @@ router.post('/login', asyncHandler(async (req, res) => {
       .eq('id', profile.tenant_id)
       .single();
     if (tmErr && !isAbortError(tmErr)) {
-      console.warn('[auth:login] tenantMeta fetch error:', tmErr.message);
+      logger.warn('Auth:Login', 'tenantMeta fetch error:', tmErr.message);
     }
     tenantMeta = tm || null;
   } catch (_) {
@@ -548,9 +547,14 @@ router.post('/login', asyncHandler(async (req, res) => {
     email, session_id: sessionId,
   }).catch(() => {});
 
+  // ── Set refresh token in HTTP-only cookie ──────────────────────────
+  // This is the secure, XSS-safe storage path. The token is also
+  // returned in the body for clients that cannot use cookies (native apps).
+  res.cookie(RT_COOKIE, refreshToken, RT_COOKIE_OPTS);
+
   res.json({
     token:        loginData.session.access_token,
-    refreshToken,          // Our own refresh token (not Supabase's)
+    refreshToken,          // Our own refresh token (not Supabase's) — also in httpOnly cookie
     expiresIn:    ACCESS_TOKEN_EXPIRY_SEC,
     expiresAt:    new Date(Date.now() + ACCESS_TOKEN_EXPIRY_SEC * 1000).toISOString(),
     sessionId,
@@ -574,7 +578,8 @@ router.post('/login', asyncHandler(async (req, res) => {
    Silent token refresh — rotates refresh token
 ═══════════════════════════════════════════════ */
 router.post('/refresh', asyncHandler(async (req, res) => {
-  const oldRefreshToken = req.body.refresh_token || req.cookies?.rt;
+  // Accept refresh token from: (1) HTTP-only cookie [preferred], (2) request body [legacy]
+  const oldRefreshToken = req.cookies?.[RT_COOKIE] || req.body.refresh_token || req.cookies?.rt;
 
   if (!oldRefreshToken) {
     return res.status(400).json({ error: 'refresh_token is required' });
@@ -664,8 +669,7 @@ router.post('/refresh', asyncHandler(async (req, res) => {
         throw new Error(adminErr?.message || 'admin.createSession returned no token');
       }
     } catch (adminErr) {
-      console.warn('[Auth] admin.createSession failed:', adminErr.message);
-      console.warn('[Auth] Trying custom JWT signing as fallback...');
+      logger.warn('Auth:Refresh', `admin.createSession failed: ${adminErr.message} — trying custom JWT signing`);
 
       // Strategy 2: Sign a custom JWT using JWT_SECRET
       if (JWT_SECRET && jwt) {
@@ -689,23 +693,25 @@ router.post('/refresh', asyncHandler(async (req, res) => {
             },
           };
           accessToken = jwt.sign(payload, JWT_SECRET, { algorithm: 'HS256' });
-          console.log('[Auth] ✅ Refresh: Custom JWT signed with JWT_SECRET');
+          logger.info('Auth:Refresh', '✅ Custom JWT signed with JWT_SECRET');
         } catch (jwtErr) {
-          console.warn('[Auth] Custom JWT signing failed:', jwtErr.message);
+          logger.warn('Auth:Refresh', 'Custom JWT signing failed:', jwtErr.message);
         }
       } else {
-        console.warn('[Auth] JWT_SECRET not configured — cannot sign custom JWT');
-        console.warn('[Auth] Client will retry login to get a fresh Supabase token');
+        logger.warn('Auth:Refresh', 'JWT_SECRET not configured — client must re-login for fresh Supabase token');
       }
     }
   } else {
-    console.warn('[Auth] No auth_id found for user', user.id, '— cannot issue new access token');
+    logger.warn('Auth:Refresh', `No auth_id found for user ${user.id} — cannot issue new access token`);
   }
 
   await logActivity(user.id, tenantId, 'TOKEN_REFRESH', req, { session_id: newSessionId });
 
+  // Rotate the HTTP-only cookie with the new refresh token
+  res.cookie(RT_COOKIE, newToken, RT_COOKIE_OPTS);
+
   // Always return the rotated refresh token even if access token is empty.
-  // The client can call /api/auth/me with the old access token or trigger re-login.
+  // If requires_reauth=true the client must redirect to /login — NO retry loops.
   res.json({
     token:        accessToken,
     refreshToken: newToken,
@@ -729,8 +735,12 @@ router.post('/refresh', asyncHandler(async (req, res) => {
    POST /api/auth/logout
 ═══════════════════════════════════════════════ */
 router.post('/logout', asyncHandler(async (req, res) => {
-  const refreshToken = req.body.refresh_token;
+  // Accept refresh token from HTTP-only cookie or request body
+  const refreshToken = req.cookies?.[RT_COOKIE] || req.body.refresh_token;
   const accessToken  = req.headers.authorization?.split(' ')[1];
+
+  // Clear the HTTP-only refresh cookie immediately
+  res.clearCookie(RT_COOKIE, { ...RT_COOKIE_OPTS, maxAge: 0 });
 
   // Revoke refresh token in DB
   if (refreshToken) {
@@ -959,7 +969,7 @@ router.post('/refresh-from-cookie', asyncHandler(async (req, res) => {
       }
     } catch (adminErr) {
       // Fall back to the cookie token — it's still valid per getUser() above
-      console.warn('[Auth] refresh-from-cookie: admin.createSession failed, using cookie token:', adminErr.message);
+      logger.warn('Auth:CookieRefresh', `admin.createSession failed, using cookie token: ${adminErr.message}`);
     }
 
     // Issue a new refresh token
@@ -968,7 +978,7 @@ router.post('/refresh-from-cookie', asyncHandler(async (req, res) => {
 
     await logActivity(profile.id, profile.tenant_id, 'TOKEN_REFRESH_FROM_COOKIE', req, { session_id: sessionId });
 
-    console.log('[Auth] ✅ refresh-from-cookie succeeded for', profile.email);
+    logger.info('Auth:CookieRefresh', `✅ succeeded for ${profile.email}`);
 
     return res.json({
       token:        accessToken,
@@ -987,7 +997,7 @@ router.post('/refresh-from-cookie', asyncHandler(async (req, res) => {
     });
 
   } catch (err) {
-    console.warn('[Auth] refresh-from-cookie error:', err.message);
+    logger.warn('Auth:CookieRefresh', 'error:', err.message);
     return res.status(401).json({
       error: 'Session restoration failed. Please log in again.',
       code:  'REFRESH_FAILED',

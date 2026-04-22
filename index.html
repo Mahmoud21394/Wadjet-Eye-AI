@@ -877,6 +877,41 @@
   window.THREATPILOT_WS_URL  = 'https://wadjet-eye-ai.onrender.com';
   // Legacy alias
   window.WADJET_API_URL = window.THREATPILOT_API_URL;
+
+  /* ── Production console kill-switch (drop_console) ──────────────
+     In production (non-localhost, no wadjet_debug flag) we silence
+     console.log / console.info / console.debug entirely.
+     console.warn and console.error are ALWAYS preserved.
+     Override window.DEBUG_MODE = true at runtime to restore all logs.
+  ────────────────────────────────────────────────────────────────── */
+  (function _consoleKillSwitch() {
+    const _isLocalDev = (
+      location.hostname === 'localhost' ||
+      location.hostname === '127.0.0.1' ||
+      location.hostname.includes('.e2b.dev') ||
+      localStorage.getItem('wadjet_debug') === '1'
+    );
+    window.DEBUG_MODE = !!_isLocalDev;
+
+    if (!_isLocalDev) {
+      // Silence all non-error output in production
+      const _noop = () => {};
+      console.log   = _noop;
+      console.info  = _noop;
+      console.debug = _noop;
+      // console.warn  → preserved (security/auth warnings still visible in DevTools)
+      // console.error → preserved (always shown)
+    }
+
+    // Runtime toggle: window._malDebug(true) or window.DEBUG_MODE = true
+    // restores full logging without a page reload.
+    window.enableDebugLogs = function() {
+      window.DEBUG_MODE = true;
+      // Restore original console methods from the prototype
+      ['log','info','debug'].forEach(m => { delete console[m]; });
+      console.info('[Wadjet-Eye AI] 🔧 Debug logs ENABLED — console fully restored');
+    };
+  })();
 </script>
 
 <!-- Socket.IO -->
