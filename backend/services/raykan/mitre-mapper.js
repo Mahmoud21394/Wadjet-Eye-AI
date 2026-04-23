@@ -508,9 +508,12 @@ class MitreMapper {
   }
 
   // ── Map a Detection to MITRE ──────────────────────────────────────
+  // Context-aware: respects _contextAdjusted tags set by the context
+  // validator (suppressed techniques are already removed from tags).
   mapDetection(detection) {
     const techniques = [];
-    const tags       = detection.tags || [];
+    // If context validator ran, use adjusted tags; else fall back to original
+    const tags = detection.tags || [];
 
     for (const tag of tags) {
       const lower = tag.toLowerCase();
@@ -520,30 +523,38 @@ class MitreMapper {
         const tid  = match[1].toUpperCase();
         const info = MITRE_TAXONOMY.techniques[tid];
         if (info) {
+          // Use adjusted confidence when context validation ran
+          const baseConf = detection.confidence || 70;
+          // Penalise techniques that came from context adjustment
+          const wasAdjusted = detection._contextAdjusted === true;
           techniques.push({
             id         : tid,
             name       : info.name,
             tactic     : MITRE_TAXONOMY.tactics[info.tactic],
             tacticId   : info.tactic,
             url        : `https://attack.mitre.org/techniques/${tid.replace('.', '/')}`,
-            confidence : detection.confidence || 70,
+            confidence : wasAdjusted ? Math.max(30, baseConf - 15) : baseConf,
+            validated  : !wasAdjusted,
           });
         }
       }
     }
 
-    // Deduplicate
-    const seen = new Set();
-    const unique = techniques.filter(t => {
-      if (seen.has(t.id)) return false;
-      seen.add(t.id);
-      return true;
-    });
+    // Deduplicate — prefer higher-confidence entry
+    const seen = new Map();
+    for (const t of techniques) {
+      if (!seen.has(t.id) || seen.get(t.id).confidence < t.confidence) {
+        seen.set(t.id, t);
+      }
+    }
+    const unique = [...seen.values()];
 
     return {
       techniques : unique,
       tactics    : [...new Set(unique.map(t => t.tactic?.name).filter(Boolean))],
       coverage   : unique.length,
+      // Surface context warnings for downstream consumers
+      contextWarnings: detection._contextWarnings || [],
     };
   }
 

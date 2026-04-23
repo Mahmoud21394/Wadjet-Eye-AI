@@ -36,6 +36,14 @@ const {
   metrics: normalizerMetrics,
 } = require('./ingestion-normalizer');
 
+// ── Context Validator (false-positive suppression + behavioral correlation)
+let contextValidator = null;
+try {
+  contextValidator = require('./detection-context-validator');
+} catch (e) {
+  console.warn('[RAYKAN/engine] detection-context-validator not found — context gating disabled');
+}
+
 // ── Sub-engines ──────────────────────────────────────────────────
 const SigmaEngine    = require('./sigma-engine');
 const AIDetector     = require('./ai-detector');
@@ -171,10 +179,29 @@ class RaykanEngine extends EventEmitter {
       this.ueba.analyzeEvents(normalized),
     ]);
 
+    // ── Phase 2b: Context-aware behavioral correlation ────────────
+    // Generates supplemental detections for auth sequences (brute-force,
+    // PtH, account creation) that sigma rules can't correlate alone.
+    let correlatedHits = [];
+    if (contextValidator) {
+      try {
+        correlatedHits = contextValidator.buildCorrelatedDetections(normalized, sigmaHits);
+        if (correlatedHits.length > 0) {
+          console.log(`[RAYKAN/engine] Context correlator added ${correlatedHits.length} supplemental detection(s)`);
+          this._stats.correlatedDetections = (this._stats.correlatedDetections || 0) + correlatedHits.length;
+        }
+      } catch (e) {
+        console.warn('[RAYKAN/engine] Context correlation failed:', e.message);
+      }
+    }
+
+    // Merge sigma hits with correlated hits (deduplication by ruleId handled downstream)
+    const allSigmaHits = [...sigmaHits, ...correlatedHits];
+
     // ── Phase 3: AI augmentation ──────────────────────────────────
-    let aiEnhanced = sigmaHits;
-    if (this.config.aiEnabled && sigmaHits.length > 0) {
-      aiEnhanced = await this.ai.enrichDetections(sigmaHits, normalized);
+    let aiEnhanced = allSigmaHits;
+    if (this.config.aiEnabled && allSigmaHits.length > 0) {
+      aiEnhanced = await this.ai.enrichDetections(allSigmaHits, normalized);
     }
 
     // ── Phase 4: IOC enrichment ───────────────────────────────────
@@ -325,6 +352,7 @@ class RaykanEngine extends EventEmitter {
 
   // ── Stats & Health ────────────────────────────────────────────────
   getStats() {
+    const cvMetrics = contextValidator ? contextValidator.getMetrics() : null;
     return {
       ...this._stats,
       version     : this.version,
@@ -338,6 +366,12 @@ class RaykanEngine extends EventEmitter {
         ueba     : this.ueba.getStatus(),
         forensics: this.forensics.getStatus(),
       },
+      contextValidation: cvMetrics ? {
+        suppressed_fp_count    : cvMetrics.suppressed_count,
+        adjusted_detection_count: cvMetrics.adjusted_count,
+        validated_count        : cvMetrics.validated_count,
+        fp_reason_breakdown    : cvMetrics.fp_reasons,
+      } : { available: false },
     };
   }
 
@@ -450,5 +484,6 @@ RaykanEngine.normalizeDetections = normalizeDetections;
 RaykanEngine.parseRawInput       = parseRawInput;
 RaykanEngine.processEvent        = processEvent;
 RaykanEngine.normalizerMetrics   = normalizerMetrics;
+RaykanEngine.contextValidator    = contextValidator;
 
 module.exports = RaykanEngine;
