@@ -51,12 +51,33 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   PAGE CONTAINER — #page-email-threat must be a flex column so
+   that the child .eti-module (height:100%) can fill the viewport.
+   RC-FIX v4.0: Override the global .page.active { display:block }
+   rule so the email-threat page uses flex layout.
+   ═══════════════════════════════════════════════════════════════ */
+#page-email-threat {
+  padding: 0 !important;
+  overflow: hidden !important;
+  display: flex;
+  flex-direction: column;
+  /* Fill the content-area. Since content-area has padding:18px,
+     we use a negative margin trick to bleed to the edges. */
+  margin: -18px;
+  height: calc(100% + 36px);
+  min-height: 500px;
+}
+/* Still need display:none when NOT active */
+#page-email-threat:not(.active) { display: none !important; }
+
+/* ═══════════════════════════════════════════════════════════════
    MODULE CONTAINER
    ═══════════════════════════════════════════════════════════════ */
 .eti-module {
   display: none;
   flex-direction: column;
-  height: 100%;
+  flex: 1;               /* fill parent flex container */
+  min-height: 0;         /* flex child: allow shrinking */
   background: var(--eti-bg-primary);
   color: var(--eti-text-primary);
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
