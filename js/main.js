@@ -383,6 +383,33 @@ const PAGE_CONFIG = {
       if (typeof window.stopRAKAY === 'function') window.stopRAKAY();
     },
   },
+
+  /* ── ETI-AARE EMAIL THREAT INTELLIGENCE MODULE ── */
+  'email-threat': {
+    title: 'Email Threat Intelligence',
+    breadcrumb: 'Cyber Defense Brain / ETI-AARE',
+    onEnter: () => {
+      const container = document.getElementById('page-email-threat');
+      if (!container) return;
+      if (!container.dataset.rendered) {
+        container.dataset.rendered = '1';
+        if (typeof window.ETIModule !== 'undefined') {
+          window.ETIModule.mount(container);
+        } else {
+          container.innerHTML = '<div style="padding:60px;text-align:center;color:#8b949e;"><i class="fas fa-spinner fa-spin fa-2x" style="display:block;margin-bottom:16px;"></i>Loading ETI-AARE module…</div>';
+          // Retry once module loads
+          setTimeout(() => {
+            if (typeof window.ETIModule !== 'undefined' && !container.querySelector('.eti-module')) {
+              window.ETIModule.mount(container);
+            }
+          }, 800);
+        }
+      } else {
+        if (typeof window.ETIModule?.onShow === 'function') window.ETIModule.onShow();
+      }
+    },
+    onLeave: () => {},
+  },
 };
 
 // ── Expose PAGE_CONFIG on window so late-loading modules (campaigns-soc.js,
