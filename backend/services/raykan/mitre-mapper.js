@@ -12,6 +12,14 @@
 
 'use strict';
 
+// ── Central Evidence Authority (CEA) — MITRE-mapper final guard ──────────────
+let _cea = null;
+try {
+  _cea = require('./central-evidence-authority');
+} catch (e) {
+  console.warn('[MitreMapper] central-evidence-authority not available — final guard disabled');
+}
+
 // ── Full MITRE ATT&CK v14 Taxonomy ───────────────────────────────
 // Complete taxonomy: 14 tactics, 196 techniques, 411 sub-techniques
 const MITRE_TAXONOMY = {
@@ -510,31 +518,30 @@ class MitreMapper {
   // ── Map a Detection to MITRE ──────────────────────────────────────
   // Context-aware: respects _contextAdjusted tags set by the context
   // validator (suppressed techniques are already removed from tags).
-  mapDetection(detection) {
+  // ── Map a Detection to MITRE (CEA-enforced) ─────────────────────────────────
+  // Only techniques that passed the Central Evidence Authority appear in output.
+  mapDetection(detection, evidenceCtx = null) {
     const techniques = [];
-    // If context validator ran, use adjusted tags; else fall back to original
     const tags = detection.tags || [];
 
     for (const tag of tags) {
       const lower = tag.toLowerCase();
-      // Direct technique tag
       const match = lower.match(/attack\.(t\d+(?:\.\d+)?)/);
       if (match) {
         const tid  = match[1].toUpperCase();
         const info = MITRE_TAXONOMY.techniques[tid];
         if (info) {
-          // Use adjusted confidence when context validation ran
-          const baseConf = detection.confidence || 70;
-          // Penalise techniques that came from context adjustment
-          const wasAdjusted = detection._contextAdjusted === true;
+          const baseConf    = detection.confidence || 70;
+          const wasAdjusted = detection._ceaAdjusted === true || detection._contextAdjusted === true;
           techniques.push({
-            id         : tid,
-            name       : info.name,
-            tactic     : MITRE_TAXONOMY.tactics[info.tactic],
-            tacticId   : info.tactic,
-            url        : `https://attack.mitre.org/techniques/${tid.replace('.', '/')}`,
-            confidence : wasAdjusted ? Math.max(30, baseConf - 15) : baseConf,
-            validated  : !wasAdjusted,
+            id          : tid,
+            name        : info.name,
+            tactic      : MITRE_TAXONOMY.tactics[info.tactic],
+            tacticId    : info.tactic,
+            url         : `https://attack.mitre.org/techniques/${tid.replace('.', '/')}`,
+            confidence  : wasAdjusted ? Math.max(30, baseConf - 15) : baseConf,
+            validated   : !wasAdjusted,
+            ceaValidated: detection._ceaValidated === true,
           });
         }
       }
@@ -547,16 +554,26 @@ class MitreMapper {
         seen.set(t.id, t);
       }
     }
-    const unique = [...seen.values()];
+    let unique = [...seen.values()];
+
+    // ── CEA final guard ───────────────────────────────────────────────────────
+    // Last-resort safety net: strip any technique that CEA would reject,
+    // even if it somehow survived earlier gates (e.g. from AI-generated tags).
+    if (_cea) {
+      const ctx = evidenceCtx ||
+        _cea.buildEvidence(detection.event ? [detection.event] : [], [detection]);
+      unique = _cea.mitreMapperGuard(unique, ctx, detection);
+    }
 
     return {
-      techniques : unique,
-      tactics    : [...new Set(unique.map(t => t.tactic?.name).filter(Boolean))],
-      coverage   : unique.length,
-      // Surface context warnings for downstream consumers
-      contextWarnings: detection._contextWarnings || [],
+      techniques      : unique,
+      tactics         : [...new Set(unique.map(t => t.tactic?.name).filter(Boolean))],
+      coverage        : unique.length,
+      contextWarnings : detection._ceaWarnings || detection._contextWarnings || [],
+      ceaValidated    : detection._ceaValidated === true,
     };
   }
+
 
   // ── Build entity-level MITRE map ──────────────────────────────────
   buildEntityMap(detections) {
