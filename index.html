@@ -25,6 +25,8 @@
   <link rel="stylesheet" href="css/animation-system.css" />
   <!-- Unified SOC Modules v2.0 — Shared components for ThreatGraph, MalwareDNA, Settings, all CDS modules -->
   <link rel="stylesheet" href="css/sidebar-v2.css" />
+  <!-- ETI-AARE Email Threat Intelligence Module v1.0 -->
+  <link rel="stylesheet" href="css/email-threat.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -153,6 +155,10 @@
         </a>
         <a href="#" class="nav-child" data-page="attack-graph">
           <i class="fas fa-sitemap"></i><span>Attack Graph Intelligence</span>
+        </a>
+        <a href="#" class="nav-child" data-page="email-threat">
+          <i class="fas fa-envelope-open-text"></i><span>Email Threat Intelligence</span>
+          <span class="nav-child-badge" style="background:linear-gradient(90deg,#FF2D55,#FF6B35);color:#fff;font-size:8px;padding:1px 5px;border-radius:8px;">NEW</span>
         </a>
         <a href="#" class="nav-child" data-page="malware-dna">
           <i class="fas fa-dna"></i><span>Malware DNA Engine</span>
@@ -1343,6 +1349,9 @@
 <script src="js/raykan.js"></script>
 <script src="js/tenant-management-v2.js"></script>
 
+<!-- ════ ETI-AARE Email Threat Intelligence Module v1.0 ════ -->
+<script src="js/email-threat-module.js"></script>
+
 <!-- Cyber Defense Brain — PAGE_CONFIG Wiring & Feature Flags -->
 <script>
 (function() {
@@ -1396,6 +1405,17 @@
     'autonomous-agent':  () => typeof window.renderAutonomousAgent     === 'function' && window.renderAutonomousAgent(),
     'customers':         () => typeof window.renderTenantsPage         === 'function' && window.renderTenantsPage(),
     'exposure':          () => typeof window.renderCVEIntelligence     === 'function' && window.renderCVEIntelligence(),
+    'email-threat':      () => {
+      const mod = document.getElementById('etiModule');
+      if (mod) {
+        document.querySelectorAll('.page, .module-page, [id$="Module"]').forEach(p => {
+          if (p !== mod) p.style.display = 'none';
+        });
+        mod.style.display = 'flex';
+        mod.classList.add('active');
+        if (typeof window.ETIModule?.init === 'function') window.ETIModule.init();
+      }
+    },
   };
 
   /* ─── Page metadata for topbar ─── */
@@ -1415,6 +1435,7 @@
     'autonomous-agent':  { title: 'Autonomous SOC Agent',           breadcrumb: 'Innovations / Autonomous Agent' },
     'customers':         { title: 'Tenant Management',              breadcrumb: 'Platform / Tenants' },
     'exposure':          { title: 'CVE Intelligence Engine',        breadcrumb: 'Intelligence / CVE Intelligence' },
+    'email-threat':      { title: 'Email Threat Intelligence',       breadcrumb: 'Cyber Defense Brain / ETI-AARE' },
   };
 
   /* ─── Wire into PAGE_CONFIG ─── */
