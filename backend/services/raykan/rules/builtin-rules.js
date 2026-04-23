@@ -347,20 +347,25 @@ module.exports = [
 
   {
     id: 'RAYKAN-042',
-    title: 'Brute Force Login Attempts (Security Event 4625)',
-    description: 'Multiple failed logon attempts indicating brute-force attack.',
+    // NOTE: A single 4625 event is NOT sufficient for T1110 (Brute Force).
+    // The context validator requires ≥3 failures before mapping T1110.
+    // Single/double failures are demoted to T1078 (Valid Accounts attempt).
+    // LogonType=3 alone = normal network logon; requires multiple failures.
+    title: 'Failed Logon Attempt (Security Event 4625)',
+    description: 'Failed logon event. Single occurrence mapped to T1078 (account use); requires ≥3 failures for T1110 (Brute Force) classification.',
     author: 'RAYKAN',
-    level: 'medium',
+    level: 'low',
     status: 'stable',
-    tags: ['attack.credential_access', 'attack.t1110.001'],
+    tags: ['attack.credential_access', 'attack.t1078'],
     logsource: { category: 'security', product: 'windows' },
     detection: {
       selection: {
         EventID: ['4625'],
-        LogonType: ['3'],
       },
       condition: 'selection',
     },
+    // Context validator will upgrade to T1110.001 when ≥3 failures present
+    falsepositives: ['Legitimate failed logins (password mistakes, service account misconfigs)'],
   },
 
   {
@@ -482,12 +487,19 @@ module.exports = [
 
   {
     id: 'RAYKAN-062',
-    title: 'Pass-The-Hash with WinRM (Event 4624, LogonType 3)',
-    description: 'Network logon with NTLM may indicate pass-the-hash attack.',
+    // FIXED: LogonType=3 + NTLM alone is NOT sufficient for T1550.002 (PtH).
+    // LogonType=3 is the default Windows network logon type for file shares,
+    // scheduled tasks, and many legitimate operations.
+    // The context validator gates T1550.002 on cross-host NTLM evidence.
+    // Without multi-host evidence this is demoted to T1078 (Valid Accounts).
+    title: 'NTLM Network Logon (Event 4624, LogonType 3)',
+    description: 'Network logon with NTLM authentication. Requires cross-host evidence for lateral movement classification. Single-host occurrence is normal network authentication.',
     author: 'RAYKAN',
-    level: 'high',
+    level: 'medium',
     status: 'stable',
-    tags: ['attack.lateral_movement', 'attack.t1550.002'],
+    // Primary tag is t1078 (valid accounts); context validator will promote to
+    // t1550.002 when cross-host NTLM evidence exists in the event batch.
+    tags: ['attack.credential_access', 'attack.t1078'],
     logsource: { category: 'security', product: 'windows' },
     detection: {
       selection: {
@@ -500,6 +512,10 @@ module.exports = [
       },
       condition: 'selection and not filter',
     },
+    falsepositives: [
+      'Normal network authentication (file shares, scheduled tasks, mapped drives)',
+      'Service account network logons',
+    ],
   },
 
   // ════════════════════════════════════════════════════

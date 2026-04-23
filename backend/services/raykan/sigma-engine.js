@@ -22,6 +22,14 @@ const EventEmitter = require('events');
 const path         = require('path');
 const crypto       = require('crypto');
 
+// ── Context Validator (telemetry-source + evidence gating) ────────
+let _contextValidator = null;
+try {
+  _contextValidator = require('./detection-context-validator');
+} catch (e) {
+  console.warn('[Sigma] detection-context-validator not available — running without context gating');
+}
+
 // ── Built-in Sigma Rule Definitions ──────────────────────────────
 // In production these load from YAML files; here we define them
 // as JS objects so no YAML parser dependency is needed.
@@ -129,11 +137,13 @@ class SigmaEngine extends EventEmitter {
   /**
    * detect — Run all candidate rules against normalized events.
    * @param {Array}  normalizedEvents
-   * @param {Object} opts — { maxCandidates: number (default 2000) }
+   * @param {Object} opts — { maxCandidates: number (default 2000),
+   *                          applyContextValidation: boolean (default true) }
    */
   async detect(normalizedEvents, opts = {}) {
-    const detections = [];
-    const MAX_CANDIDATES = opts.maxCandidates || 2000; // cap prevents O(n*m) blow-up with large rule sets
+    const rawDetections = [];
+    const MAX_CANDIDATES   = opts.maxCandidates || 2000;
+    const applyValidation  = opts.applyContextValidation !== false; // default true
 
     for (const evt of normalizedEvents) {
       this._stats.evaluated++;
@@ -148,11 +158,20 @@ class SigmaEngine extends EventEmitter {
         const rule = this._rules.get(ruleId);
         if (!rule) continue;
 
+        // ── Logsource compatibility pre-filter ──────────────────
+        // Reject evaluation entirely when the rule's logsource
+        // category is categorically incompatible with the event
+        // format (e.g. webserver rules against Windows auth events).
+        if (applyValidation && _contextValidator && !this._logsourceCompatible(rule, evt)) {
+          this._stats.logsourceSkipped = (this._stats.logsourceSkipped || 0) + 1;
+          continue;
+        }
+
         try {
           const match = this._evaluateRule(rule, evt);
           if (match) {
             const det = this._buildDetection(rule, evt);
-            detections.push(det);
+            rawDetections.push(det);
             this._stats.matched++;
             this.emit('rule:match', det);
           }
@@ -162,7 +181,55 @@ class SigmaEngine extends EventEmitter {
       }
     }
 
-    return detections;
+    // ── Post-evaluation context validation ──────────────────────
+    // Filter/adjust detections whose tagged techniques lack supporting
+    // telemetry evidence (e.g. T1190 without web logs, T1021 without
+    // multi-host evidence).
+    if (applyValidation && _contextValidator && rawDetections.length > 0) {
+      return _contextValidator.filterDetectionsByContext(rawDetections, normalizedEvents);
+    }
+
+    return rawDetections;
+  }
+
+  // ── Logsource compatibility check ────────────────────────────────
+  // Returns false only when the rule's logsource has a STRICT category
+  // that is CATEGORICALLY incompatible with the event's known source.
+  // Does NOT filter when the event source is unknown/generic.
+  _logsourceCompatible(rule, evt) {
+    const ruleCategory = (rule.logsource?.category || '').toLowerCase();
+    const ruleProduct  = (rule.logsource?.product  || '').toLowerCase();
+    if (!ruleCategory) return true; // No category constraint → allow
+
+    const evtSource  = (evt.source || '').toLowerCase();
+    const evtFormat  = (evt.format || '').toLowerCase();
+    const evtChannel = (evt.channel || (evt.raw && evt.raw.Channel) || '').toLowerCase();
+
+    // Web-server rules require web-server telemetry signals
+    if (['webserver', 'web', 'http', 'iis', 'apache', 'nginx'].includes(ruleCategory)) {
+      // Allow if the event comes from a web source
+      const isWebEvent =
+        evtSource.includes('web') || evtSource.includes('iis') || evtSource.includes('apache') ||
+        evtSource.includes('nginx') || evtSource.includes('http') ||
+        evtFormat === 'webserver' ||
+        evt.url != null ||
+        (evt.raw && (evt.raw['cs-uri-stem'] != null || evt.raw['cs-method'] != null)) ||
+        evtChannel.includes('w3svc') || evtChannel.includes('httpd') ||
+        // Web shell rule exception: still allow when parent process is a web server
+        (evt.parentProc && /w3wp|httpd|nginx|php|apache|tomcat|iisexpress/i.test(evt.parentProc));
+      if (!isWebEvent) return false;
+    }
+
+    // DNS rules should only apply to DNS log events
+    if (ruleCategory === 'dns') {
+      const isDnsEvent =
+        evtSource.includes('dns') || evtFormat === 'dns' ||
+        evtChannel.includes('dns') ||
+        evt.domain != null;
+      if (!isDnsEvent) return false;
+    }
+
+    return true; // Compatible (or indeterminate — allow through)
   }
 
   // ── Rule Compilation ─────────────────────────────────────────────
