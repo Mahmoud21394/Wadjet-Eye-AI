@@ -694,12 +694,15 @@ test('54. T1190 stripped from MITRE output without web evidence', () => {
   assertArrayLength(result, 0, 'T1190 should be stripped from MITRE output');
 });
 
-test('55. T1059.001 preserved in MITRE output (no CEA gate)', () => {
-  const detection = makeDet({ tags: ['attack.t1059.001'] });
+test('55. T1059.001 preserved in MITRE output with PowerShell evidence', () => {
+  // T1059.001 now requires PowerShell process evidence (added in v5.8)
+  const evt = { eventId: '4688', process: 'powershell.exe',
+    commandLine: 'powershell.exe -enc JABXAG...', raw: { EventID: '4688', Image: 'powershell.exe' } };
+  const detection = makeDet({ tags: ['attack.t1059.001'], event: evt });
   const techniques = [{ id: 'T1059.001', name: 'PowerShell', confidence: 90 }];
-  const ctx = buildEvidence([], [detection]);
+  const ctx = buildEvidence([evt], [detection]);
   const result = mitreMapperGuard(techniques, ctx, detection);
-  assert(result.some(t => t.id === 'T1059.001'), 'T1059.001 should be preserved');
+  assert(result.some(t => t.id === 'T1059.001'), 'T1059.001 should be preserved with PowerShell process evidence');
 });
 
 test('56. T1550.002 stripped from MITRE without cross-host NTLM', () => {

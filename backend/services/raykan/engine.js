@@ -47,6 +47,24 @@ try {
   console.error('[RAYKAN/engine] CRITICAL: central-evidence-authority not found — CEA gating DISABLED');
 }
 
+// ── Global Log Classifier (GLC) — domain classification + logsource gating ────
+let glc = null;
+try {
+  glc = require('./global-log-classifier');
+  console.log('[RAYKAN/engine] Global Log Classifier loaded — source-aware domain classification ACTIVE');
+} catch (e) {
+  console.error('[RAYKAN/engine] WARNING: global-log-classifier not found — domain gating DISABLED');
+}
+
+// ── Behavioral Correlation Engine (BCE) — unified cross-domain chain detection ─
+let bce = null;
+try {
+  bce = require('./behavioral-correlation-engine');
+  console.log('[RAYKAN/engine] Behavioral Correlation Engine loaded — cross-domain attack chains ACTIVE');
+} catch (e) {
+  console.warn('[RAYKAN/engine] behavioral-correlation-engine not found — BCE disabled');
+}
+
 // ── Context Validator (behavioral correlation — supplemental) ─────────────────
 let contextValidator = null;
 try {
@@ -67,7 +85,7 @@ const TimelineEngine = require('./timeline-engine');
 const RiskScorer     = require('./risk-scorer');
 
 // ── Constants ────────────────────────────────────────────────────
-const RAYKAN_VERSION     = '1.0.0';
+const RAYKAN_VERSION     = '2.0.0'; // v2.0: Global Detection Pipeline
 const MAX_EVENTS_BUFFER  = 50_000;   // stream-window max
 const DETECTION_TIMEOUT  = 30_000;   // 30 s per analysis job
 const BATCH_SIZE         = 500;      // events per processing batch
@@ -179,98 +197,164 @@ class RaykanEngine extends EventEmitter {
 
     if (!safeEvents.length) return results;
 
-    // ── Phase 1: Normalize (schema-tolerant) ────────────────────────
-    const normalized = this._normalizeEvents(safeEvents, context);
+    // ════════════════════════════════════════════════════════════════
+    //  GLOBAL DETECTION PIPELINE v2.0
+    //  Stage 1: Log Classification  (GLC)
+    //  Stage 2: Normalize
+    //  Stage 3: CEA Evidence Context build
+    //  Stage 4: Logsource Gate (enforced in SigmaEngine via GLC)
+    //  Stage 5: Detection (Sigma + UEBA)
+    //  Stage 6: Behavioral Correlation Engine (BCE) — unified chains
+    //  Stage 7: CEA Batch Validation (all detections)
+    //  Stage 8: AI Enrichment + CEA re-validation
+    //  Stage 9: IOC Enrichment
+    //  Stage 10: MITRE Mapping (CEA final guard)
+    //  Stage 11: Risk Scoring
+    //  Stage 12: Attack Chain Reconstruction
+    //  Stage 13: Timeline Building
+    // ════════════════════════════════════════════════════════════════
+
+    // ── Stage 1: Log Classification (GLC) ───────────────────────────
+    // Every event gets a _meta block with { domain, subDomain, confidence }
+    // This metadata is IMMUTABLE — downstream modules cannot change it.
+    let classified;
+    if (glc) {
+      classified = glc.classifyBatch(safeEvents);
+      const domainBreakdown = glc.getMetrics().domain_breakdown;
+      console.log(`[RAYKAN/engine] GLC classified ${classified.length} events:`, JSON.stringify(domainBreakdown));
+    } else {
+      classified = safeEvents;
+    }
+
+    // ── Stage 2: Normalize (schema-tolerant) ────────────────────────
+    const normalized = this._normalizeEvents(classified, context);
     results.processed = normalized.length;
     this._stats.eventsProcessed += normalized.length;
 
-    // ── Phase 1b: Build CEA EvidenceContext ──────────────────────────
-    // Build ONCE per ingest call; all downstream phases reuse it.
-    // This is the immutable evidence snapshot for this batch.
+    // ── Stage 3: Build CEA EvidenceContext ──────────────────────────
+    // Build ONCE per ingest call; ALL downstream stages reuse it.
+    // This is the immutable evidence snapshot for this entire batch.
     const evidenceCtx = cea ? cea.buildEvidence(normalized) : null;
+    results.evidenceFlags = evidenceCtx ? evidenceCtx.flags : {};
 
-    // ── Phase 2: Parallel detection pipeline ─────────────────────
+    // ── Stage 4 + 5: Parallel detection (Logsource Gate inside Sigma) ─
+    // SigmaEngine enforces GLC logsource compatibility internally.
+    // CEA post-evaluation is also applied inside sigma.detect().
     const [sigmaHits, anomalies] = await Promise.all([
-      this.sigma.detect(normalized),            // CEA is enforced inside sigma.detect()
+      this.sigma.detect(normalized, { evidenceCtx }),
       this.ueba.analyzeEvents(normalized),
     ]);
 
-    // ── Phase 2b: Unified behavioral correlation pipeline ─────────
-    // Generates supplemental detections for auth sequences (brute-force,
-    // PtH, account creation) correlated from multiple events.
-    // CEA is applied to correlated detections immediately after generation.
-    let correlatedHits = [];
-    if (contextValidator) {
+    // ── Stage 6: Behavioral Correlation Engine (BCE) ──────────────────
+    // BCE is the SINGLE global behavioral pipeline:
+    //   Auth → Privilege Escalation → Persistence (Windows)
+    //   SSH Brute → Root → Cron (Linux)
+    //   Recon → Web Exploit → Shell (Web)
+    //   Port Scan → Service Exploit → Exfil (Firewall)
+    //   SQLi → Dump → Exfil (Database)
+    //   Cross-domain chains linking all of the above
+    // BCE emits CEA-pre-validated correlated detections.
+    let bceResult = null;
+    let bceDetections = [];
+    if (bce) {
       try {
-        const rawCorrelated = contextValidator.buildCorrelatedDetections(normalized, sigmaHits);
-        // Apply CEA to correlated detections to prevent unchecked technique assignments
-        correlatedHits = cea
-          ? cea.validateBatch(rawCorrelated, normalized)
-          : rawCorrelated;
-        if (correlatedHits.length > 0) {
-          console.log(`[RAYKAN/engine] Correlation pipeline added ${correlatedHits.length} validated detection(s)`);
-          this._stats.correlatedDetections = (this._stats.correlatedDetections || 0) + correlatedHits.length;
+        bceResult = bce.correlate(normalized, sigmaHits, evidenceCtx);
+        bceDetections = bceResult.correlatedDetections || [];
+
+        if (bceResult.chains.length > 0) {
+          console.log(`[RAYKAN/engine] BCE found ${bceResult.chains.length} behavioral chain(s), ` +
+            `${bceResult.stats.crossDomainChains} cross-domain`);
+          this._stats.bceChains = (this._stats.bceChains || 0) + bceResult.chains.length;
         }
       } catch (e) {
-        console.warn('[RAYKAN/engine] Behavioral correlation failed:', e.message);
+        console.warn('[RAYKAN/engine] BCE error:', e.message);
       }
     }
 
-    // Merge sigma hits with correlated hits
-    const allSigmaHits = [...sigmaHits, ...correlatedHits];
-
-    // ── Phase 2c: CEA second-pass enforcement ─────────────────────
-    // Ensure any detections that bypassed the sigma CEA gate (e.g. correlated
-    // detections, externally-injected detections) are re-validated.
-    // This is the PRIMARY enforcement point — all detections must pass CEA.
-    const ceaVerified = cea
-      ? cea.validateBatch(allSigmaHits, normalized)
-      : allSigmaHits;
-
-    // ── Phase 3: AI augmentation ──────────────────────────────────
-    // AI enrichment may add or modify technique tags.
-    // CEA re-validation is applied AFTER AI enrichment to strip any
-    // techniques the AI added without evidence support.
-    let aiEnhanced = ceaVerified;
-    if (this.config.aiEnabled && ceaVerified.length > 0) {
-      const aiRaw  = await this.ai.enrichDetections(ceaVerified, normalized);
-      // Re-apply CEA after AI enrichment — AI cannot override CEA decisions
-      aiEnhanced   = cea ? cea.validateBatch(aiRaw, normalized) : aiRaw;
+    // Supplemental correlation from context validator (Windows auth sequences)
+    let contextCorrelated = [];
+    if (contextValidator) {
+      try {
+        const rawCorr = contextValidator.buildCorrelatedDetections(normalized, sigmaHits);
+        contextCorrelated = cea ? cea.validateBatch(rawCorr, normalized) : rawCorr;
+      } catch (e) {
+        console.warn('[RAYKAN/engine] Context validator correlation failed:', e.message);
+      }
     }
 
-    // ── Phase 4: IOC enrichment ───────────────────────────────────
+    // ── Merge all detection streams ───────────────────────────────────
+    // Order: Sigma → BCE → Context Validator supplemental
+    const allRawDetections = [
+      ...sigmaHits,
+      ...bceDetections,
+      ...contextCorrelated,
+    ];
+
+    // ── Stage 7: CEA Batch Validation (ALL detections) ────────────────
+    // This is the PRIMARY enforcement point.
+    // Every detection from every source passes through CEA.
+    // No downstream module may re-add a CEA-suppressed technique.
+    const ceaVerified = cea
+      ? cea.validateBatch(allRawDetections, normalized)
+      : allRawDetections;
+
+    // ── Stage 8: AI Enrichment + CEA re-validation ────────────────────
+    let aiEnhanced = ceaVerified;
+    if (this.config.aiEnabled && ceaVerified.length > 0) {
+      const aiRaw = await this.ai.enrichDetections(ceaVerified, normalized);
+      // Re-apply CEA — AI cannot override CEA decisions
+      aiEnhanced  = cea ? cea.validateBatch(aiRaw, normalized) : aiRaw;
+    }
+
+    // ── Stage 9: IOC enrichment ───────────────────────────────────────
     const enriched = await this.enricher.enrichBatch(aiEnhanced);
 
-    // ── Phase 5: MITRE mapping (CEA final guard inside mapDetection) ─
-    // Pass the shared evidenceCtx so the MITRE mapper's CEA guard
-    // doesn't rebuild context from scratch for each detection.
+    // ── Stage 10: MITRE Mapping (CEA final guard inside mapDetection) ──
     const mapped = enriched.map(det => ({
       ...det,
       mitre: this.mitre.mapDetection(det, evidenceCtx),
     }));
 
-    // ── Phase 6: Risk scoring ─────────────────────────────────────
+    // ── Stage 11: Risk Scoring ────────────────────────────────────────
     const scored = mapped.map(det => ({
       ...det,
       riskScore: this.scorer.scoreDetection(det, context),
     }));
 
-    // ── Phase 7: Attack-chain reconstruction ─────────────────────
-    const chains = this.forensics.reconstructChains(scored, normalized);
+    // ── Stage 12: Attack-chain reconstruction ─────────────────────────
+    // Merge BCE chains with forensics-engine chains
+    const forensicsChains = this.forensics.reconstructChains(scored, normalized);
+    const bceChainsFinal  = bceResult ? bceResult.chains : [];
+    const allChains       = [
+      ...forensicsChains,
+      ...bceChainsFinal.map(c => ({
+        id          : c.id,
+        label       : c.label,
+        stages      : c.techniques.map(t => t.id),
+        techniques  : c.techniques,
+        domain      : c.domain,
+        confidence  : c.confidence,
+        eventCount  : c.events.length,
+        crossDomain : c.domain === 'cross_domain',
+        source      : 'bce',
+      })),
+    ];
 
-    // ── Phase 8: Timeline building ────────────────────────────────
+    // ── Stage 13: Timeline building ───────────────────────────────────
     const timelineEvents = this.timeline.buildTimeline(normalized, scored);
 
-    // ── Aggregate results — always plain arrays (never null/object) ──
+    // ── Aggregate results — always plain arrays (never null/object) ───
     results.detections = normalizeDetections(scored,         'engine.scored');
     results.anomalies  = normalizeDetections(anomalies,      'engine.anomalies');
-    results.chains     = normalizeDetections(chains,         'engine.chains');
+    results.chains     = normalizeDetections(allChains,      'engine.chains');
     results.timeline   = normalizeDetections(timelineEvents, 'engine.timeline');
     results.riskScore  = this.scorer.aggregateRisk(scored);
     results.duration   = Date.now() - startTs;
 
-    // CEA metrics surfaced in results for observability
+    // Observability: surface GLC, CEA, BCE metrics
     results.ceaMetrics = cea ? cea.getMetrics() : null;
+    results.glcMetrics = glc ? glc.getMetrics()  : null;
+    results.bceStats   = bceResult ? bceResult.stats : null;
 
     this._stats.detectionsTriggered += results.detections.length;
     this._stats.anomaliesFound      += results.anomalies.length;

@@ -31,6 +31,14 @@ try {
   console.warn('[Sigma] central-evidence-authority not available — CEA gating disabled (UNSAFE)');
 }
 
+// ── Global Log Classifier (GLC) — domain-aware logsource gating ───
+let _glc = null;
+try {
+  _glc = require('./global-log-classifier');
+} catch (e) {
+  console.warn('[Sigma] global-log-classifier not available — domain gating uses legacy path');
+}
+
 // ── Context Validator (legacy — kept for correlateAuthSequence / buildCorrelatedDetections) ─
 let _contextValidator = null;
 try {
@@ -219,12 +227,24 @@ class SigmaEngine extends EventEmitter {
     return rawDetections;
   }
 
-  // ── CEA logsource pre-filter ────────────────────────────────────────────
-  // Returns false when the rule's tagged techniques are BLOCKED for this
-  // event source, so we skip rule evaluation entirely.
+  // ── CEA + GLC logsource pre-filter ─────────────────────────────────────
+  // Returns false when:
+  //   1. The rule's tagged techniques are BLOCKED for this event source (CEA)
+  //   2. The rule's logsource domain is incompatible with the event domain (GLC)
+  // This combination gives us strict domain-aware technique gating.
   _ceaLogsourceOk(rule, evt) {
+    // ── GLC domain gate: check if rule logsource is domain-compatible ──────
+    if (_glc && evt._meta?.classified) {
+      if (!_glc.isRuleCompatible(rule, evt)) {
+        return false;
+      }
+    }
+
+    // ── CEA technique-blocked-source gate ─────────────────────────────────
     if (!_cea || !rule.tags?.length) return true;
     const evtId = String(evt.eventId || evt.raw?.EventID || '');
+    const evtDomain = evt._meta?.domain || '';
+
     for (const tag of rule.tags) {
       const m = tag.toLowerCase().match(/attack\.(t\d+(?:\.\d+)?)/);
       if (!m) continue;
@@ -240,10 +260,20 @@ class SigmaEngine extends EventEmitter {
           if (flag === 'has_webserver_logs') {
             const src  = (evt.source || '').toLowerCase();
             const fmt  = (evt.format || '').toLowerCase();
-            return src.includes('web') || src.includes('iis') || fmt === 'webserver' || evt.url != null;
+            return evtDomain === 'web' || src.includes('web') || src.includes('iis') ||
+                   fmt === 'webserver' || evt.url != null;
           }
           if (flag === 'has_web_parent_process') {
             return _cea.EvidenceContext.eventHasWebParent(evt);
+          }
+          if (flag === 'has_linux_events') {
+            return evtDomain === 'linux';
+          }
+          if (flag === 'multi_host_activity' || flag === 'has_firewall_logs') {
+            return evtDomain === 'firewall' || evtDomain === 'network';
+          }
+          if (flag === 'has_database_events') {
+            return evtDomain === 'database';
           }
           return false;
         });
