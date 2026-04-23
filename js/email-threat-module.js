@@ -200,9 +200,23 @@ const ETIModule = (() => {
       }
       state.container = container;
 
+      // Ensure the page container fills the viewport
+      // navigateTo() sets display:'' on the .page div — we need it to be a
+      // flex column so #etiModuleRoot (height:100%) can fill the space.
+      container.style.height   = '100%';
+      container.style.display  = 'flex';
+      container.style.flexDirection = 'column';
+      container.style.padding  = '0';
+      container.style.overflow = 'hidden';
+
       // Inject HTML
       container.innerHTML = buildModuleHTML();
       state.mounted = true;
+
+      // RC-FIX v4.0: Add .active class to #etiModuleRoot so CSS shows it
+      // (.eti-module { display:none } .eti-module.active { display:flex })
+      const root = container.querySelector('#etiModuleRoot');
+      if (root) root.classList.add('active');
 
       // Bind events & load data
       bindEvents(container);
@@ -483,7 +497,9 @@ const ETIModule = (() => {
 
   function switchTab(tab) {
     state.currentTab = tab;
-    document.querySelectorAll('.eti-tab-btn').forEach(t =>
+    // RC-FIX v4.0: Scope query to container to avoid collisions with other page tabs
+    const scope = state.container || document;
+    scope.querySelectorAll('.eti-tab-btn').forEach(t =>
       t.classList.toggle('active', t.dataset.tab === tab));
     if (state.currentAnalysis) renderTabContent(tab, state.currentAnalysis);
   }
@@ -527,11 +543,12 @@ const ETIModule = (() => {
   async function runDemo(scenario) {
     if (state.analyzing) return;
     showAnalyzing(true);
+    animateAnalyzingSteps();
 
     try {
-      animateAnalyzingSteps();
+      // API._fetch returns null on network/non-OK errors — always fall back to mock
       const result = await API.analyzeDemo(scenario);
-      if (result && result.success) {
+      if (result && result.success && result.data) {
         processAnalysisResult(result.data);
         const tier = result.data.risk?.tier || 'unknown';
         showToast(
@@ -540,11 +557,13 @@ const ETIModule = (() => {
           tier === 'critical' || tier === 'high' ? 'critical' : 'info'
         );
       } else {
-        showToast('Analysis Warning', result?.error || 'Unexpected response — using demo data', 'info');
+        // RC-FIX v4.0: null result (network error) or non-success → use rich offline mock data
+        console.info('[ETI-AARE] Backend unreachable or returned non-success — using offline demo data for:', scenario);
+        showToast('Demo Mode', `Running ${scenario.toUpperCase()} scenario with demo data`, 'info');
         processMockAnalysis(scenario);
       }
     } catch (err) {
-      console.warn('[ETI-AARE] API unavailable, using offline mock data:', err.message);
+      console.warn('[ETI-AARE] runDemo error, using offline mock data:', err.message);
       showToast('Offline Demo Mode', 'Backend not reachable — showing demo data', 'info');
       processMockAnalysis(scenario);
     } finally {
@@ -1602,14 +1621,18 @@ IMMEDIATE ACTION: Verify with CEO via phone. Do NOT reply to this email or proce
     const overlay = document.getElementById('etiAnalyzingOverlay');
     if (overlay) overlay.classList.toggle('active', visible);
     if (!visible) {
-      document.querySelectorAll('.eti-analyzing-step').forEach(s => {
+      // RC-FIX v4.0: Scope to container to avoid conflicts with other pages
+      const scope = state.container || document;
+      scope.querySelectorAll('.eti-analyzing-step').forEach(s => {
         s.classList.remove('active', 'done');
       });
     }
   }
 
   function animateAnalyzingSteps() {
-    const steps = document.querySelectorAll('.eti-analyzing-step');
+    // RC-FIX v4.0: Scope to container
+    const scope = state.container || document;
+    const steps = scope.querySelectorAll('.eti-analyzing-step');
     let i = 0;
     const iv = setInterval(() => {
       if (i > 0 && steps[i - 1]) steps[i - 1].classList.replace('active', 'done');
