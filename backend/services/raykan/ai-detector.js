@@ -21,6 +21,16 @@ const EventEmitter   = require('events');
 const crypto         = require('crypto');
 const SigmaBuilder   = require('./sigma-rule-builder');   // v2.0 safe builder
 
+// ── Central Evidence Authority (CEA) — AI post-enrichment guard ───────────────
+// The AI enricher may add technique tags based on LLM reasoning.
+// Those tags MUST be re-validated by CEA before they leave this module.
+let _cea = null;
+try {
+  _cea = require('./central-evidence-authority');
+} catch (e) {
+  console.warn('[AI-Detector] central-evidence-authority not available — AI tag re-validation disabled');
+}
+
 // ── MITRE → LLM Context map ───────────────────────────────────────
 const TECHNIQUE_DESCRIPTIONS = {
   'T1059.001': 'PowerShell command execution — attackers use encoded commands to evade detection',
@@ -153,6 +163,8 @@ class AIDetector extends EventEmitter {
   }
 
   // ── Enrich Detections with AI Context ────────────────────────────
+  // AI enrichment adds contextual analysis but MUST NOT override CEA decisions.
+  // Any technique tags introduced or modified by AI are re-validated by CEA.
   async enrichDetections(detections, events) {
     if (!this._ready) return detections;
 
@@ -173,21 +185,35 @@ class AIDetector extends EventEmitter {
           this._cache.set(cacheKey, analysis);
         }
 
-        enriched.push({
+        // Build enriched detection — AI context only; do NOT modify tags here
+        const enrichedDet = {
           ...det,
-          ai: analysis,
-          summary         : analysis?.summary || null,
+          ai               : analysis,
+          summary          : analysis?.summary || null,
           attackStage      : analysis?.attackStage || null,
           falsePositiveProb: analysis?.falsePositiveProbability || null,
           recommendedAction: analysis?.recommendedAction || null,
+          // Adjust confidence based on AI assessment, but respect CEA suppressions
           confidence       : analysis?.isMalicious === true
             ? Math.min(100, det.confidence + 15)
             : analysis?.isMalicious === false
               ? Math.max(10, det.confidence - 20)
               : det.confidence,
-        });
+        };
 
-        this.emit('ai:detection', enriched[enriched.length - 1]);
+        // ── CEA re-validation after AI enrichment ──────────────────
+        // If AI analysis added new technique tags or the detection was
+        // previously un-validated, re-run CEA to strip unsupported techniques.
+        // This prevents LLM hallucination from introducing invalid mappings.
+        let finalDet = enrichedDet;
+        if (_cea && !enrichedDet._ceaValidated) {
+          const evtBatch  = Array.isArray(events) ? events : [evt];
+          const evtCtx    = _cea.buildEvidence(evtBatch, [enrichedDet]);
+          finalDet = _cea.validateDetection(enrichedDet, evtCtx);
+        }
+
+        enriched.push(finalDet);
+        this.emit('ai:detection', finalDet);
       } catch (e) {
         this._stats.errors++;
         enriched.push(det); // Return un-enriched on error

@@ -36,12 +36,23 @@ const {
   metrics: normalizerMetrics,
 } = require('./ingestion-normalizer');
 
-// ── Context Validator (false-positive suppression + behavioral correlation)
+// ── Central Evidence Authority (CEA) — mandatory global gate ─────────────────
+// All technique assignments MUST pass through the CEA.  No downstream module
+// (AI enricher, MITRE mapper, narrative builder) may re-add a suppressed tag.
+let cea = null;
+try {
+  cea = require('./central-evidence-authority');
+  console.log('[RAYKAN/engine] Central Evidence Authority loaded — global evidence gating ACTIVE');
+} catch (e) {
+  console.error('[RAYKAN/engine] CRITICAL: central-evidence-authority not found — CEA gating DISABLED');
+}
+
+// ── Context Validator (behavioral correlation — supplemental) ─────────────────
 let contextValidator = null;
 try {
   contextValidator = require('./detection-context-validator');
 } catch (e) {
-  console.warn('[RAYKAN/engine] detection-context-validator not found — context gating disabled');
+  console.warn('[RAYKAN/engine] detection-context-validator not found — behavioral correlation disabled');
 }
 
 // ── Sub-engines ──────────────────────────────────────────────────
@@ -173,44 +184,69 @@ class RaykanEngine extends EventEmitter {
     results.processed = normalized.length;
     this._stats.eventsProcessed += normalized.length;
 
+    // ── Phase 1b: Build CEA EvidenceContext ──────────────────────────
+    // Build ONCE per ingest call; all downstream phases reuse it.
+    // This is the immutable evidence snapshot for this batch.
+    const evidenceCtx = cea ? cea.buildEvidence(normalized) : null;
+
     // ── Phase 2: Parallel detection pipeline ─────────────────────
     const [sigmaHits, anomalies] = await Promise.all([
-      this.sigma.detect(normalized),
+      this.sigma.detect(normalized),            // CEA is enforced inside sigma.detect()
       this.ueba.analyzeEvents(normalized),
     ]);
 
-    // ── Phase 2b: Context-aware behavioral correlation ────────────
+    // ── Phase 2b: Unified behavioral correlation pipeline ─────────
     // Generates supplemental detections for auth sequences (brute-force,
-    // PtH, account creation) that sigma rules can't correlate alone.
+    // PtH, account creation) correlated from multiple events.
+    // CEA is applied to correlated detections immediately after generation.
     let correlatedHits = [];
     if (contextValidator) {
       try {
-        correlatedHits = contextValidator.buildCorrelatedDetections(normalized, sigmaHits);
+        const rawCorrelated = contextValidator.buildCorrelatedDetections(normalized, sigmaHits);
+        // Apply CEA to correlated detections to prevent unchecked technique assignments
+        correlatedHits = cea
+          ? cea.validateBatch(rawCorrelated, normalized)
+          : rawCorrelated;
         if (correlatedHits.length > 0) {
-          console.log(`[RAYKAN/engine] Context correlator added ${correlatedHits.length} supplemental detection(s)`);
+          console.log(`[RAYKAN/engine] Correlation pipeline added ${correlatedHits.length} validated detection(s)`);
           this._stats.correlatedDetections = (this._stats.correlatedDetections || 0) + correlatedHits.length;
         }
       } catch (e) {
-        console.warn('[RAYKAN/engine] Context correlation failed:', e.message);
+        console.warn('[RAYKAN/engine] Behavioral correlation failed:', e.message);
       }
     }
 
-    // Merge sigma hits with correlated hits (deduplication by ruleId handled downstream)
+    // Merge sigma hits with correlated hits
     const allSigmaHits = [...sigmaHits, ...correlatedHits];
 
+    // ── Phase 2c: CEA second-pass enforcement ─────────────────────
+    // Ensure any detections that bypassed the sigma CEA gate (e.g. correlated
+    // detections, externally-injected detections) are re-validated.
+    // This is the PRIMARY enforcement point — all detections must pass CEA.
+    const ceaVerified = cea
+      ? cea.validateBatch(allSigmaHits, normalized)
+      : allSigmaHits;
+
     // ── Phase 3: AI augmentation ──────────────────────────────────
-    let aiEnhanced = allSigmaHits;
-    if (this.config.aiEnabled && allSigmaHits.length > 0) {
-      aiEnhanced = await this.ai.enrichDetections(allSigmaHits, normalized);
+    // AI enrichment may add or modify technique tags.
+    // CEA re-validation is applied AFTER AI enrichment to strip any
+    // techniques the AI added without evidence support.
+    let aiEnhanced = ceaVerified;
+    if (this.config.aiEnabled && ceaVerified.length > 0) {
+      const aiRaw  = await this.ai.enrichDetections(ceaVerified, normalized);
+      // Re-apply CEA after AI enrichment — AI cannot override CEA decisions
+      aiEnhanced   = cea ? cea.validateBatch(aiRaw, normalized) : aiRaw;
     }
 
     // ── Phase 4: IOC enrichment ───────────────────────────────────
     const enriched = await this.enricher.enrichBatch(aiEnhanced);
 
-    // ── Phase 5: MITRE mapping ────────────────────────────────────
+    // ── Phase 5: MITRE mapping (CEA final guard inside mapDetection) ─
+    // Pass the shared evidenceCtx so the MITRE mapper's CEA guard
+    // doesn't rebuild context from scratch for each detection.
     const mapped = enriched.map(det => ({
       ...det,
-      mitre: this.mitre.mapDetection(det),
+      mitre: this.mitre.mapDetection(det, evidenceCtx),
     }));
 
     // ── Phase 6: Risk scoring ─────────────────────────────────────
@@ -232,6 +268,9 @@ class RaykanEngine extends EventEmitter {
     results.timeline   = normalizeDetections(timelineEvents, 'engine.timeline');
     results.riskScore  = this.scorer.aggregateRisk(scored);
     results.duration   = Date.now() - startTs;
+
+    // CEA metrics surfaced in results for observability
+    results.ceaMetrics = cea ? cea.getMetrics() : null;
 
     this._stats.detectionsTriggered += results.detections.length;
     this._stats.anomaliesFound      += results.anomalies.length;
@@ -352,7 +391,8 @@ class RaykanEngine extends EventEmitter {
 
   // ── Stats & Health ────────────────────────────────────────────────
   getStats() {
-    const cvMetrics = contextValidator ? contextValidator.getMetrics() : null;
+    const cvMetrics  = contextValidator ? contextValidator.getMetrics() : null;
+    const ceaMetrics = cea ? cea.getMetrics() : null;
     return {
       ...this._stats,
       version     : this.version,
@@ -366,11 +406,21 @@ class RaykanEngine extends EventEmitter {
         ueba     : this.ueba.getStatus(),
         forensics: this.forensics.getStatus(),
       },
+      ceaGating: ceaMetrics ? {
+        active              : true,
+        total_evaluated     : ceaMetrics.total_evaluated,
+        allowed             : ceaMetrics.allowed,
+        suppressed          : ceaMetrics.suppressed,
+        downgraded          : ceaMetrics.downgraded,
+        blocked_source      : ceaMetrics.blocked_source,
+        keyword_blocked     : ceaMetrics.keyword_blocked,
+        fp_reason_breakdown : ceaMetrics.fp_reason_breakdown,
+      } : { active: false, reason: 'CEA module not loaded' },
       contextValidation: cvMetrics ? {
-        suppressed_fp_count    : cvMetrics.suppressed_count,
+        suppressed_fp_count     : cvMetrics.suppressed_count,
         adjusted_detection_count: cvMetrics.adjusted_count,
-        validated_count        : cvMetrics.validated_count,
-        fp_reason_breakdown    : cvMetrics.fp_reasons,
+        validated_count         : cvMetrics.validated_count,
+        fp_reason_breakdown     : cvMetrics.fp_reasons,
       } : { available: false },
     };
   }
@@ -477,13 +527,12 @@ class RaykanEngine extends EventEmitter {
   }
 }
 
-// ── Static exports: normalizer utilities accessible as engine properties ──
-// Allows route files and tests to use RaykanEngine.normalizeDetections()
-// without a separate require, keeping the API surface minimal.
+// ── Static exports: utilities accessible as engine properties ────────────────
 RaykanEngine.normalizeDetections = normalizeDetections;
 RaykanEngine.parseRawInput       = parseRawInput;
 RaykanEngine.processEvent        = processEvent;
 RaykanEngine.normalizerMetrics   = normalizerMetrics;
 RaykanEngine.contextValidator    = contextValidator;
+RaykanEngine.cea                 = cea;  // Central Evidence Authority
 
 module.exports = RaykanEngine;

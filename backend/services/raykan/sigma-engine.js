@@ -22,12 +22,21 @@ const EventEmitter = require('events');
 const path         = require('path');
 const crypto       = require('crypto');
 
-// ── Context Validator (telemetry-source + evidence gating) ────────
+// ── Central Evidence Authority (CEA) — single source of truth ───
+// ALL technique assignments pass through the CEA.  No bypass is allowed.
+let _cea = null;
+try {
+  _cea = require('./central-evidence-authority');
+} catch (e) {
+  console.warn('[Sigma] central-evidence-authority not available — CEA gating disabled (UNSAFE)');
+}
+
+// ── Context Validator (legacy — kept for correlateAuthSequence / buildCorrelatedDetections) ─
 let _contextValidator = null;
 try {
   _contextValidator = require('./detection-context-validator');
 } catch (e) {
-  console.warn('[Sigma] detection-context-validator not available — running without context gating');
+  console.warn('[Sigma] detection-context-validator not available');
 }
 
 // ── Built-in Sigma Rule Definitions ──────────────────────────────
@@ -102,10 +111,17 @@ class SigmaEngine extends EventEmitter {
 
   // ── Load Rules ───────────────────────────────────────────────────
   async loadRules() {
-    let loaded = 0;
+    let loaded   = 0;
+    let stripped = 0;
     for (const rule of ALL_RULES) {
       try {
-        const compiled = this._compileRule(rule);
+        // ── CEA pre-sanitisation: remove technique tags that are structurally
+        //    impossible for this rule to ever produce valid evidence for.
+        //    This prevents 6 000+ auto-generated rules from matching auth events
+        //    against T1190 / T1021.002 / T1550.002 at rule-load time.
+        const sanitized = _cea ? _cea.sanitizeRuleTags(rule) : rule;
+        if (sanitized._ceaSanitized) stripped++;
+        const compiled = this._compileRule(sanitized);
         this._indexRule(compiled);
         loaded++;
       } catch (e) {
@@ -113,7 +129,7 @@ class SigmaEngine extends EventEmitter {
         console.warn(`[Sigma] Rule compile error: ${rule.title || 'unknown'} — ${e.message}`);
       }
     }
-    console.log(`[Sigma] Loaded ${loaded} rules (${this._stats.errors} errors)`);
+    console.log(`[Sigma] Loaded ${loaded} rules (${stripped} CEA-sanitised, ${this._stats.errors} errors)`);
     return loaded;
   }
 
@@ -141,15 +157,16 @@ class SigmaEngine extends EventEmitter {
    *                          applyContextValidation: boolean (default true) }
    */
   async detect(normalizedEvents, opts = {}) {
-    const rawDetections = [];
-    const MAX_CANDIDATES   = opts.maxCandidates || 2000;
-    const applyValidation  = opts.applyContextValidation !== false; // default true
+    const rawDetections   = [];
+    const MAX_CANDIDATES  = opts.maxCandidates || 2000;
+    const applyCEA        = opts.applyCEA !== false; // default true — cannot be disabled in prod
+    const applyValidation = opts.applyContextValidation !== false; // legacy compat
 
     for (const evt of normalizedEvents) {
       this._stats.evaluated++;
       const candidateSet = this._getCandidateRules(evt);
 
-      // If candidate set is huge (e.g., all wildcard rules), cap to avoid timeouts
+      // Cap candidate set to avoid timeouts on wildcard-heavy rule sets
       const candidates = candidateSet.size > MAX_CANDIDATES
         ? Array.from(candidateSet).slice(0, MAX_CANDIDATES)
         : candidateSet;
@@ -158,11 +175,15 @@ class SigmaEngine extends EventEmitter {
         const rule = this._rules.get(ruleId);
         if (!rule) continue;
 
-        // ── Logsource compatibility pre-filter ──────────────────
-        // Reject evaluation entirely when the rule's logsource
-        // category is categorically incompatible with the event
-        // format (e.g. webserver rules against Windows auth events).
-        if (applyValidation && _contextValidator && !this._logsourceCompatible(rule, evt)) {
+        // ── CEA logsource pre-filter (replaces legacy _logsourceCompatible) ──
+        // Use the CEA's TECHNIQUE_BLOCKED_SOURCES to skip evaluation of rules
+        // that could never produce valid technique assignments for this event.
+        if (applyCEA && _cea && !this._ceaLogsourceOk(rule, evt)) {
+          this._stats.logsourceSkipped = (this._stats.logsourceSkipped || 0) + 1;
+          continue;
+        }
+        // Legacy logsource check (kept as fallback when CEA is unavailable)
+        if (!applyCEA && _contextValidator && !this._logsourceCompatible(rule, evt)) {
           this._stats.logsourceSkipped = (this._stats.logsourceSkipped || 0) + 1;
           continue;
         }
@@ -181,15 +202,55 @@ class SigmaEngine extends EventEmitter {
       }
     }
 
-    // ── Post-evaluation context validation ──────────────────────
-    // Filter/adjust detections whose tagged techniques lack supporting
-    // telemetry evidence (e.g. T1190 without web logs, T1021 without
-    // multi-host evidence).
-    if (applyValidation && _contextValidator && rawDetections.length > 0) {
+    if (rawDetections.length === 0) return rawDetections;
+
+    // ── CEA post-evaluation gate (primary) ─────────────────────────────────
+    // Applies the Central Evidence Authority to every detection.  This is the
+    // AUTHORITATIVE gate — it runs even if the logsource pre-filter missed a rule.
+    if (applyCEA && _cea) {
+      return _cea.validateBatch(rawDetections, normalizedEvents);
+    }
+
+    // ── Legacy context validation fallback ─────────────────────────────────
+    if (applyValidation && _contextValidator) {
       return _contextValidator.filterDetectionsByContext(rawDetections, normalizedEvents);
     }
 
     return rawDetections;
+  }
+
+  // ── CEA logsource pre-filter ────────────────────────────────────────────
+  // Returns false when the rule's tagged techniques are BLOCKED for this
+  // event source, so we skip rule evaluation entirely.
+  _ceaLogsourceOk(rule, evt) {
+    if (!_cea || !rule.tags?.length) return true;
+    const evtId = String(evt.eventId || evt.raw?.EventID || '');
+    for (const tag of rule.tags) {
+      const m = tag.toLowerCase().match(/attack\.(t\d+(?:\.\d+)?)/);
+      if (!m) continue;
+      const tid     = m[1].toUpperCase();
+      const blocked = _cea.TECHNIQUE_BLOCKED_SOURCES[tid];
+      if (!blocked) continue;
+
+      // If the event's ID is blocked for this technique AND no web evidence exists,
+      // skip the rule evaluation entirely.
+      if (evtId && blocked.blockedEventIds.has(evtId)) {
+        // Check exceptions using a lightweight evidence proxy
+        const exceptOk = blocked.exceptWhen?.some(flag => {
+          if (flag === 'has_webserver_logs') {
+            const src  = (evt.source || '').toLowerCase();
+            const fmt  = (evt.format || '').toLowerCase();
+            return src.includes('web') || src.includes('iis') || fmt === 'webserver' || evt.url != null;
+          }
+          if (flag === 'has_web_parent_process') {
+            return _cea.EvidenceContext.eventHasWebParent(evt);
+          }
+          return false;
+        });
+        if (!exceptOk) return false;
+      }
+    }
+    return true;
   }
 
   // ── Logsource compatibility check ────────────────────────────────
