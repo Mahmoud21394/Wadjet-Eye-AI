@@ -477,6 +477,10 @@ app.get('/api/rbac/roles', (req, res) => {
 // NOTE: Must be BEFORE app.use(verifyToken) below.
 app.use('/api/raykan', raykanEngineRoutes);
 
+// ETI-AARE Email Threat Intelligence Engine v1.0 — public for demo/testing
+const emailThreatRoutes = require('./routes/email-threat');
+app.use('/api/email-threat', emailThreatRoutes);
+
 // /api/news — Cyber News is public (no user-specific data in news articles).
 // Registered before verifyToken so unauthenticated clients (demo mode, public
 // dashboard) can read news. The POST /ingest endpoint inside newsRoutes does its
