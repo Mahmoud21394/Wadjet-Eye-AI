@@ -150,21 +150,23 @@ const TECHNIQUE_EVIDENCE_RULES = {
   'T1110': {
     label: 'Brute Force',
     requiresAny: [
-      { type: 'evidence_flag',  flag: 'multiple_4625_events' },
+      { type: 'evidence_flag',  flag: 'multiple_4625_events' },      // Windows
+      { type: 'evidence_flag',  flag: 'multiple_ssh_failures' },     // Linux SSH
       { type: 'cmd_contains',   field: 'commandLine', values: ['hydra', 'medusa', 'ncrack', 'crowbar', '-password', '-spray'] },
     ],
     suppressedAlternative: 'T1078',
-    reason: 'T1110 requires ≥3 failed logon events; single 4625 → T1078',
+    reason: 'T1110 requires ≥3 failed logon events (Windows 4625 or Linux SSH); single failure → T1078',
   },
 
   // ── T1110.001 — Password Guessing ─────────────────────────────────────────
   'T1110.001': {
     label: 'Password Guessing',
     requiresAny: [
-      { type: 'evidence_flag',  flag: 'multiple_4625_events' },
+      { type: 'evidence_flag',  flag: 'multiple_4625_events' },      // Windows
+      { type: 'evidence_flag',  flag: 'multiple_ssh_failures' },     // Linux SSH
     ],
     suppressedAlternative: 'T1078',
-    reason: 'T1110.001 requires multiple (≥3) failed logon events',
+    reason: 'T1110.001 requires multiple (≥3) failed logon events (Windows 4625 or Linux SSH)',
   },
 
   // ── T1110.003 — Password Spraying ─────────────────────────────────────────
@@ -221,6 +223,353 @@ const TECHNIQUE_EVIDENCE_RULES = {
     suppressedAlternative: null,
     reason: 'T1071.004 requires DNS or network telemetry',
   },
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  LINUX / UNIX TECHNIQUES
+  // ═══════════════════════════════════════════════════════════════════
+
+  // ── T1110 (Linux) — SSH Brute Force ──────────────────────────────────────
+  // Already defined for Windows; extend via evidence_flag (multi-platform)
+
+  // ── T1021.004 — SSH Lateral Movement ─────────────────────────────────────
+  'T1021.004': {
+    label: 'Remote Services: SSH',
+    requiresAny: [
+      { type: 'evidence_flag',  flag: 'ssh_lateral_movement' },
+      { type: 'evidence_flag',  flag: 'multi_host_activity' },
+      { type: 'logsource_cat',  categories: ['linux', 'syslog', 'auth', 'ssh'] },
+      { type: 'process_match',  field: 'process',    values: ['ssh','sshd','openssh','putty','plink'] },
+      { type: 'cmd_contains',   field: 'commandLine', values: ['ssh ', '-i ', 'StrictHostKeyChecking', 'ssh-agent'] },
+      { type: 'port_match',     ports: ['22'] },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1021.004 requires SSH process, port 22, or Linux/SSH telemetry',
+  },
+
+  // ── T1059.004 — Unix Shell ────────────────────────────────────────────────
+  'T1059.004': {
+    label: 'Command and Scripting Interpreter: Unix Shell',
+    requiresAny: [
+      { type: 'logsource_cat',  categories: ['linux', 'syslog', 'auditd', 'auth'] },
+      { type: 'process_match',  field: 'process',    values: ['bash','sh','zsh','ksh','csh','tcsh','dash','fish'] },
+      { type: 'cmd_contains',   field: 'commandLine', values: ['/bin/sh','/bin/bash','/usr/bin/','/etc/'] },
+      { type: 'evidence_flag',  flag: 'has_linux_events' },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1059.004 requires Unix/Linux shell process or Linux telemetry',
+  },
+
+  // ── T1548.001 — Setuid/Setgid ─────────────────────────────────────────────
+  'T1548.001': {
+    label: 'Abuse Elevation Control: Setuid and Setgid',
+    requiresAny: [
+      { type: 'logsource_cat',  categories: ['linux', 'auditd'] },
+      { type: 'cmd_contains',   field: 'commandLine', values: ['chmod +s', 'chmod u+s', 'setuid', 'setgid', 'chmod 4', 'chmod 6'] },
+      { type: 'evidence_flag',  flag: 'has_linux_events' },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1548.001 requires Linux/auditd telemetry or setuid command',
+  },
+
+  // ── T1053.003 — Cron ─────────────────────────────────────────────────────
+  'T1053.003': {
+    label: 'Scheduled Task/Job: Cron',
+    requiresAny: [
+      { type: 'logsource_cat',  categories: ['linux', 'syslog', 'auditd', 'cron'] },
+      { type: 'process_match',  field: 'process',    values: ['cron','crond','crontab','at','atd'] },
+      { type: 'cmd_contains',   field: 'commandLine', values: ['crontab','cron.d','cron.daily','cron.hourly','at '] },
+      { type: 'evidence_flag',  flag: 'has_linux_events' },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1053.003 requires Linux cron telemetry or crontab command',
+  },
+
+  // ── T1078.003 — Local Accounts (Linux) ───────────────────────────────────
+  'T1078.003': {
+    label: 'Valid Accounts: Local Accounts',
+    requiresAny: [
+      { type: 'evidence_flag',  flag: 'linux_auth_success' },
+      { type: 'evidence_flag',  flag: 'linux_ssh_success' },
+      { type: 'logsource_cat',  categories: ['linux', 'syslog', 'auth'] },
+      { type: 'cmd_contains',   field: 'message', values: ['Accepted password','Accepted publickey','session opened'] },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1078.003 requires Linux authentication telemetry',
+  },
+
+  // ── T1098 — Account Manipulation (Linux) ─────────────────────────────────
+  'T1098': {
+    label: 'Account Manipulation',
+    requiresAny: [
+      { type: 'cmd_contains',   field: 'commandLine', values: ['usermod','chage','passwd','visudo','sudoers','ssh-copy-id'] },
+      { type: 'cmd_contains',   field: 'message',     values: ['usermod','chage','visudo'] },
+      { type: 'event_id',       ids: ['4738','4781','4782','4740'] },
+      { type: 'logsource_cat',  categories: ['linux', 'auditd'] },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1098 requires account manipulation command or telemetry',
+  },
+
+  // ── T1562.001 — Disable Security Tools (Linux) ───────────────────────────
+  'T1562.001': {
+    label: 'Impair Defenses: Disable or Modify Tools',
+    requiresAny: [
+      { type: 'cmd_contains',   field: 'commandLine', values: [
+          'setenforce 0','systemctl stop auditd','service iptables stop',
+          'ufw disable','iptables -F','chkconfig --off','systemctl disable',
+          'Set-MpPreference -DisableRealtimeMonitoring','sc stop','net stop',
+          'bcdedit /set','wbadmin delete',
+        ]
+      },
+      { type: 'event_id',       ids: ['4689','1102'] },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1562.001 requires concrete security-tool-disable command',
+  },
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  FIREWALL / NETWORK TECHNIQUES
+  // ═══════════════════════════════════════════════════════════════════
+
+  // ── T1046 — Network Service Scanning ─────────────────────────────────────
+  'T1046': {
+    label: 'Network Service Scanning',
+    requiresAny: [
+      { type: 'logsource_cat',  categories: ['network', 'firewall', 'netflow', 'zeek'] },
+      { type: 'evidence_flag',  flag: 'has_network_scan' },
+      { type: 'cmd_contains',   field: 'commandLine', values: ['nmap','masscan','zmap','nessus','-sV','-sS','-sT','--scan-delay'] },
+      { type: 'evidence_flag',  flag: 'port_scan_detected' },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1046 requires network scan telemetry or scanner tool evidence',
+  },
+
+  // ── T1498 — Network Denial of Service ────────────────────────────────────
+  'T1498': {
+    label: 'Network Denial of Service',
+    requiresAny: [
+      { type: 'logsource_cat',  categories: ['network', 'firewall', 'netflow'] },
+      { type: 'evidence_flag',  flag: 'high_volume_traffic' },
+      { type: 'evidence_flag',  flag: 'connection_rate_spike' },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1498 requires network flow or firewall telemetry showing high volume',
+  },
+
+  // ── T1572 — Protocol Tunneling ────────────────────────────────────────────
+  'T1572': {
+    label: 'Protocol Tunneling',
+    requiresAny: [
+      { type: 'logsource_cat',  categories: ['network', 'firewall', 'dns', 'proxy'] },
+      { type: 'cmd_contains',   field: 'commandLine', values: ['iodine','dnscat','icmptunnel','ptunnel','chisel','ngrok','cloudflared'] },
+      { type: 'evidence_flag',  flag: 'dns_tunneling_detected' },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1572 requires tunneling tool evidence or network telemetry',
+  },
+
+  // ── T1048 — Exfiltration Over Alternative Protocol ───────────────────────
+  'T1048': {
+    label: 'Exfiltration Over Alternative Protocol',
+    requiresAny: [
+      { type: 'logsource_cat',  categories: ['network', 'firewall', 'proxy', 'dns'] },
+      { type: 'evidence_flag',  flag: 'high_outbound_data' },
+      { type: 'cmd_contains',   field: 'commandLine', values: ['scp ','sftp ','ftp ','curl ','wget ','nc ','ncat ','openssl s_client'] },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1048 requires network/firewall telemetry or exfil tool evidence',
+  },
+
+  // ── T1040 — Network Sniffing ──────────────────────────────────────────────
+  'T1040': {
+    label: 'Network Sniffing',
+    requiresAny: [
+      { type: 'cmd_contains',   field: 'commandLine', values: ['tcpdump','wireshark','tshark','windump','networkminer','pktmon','netsh trace'] },
+      { type: 'process_match',  field: 'process',    values: ['tcpdump','wireshark','tshark','windump','networkMiner'] },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1040 requires packet-capture tool evidence',
+  },
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  WEB SERVER / APPLICATION TECHNIQUES
+  // ═══════════════════════════════════════════════════════════════════
+
+  // ── T1505.003 — Web Shell ─────────────────────────────────────────────────
+  'T1505.003': {
+    label: 'Server Software Component: Web Shell',
+    requiresAny: [
+      { type: 'evidence_flag',  flag: 'has_web_parent_process' },
+      { type: 'evidence_flag',  flag: 'has_webserver_logs' },
+      { type: 'logsource_cat',  categories: ['webserver', 'web', 'iis', 'apache', 'nginx'] },
+      { type: 'cmd_contains',   field: 'commandLine', values: ['cmd.exe','powershell','/bin/sh','/bin/bash','whoami','net user'] },
+      { type: 'process_match',  field: 'parentProc',  values: ['w3wp.exe','httpd','nginx','php','apache','tomcat'] },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1505.003 requires web-server parent process or web telemetry',
+  },
+
+  // ── T1190.001 — SQL Injection (sub-technique, mapped via T1190) ──────────
+  // T1190 is the parent — same requirements apply
+
+  // ── T1059.007 — JavaScript / Web Scripts ─────────────────────────────────
+  'T1059.007': {
+    label: 'Command and Scripting Interpreter: JavaScript',
+    requiresAny: [
+      { type: 'logsource_cat',  categories: ['webserver', 'web', 'proxy'] },
+      { type: 'process_match',  field: 'process',    values: ['node','nodejs','wscript.exe','cscript.exe','mshta.exe','jscript'] },
+      { type: 'evidence_flag',  flag: 'has_webserver_logs' },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1059.007 requires web/script engine process or web telemetry',
+  },
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  DATABASE TECHNIQUES
+  // ═══════════════════════════════════════════════════════════════════
+
+  // ── T1190 (DB variant) — SQL Injection via DB logs ────────────────────────
+  // Handled by T1190 above — add db_evidence_flag support
+
+  // ── T1005 — Data from Local System (Database Exfil) ──────────────────────
+  'T1005': {
+    label: 'Data from Local System',
+    requiresAny: [
+      { type: 'logsource_cat',  categories: ['database', 'mssql', 'mysql', 'postgresql'] },
+      { type: 'cmd_contains',   field: 'commandLine', values: ['SELECT ','DUMP ','backup','mysqldump','pg_dump','bcp ','sqlcmd','BULK INSERT'] },
+      { type: 'evidence_flag',  flag: 'has_database_exfil' },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1005 requires database telemetry or data-export command',
+  },
+
+  // ── T1213 — Data from Information Repositories ────────────────────────────
+  'T1213': {
+    label: 'Data from Information Repositories',
+    requiresAny: [
+      { type: 'logsource_cat',  categories: ['database', 'mssql', 'mysql', 'postgresql'] },
+      { type: 'cmd_contains',   field: 'commandLine', values: ['SELECT ','UNION SELECT','FROM ','WHERE '] },
+      { type: 'evidence_flag',  flag: 'has_database_events' },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1213 requires database query telemetry',
+  },
+
+  // ── T1078.001 — Default Accounts ─────────────────────────────────────────
+  'T1078.001': {
+    label: 'Valid Accounts: Default Accounts',
+    requiresAny: [
+      { type: 'cmd_contains',   field: 'user',    values: ['sa','admin','root','postgres','mysql','oracle','guest','administrator'] },
+      { type: 'cmd_contains',   field: 'dstUser', values: ['sa','admin','root','postgres','mysql','oracle'] },
+      { type: 'event_id',       ids: ['4624','4625'] }, // combined with default username check
+      { type: 'evidence_flag',  flag: 'default_account_logon' },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1078.001 requires evidence of default account usage',
+  },
+
+  // ── T1190 (enhanced) — add database parent indicator ─────────────────────
+  // (T1190 already defined above; database variant covered by domain classifier)
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  CROSS-PLATFORM / COMMON TECHNIQUES
+  // ═══════════════════════════════════════════════════════════════════
+
+  // ── T1059.001 — PowerShell ────────────────────────────────────────────────
+  'T1059.001': {
+    label: 'Command and Scripting Interpreter: PowerShell',
+    requiresAny: [
+      { type: 'process_match',  field: 'process',    values: ['powershell.exe','pwsh.exe','powershell_ise'] },
+      { type: 'process_match',  field: 'parentProc', values: ['powershell.exe','pwsh.exe'] },
+      { type: 'cmd_contains',   field: 'commandLine', values: ['powershell','pwsh','-encodedcommand','-enc ','invoke-expression','iex ','downloadstring','webclient'] },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1059.001 requires PowerShell process or command-line evidence',
+  },
+
+  // ── T1055 — Process Injection ─────────────────────────────────────────────
+  'T1055': {
+    label: 'Process Injection',
+    requiresAny: [
+      { type: 'logsource_cat',  categories: ['process_creation', 'windows'] },
+      { type: 'cmd_contains',   field: 'commandLine', values: ['inject','shellcode','VirtualAlloc','CreateRemoteThread','WriteProcessMemory'] },
+      { type: 'event_id',       ids: ['10','8'] }, // Sysmon process access / create_remote_thread
+      { type: 'evidence_flag',  flag: 'process_injection_indicator' },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1055 requires process injection telemetry (Sysmon EventID 10/8 or injection command)',
+  },
+
+  // ── T1003 — OS Credential Dumping (parent) ────────────────────────────────
+  'T1003': {
+    label: 'OS Credential Dumping',
+    requiresAny: [
+      { type: 'process_match',  field: 'process',    values: ['mimikatz','lsass','procdump','wce.exe','fgdump','gsecdump','pwdump'] },
+      { type: 'cmd_contains',   field: 'commandLine', values: ['sekurlsa','lsadump','mimikatz','procdump -ma lsass','wce -s','fgdump'] },
+      { type: 'event_id',       ids: ['4656','4663','10'] }, // Object access / Sysmon LSASS
+    ],
+    suppressedAlternative: null,
+    reason: 'T1003 requires credential-dumping tool process or LSASS access event',
+  },
+
+  // ── T1003.001 — LSASS Memory ──────────────────────────────────────────────
+  'T1003.001': {
+    label: 'OS Credential Dumping: LSASS Memory',
+    requiresAny: [
+      { type: 'process_match',  field: 'process',    values: ['mimikatz.exe','procdump.exe','wce.exe','lsass.exe'] },
+      { type: 'cmd_contains',   field: 'commandLine', values: ['sekurlsa::logonpasswords','procdump.*lsass','lsass.dmp','minidump'] },
+      { type: 'event_id',       ids: ['10'] }, // Sysmon process access
+      { type: 'evidence_flag',  flag: 'lsass_access_detected' },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1003.001 requires LSASS access via Sysmon EID 10 or dumping tool',
+  },
+
+  // ── T1486 — Data Encrypted for Impact (Ransomware) ───────────────────────
+  'T1486': {
+    label: 'Data Encrypted for Impact',
+    requiresAny: [
+      { type: 'cmd_contains',   field: 'commandLine', values: ['vssadmin','wbadmin','bcdedit','cipher /w','openssl enc','gpg --encrypt'] },
+      { type: 'evidence_flag',  flag: 'ransomware_extensions_detected' },
+      { type: 'evidence_flag',  flag: 'shadow_copy_deletion' },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1486 requires encryption/shadow-copy command or ransomware extension evidence',
+  },
+
+  // ── T1490 — Inhibit System Recovery ──────────────────────────────────────
+  'T1490': {
+    label: 'Inhibit System Recovery',
+    requiresAny: [
+      { type: 'cmd_contains',   field: 'commandLine', values: ['vssadmin delete shadows','wbadmin delete','bcdedit /set {default} recoveryenabled no','sdelete','wmic shadowcopy delete'] },
+      { type: 'evidence_flag',  flag: 'shadow_copy_deletion' },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1490 requires shadow-copy deletion or system-recovery inhibit command',
+  },
+
+  // ── T1047 — Windows Management Instrumentation ────────────────────────────
+  'T1047': {
+    label: 'Windows Management Instrumentation',
+    requiresAny: [
+      { type: 'process_match',  field: 'process',    values: ['wmic.exe','wmiprvse.exe','wmiapsrv.exe'] },
+      { type: 'cmd_contains',   field: 'commandLine', values: ['wmic','Invoke-WmiMethod','Get-WmiObject','wmiexec','Win32_Process'] },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1047 requires WMI process or command evidence',
+  },
+
+  // ── T1053.005 — Scheduled Task (Windows) ─────────────────────────────────
+  'T1053.005': {
+    label: 'Scheduled Task/Job: Scheduled Task',
+    requiresAny: [
+      { type: 'process_match',  field: 'process',    values: ['schtasks.exe','taskschd.msc','at.exe'] },
+      { type: 'cmd_contains',   field: 'commandLine', values: ['schtasks','Register-ScheduledTask','/create','/sc ','/tr '] },
+      { type: 'event_id',       ids: ['4698','4699','4700','4701','4702'] },
+    ],
+    suppressedAlternative: null,
+    reason: 'T1053.005 requires schtasks command or scheduled-task EventID',
+  },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -235,13 +584,55 @@ const TECHNIQUE_BLOCKED_SOURCES = {
     blockedEventIds:   new Set(['4624', '4625', '4626', '4627', '4648', '4768', '4769', '4776']),
     blockedLogsources: new Set(['security', 'system', 'application']),
     description: 'Web exploitation techniques must not match Windows authentication events',
-    exceptWhen: ['has_webserver_logs', 'has_web_parent_process'],
+    exceptWhen: ['has_webserver_logs', 'has_web_parent_process', 'sqli_patterns_detected'],
   },
   'T1189': {
     blockedEventIds:   new Set(['4624', '4625', '4648', '4768', '4769']),
     blockedLogsources: new Set(['security', 'system', 'application']),
     description: 'Drive-by technique must not match Windows authentication events',
     exceptWhen: ['has_webserver_logs'],
+  },
+  // Lateral movement techniques must not fire on pure Windows auth events without supporting evidence
+  // Note: exceptions include psexec/admin$ presence which overrides the blocked source check
+  // via the evidence requirement gate (Gate 2), which runs after Gate 0.
+  // Gate 0 only blocks when there is NO additional SMB evidence on the event itself.
+  // We deliberately do NOT block T1021.002 on 4624 here — that is handled by Gate 2
+  // (the evidence requirement gate), which correctly evaluates process_match for psexec.exe.
+  // 'T1021.002': { ... } — REMOVED from blocked sources; handled entirely by Gate 2 evidence rules
+
+  // SSH lateral movement must not fire on Windows events
+  'T1021.004': {
+    blockedEventIds:   new Set(['4624', '4625', '4648', '4768', '4769']),
+    blockedLogsources: new Set(['security']),
+    description: 'SSH lateral movement must not fire on Windows authentication events',
+    exceptWhen: ['has_linux_events', 'ssh_lateral_movement'],
+  },
+  // Linux techniques must not fire on Windows events
+  'T1059.004': {
+    blockedEventIds:   new Set(['4624', '4625', '4688', '4689']),
+    blockedLogsources: new Set(['security', 'system']),
+    description: 'Unix shell technique must not fire on Windows events',
+    exceptWhen: ['has_linux_events'],
+  },
+  // Cron must not fire on Windows events
+  'T1053.003': {
+    blockedEventIds:   new Set(['4624', '4625', '4688', '4698', '4699']),
+    blockedLogsources: new Set(['security', 'system']),
+    description: 'Linux cron technique must not fire on Windows events',
+    exceptWhen: ['has_linux_events'],
+  },
+  // Database techniques must not fire on Windows auth/process events
+  'T1005': {
+    blockedEventIds:   new Set(['4624', '4625', '4688']),
+    blockedLogsources: new Set(['security']),
+    description: 'Database data access must not fire on Windows auth events',
+    exceptWhen: ['has_database_events', 'has_database_exfil'],
+  },
+  'T1213': {
+    blockedEventIds:   new Set(['4624', '4625', '4688']),
+    blockedLogsources: new Set(['security']),
+    description: 'Data from repositories must not fire on Windows auth events',
+    exceptWhen: ['has_database_events'],
   },
 };
 
@@ -342,6 +733,147 @@ class EvidenceContext {
     } else {
       flags.cross_host_ntlm_logon = false;
     }
+
+    // ── Linux / SSH flags ─────────────────────────────────────────────────
+    const linuxEvts = evts.filter(e => {
+      const src  = (e.source  || '').toLowerCase();
+      const fmt  = (e.format  || '').toLowerCase();
+      const prog = (e.program || e.raw?.program || e.raw?.appname || '').toLowerCase();
+      return fmt === 'syslog' || fmt === 'linux' ||
+             src.includes('auth.log') || src.includes('secure') || src.includes('/var/log') ||
+             /sshd|sudo|cron|auditd|pam_unix|useradd/.test(prog) ||
+             e._meta?.domain === 'linux';
+    });
+    flags.has_linux_events = linuxEvts.length > 0;
+
+    // SSH brute-force: ≥3 'Failed password' syslog entries
+    const sshFailures = linuxEvts.filter(e => {
+      const msg = (e.message || e.raw?.message || '').toLowerCase();
+      return msg.includes('failed password') || msg.includes('invalid user') || msg.includes('authentication failure');
+    });
+    flags.multiple_ssh_failures = sshFailures.length >= 3;
+
+    // SSH success
+    flags.linux_ssh_success = linuxEvts.some(e => {
+      const msg = (e.message || e.raw?.message || '').toLowerCase();
+      return msg.includes('accepted password') || msg.includes('accepted publickey');
+    });
+    flags.linux_auth_success = flags.linux_ssh_success;
+
+    // SSH lateral movement: success across multiple source IPs
+    if (flags.linux_ssh_success) {
+      const sshSuccesses  = linuxEvts.filter(e => {
+        const msg = (e.message || e.raw?.message || '').toLowerCase();
+        return msg.includes('accepted');
+      });
+      const sshSrcIps = new Set(sshSuccesses.map(e => (e.srcIp || e.raw?.IpAddress || '')).filter(v => v && v !== '127.0.0.1'));
+      flags.ssh_lateral_movement = sshSrcIps.size >= 2;
+    } else {
+      flags.ssh_lateral_movement = false;
+    }
+
+    // ── Firewall / Network flags ──────────────────────────────────────────
+    const fwEvts = evts.filter(e => {
+      const src = (e.source || '').toLowerCase();
+      const fmt = (e.format || '').toLowerCase();
+      const eid = String(e.eventId || e.raw?.EventID || '');
+      return fmt === 'firewall' || fmt === 'cef_firewall' ||
+             /firewall|iptables|asa|fortigate|paloalto/.test(src) ||
+             ['5152','5153','5154','5155','5156','5157','5158','5159'].includes(eid) ||
+             e._meta?.domain === 'firewall';
+    });
+    flags.has_firewall_logs = fwEvts.length > 0;
+
+    // Port scan: ≥5 distinct destination ports from same source in firewall logs
+    if (fwEvts.length >= 5) {
+      const portsByIp = {};
+      fwEvts.forEach(e => {
+        const src  = (e.srcIp || e.raw?.src_ip || e.raw?.IpAddress || '').toLowerCase();
+        const port = String(e.dstPort || e.raw?.dst_port || e.raw?.DestinationPort || '');
+        if (src && port) {
+          if (!portsByIp[src]) portsByIp[src] = new Set();
+          portsByIp[src].add(port);
+        }
+      });
+      flags.port_scan_detected = Object.values(portsByIp).some(s => s.size >= 5);
+      flags.has_network_scan   = flags.port_scan_detected;
+    }
+
+    // High outbound data (exfiltration indicator)
+    const outboundBytes = fwEvts.reduce((sum, e) => {
+      const b = parseInt(e.raw?.bytes_sent || e.raw?.BytesSent || e.raw?.['sc-bytes'] || '0', 10);
+      return sum + (isNaN(b) ? 0 : b);
+    }, 0);
+    flags.high_outbound_data = outboundBytes > 100_000_000; // 100MB threshold
+
+    // ── Web server flags ──────────────────────────────────────────────────
+    const webEvts = evts.filter(e => {
+      const src = (e.source || '').toLowerCase();
+      const fmt = (e.format || '').toLowerCase();
+      return fmt === 'web' || fmt === 'webserver' || fmt === 'iis' || fmt === 'apache' || fmt === 'nginx' ||
+             /apache|nginx|iis|httpd|lighttpd/.test(src) ||
+             e.url != null || e.raw?.['cs-uri-stem'] != null || e.raw?.['cs-method'] != null ||
+             e._meta?.domain === 'web';
+    });
+    // has_webserver_logs already set above; update with domain-aware check
+    if (webEvts.length > 0) flags.has_webserver_logs = true;
+
+    // SQL injection patterns in web logs
+    flags.sqli_patterns_detected = webEvts.some(e => {
+      const uri = (e.url || e.uri || e.raw?.['cs-uri-stem'] || e.raw?.RequestURI || '').toLowerCase();
+      const qs  = (e.raw?.['cs-uri-query'] || e.raw?.QueryString || '').toLowerCase();
+      return /union.select|or.1=1|and.1=0|sleep\(|benchmark\(|xp_cmdshell|load_file/i.test(uri + qs);
+    });
+
+    // ── Database flags ────────────────────────────────────────────────────
+    const dbEvts = evts.filter(e => {
+      const src = (e.source || '').toLowerCase();
+      return /mysql|postgresql|mssql|sqlserver|oracle|mongodb|mariadb/.test(src) ||
+             e.raw?.query != null || e.raw?.sql_statement != null ||
+             e._meta?.domain === 'database';
+    });
+    flags.has_database_events = dbEvts.length > 0;
+
+    // Database exfil: large SELECT or bulk dump command
+    flags.has_database_exfil = dbEvts.some(e => {
+      const q = (e.raw?.query || e.raw?.sql_statement || e.commandLine || '').toLowerCase();
+      return /select.+into|bulk\s+insert|mysqldump|pg_dump|bcp |sqlcmd/.test(q);
+    });
+
+    // Default account logon
+    const defaultAccounts = new Set(['sa','administrator','root','postgres','mysql','oracle','guest','admin']);
+    flags.default_account_logon = evts.some(e => {
+      const u = (e.user || e.raw?.TargetUserName || e.raw?.username || '').toLowerCase();
+      return defaultAccounts.has(u);
+    });
+
+    // ── Ransomware / Impact flags ─────────────────────────────────────────
+    const RANSOMWARE_EXTS = /\.(locked|encrypted|enc|crypt|crypto|cerber|locky|wannacry|petya|zzzzz|vvvv|thor|micro|osiris|zepto|crypted)$/i;
+    flags.ransomware_extensions_detected = evts.some(e => {
+      const path = (e.raw?.TargetFilename || e.raw?.FileName || e.commandLine || '').toLowerCase();
+      return RANSOMWARE_EXTS.test(path);
+    });
+
+    flags.shadow_copy_deletion = evts.some(e => {
+      const cmd = (e.commandLine || e.raw?.CommandLine || '').toLowerCase();
+      return /vssadmin.*delete|wbadmin.*delete|wmic.*shadowcopy.*delete|bcdedit.*recoveryenabled/.test(cmd);
+    });
+
+    // ── Process injection indicator ───────────────────────────────────────
+    flags.process_injection_indicator = evts.some(e => {
+      const eid = String(e.eventId || e.raw?.EventID || '');
+      const cmd = (e.commandLine || e.raw?.CommandLine || '').toLowerCase();
+      return eid === '10' || eid === '8' || /virtualalloc|createremotethread|writeprocessmemory|inject/i.test(cmd);
+    });
+
+    // ── LSASS access ──────────────────────────────────────────────────────
+    flags.lsass_access_detected = evts.some(e => {
+      const eid     = String(e.eventId || e.raw?.EventID || '');
+      const target  = (e.raw?.TargetImage || e.raw?.CallTrace || '').toLowerCase();
+      const cmd     = (e.commandLine || e.raw?.CommandLine || '').toLowerCase();
+      return (eid === '10' && target.includes('lsass')) ||
+             /lsass\.dmp|procdump.*lsass|sekurlsa/.test(cmd);
+    });
 
     return flags;
   }
