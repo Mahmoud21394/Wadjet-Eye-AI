@@ -96,6 +96,12 @@ const { Server }     = require('socket.io');
 const { verifyToken }    = require('./middleware/auth');
 const { auditLog }       = require('./middleware/audit');
 const { errorHandler }   = require('./middleware/errorHandler');
+const {
+  authFailureLogger,
+  apiErrorLogger,
+  slowRequestLogger,
+  routeNotFoundLogger,
+} = require('./middleware/observability');
 
 // ── Routes ───────────────────────────────────────────────────────
 const authRoutes      = require('./routes/auth');
@@ -349,6 +355,15 @@ app.use((req, _res, next) => {
 // In production use 'combined' (Apache-style), dev use 'dev' (colorful)
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
+// ── Slow-request detector (fires on res.finish after 3s) ──────────
+// Logs any request that takes > 3s — surfaced as Perf SLOW_REQUEST events.
+app.use(slowRequestLogger);
+
+// ── Auth failure logger — intercepts res.json for 401/403 ─────────
+// Applied globally so ALL routes (auth, protected, public) get structured
+// auth-failure log entries.  Does NOT block requests — intercept only.
+app.use(authFailureLogger);
+
 // ════════════════════════════════════════════════════════════════
 //  HEALTH CHECK — No auth required
 //  Render uses this endpoint to verify the service is alive
@@ -483,11 +498,25 @@ app.use('/api/email-threat', emailThreatRoutes);
 
 // /api/email-analysis — alias health check endpoint for the frontend
 // GET /api/email-analysis/health — returns engine status (no auth required)
+// RC-FIX v3.0: Added stats, enricher status, CORS-safe response.
+//   Previously returned degraded when engine loaded fine (TypeError on
+//   engine.scorer being undefined). Now safely checks each sub-system
+//   with optional chaining and provides meaningful fallback values.
 app.get('/api/email-analysis/health', (req, res) => {
+  // Always return 200 — the UI uses the `healthy` field for status
   try {
     const { getInstance } = require('./services/email-threat/eti-aare-engine');
-    const engine = getInstance({ enableAI: false });
-    const rules  = engine.detector?.getRules?.()?.length || 0;
+    const engine = getInstance({
+      enableAI:              false,
+      auto_response_enabled: true,
+      virustotal_api_key:    process.env.VIRUSTOTAL_API_KEY,
+      abuseipdb_api_key:     process.env.ABUSEIPDB_API_KEY,
+      urlscan_api_key:       process.env.URLSCAN_API_KEY,
+    });
+
+    const rules = engine.detector?.getRules?.()?.length ?? 0;
+    const stats = engine.getStats?.() ?? {};
+
     res.json({
       status:    'ok',
       healthy:   true,
@@ -495,9 +524,20 @@ app.get('/api/email-analysis/health', (req, res) => {
       service:   'ETI-AARE Email Threat Intelligence Engine',
       version:   '2.0.0',
       timestamp: new Date().toISOString(),
-      details:   { detector_rules: rules, fingerprinter: true, scorer: true, soar: true }
+      details: {
+        detector_rules: rules,
+        fingerprinter:  typeof engine.fingerprinter !== 'undefined',
+        scorer:         typeof engine.scorer        !== 'undefined',
+        soar:           typeof engine.soar          !== 'undefined',
+        enrichment:     typeof engine.enricher      !== 'undefined',
+      },
+      stats: {
+        total_analyzed: stats.total_analyzed ?? 0,
+        by_tier: stats.by_tier ?? { critical: 0, high: 0, medium: 0, low: 0, clean: 0 },
+      },
     });
   } catch (e) {
+    logger.warn('EmailHealth', `Engine init warning: ${e.message}`);
     res.json({
       status:    'degraded',
       healthy:   false,
@@ -505,8 +545,21 @@ app.get('/api/email-analysis/health', (req, res) => {
       service:   'ETI-AARE Email Threat Intelligence Engine',
       version:   '2.0.0',
       timestamp: new Date().toISOString(),
-      error:     e.message
+      error:     e.message,
+      details:   { detector_rules: 0, fingerprinter: false, scorer: false, soar: false },
     });
+  }
+});
+
+// /api/email-analysis/stats — convenience alias used by some frontend widgets
+// Returns same structure as /api/email-threat/stats (no auth required)
+app.get('/api/email-analysis/stats', (req, res) => {
+  try {
+    const { getInstance } = require('./services/email-threat/eti-aare-engine');
+    const engine = getInstance({ enableAI: false });
+    res.json({ success: true, data: engine.getStats?.() ?? {} });
+  } catch (e) {
+    res.json({ success: false, data: {}, error: e.message });
   }
 });
 
@@ -567,6 +620,7 @@ app.use('/api/rbac',           rbacRoutes);
 //  404 HANDLER — catches all unmatched routes
 //  Must be placed AFTER all route registrations
 // ════════════════════════════════════════════════════════════════
+app.use(routeNotFoundLogger);   // structured log for /api/* 404s
 app.use((req, res) => {
   res.status(404).json({
     error: `Route not found: ${req.method} ${req.path}`,
@@ -576,8 +630,10 @@ app.use((req, res) => {
 
 // ════════════════════════════════════════════════════════════════
 //  GLOBAL ERROR HANDLER — must be LAST middleware
+//  apiErrorLogger runs first (logs), then errorHandler (responds)
 // ════════════════════════════════════════════════════════════════
-app.use(errorHandler);
+app.use(apiErrorLogger);   // structured error logging (observability)
+app.use(errorHandler);     // final response sender
 
 // ════════════════════════════════════════════════════════════════
 //  WEBSOCKETS

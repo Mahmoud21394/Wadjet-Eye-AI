@@ -794,6 +794,13 @@ async function _syncStoresOnLoad() {
    GLOBAL HELPERS — public API for other modules
 ═══════════════════════════════════════════════════════════════ */
 
+// ── RC-FIX v7.5: _expiredHandled declared HERE (top of public-API section) ──
+// Must be ABOVE both PersistentAuth_onLogin and PersistentAuth_onLogout because
+// `var` is function-scoped and module-scoped code runs top-to-bottom.  Even
+// though `var` hoists the declaration, placing it here makes the intent
+// explicit and prevents linters from flagging "used before defined".
+var _expiredHandled = false;  // eslint-disable-line no-var
+
 /** Called by main.js / login handler after successful login */
 window.PersistentAuth_onLogin = function(user, token, refreshToken, expiresAt, isOffline) {
   // Clear any cookie-refresh backoff so the new session can use cookie if available
@@ -836,8 +843,8 @@ window.PersistentAuth_onLogout = function() {
   if (typeof window.TokenStore !== 'undefined') window.TokenStore.clear();
   window.StateSync?.updateAuthState({ isAuthenticated: false, user: null });
 
-  // ROOT-CAUSE FIX v6.2: Reset the expired-event dedup flag so that a fresh
-  // login after logout doesn't get blocked by the 15-second cooldown.
+  // Reset expired-event dedup flag so a fresh login after logout
+  // isn't blocked by the 15-second cooldown.
   _expiredHandled = false;
 
   // Remove any stale session-expired banners left from the previous session
@@ -867,8 +874,9 @@ function _dispatchAuthEvent(name, detail = {}) {
 
 /* ═══════════════════════════════════════════════════════════════
    GLOBAL AUTH:EXPIRED HANDLER
+   _expiredHandled is declared at the top of the GLOBAL HELPERS
+   section (above PersistentAuth_onLogin) so it is always available.
 ═══════════════════════════════════════════════════════════════ */
-let _expiredHandled = false;
 window.addEventListener('auth:expired', () => {
   if (_expiredHandled) return;
   _expiredHandled = true;
