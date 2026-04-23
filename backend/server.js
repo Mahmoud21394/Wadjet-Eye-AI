@@ -481,6 +481,35 @@ app.use('/api/raykan', raykanEngineRoutes);
 const emailThreatRoutes = require('./routes/email-threat');
 app.use('/api/email-threat', emailThreatRoutes);
 
+// /api/email-analysis — alias health check endpoint for the frontend
+// GET /api/email-analysis/health — returns engine status (no auth required)
+app.get('/api/email-analysis/health', (req, res) => {
+  try {
+    const { getInstance } = require('./services/email-threat/eti-aare-engine');
+    const engine = getInstance({ enableAI: false });
+    const rules  = engine.detector?.getRules?.()?.length || 0;
+    res.json({
+      status:    'ok',
+      healthy:   true,
+      success:   true,
+      service:   'ETI-AARE Email Threat Intelligence Engine',
+      version:   '2.0.0',
+      timestamp: new Date().toISOString(),
+      details:   { detector_rules: rules, fingerprinter: true, scorer: true, soar: true }
+    });
+  } catch (e) {
+    res.json({
+      status:    'degraded',
+      healthy:   false,
+      success:   false,
+      service:   'ETI-AARE Email Threat Intelligence Engine',
+      version:   '2.0.0',
+      timestamp: new Date().toISOString(),
+      error:     e.message
+    });
+  }
+});
+
 // /api/news — Cyber News is public (no user-specific data in news articles).
 // Registered before verifyToken so unauthenticated clients (demo mode, public
 // dashboard) can read news. The POST /ingest endpoint inside newsRoutes does its

@@ -818,6 +818,9 @@
     <!-- ════ RAKAY MODULE PAGE ════ -->
     <div class="page" id="page-rakay" style="padding:0;overflow:hidden;"></div>
 
+    <!-- ════ ETI-AARE: Email Threat Intelligence Module PAGE ════ -->
+    <div class="page" id="page-email-threat" style="padding:0;overflow:auto;"></div>
+
   </div><!-- end content-area -->
 </div><!-- end main-wrapper -->
 </div><!-- end mainApp -->
@@ -1375,6 +1378,7 @@
     'whatif-simulator':    true,
     'security-brain':      true,
     'autonomous-agent':    true,
+    'email-threat':        true,
   });
 
   /* ═══════════════════════════════════════════════════════════
@@ -1406,14 +1410,18 @@
     'customers':         () => typeof window.renderTenantsPage         === 'function' && window.renderTenantsPage(),
     'exposure':          () => typeof window.renderCVEIntelligence     === 'function' && window.renderCVEIntelligence(),
     'email-threat':      () => {
-      const mod = document.getElementById('etiModule');
-      if (mod) {
-        document.querySelectorAll('.page, .module-page, [id$="Module"]').forEach(p => {
-          if (p !== mod) p.style.display = 'none';
-        });
-        mod.style.display = 'flex';
-        mod.classList.add('active');
-        if (typeof window.ETIModule?.init === 'function') window.ETIModule.init();
+      const container = document.getElementById('page-email-threat');
+      if (container) {
+        if (!container.dataset.rendered) {
+          container.dataset.rendered = '1';
+          if (typeof window.ETIModule !== 'undefined') {
+            window.ETIModule.mount(container);
+          } else {
+            container.innerHTML = '<div style="padding:60px;text-align:center;color:#8b949e;"><i class="fas fa-spinner fa-spin fa-2x" style="display:block;margin-bottom:16px;"></i>Loading ETI-AARE module…</div>';
+          }
+        } else {
+          if (typeof window.ETIModule?.onShow === 'function') window.ETIModule.onShow();
+        }
       }
     },
   };

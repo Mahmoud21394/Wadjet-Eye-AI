@@ -332,6 +332,38 @@ function getDemoCleanEmail() {
   };
 }
 
+/**
+ * GET /api/email-threat/health
+ * Health check for ETI-AARE engine
+ */
+router.get('/health', asyncHandler(async (req, res) => {
+  let engineStatus = 'ok';
+  let details = {};
+  try {
+    const engine = getEngine(req);
+    details = {
+      detector_rules:  engine.detector?.getRules?.()?.length || 0,
+      fingerprinter:   typeof engine.fingerprinter !== 'undefined',
+      scorer:          typeof engine.scorer !== 'undefined',
+      soar:            typeof engine.soar !== 'undefined',
+      enrichment:      typeof engine.enricher !== 'undefined'
+    };
+  } catch (e) {
+    engineStatus = 'degraded';
+    details.error = e.message;
+  }
+
+  res.json({
+    status:   engineStatus,
+    healthy:  engineStatus === 'ok',
+    success:  true,
+    service:  'ETI-AARE Email Threat Intelligence Engine',
+    version:  '2.0.0',
+    timestamp: new Date().toISOString(),
+    details
+  });
+}));
+
 // ─── Error Handler ────────────────────────────────────────────────────────────
 router.use((err, req, res, next) => {
   console.error('[ETI-AARE API Error]', err.message);
