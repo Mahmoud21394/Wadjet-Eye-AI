@@ -29,31 +29,129 @@ const ETIModule = (() => {
   };
 
   // ── API Client ─────────────────────────────────────────────────────────────
+  // ROOT-CAUSE FIX v3.0:
+  //   RC-1: Wrong token key — old code used localStorage.getItem('authToken')
+  //         which is never written by auth-interceptor.js.  The correct primary
+  //         key is 'wadjet_access_token' (written by UnifiedTokenStore.save()).
+  //         Fallback chain: UnifiedTokenStore.getToken() → window.getAuthToken()
+  //         → legacy keys → empty string (public endpoints work without token).
+  //
+  //   RC-2: Relative base URLs ('/api/email-threat') work when the frontend is
+  //         served from the same origin as the backend (localhost dev).  In
+  //         production the frontend lives on Vercel and the backend lives on
+  //         Render — relative requests hit Vercel's 404 not Render's Express.
+  //         Fix: derive absolute backend URL from window.THREATPILOT_API_URL
+  //         (set in index.html) with a localhost fallback for dev.
+  //
+  //   RC-3: /api/email-analysis/health was also sent via relative path → same
+  //         wrong-origin problem.
+  //
+  //   RC-4: No retry on 401 for public endpoints (stats/health need no token).
+  //         Added graceful fallback: on non-2xx or network error, return null
+  //         instead of throwing, so callers can use offline mock data.
   const API = {
-    base: '/api/email-threat',
-    healthBase: '/api/email-analysis',
 
+    // Absolute backend URL — critical for Vercel + Render split deployment
+    _backendUrl() {
+      return (
+        window.THREATPILOT_API_URL ||
+        window.WADJET_API_URL      ||
+        window.CONFIG?.BACKEND_URL ||
+        (location.hostname === 'localhost' || location.hostname === '127.0.0.1'
+          ? `${location.protocol}//${location.hostname}:4000`
+          : 'https://wadjet-eye-ai.onrender.com')
+      ).replace(/\/$/, '');
+    },
+
+    // RC-1 FIX: Token key resolution — primary → legacy aliases → fallback
     _token() {
-      return window._authToken || localStorage.getItem('authToken') || '';
+      // 1. Ask UnifiedTokenStore (auth-interceptor.js) if available
+      if (typeof window.UnifiedTokenStore !== 'undefined') {
+        return window.UnifiedTokenStore.getToken() || '';
+      }
+      // 2. Helper exposed by auth-interceptor.js
+      if (typeof window.getAuthToken === 'function') {
+        return window.getAuthToken() || '';
+      }
+      // 3. Primary localStorage key written by auth-interceptor + auth-persistent
+      return localStorage.getItem('wadjet_access_token')
+          || localStorage.getItem('we_access_token')
+          || localStorage.getItem('tp_access_token')
+          || localStorage.getItem('authToken')  // legacy fallback only
+          || window._authToken
+          || '';
+    },
+
+    /**
+     * _fetch(method, path, body, baseOverride)
+     * Centralised fetch with:
+     *   - Absolute URL construction (RC-2 fix)
+     *   - Authorization header (RC-1 fix)
+     *   - Timeout (30s — handles Render cold-start)
+     *   - Retry once on 401 after a silent token refresh
+     *   - Returns null on network error or non-OK (callers fall back gracefully)
+     */
+    async _fetch(method, path, body, baseOverride) {
+      const base = baseOverride || this._backendUrl() + '/api/email-threat';
+      const url  = base + path;
+      const token = this._token();
+
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const opts = {
+        method,
+        headers,
+        credentials: 'include',
+        signal: AbortSignal.timeout(30_000),
+      };
+      if (body !== undefined) opts.body = JSON.stringify(body);
+
+      try {
+        let res = await fetch(url, opts);
+
+        // On 401, attempt one silent token refresh then retry once
+        if (res.status === 401 && typeof window.silentRefresh === 'function') {
+          console.warn('[ETI-AARE] 401 on', path, '— attempting silent refresh');
+          await window.silentRefresh().catch(() => {});
+          const newToken = this._token();
+          if (newToken) headers['Authorization'] = `Bearer ${newToken}`;
+          res = await fetch(url, { ...opts, headers });
+        }
+
+        if (!res.ok) {
+          console.warn('[ETI-AARE] API', method, path, '→', res.status);
+          return null;  // caller falls back to offline/mock data
+        }
+
+        return await res.json();
+      } catch (err) {
+        if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+          console.warn('[ETI-AARE] Request timeout on', path);
+        } else if (err.message?.includes('Failed to fetch') || err.message?.includes('NetworkError')) {
+          console.warn('[ETI-AARE] Network offline —', path);
+        } else {
+          console.warn('[ETI-AARE] Fetch error on', path, err.message);
+        }
+        return null;  // caller falls back gracefully
+      }
     },
 
     async post(path, body) {
-      const res = await fetch(this.base + path, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this._token()}`
-        },
-        body: JSON.stringify(body)
-      });
-      return res.json();
+      return this._fetch('POST', path, body);
     },
 
-    async get(path, base) {
-      const res = await fetch((base || this.base) + path, {
-        headers: { 'Authorization': `Bearer ${this._token()}` }
-      });
-      return res.json();
+    async get(path, baseOverride) {
+      // RC-3 FIX: healthBase must also use the absolute backend URL
+      const base = baseOverride
+        ? (this._backendUrl() + baseOverride.replace(/https?:\/\/[^/]+/, ''))   // strip host if full URL passed
+        : undefined;
+      return this._fetch('GET', path, undefined, base);
+    },
+
+    // RC-3 FIX: checkHealth uses the absolute /api/email-analysis base
+    _healthBase() {
+      return this._backendUrl() + '/api/email-analysis';
     },
 
     analyzeDemo:     (scenario)       => API.post('/analyze-demo', { scenario }),
@@ -62,7 +160,7 @@ const ETIModule = (() => {
     getAttackGraph:  ()               => API.get('/attack-graph'),
     getIncidents:    ()               => API.get('/incidents'),
     getBlocklists:   ()               => API.get('/blocklists'),
-    checkHealth:     ()               => API.get('/health', API.healthBase)
+    checkHealth:     ()               => API._fetch('GET', '/health', undefined, API._healthBase())
   };
 
   // ── Error Boundary ─────────────────────────────────────────────────────────

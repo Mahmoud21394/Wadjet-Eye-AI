@@ -254,9 +254,27 @@
 
         if (res.status === 401) {
           const body = await res.json().catch(() => ({}));
-          console.warn('[PersistentAuth] Refresh token rejected by server:', body.error);
-          // Refresh token is invalid — need full re-login
-          _dispatchEvent('auth:session-expired', { reason: body.error || 'refresh_rejected' });
+          const errCode = body.code || 'refresh_rejected';
+          console.warn('[PersistentAuth] Refresh token rejected by server:', body.error, 'code:', errCode);
+
+          // RC-FIX v5.2: SESSION_VALIDATION_UNAVAILABLE means the DB is down,
+          // NOT that the token is invalid.  Don't expire the session — just
+          // return false so the watchdog will retry on the next schedule.
+          if (errCode === 'SESSION_VALIDATION_UNAVAILABLE') {
+            console.warn('[PersistentAuth] Session DB temporarily unavailable — preserving session');
+            return false;
+          }
+
+          // REFRESH_TOKEN_EXPIRED / INVALID_REFRESH_TOKEN → true re-login needed
+          _dispatchEvent('auth:session-expired', { reason: errCode });
+          return false;
+        }
+
+        // RC-FIX v5.2: 503 = backend cold-start or DB unavailable.
+        // Do NOT expire the session — return false so the caller retries.
+        if (res.status === 503) {
+          const body = await res.json().catch(() => ({}));
+          console.warn('[PersistentAuth] Refresh endpoint 503 (backend unavailable):', body.code || body.error);
           return false;
         }
 
@@ -267,18 +285,53 @@
 
         const data = await res.json();
 
+        // RC-FIX v5.2: Handle requires_reauth — backend could not issue a new
+        // access token (admin.createSession unavailable + no JWT_SECRET).
+        // In this case dispatch session-expired so the user sees the login screen
+        // instead of silently looping on /api/auth/refresh with no token.
+        if (data.requires_reauth) {
+          console.warn('[PersistentAuth] Backend requires re-authentication — dispatching session-expired');
+          _dispatchEvent('auth:session-expired', { reason: 'requires_reauth' });
+          return false;
+        }
+
+        const newToken = data.token || data.access_token;
+
+        // RC-FIX v5.2: Validate we actually received a token before saving.
+        // If the backend returned 200 but no token field, log a warning
+        // and fall back to offline mode rather than clearing a good session.
+        if (!newToken) {
+          console.warn('[PersistentAuth] Refresh response missing token field — preserving session in offline mode');
+          return false;
+        }
+
         // Save the rotated tokens
         PersistentTokenStore.updateTokens({
-          token:        data.token,
-          refreshToken: data.refreshToken || data.refresh_token,
+          token:        newToken,
+          refreshToken: data.refreshToken || data.refresh_token || PersistentTokenStore.getRefreshToken(),
           expiresAt:    data.expiresAt    || data.expires_at,
           expiresIn:    data.expiresIn    || data.expires_in,
           user:         data.user,
           sessionId:    data.sessionId    || data.session_id,
         });
 
+        // RC-FIX v5.2: Sync with UnifiedTokenStore / auth-interceptor if loaded.
+        // Both modules maintain parallel stores — keep them in sync so every
+        // module reading tokens sees the refreshed value immediately.
+        if (typeof window.UnifiedTokenStore !== 'undefined') {
+          window.UnifiedTokenStore.updateTokens({
+            token:        newToken,
+            refreshToken: data.refreshToken || data.refresh_token,
+            expiresAt:    data.expiresAt    || data.expires_at,
+            expiresIn:    data.expiresIn    || data.expires_in,
+            user:         data.user,
+            sessionId:    data.sessionId    || data.session_id,
+          });
+        }
+
         // Update CURRENT_USER if available
         if (data.user && typeof window !== 'undefined') {
+          if (window.CURRENT_USER) Object.assign(window.CURRENT_USER, data.user);
           const stored = PersistentTokenStore.getUser();
           if (stored) {
             Object.assign(stored, data.user);
@@ -290,9 +343,12 @@
         this.scheduleRefresh(backendUrl);
 
         console.log('[PersistentAuth] ✅ Token refreshed successfully');
-        _dispatchEvent('auth:token-refreshed', { expiresAt: data.expiresAt });
+        // RC-FIX v5.2: Dispatch both hyphen and underscore event names so both
+        // auth-interceptor.js and campaign/SOC modules receive the event.
+        _dispatchEvent('auth:token-refreshed',  { expiresAt: data.expiresAt, token: newToken });
+        _dispatchEvent('auth:token_refreshed',  { expiresAt: data.expiresAt, token: newToken });
 
-        return data.token || true;
+        return newToken;
 
       } catch (err) {
         if (err.name === 'AbortError' || err.name === 'TimeoutError') {
