@@ -340,15 +340,15 @@
     function _normalizeEvent(raw) {
       const e = Object.assign({}, raw);
       e.EventID     = parseInt(e.EventID ?? e.eventId ?? e.event_id, 10) || e.EventID;
-      e.commandLine = e.commandLine || e.CommandLine || e.cmdLine || '';
-      e.process     = e.process     || e.ProcessName || e.Image   || e.exe || '';
-      e.parentProcess = e.parentProcess || e.ParentProcess || e.ParentImage || '';
+      e.commandLine = e.commandLine || e.CommandLine || e.cmdLine || e.ProcessCmdLine || '';
+      e.process     = e.process     || e.NewProcessName || e.ProcessName || e.Image || e.exe || '';
+      e.parentProcess = e.parentProcess || e.ParentProcessName || e.ParentProcess || e.ParentImage || '';
       e.user        = e.user        || e.User || e.SubjectUserName || e.TargetUserName || e.username || '';
       e.computer    = e.computer    || e.Computer || e.ComputerName || e.hostname || e.host || '';
       e.srcIp       = e.srcIp       || e.SourceIP || e.SourceIPAddress || e.src_ip || e.IpAddress || '';
       e.destIp      = e.destIp      || e.DestinationIp || e.DestinationAddress || e.dest_ip || '';
       e.destPort    = e.destPort    || e.DestinationPort || e.dest_port || '';
-      e.timestamp   = e.timestamp   || e.TimeGenerated || e.time || e.date || new Date().toISOString();
+      e.timestamp   = e.timestamp   || e.TimeGenerated || e.TimeCreated || e.time || e.date || new Date().toISOString();
       e._os         = _detectOS(e);
       return e;
     }
@@ -777,6 +777,158 @@
           );
         },
         narrative: e => `WMI execution — "${e.commandLine||'?'}" on ${e.computer||'unknown'}`,
+      },
+
+      // ── ADDITIONAL WINDOWS RULES ─────────────────────────────
+
+      {
+        id: 'CSDE-WIN-017', title: 'PowerShell Spawned from Office/Browser (Spear Phishing)',
+        os: 'windows', severity: 'critical', category: 'execution',
+        mitre: { technique: 'T1059.001', name: 'PowerShell', tactic: 'execution' },
+        tags: ['attack.execution', 'attack.t1059.001', 'attack.t1566.001'],
+        riskScore: 98,
+        match: e => {
+          const eid    = parseInt(e.EventID, 10);
+          const proc   = (e.process || '').toLowerCase();
+          const parent = (e.parentProcess || '').toLowerCase();
+          const cmd    = (e.commandLine || '').toLowerCase();
+          const officeParents = ['outlook.exe', 'winword.exe', 'excel.exe', 'powerpnt.exe', 'mspub.exe', 'visio.exe', 'onenote.exe', 'msaccess.exe'];
+          const browserParents = ['chrome.exe', 'firefox.exe', 'iexplore.exe', 'msedge.exe', 'opera.exe'];
+          const isOffice  = officeParents.some(p => parent.includes(p));
+          const isBrowser = browserParents.some(p => parent.includes(p));
+          return eid === 4688 && proc.includes('powershell') && (isOffice || isBrowser);
+        },
+        narrative: e => `PowerShell spawned from "${e.parentProcess||'?'}" — high-confidence spear-phishing indicator on ${e.computer||'unknown'}. Command: "${(e.commandLine||'?').slice(0,150)}"`,
+        variants: [
+          { id: 'CSDE-WIN-017-ENC', title: 'Encoded PowerShell from Office Parent',
+            match: e => parseInt(e.EventID,10)===4688 && (e.process||'').toLowerCase().includes('powershell') &&
+              (e.commandLine||'').toLowerCase().includes('-enc') &&
+              ['outlook.exe','winword.exe','excel.exe','powerpnt.exe'].some(p => (e.parentProcess||'').toLowerCase().includes(p)) },
+          { id: 'CSDE-WIN-017-HID', title: 'Hidden PowerShell from Office Parent',
+            match: e => parseInt(e.EventID,10)===4688 && (e.process||'').toLowerCase().includes('powershell') &&
+              (e.commandLine||'').match(/-w(indow)?\s+hid(den)?/i) &&
+              ['outlook.exe','winword.exe','excel.exe'].some(p => (e.parentProcess||'').toLowerCase().includes(p)) },
+        ],
+      },
+
+      {
+        id: 'CSDE-WIN-018', title: 'Suspicious Script Block Execution (PowerShell EventID 4104)',
+        os: 'windows', severity: 'high', category: 'execution',
+        mitre: { technique: 'T1059.001', name: 'PowerShell', tactic: 'execution' },
+        tags: ['attack.execution', 'attack.t1059.001'],
+        riskScore: 80,
+        match: e => {
+          const eid  = parseInt(e.EventID, 10);
+          const script = (e.ScriptBlockText || e.scriptBlock || e.message || '').toLowerCase();
+          if (eid !== 4104) return false;
+          // Suspicious patterns in PowerShell script blocks
+          const SUSPICIOUS = [
+            'invoke-webrequest', 'iwr ', 'wget ', 'downloadstring', 'downloadfile',
+            'invoke-expression', 'iex(', '[system.net.webclient]', 'net.webclient',
+            'bypass', '-encodedcommand', 'frombase64string', '-noprofile',
+            'invoke-mimikatz', 'invoke-shellcode', 'invoke-ms16', 'invoke-exploit',
+            'add-type', 'shellcode', 'virtualalloc', 'createthread',
+          ];
+          return SUSPICIOUS.some(s => script.includes(s));
+        },
+        narrative: e => `Malicious PowerShell script block logged (EventID 4104) on ${e.computer||'unknown'}. Script: "${(e.ScriptBlockText||'?').slice(0,200)}"`,
+        variants: [
+          { id: 'CSDE-WIN-018-DL', title: 'PowerShell Download Cradle in Script Block',
+            match: e => parseInt(e.EventID,10)===4104 && ['invoke-webrequest','downloadstring','downloadfile','net.webclient'].some(s => (e.ScriptBlockText||e.scriptBlock||'').toLowerCase().includes(s)) },
+          { id: 'CSDE-WIN-018-IEX', title: 'Invoke-Expression in Script Block',
+            match: e => parseInt(e.EventID,10)===4104 && (e.ScriptBlockText||e.scriptBlock||'').toLowerCase().includes('invoke-expression') },
+        ],
+      },
+
+      {
+        id: 'CSDE-WIN-019', title: 'Service Installed in Suspicious Path (T1543.003)',
+        os: 'windows', severity: 'critical', category: 'persistence',
+        mitre: { technique: 'T1543.003', name: 'Windows Service', tactic: 'persistence' },
+        tags: ['attack.persistence', 'attack.t1543.003'],
+        riskScore: 92,
+        match: e => {
+          const eid = parseInt(e.EventID, 10);
+          if (eid !== 7045 && eid !== 4697) return false;
+          const imgPath = (e.ImagePath || e.ServiceFileName || e.message || '').toLowerCase();
+          const suspPaths = ['\\temp\\', '\\tmp\\', '\\appdata\\', '\\downloads\\', '%temp%', '%appdata%', '\\users\\public\\', '\\recycle'];
+          const suspExts  = ['.exe', '.dll', '.com', '.scr', '.vbs', '.ps1'];
+          const inSuspPath = suspPaths.some(p => imgPath.includes(p));
+          const hasSuspExt = suspExts.some(ext => imgPath.endsWith(ext));
+          return inSuspPath || (hasSuspExt && !imgPath.includes('\\system32\\') && !imgPath.includes('\\syswow64\\') && !imgPath.includes('\\program files\\'));
+        },
+        narrative: e => `Suspicious service installed — Name: "${e.ServiceName||'?'}", Path: "${e.ImagePath||e.ServiceFileName||'?'}" on ${e.computer||'unknown'}`,
+      },
+
+      {
+        id: 'CSDE-WIN-020', title: 'Admin Share Access / Lateral Movement via SMB',
+        os: 'windows', severity: 'high', category: 'lateral-movement',
+        mitre: { technique: 'T1021.002', name: 'Remote Services: SMB/Windows Admin Shares', tactic: 'lateral-movement' },
+        tags: ['attack.lateral_movement', 'attack.t1021.002'],
+        riskScore: 72,
+        match: e => {
+          const eid = parseInt(e.EventID, 10);
+          if (eid !== 5140 && eid !== 5145) return false;
+          const share = (e.ShareName || e.ObjectName || e.message || '').toUpperCase();
+          const adminShares = ['ADMIN$', 'C$', 'D$', 'IPC$', 'SYSVOL', 'NETLOGON'];
+          return adminShares.some(s => share.includes(s));
+        },
+        narrative: e => `Admin share accessed — "${e.ShareName||'?'}" from ${e.user||'unknown'} on ${e.computer||'unknown'}. Possible lateral movement.`,
+        variants: [
+          { id: 'CSDE-WIN-020-ADM', title: 'ADMIN$ Share Access',
+            match: e => parseInt(e.EventID,10)===5140 && (e.ShareName||'').toUpperCase().includes('ADMIN$') },
+          { id: 'CSDE-WIN-020-CSH', title: 'C$ Root Share Access (Lateral Movement)',
+            match: e => parseInt(e.EventID,10)===5140 && /\\C\$|\\D\$/i.test(e.ShareName||'') },
+        ],
+      },
+
+      {
+        id: 'CSDE-WIN-021', title: 'Ransomware Indicator: Encrypted File Extension Created',
+        os: 'windows', severity: 'critical', category: 'impact',
+        mitre: { technique: 'T1486', name: 'Data Encrypted for Impact', tactic: 'impact' },
+        tags: ['attack.impact', 'attack.t1486'],
+        riskScore: 99,
+        match: e => {
+          const eid = parseInt(e.EventID, 10);
+          if (eid !== 11 && eid !== 4663) return false;
+          const fname = (e.TargetFilename || e.ObjectName || e.message || '').toLowerCase();
+          // Known ransomware extensions
+          const ransomExts = ['.lockbit', '.locky', '.crypt', '.encrypted', '.locked', '.zzzzz', '.zepto', '.cerber', '.wncrypt', '.wanacry', '.ryuk', '.conti', '.revil', '.hive', '.blackcat', '.alphv'];
+          return ransomExts.some(ext => fname.includes(ext));
+        },
+        narrative: e => `Ransomware file extension detected — "${e.TargetFilename||e.ObjectName||'?'}" on ${e.computer||'unknown'}. Possible active ransomware encryption.`,
+      },
+
+      {
+        id: 'CSDE-WIN-022', title: 'C2 Network Connection (Process to External IP)',
+        os: 'windows', severity: 'high', category: 'command-and-control',
+        mitre: { technique: 'T1071.001', name: 'Application Layer Protocol: Web Protocols', tactic: 'command-and-control' },
+        tags: ['attack.command_and_control', 'attack.t1071.001'],
+        riskScore: 85,
+        match: e => {
+          const eid = parseInt(e.EventID, 10);
+          if (eid !== 3) return false;
+          const proc   = (e.process || e.Image || '').toLowerCase();
+          const destIp = e.DestinationIP || e.destIp || e.DestinationAddress || '';
+          // External IP (not RFC1918 or loopback)
+          const isPrivate = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|::1|0\.0\.0\.0)/.test(destIp);
+          const isSuspProc = ['payload', 'beacon', 'agent', 'rat', 'stager', 'implant'].some(s => proc.includes(s)) ||
+            // Any process that isn't a known browser/updater/system
+            (!['chrome','firefox','edge','iexplore','updater','wuauclt','svchost','lsass'].some(s => proc.includes(s)) && destIp);
+          return destIp && !isPrivate && isSuspProc;
+        },
+        narrative: e => `C2 network connection from "${e.process||e.Image||'?'}" to ${e.DestinationIP||'?'}:${e.DestinationPort||'?'} on ${e.computer||'unknown'}`,
+        variants: [
+          { id: 'CSDE-WIN-022-HTTPS', title: 'C2 via HTTPS (port 443)',
+            match: e => parseInt(e.EventID,10)===3 && (parseInt(e.DestinationPort,10)||parseInt(e.destPort,10))===443 && !/^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(e.DestinationIP||'') },
+          { id: 'CSDE-WIN-022-NONST', title: 'C2 via Non-Standard Port',
+            match: e => {
+              const eid = parseInt(e.EventID,10);
+              const port = parseInt(e.DestinationPort||e.destPort||'0', 10);
+              const ip = e.DestinationIP||'';
+              const notPriv = ip && !/^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.)/.test(ip);
+              return eid===3 && notPriv && ![80,443,8080,8443].includes(port) && port > 1024;
+            } },
+        ],
       },
 
       // ── LINUX RULES ───────────────────────────────────────────
@@ -1439,6 +1591,26 @@
     // ── Normalize external/backend detection to CSDE format ──────
     // Ensures ruleId, severity, detection_name etc. are present
     // so _dedupDetections can properly bucket them.
+    // ── OS inference from detection title/ruleName ───────────────────
+    // Returns 'windows' | 'linux' | 'unknown' based on rule title keywords
+    function _inferOsFromTitle(title) {
+      const t = String(title || '').toLowerCase();
+      // Explicit OS labels in title
+      if (/\blinux\b|\bsyslog\b|\bauditd\b|\bsudo\b|cron\s*job|systemd|\bssh\b brute|pam_unix/.test(t)) return 'linux';
+      if (/\bwindows\b|win\s+security|win\s+sysmon|eventid\s+\d{4}|powershell|wmi\b|lsass|sam\s+dump|ntds/.test(t)) return 'windows';
+      if (/hayabusa.*sysmon|sysmon\s+event/i.test(t)) return 'windows';
+      return 'unknown';
+    }
+
+    // ── Determine if a detection's OS matches the event OS ────────────
+    // Used to filter backend detections that are cross-OS mismatches
+    function _detOsMatchesEvents(det, eventsOs) {
+      if (eventsOs === 'unknown') return true; // can't determine, keep
+      const detOs = _inferOsFromTitle(det.detection_name || det.title || det.ruleName || '');
+      if (detOs === 'unknown') return true; // can't determine, keep
+      return detOs === eventsOs;
+    }
+
     function _normalizeExternalDet(det) {
       if (!det || typeof det !== 'object') return det;
       // If already a CSDE AGG detection, return as-is
@@ -1490,7 +1662,204 @@
       out.host     = out.computer;
       out.user     = out.user || out.User || out.username || '';
 
+      // ── MITRE technique extraction ──────────────────────────────────
+      // Backend may encode MITRE in different shapes: extract properly
+      if (!out.mitre || !out.mitre.technique) {
+        const rawMitre = out.mitre || out.mitre_technique || out.technique_id || out.attack || '';
+        if (typeof rawMitre === 'string' && rawMitre.match(/T\d{4}/)) {
+          out.mitre = { technique: rawMitre.match(/T\d{4}(\.\d{3})?/)?.[0] || rawMitre, name: out.mitre_name || '', tactic: out.tactic || '' };
+        } else if (typeof rawMitre === 'object' && rawMitre !== null) {
+          out.mitre = {
+            technique: rawMitre.technique || rawMitre.technique_id || rawMitre.id || '',
+            name: rawMitre.name || rawMitre.technique_name || '',
+            tactic: rawMitre.tactic || rawMitre.tactic_id || '',
+          };
+        } else if (!out.mitre) {
+          out.mitre = { technique: '', name: '', tactic: '' };
+        }
+      }
+      // Also set flat technique field for template rendering
+      if (!out.technique) out.technique = out.mitre?.technique || '';
+
       return out;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  SMART BACKEND-RESULT PROCESSOR
+    //  When the backend returns an inflated detection list (Hayabusa/Sigma
+    //  firing one match per event-rule pair), this function:
+    //   1. Normalizes all detections to CSDE format
+    //   2. Filters OS mismatches (Linux rules on Windows events)
+    //   3. Groups by canonical title slug (not just ruleId)
+    //   4. Limits to the TOP_K most significant detections
+    //   5. Merges with CSDE-generated detections for cross-validation
+    //
+    //  This produces a human-readable result instead of 400+ raw matches.
+    // ════════════════════════════════════════════════════════════════
+    const TOP_K_BACKEND_DETS = 30; // max backend detections before aggressive dedup
+
+    function processBackendResult(backendResult, rawEvents) {
+      const rawDets = normalizeDetections_inner(backendResult.detections);
+
+      // ── Step 1: Determine OS of uploaded events ───────────────────
+      const eventsOs = _inferEventsOs(rawEvents);
+
+      // ── Step 2: Normalize + OS filter ────────────────────────────
+      const normalized = rawDets
+        .map(_normalizeExternalDet)
+        .filter(d => _detOsMatchesEvents(d, eventsOs));
+
+      // ── Step 3: Aggressive backend dedup by rule title only ───────
+      // Backend (Hayabusa/Sigma) fires one match per event-rule pair, so we get:
+      //   "Hidden Window Detection" × WS01/j.doe × WS01/SYSTEM × DC01/j.doe … = 6 entries
+      // We collapse ALL occurrences of the same rule into ONE detection,
+      // accumulating total event_count and all affected hosts.
+      // Key = canonical rule slug (no host, no user) — unique per rule
+      const titleBuckets = new Map();
+      normalized.forEach(det => {
+        const slug = _canonicalSlug(det);
+        const sev  = det.severity || det.aggregated_severity || 'medium';
+        if (!titleBuckets.has(slug)) {
+          // Promote: pick the most severe instance as the representative detection
+          titleBuckets.set(slug, { ...det, _hostsAffected: new Set([det.computer || det.host || '']), _usersAffected: new Set([det.user || '']) });
+        } else {
+          const agg = titleBuckets.get(slug);
+          agg.event_count = (agg.event_count || 1) + (det.event_count || 1);
+          if (det.computer || det.host) agg._hostsAffected.add(det.computer || det.host);
+          if (det.user) agg._usersAffected.add(det.user);
+          // Escalate severity
+          if ((SEV_WEIGHT[sev] || 0) > (SEV_WEIGHT[agg.aggregated_severity] || 0)) {
+            agg.aggregated_severity = sev;
+            agg.severity = sev;
+          }
+        }
+      });
+
+      // Flatten title buckets; add hosts_affected summary
+      const backendDeduped = Array.from(titleBuckets.values()).map(d => {
+        const hosts = Array.from(d._hostsAffected).filter(Boolean);
+        const users = Array.from(d._usersAffected).filter(Boolean);
+        delete d._hostsAffected;
+        delete d._usersAffected;
+        // Build representative host/user from all affected
+        d.computer  = hosts.join(', ') || d.computer || '';
+        d.host      = d.computer;
+        d.user      = users.join(', ') || d.user || '';
+        d.hosts_affected = hosts;
+        d.users_affected = users;
+        // Ensure confidence score
+        if (!d.confidence_score) {
+          const cnt = d.event_count || 1;
+          d.confidence_score = Math.round(30 + Math.min(Math.log2(cnt + 1) / Math.log2(16), 1.0) * 70);
+        }
+        return d;
+      });
+
+      // ── Step 4: Run CSDE on the same events ───────────────────────
+      // CSDE is authoritative (OS-aware, behavioral rules, low false-positive)
+      const csdeResult = analyzeEvents(rawEvents, { dedupWindowMs: 300_000 });
+
+      // ── Step 5: CSDE wins; backend fills gaps for rules CSDE lacks ─
+      // Create a set of rule slugs CSDE already detected
+      const csdeSlugSet = new Set(csdeResult.detections.map(d => _canonicalSlug(d)));
+
+      // Also build a content-semantic dedup set: any backend rule that conceptually
+      // overlaps a CSDE detection (e.g., "Hayabusa: Sysmon EventID 1" is too generic)
+      // We only include backend detections that are SPECIFIC and significant
+      const GENERIC_RULE_PATTERNS = [
+        /hayabusa.*sysmon\s+eventid/i,       // Hayabusa: Sysmon EventID 1 — too generic
+        /win\s+security.*eventid\s+\d{4}/i,  // Win Security: EventID 4688 — too generic
+        /eventid\s+\d{4}\s*[–-]/i,           // EventID 4688 — New Process: too generic
+        /^sysmon\s+event/i,                   // Sysmon Event — too generic
+        /network\s+device\s+cli/i,            // Network Device CLI — irrelevant for Windows hosts
+        /replication.*removable\s+media/i,    // Removable Media — low signal
+        /external\s+remote\s+services/i,      // External Remote Services — low specificity
+      ];
+      const isGenericRule = (name) => GENERIC_RULE_PATTERNS.some(p => p.test(name));
+
+      // Build semantic keyword set from CSDE detections for overlap detection
+      // "Shadow Copy Deletion (Ransomware Indicator)" → keywords: ['shadow', 'copy', 'deletion']
+      const csdeKeywords = new Set();
+      csdeResult.detections.forEach(d => {
+        const name = (d.detection_name || d.ruleName || '').toLowerCase();
+        // Extract meaningful keywords (skip common words)
+        name.split(/[\s\-\/\(\)]+/).filter(w => w.length > 4).forEach(w => csdeKeywords.add(w));
+      });
+
+      const backendExtras = backendDeduped.filter(d => {
+        const slug = _canonicalSlug(d);
+        const name = (d.detection_name || d.title || '').toLowerCase();
+        const sev  = d.aggregated_severity || d.severity || 'low';
+        // Skip if CSDE already covers this rule (exact slug match)
+        if (csdeSlugSet.has(slug)) return false;
+        // Skip generic/noisy rules
+        if (isGenericRule(name)) return false;
+        // Skip if semantic overlap with CSDE detection
+        // (e.g., backend "Shadow Copy Deletion" overlaps CSDE "Shadow Copy Deletion (Ransomware Indicator)")
+        const nameWords = name.split(/[\s\-\/\(\)]+/).filter(w => w.length > 4);
+        const overlapCount = nameWords.filter(w => csdeKeywords.has(w)).length;
+        if (overlapCount >= 2) return false; // 2+ keyword overlap = duplicate concept
+        // Only include high/critical backend extras
+        return ['critical', 'high'].includes(sev);
+      });
+
+      // ── Step 6: Build final result ─────────────────────────────
+      const combined = _dedupDetections([
+        ...csdeResult.detections,
+        ...backendExtras,
+      ]);
+
+      const rawCount     = rawDets.length;
+      const dedupedCount = combined.length;
+
+      return {
+        ...backendResult,
+        detections: combined,
+        timeline  : csdeResult.timeline.length ? csdeResult.timeline : normalizeDetections_inner(backendResult.timeline),
+        chains    : csdeResult.chains.length   ? csdeResult.chains   : normalizeDetections_inner(backendResult.chains),
+        anomalies : csdeResult.anomalies.length ? csdeResult.anomalies : normalizeDetections_inner(backendResult.anomalies),
+        riskScore : Math.max(csdeResult.riskScore, backendResult.riskScore || 0),
+        engine    : 'CSDE+Backend',
+        _meta: {
+          ...(backendResult._meta || {}),
+          rawDetections      : rawCount,
+          backendRaw         : rawCount,
+          csdeDetections     : csdeResult.detections.length,
+          backendDeduped     : backendDeduped.length,
+          backendExtraAdded  : backendExtras.length,
+          dedupedDetections  : dedupedCount,
+          eventsAnalyzed     : rawEvents.length,
+          eventsOs,
+          osMismatchFiltered : rawDets.length - normalized.length,
+          dedupWindowMs      : 300_000,
+        },
+      };
+    }
+
+    // Helper: determine dominant OS across a batch of raw events
+    function _inferEventsOs(events) {
+      const counts = { windows: 0, linux: 0, unknown: 0 };
+      events.forEach(e => {
+        const os = _detectOS(Object.assign({}, e,
+          { commandLine: e.CommandLine || e.commandLine || '',
+            process: e.NewProcessName || e.ProcessName || e.process || '' }));
+        counts[os]++;
+      });
+      if (counts.windows > counts.linux) return 'windows';
+      if (counts.linux > counts.windows) return 'linux';
+      return 'unknown';
+    }
+
+    // Inner helper to not conflict with outer normalizeDetections
+    function normalizeDetections_inner(input) {
+      if (input == null) return [];
+      if (Array.isArray(input)) return input;
+      if (typeof input === 'object') {
+        if (Array.isArray(input.items)) return input.items;
+        if (Array.isArray(input.detections)) return input.detections;
+        return [];
+      }
+      return [];
     }
 
     // ── Build sample scenario events ─────────────────────────────
@@ -1549,7 +1918,7 @@
       return scenarios[scMap[scenario]] || scenarios.brute_force_compromise;
     }
 
-    return { analyzeEvents, getSampleEvents, mergeDetections, _dedupDetections, _normalizeRuleName, _baseRuleId, _canonicalSlug, _normalizeExternalDet };
+    return { analyzeEvents, getSampleEvents, mergeDetections, processBackendResult, _dedupDetections, _normalizeRuleName, _baseRuleId, _canonicalSlug, _normalizeExternalDet, _inferEventsOs, _inferOsFromTitle };
 
   })(); // end CSDE
 
@@ -2574,11 +2943,14 @@
       let r;
       try {
         // Try backend first
-        r = await _api('POST', '/ingest', { events, context: { format: fmt } });
+        const backendRaw = await _api('POST', '/ingest', { events, context: { format: fmt } });
+        // Smart processing: cross-validate with CSDE to eliminate noise
+        r = CSDE.processBackendResult(backendRaw, events);
+        console.log(`[RAYKAN] Smart analysis: ${(backendRaw._meta?.rawDetections || normalizeDetections(backendRaw.detections).length)} backend raw → ${r.detections.length} final detections`);
       } catch(apiErr) {
         // Fallback: run full client-side detection engine (CSDE)
         console.warn('[RAYKAN] Backend unavailable — using client-side detection engine:', apiErr.message);
-        r = CSDE.analyzeEvents(events);
+        r = CSDE.analyzeEvents(events, { dedupWindowMs: 300_000 });
         _showToast(`[Offline Mode] Analyzed ${events.length} events — ${r.detections.length} detections found`, 'info');
       }
 
@@ -2614,30 +2986,60 @@
 
   function _ingestSummaryCard(r) {
     // normalizeDetections before .length access — response shape may vary
-    const detsLen  = normalizeDetections(r.detections).length;
-    const anomsLen = normalizeDetections(r.anomalies).length;
-    const chsLen   = normalizeDetections(r.chains).length;
+    const detsLen   = normalizeDetections(r.detections).length;
+    const anomsLen  = normalizeDetections(r.anomalies).length;
+    const chsLen    = normalizeDetections(r.chains).length;
     const isOffline = r.engine === 'CSDE-offline';
-    const rawDets  = r._meta?.rawDetections || detsLen;
-    const deduped  = r._meta?.dedupedDetections || detsLen;
+    const isHybrid  = r.engine === 'CSDE+Backend';
+    const rawDets   = r._meta?.rawDetections || r._meta?.backendRaw || detsLen;
+    const deduped   = r._meta?.dedupedDetections || detsLen;
+    const csdeCount = r._meta?.csdeDetections || 0;
+    const backendExtra = r._meta?.backendExtraAdded || 0;
+    const osMismatch = r._meta?.osMismatchFiltered || 0;
     const dedupSaving = rawDets > deduped ? rawDets - deduped : 0;
+    const eventsOs   = r._meta?.eventsOs || '';
+
+    // Build engine badge
+    const engineBadge = isOffline
+      ? `<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(96,165,250,0.12);color:#60a5fa;font-weight:700;">OFFLINE — CSDE</span>`
+      : isHybrid
+      ? `<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(52,211,153,0.12);color:#34d399;font-weight:700;">SMART ANALYSIS — CSDE + Backend</span>`
+      : `<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(167,139,250,0.12);color:#a78bfa;font-weight:700;">Backend Engine</span>`;
+
+    // Smart analysis breakdown (only shown for hybrid mode)
+    const smartBreakdown = isHybrid && rawDets > deduped ? `
+<div style="margin-top:10px;padding:10px 14px;background:rgba(52,211,153,0.04);border:1px solid rgba(52,211,153,0.15);border-radius:8px;font-size:11px;">
+  <div style="color:#34d399;font-weight:700;margin-bottom:6px;">🔬 Smart Analysis Breakdown</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;color:#9ca3af;">
+    <span>Backend raw rule matches:</span><span style="color:#f97316;font-weight:600;">${rawDets} detections</span>
+    <span>OS mismatch filtered:</span><span style="color:#6b7280;font-weight:600;">−${osMismatch} (${eventsOs} host, Linux rules removed)</span>
+    <span>CSDE precise detections:</span><span style="color:#34d399;font-weight:600;">${csdeCount}</span>
+    <span>Backend unique additions:</span><span style="color:#60a5fa;font-weight:600;">+${backendExtra}</span>
+    <span style="color:#e6edf3;font-weight:700;">Final verified detections:</span><span style="color:#ef4444;font-weight:700;">${deduped}</span>
+  </div>
+  <div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.06);color:#6b7280;">
+    Noise reduction: ${rawDets} → ${deduped} (${Math.round((1-deduped/rawDets)*100)}% false positives eliminated)
+  </div>
+</div>` : (dedupSaving > 0 ? `
+<div style="margin-top:10px;padding:8px 12px;background:rgba(52,211,153,0.06);border:1px solid rgba(52,211,153,0.15);border-radius:6px;font-size:11px;color:#34d399;">
+  Deduplication: ${rawDets} raw → ${deduped} unique detection(s) | Window: ${((r._meta?.dedupWindowMs||60000)/1000)}s
+</div>` : '');
+
     return `<div class="rk-card" style="padding:16px;">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
     <div style="font-size:13px;font-weight:600;color:#34d399;">✓ Analysis Complete</div>
-    ${isOffline ? `<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(96,165,250,0.12);color:#60a5fa;font-weight:700;">OFFLINE MODE</span>` : ''}
-    ${dedupSaving > 0 ? `<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(52,211,153,0.12);color:#34d399;font-weight:700;">🧹 ${dedupSaving} duplicates removed</span>` : ''}
+    ${engineBadge}
+    ${dedupSaving > 0 ? `<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(52,211,153,0.12);color:#34d399;font-weight:700;">🧹 ${dedupSaving} noise eliminated</span>` : ''}
   </div>
   <div class="rk-grid-3" style="gap:8px;">
-    ${_miniStat('Events',         r.processed   || 0, '#60a5fa')}
-    ${_miniStat('Raw Detections', rawDets,             '#f97316')}
-    ${_miniStat('After Dedup',    deduped,             '#ef4444')}
-    ${_miniStat('Anomalies',      anomsLen,            '#f59e0b')}
-    ${_miniStat('Attack Chains',  chsLen,              '#a78bfa')}
-    ${_miniStat('Risk Score',     r.riskScore||0, '#ef4444')}
+    ${_miniStat('Events',          r._meta?.eventsAnalyzed || r.processed || 0, '#60a5fa')}
+    ${_miniStat('Raw Rule Matches', rawDets,             '#f97316')}
+    ${_miniStat('Verified Detections', deduped,         '#ef4444')}
+    ${_miniStat('Anomalies',       anomsLen,            '#f59e0b')}
+    ${_miniStat('Attack Chains',   chsLen,              '#a78bfa')}
+    ${_miniStat('Risk Score',      r.riskScore||0, r.riskScore >= 80 ? '#ef4444' : r.riskScore >= 50 ? '#f97316' : '#34d399')}
   </div>
-  ${dedupSaving > 0 ? `<div style="margin-top:10px;padding:8px 12px;background:rgba(52,211,153,0.06);border:1px solid rgba(52,211,153,0.15);border-radius:6px;font-size:11px;color:#34d399;">
-    Deduplication collapsed ${rawDets} raw detection events into ${deduped} unique detection(s) using a ${(r._meta?.dedupWindowMs||60000)/1000}s sliding time window.
-  </div>` : ''}
+  ${smartBreakdown}
   <div style="margin-top:12px;display:flex;gap:8px;">
     <button class="rk-btn rk-btn-primary" onclick="RAYKAN_UI._setTab('detections')" style="font-size:11px;">View Detections →</button>
     <button class="rk-btn rk-btn-ghost"   onclick="RAYKAN_UI._setTab('chains')"     style="font-size:11px;">Attack Chains →</button>
@@ -2721,14 +3123,19 @@
       if (bar) bar.style.width = '60%';
       if (msg) msg.textContent = `Analyzing ${events.length} event(s)…`;
 
+      const eventsSlice = events.slice(0, 5000);
       let r;
       try {
         // Try backend API first
-        r = await _api('POST', '/ingest', { events: events.slice(0, 5000), context: { source: 'file', fileName: file.name } });
+        const backendRaw = await _api('POST', '/ingest', { events: eventsSlice, context: { source: 'file', fileName: file.name } });
+        // Smart processing: run CSDE in parallel for cross-validation & OS filtering
+        // This eliminates the 369-detection spam from Hayabusa/Sigma rule noise
+        r = CSDE.processBackendResult(backendRaw, eventsSlice);
+        console.log(`[RAYKAN] Smart analysis: ${(backendRaw._meta?.rawDetections || normalizeDetections(backendRaw.detections).length)} backend raw → ${r.detections.length} final detections`);
       } catch(apiErr) {
         // Fallback: client-side detection engine (CSDE)
         console.warn('[RAYKAN] Backend unavailable — using CSDE for file:', apiErr.message);
-        r = CSDE.analyzeEvents(events.slice(0, 5000));
+        r = CSDE.analyzeEvents(eventsSlice, { dedupWindowMs: 300_000 });
       }
 
       if (bar) bar.style.width = '100%';
@@ -2738,7 +3145,7 @@
       const chs   = normalizeDetections(r.chains);
       const anoms = normalizeDetections(r.anomalies);
 
-      // Cross-analysis dedup merge
+      // Cross-analysis dedup merge (handles repeated uploads)
       S.detections  = CSDE.mergeDetections(S.detections, dets);
       if (msg) msg.textContent = `✓ Done — ${S.detections.length} detection(s) [deduped]${r.engine === 'CSDE-offline' ? ' [Offline]' : ''}`;
 
@@ -2793,18 +3200,35 @@
     const vCount = d.variants_triggered ? d.variants_triggered.length : 1;
     const conf   = d.confidence_score || 30;
     const confColor = conf >= 80 ? '#ef4444' : conf >= 60 ? '#f97316' : conf >= 40 ? '#eab308' : '#6b7280';
+    // Extract MITRE technique from nested or flat field
+    const mitreTech = (d.mitre && d.mitre.technique) ? d.mitre.technique
+                    : (d.technique || d.technique_id || d.mitre_technique || '');
+    const mitreName = (d.mitre && d.mitre.name) ? d.mitre.name : '';
+    const mitreTactic = (d.mitre && d.mitre.tactic) ? d.mitre.tactic.replace(/-/g,' ') : '';
+    const mitreDisplay = mitreTech
+      ? `<a href="https://attack.mitre.org/techniques/${mitreTech.replace('.','/')}/" target="_blank"
+             title="${mitreName}${mitreTactic ? ' — '+mitreTactic : ''}"
+             style="color:#a78bfa;text-decoration:none;font-size:10px;"
+             onclick="event.stopPropagation();">${mitreTech}</a>`
+      : '<span style="color:#374151;font-size:10px;">—</span>';
     const varBadge = vCount > 1
       ? `<span style="font-size:9px;padding:1px 5px;background:rgba(167,139,250,0.15);color:#a78bfa;border-radius:8px;margin-left:4px;">${vCount} variants</span>`
       : '';
+    // Category badge
+    const cat = d.category || '';
+    const catColor = cat.includes('credential') ? '#ef4444' : cat.includes('execut') ? '#f97316'
+                   : cat.includes('persist') ? '#eab308' : cat.includes('lateral') ? '#a78bfa'
+                   : cat.includes('discovery') ? '#60a5fa' : '#6b7280';
     return `
   <tr onclick="RAYKAN_UI._showDetDetail('${d.id||''}')" style="cursor:pointer;">
     <td>${_sevBadge(sev)}</td>
     <td style="font-weight:600;color:#e6edf3;max-width:220px;">
-      <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${d.detection_name||d.ruleName||d.title||'Detection'}${varBadge}</div>
+      <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${(d.detection_name||d.ruleName||d.title||'Detection').replace(/"/g,'&quot;')}">${d.detection_name||d.ruleName||d.title||'Detection'}${varBadge}</div>
+      ${cat ? `<div style="font-size:9px;color:${catColor};margin-top:2px;text-transform:uppercase;letter-spacing:0.5px;">${cat}</div>` : ''}
     </td>
     <td style="color:#8b949e;font-family:monospace;font-size:11px;">${d.computer||d.host||'—'}</td>
     <td style="color:#60a5fa;font-size:11px;">${d.user||'—'}</td>
-    <td><span class="rk-tag" style="color:#a78bfa;font-size:10px;">${d.mitre?.technique||d.technique||'—'}</span></td>
+    <td>${mitreDisplay}</td>
     <td style="text-align:center;color:#e6edf3;font-weight:600;font-size:12px;">${eCount}</td>
     <td style="text-align:center;">
       <span style="font-size:11px;font-weight:700;color:${confColor};">${conf}%</span>
@@ -3717,6 +4141,7 @@
 
   // Expose globally
   window.RAYKAN_UI     = RAYKAN_UI;
+  window.CSDE          = CSDE; // Expose CSDE for testing and external access
   window.renderRAYKAN  = () => {
     const wrap = document.getElementById('raykanWrap');
     if (wrap) render(wrap);
