@@ -293,15 +293,36 @@
     // CSDE-WIN-001-WP          →  CSDE-WIN-001
     // CSDE-WIN-003             →  CSDE-WIN-003
     // CSDE-LNX-001             →  CSDE-LNX-001
+    // backend-det-7            →  (use ruleName slug instead)
     function _baseRuleId(ruleId) {
       if (!ruleId) return 'UNKNOWN';
       const s = String(ruleId);
       // Match standard CSDE rule IDs: PREFIX-OS-NNN (3 dash groups)
       const m = s.match(/^(CSDE-[A-Z]+-\d+[A-Z]*)/);
       if (m) return m[1];
-      // Fallback: take first 3 dash-separated tokens
-      const parts = s.split('-');
-      return parts.slice(0, Math.min(3, parts.length)).join('-');
+      // Strip event-index suffix from per-event variant IDs (e.g. CSDE-WIN-004-NET-7)
+      const m2 = s.match(/^([A-Z]+-[A-Z]+-\d+[A-Z]?)/);
+      if (m2) return m2[1];
+      // Backend/external rule IDs: return as-is (they'll be grouped by canonical slug)
+      return s;
+    }
+
+    // ── Canonical rule slug for cross-engine deduplication ───────
+    // Normalizes a detection's identity for bucketing, supporting both
+    // CSDE rule IDs and backend/external rule title slugs.
+    function _canonicalSlug(det) {
+      // Prefer canonical ruleId if it looks like a CSDE rule
+      const rid = det.ruleId || '';
+      if (rid.match(/^CSDE-/)) return _baseRuleId(rid);
+      // Fallback: slug from detection name / title / ruleName
+      const name = _normalizeRuleName(det.detection_name || det.ruleName || det.title || rid || '');
+      if (name) {
+        return 'SLUG-' + name.toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .slice(0, 40);
+      }
+      return 'UNKNOWN';
     }
 
     // ── Wildcard/glob match (O(1) for non-wildcard) ───────────────
@@ -564,7 +585,15 @@
         mitre: { technique: 'T1021.002', name: 'Remote Services: SMB/Windows Admin Shares', tactic: 'lateral-movement' },
         tags: ['attack.lateral_movement', 'attack.t1021.002'],
         riskScore: 35,
-        match: e => parseInt(e.EventID,10) === 4624 && (e.LogonType == 3 || e.LogonType === '3'),
+        match: e => {
+          // Only fire for network logon (Type 3) from non-loopback external sources
+          if (parseInt(e.EventID,10) !== 4624) return false;
+          if (e.LogonType != 3 && e.LogonType !== '3') return false;
+          const ip = e.srcIp || e.SourceIP || e.SourceIPAddress || e.IpAddress || '';
+          // Skip localhost / empty IPs — these are system events, not lateral movement
+          if (!ip || ip === '127.0.0.1' || ip === '::1' || ip === '-' || ip === 'localhost') return false;
+          return true;
+        },
         narrative: e => `Network logon (Type 3) for "${e.user||'unknown'}" from ${e.srcIp||'unknown'} on ${e.computer||'DC01'}`,
       },
 
@@ -594,8 +623,31 @@
         tags: ['attack.execution', 'attack.t1059.003'],
         riskScore: 30,
         match: e => {
-          const parent = (e.parentProcess || e.ParentImage || '').toLowerCase();
-          return parseInt(e.EventID,10) === 4688 && parent.includes('cmd.exe');
+          if (parseInt(e.EventID,10) !== 4688) return false;
+          const parent = (e.parentProcess || e.ParentImage || e.ParentProcessName || '').toLowerCase();
+          if (!parent.includes('cmd.exe')) return false;
+          // Only alert on genuinely suspicious child processes — not benign system tools
+          const proc = (e.process || e.ProcessName || e.Image || '').toLowerCase();
+          const cmd  = (e.commandLine || '').toLowerCase();
+          const BENIGN = ['conhost.exe', 'cmd.exe', 'ipconfig.exe', 'ping.exe', 'tracert.exe',
+                          'tasklist.exe', 'systeminfo.exe', 'hostname.exe', 'whoami.exe',
+                          'chcp.exe', 'find.exe', 'findstr.exe', 'more.exe', 'timeout.exe',
+                          'tree.exe', 'cls', 'echo', 'pause', 'xcopy.exe', 'type', 'dir'];
+          if (BENIGN.some(b => proc.endsWith(b))) return false;
+          // Only fire for: powershell, wscript, cscript, rundll32, mshta, regsvr32,
+          // net.exe with /add, reg.exe writes, encoded commands, or unknown executables
+          const SUSPICIOUS = ['powershell', 'wscript', 'cscript', 'rundll32', 'mshta',
+                              'regsvr32', 'bitsadmin', 'certutil', 'wmic', 'msiexec'];
+          if (SUSPICIOUS.some(s => proc.includes(s))) return true;
+          if (proc.includes('net.exe') || proc.includes('net1.exe')) {
+            return cmd.includes('/add') || cmd.includes('localgroup') || cmd.includes('user ');
+          }
+          if (proc.includes('reg.exe')) {
+            return cmd.includes('add') || cmd.includes('import') || cmd.includes('export');
+          }
+          // Unknown/unsigned process launched from cmd.exe with suspicious patterns
+          return cmd.includes('-enc') || cmd.includes('http') || cmd.includes('download') ||
+                 cmd.includes('invoke') || cmd.includes('bypass') || cmd.includes('hidden');
         },
         narrative: e => `Process "${e.process||e.ProcessName||'unknown'}" spawned by cmd.exe — command: ${e.commandLine||'?'}`,
       },
@@ -803,119 +855,183 @@
     function _dedupDetections(rawDetections) {
       if (!rawDetections.length) return [];
 
-      // Sort by timestamp ascending (O(n log n))
+      // ── Step 1: Sort by timestamp ascending (O(n log n)) ──────────
       const sorted = [...rawDetections].sort((a, b) => {
-        const ta = new Date(a.timestamp||0).getTime();
-        const tb = new Date(b.timestamp||0).getTime();
+        const ta = new Date(a.timestamp || a.first_seen || 0).getTime();
+        const tb = new Date(b.timestamp || b.first_seen || 0).getTime();
         return ta - tb;
       });
 
-      // Build dedup buckets: key = `baseRuleId|host|user`
+      // ── Step 2: Build dedup buckets ───────────────────────────────
+      // Key = canonical rule slug + host + user
+      // Grouping logic:
+      //   • Events from same session (same upload batch) always group regardless
+      //     of timestamp span — prevents duplicate spam on long-duration logs
+      //   • Time-window only applied when merging ACROSS separate sessions
+      // ─────────────────────────────────────────────────────────────
       const buckets = new Map();
 
       sorted.forEach(det => {
-        const baseId   = _baseRuleId(det.ruleId || det.id || '');
+        // Canonical slug uses ruleId if available, else title-based slug
+        const slug     = _canonicalSlug(det);
         const host     = (det.computer || det.host || '').toLowerCase().trim();
         const user     = (det.user || '').toLowerCase().trim();
-        const ts       = new Date(det.timestamp || 0).getTime();
-        const bucketKey = `${baseId}|${host}|${user}`;
+        const ts       = new Date(det.timestamp || det.first_seen || 0).getTime();
+
+        // Primary bucket key: slug + host + user (groups all variants of same rule per entity)
+        const bucketKey = `${slug}|${host}|${user}`;
 
         if (!buckets.has(bucketKey)) {
-          buckets.set(bucketKey, []);
+          buckets.set(bucketKey, null); // sentinel before first detection
         }
-        const bucket = buckets.get(bucketKey);
 
-        // Find an existing window to merge into
-        const windowStart = ts - CFG.DEDUP_WINDOW_MS;
-        const existing = bucket.find(b =>
-          new Date(b.last_seen || 0).getTime() >= windowStart &&
-          Math.abs(new Date(b.first_seen || 0).getTime() - ts) <= CFG.DEDUP_WINDOW_MS
-        );
+        const existing = buckets.get(bucketKey);
 
-        if (existing) {
-          // Merge into existing aggregated detection
-          existing.event_count += (det.count || (det.evidence ? det.evidence.length : 1));
-          existing.last_seen    = det.timestamp || existing.last_seen;
+        if (existing !== null && existing !== undefined) {
+          // ── Merge into existing aggregated detection ──────────────
+          const prevTs   = new Date(existing.last_seen || existing.first_seen || 0).getTime();
+          const timeDiff = ts - prevTs;
 
-          // Track variant
-          const variantId = det.id || det.ruleId || baseId;
-          if (!existing.variants_triggered.includes(variantId)) {
-            existing.variants_triggered.push(variantId);
-          }
+          // Only split into new window if BOTH:
+          //   a) time gap > DEDUP_WINDOW_MS, AND
+          //   b) this is NOT an already-aggregated detection (event_count > 1 means
+          //      it came from a prior dedup pass — always merge it)
+          const isAlreadyAgg = (det.event_count || 0) > 1 ||
+                               Array.isArray(det.variants_triggered) && det.variants_triggered.length > 0;
+          const shouldSplit  = !isAlreadyAgg && timeDiff > CFG.DEDUP_WINDOW_MS * 5; // 5 min hard cap
 
-          // Severity escalation
-          const newW = SEV_WEIGHT[det.severity] || 0;
-          const curW = SEV_WEIGHT[existing.aggregated_severity] || 0;
-          if (newW > curW) existing.aggregated_severity = det.severity;
-
-          // Risk score escalation
-          if ((det.riskScore||0) > existing.riskScore) existing.riskScore = det.riskScore;
-
-          // Behavioral diversity: distinct EventIDs, users, IPs seen
-          (det.evidence || []).forEach(ev => {
-            const eid = String(ev.EventID || ev.eventId || '');
-            if (eid && !existing._seenEventIds.has(eid + ':' + String(ev.Computer||ev.computer||''))) {
-              existing._seenEventIds.add(eid + ':' + String(ev.Computer||ev.computer||''));
+          if (!shouldSplit) {
+            // Merge
+            const addCount = det.event_count || (det.evidence ? det.evidence.length : 1);
+            existing.event_count += addCount;
+            if (ts > new Date(existing.last_seen || 0).getTime()) {
+              existing.last_seen = det.timestamp || det.last_seen || existing.last_seen;
             }
-          });
 
-          // Accumulate evidence (capped)
-          if (det.evidence && existing.raw_detections.length < CFG.MAX_EVIDENCE_STORED) {
-            existing.raw_detections.push(det);
+            // Track variant IDs
+            const incomingVariants = Array.isArray(det.variants_triggered)
+              ? det.variants_triggered
+              : [det.variantId || det.id || slug];
+            incomingVariants.forEach(v => {
+              if (v && !existing.variants_triggered.includes(v)) {
+                existing.variants_triggered.push(v);
+              }
+            });
+
+            // Severity escalation (keep highest)
+            const newW = SEV_WEIGHT[det.severity] || SEV_WEIGHT[det.aggregated_severity] || 0;
+            const curW = SEV_WEIGHT[existing.aggregated_severity] || 0;
+            if (newW > curW) {
+              existing.aggregated_severity = det.severity || det.aggregated_severity || existing.aggregated_severity;
+              existing.severity = existing.aggregated_severity;
+            }
+
+            // Risk score escalation
+            const inRisk = det.riskScore || 0;
+            if (inRisk > existing.riskScore) existing.riskScore = inRisk;
+
+            // Behavioral diversity: distinct EventIDs
+            (det.evidence || []).forEach(ev => {
+              const eid = String(ev.EventID || ev.eventId || ev.event_id || '');
+              if (eid) {
+                const ekey = eid + ':' + String(ev.Computer || ev.computer || ev.hostname || '');
+                if (!existing._seenEventIds.has(ekey)) existing._seenEventIds.add(ekey);
+              }
+            });
+
+            // Accumulate raw evidence (capped)
+            if (existing.raw_detections.length < CFG.MAX_EVIDENCE_STORED) {
+              existing.raw_detections.push(det);
+            }
+
+            // Absorb richer narrative
+            if (det.narrative && det.narrative.length > (existing.narrative || '').length) {
+              existing.narrative = det.narrative;
+            }
+            return; // merged — do not create new bucket entry
           }
-          existing.narrative = det.narrative || existing.narrative;
-        } else {
-          // New aggregated detection
-          const evidenceEvents = det.evidence || [];
-          const seenIds = new Set(
-            evidenceEvents.map(ev => String(ev.EventID||'') + ':' + String(ev.Computer||ev.computer||''))
-          );
-          bucket.push({
-            id            : `AGG-${baseId}-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
-            ruleId        : baseId,
-            ruleName      : _normalizeRuleName(det.ruleName || det.title || baseId),
-            title         : _normalizeRuleName(det.ruleName || det.title || baseId),
-            detection_name: _normalizeRuleName(det.ruleName || det.title || baseId),
-            variants_triggered : [det.id || det.ruleId || baseId],
-            event_count   : det.count || (det.evidence ? det.evidence.length : 1),
-            first_seen    : det.timestamp,
-            last_seen     : det.timestamp,
-            aggregated_severity: det.severity || 'medium',
-            severity      : det.severity || 'medium',
-            riskScore     : det.riskScore || 0,
-            computer      : det.computer || det.host || '',
-            host          : det.computer || det.host || '',
-            user          : det.user || '',
-            srcIp         : det.srcIp || det.src_ip || '',
-            commandLine   : det.commandLine || '',
-            process       : det.process || '',
-            mitre         : det.mitre,
-            technique     : det.mitre?.technique || det.technique || '',
-            tags          : det.tags || [],
-            category      : det.category || '',
-            narrative     : det.narrative || '',
-            description   : det.description || '',
-            raw_detections: [det],
-            _seenEventIds : seenIds,
-            timestamp     : det.timestamp,
-          });
+          // If shouldSplit, fall through to create second window bucket
+          // Use a time-keyed sub-bucket so we don't overwrite the first
+          const subKey = `${bucketKey}|W${Math.floor(ts / (CFG.DEDUP_WINDOW_MS * 5))}`;
+          if (!buckets.has(subKey)) {
+            // Create a new window bucket
+            buckets.set(subKey, _newAggEntry(det, slug));
+            return;
+          }
+          // Merge into existing sub-window
+          const subBucket = buckets.get(subKey);
+          if (subBucket) {
+            subBucket.event_count += det.event_count || 1;
+            if (ts > new Date(subBucket.last_seen || 0).getTime()) subBucket.last_seen = det.timestamp || subBucket.last_seen;
+          }
+          return;
         }
+
+        // No existing bucket — create first entry
+        buckets.set(bucketKey, _newAggEntry(det, slug));
       });
 
-      // Flatten all buckets and compute final confidence scores
+      // ── Step 3: Flatten buckets and compute confidence ────────────
       const aggregated = [];
-      buckets.forEach(bucket => {
-        bucket.forEach(agg => {
-          agg.confidence_score = _calcConfidence(agg);
-          // Clean internal working fields
-          delete agg._seenEventIds;
-          aggregated.push(agg);
-        });
+      buckets.forEach(agg => {
+        if (!agg) return; // skip null sentinels
+        agg.confidence_score = _calcConfidence(agg);
+        delete agg._seenEventIds; // clean internal field
+        aggregated.push(agg);
       });
 
-      // Sort by riskScore desc, then first_seen asc
-      aggregated.sort((a, b) => (b.riskScore - a.riskScore) || (new Date(a.first_seen) - new Date(b.first_seen)));
+      // Sort: risk desc, then first_seen asc
+      aggregated.sort((a, b) =>
+        (b.riskScore - a.riskScore) || (new Date(a.first_seen) - new Date(b.first_seen))
+      );
       return aggregated;
+    }
+
+    // ── Create a new aggregated detection entry ──────────────────
+    function _newAggEntry(det, slug) {
+      const baseId   = _baseRuleId(det.ruleId || det.id || slug);
+      const ruleName = _normalizeRuleName(det.detection_name || det.ruleName || det.title || baseId);
+      const evidenceEvents = det.evidence || [];
+      const seenIds = new Set(
+        evidenceEvents.map(ev =>
+          String(ev.EventID || ev.eventId || ev.event_id || '') +
+          ':' + String(ev.Computer || ev.computer || ev.hostname || '')
+        )
+      );
+      const initVariants = Array.isArray(det.variants_triggered) && det.variants_triggered.length
+        ? [...det.variants_triggered]
+        : [det.variantId || det.id || baseId];
+
+      return {
+        id             : `AGG-${baseId}-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
+        ruleId         : det.ruleId || baseId,
+        ruleName,
+        title          : ruleName,
+        detection_name : ruleName,
+        variants_triggered : initVariants,
+        event_count    : det.event_count || det.count || (det.evidence ? det.evidence.length : 1),
+        first_seen     : det.timestamp || det.first_seen,
+        last_seen      : det.last_seen || det.timestamp,
+        aggregated_severity : det.severity || det.aggregated_severity || 'medium',
+        severity       : det.severity || det.aggregated_severity || 'medium',
+        riskScore      : det.riskScore || 0,
+        computer       : det.computer || det.host || '',
+        host           : det.computer || det.host || '',
+        user           : det.user || '',
+        srcIp          : det.srcIp || det.src_ip || '',
+        commandLine    : det.commandLine || '',
+        process        : det.process || '',
+        mitre          : det.mitre || null,
+        technique      : det.mitre?.technique || det.technique || '',
+        tags           : det.tags || [],
+        category       : det.category || '',
+        narrative      : det.narrative || '',
+        description    : det.description || '',
+        raw_detections : [det],
+        _seenEventIds  : seenIds,
+        timestamp      : det.timestamp || det.first_seen,
+        confidence_score: 30, // placeholder; recalculated at end
+      };
     }
 
     // ── Confidence score formula ──────────────────────────────────
@@ -1311,9 +1427,70 @@
     // ── Global state deduplication (cross-analysis) ──────────────
     // Merges new deduplicated detections into an existing array,
     // collapsing duplicates across multiple analyses.
+    // Works with BOTH CSDE-format AGG detections AND raw backend detections.
     function mergeDetections(existing, incoming) {
-      const combined = [...existing, ...incoming];
+      // Normalize incoming detections to CSDE format before merging
+      const normalizedIncoming = incoming.map(_normalizeExternalDet);
+      const normalizedExisting = existing.map(_normalizeExternalDet);
+      const combined = [...normalizedExisting, ...normalizedIncoming];
       return _dedupDetections(combined);
+    }
+
+    // ── Normalize external/backend detection to CSDE format ──────
+    // Ensures ruleId, severity, detection_name etc. are present
+    // so _dedupDetections can properly bucket them.
+    function _normalizeExternalDet(det) {
+      if (!det || typeof det !== 'object') return det;
+      // If already a CSDE AGG detection, return as-is
+      if (det.id && String(det.id).startsWith('AGG-')) return det;
+
+      const out = { ...det };
+      // Canonical ruleId: prefer ruleId, then rule_id, then slug from title
+      if (!out.ruleId) {
+        out.ruleId = out.rule_id || out.ruleID ||
+          (out.title || out.ruleName || out.detection_name || '');
+      }
+      // Canonical display name
+      if (!out.detection_name) {
+        out.detection_name = _normalizeRuleName(out.ruleName || out.title || out.ruleId || '');
+      }
+      if (!out.ruleName) out.ruleName = out.detection_name;
+      if (!out.title) out.title = out.detection_name;
+
+      // Severity normalization
+      const sevMap = { 0: 'informational', 1: 'low', 2: 'medium', 3: 'high', 4: 'critical',
+                       'info': 'informational', 'warn': 'low', 'warning': 'medium',
+                       'error': 'high', 'critical': 'critical' };
+      const rawSev = String(out.severity || out.level || 'medium').toLowerCase();
+      out.severity = sevMap[rawSev] || rawSev || 'medium';
+      if (!out.aggregated_severity) out.aggregated_severity = out.severity;
+
+      // Ensure event_count
+      if (!out.event_count) {
+        out.event_count = out.count || (Array.isArray(out.evidence) ? out.evidence.length : 1);
+      }
+
+      // Ensure timestamps
+      out.timestamp  = out.timestamp  || out.first_seen  || out.TimeGenerated || out.time || new Date().toISOString();
+      out.first_seen = out.first_seen || out.timestamp;
+      out.last_seen  = out.last_seen  || out.timestamp;
+
+      // Ensure variants_triggered array
+      if (!Array.isArray(out.variants_triggered)) {
+        out.variants_triggered = out.variantId ? [out.variantId] : [];
+      }
+
+      // Ensure raw_detections array
+      if (!Array.isArray(out.raw_detections)) {
+        out.raw_detections = [];
+      }
+
+      // Host/computer normalization
+      out.computer = out.computer || out.host || out.hostname || out.Computer || '';
+      out.host     = out.computer;
+      out.user     = out.user || out.User || out.username || '';
+
+      return out;
     }
 
     // ── Build sample scenario events ─────────────────────────────
@@ -1372,7 +1549,7 @@
       return scenarios[scMap[scenario]] || scenarios.brute_force_compromise;
     }
 
-    return { analyzeEvents, getSampleEvents, mergeDetections, _dedupDetections, _normalizeRuleName, _baseRuleId };
+    return { analyzeEvents, getSampleEvents, mergeDetections, _dedupDetections, _normalizeRuleName, _baseRuleId, _canonicalSlug, _normalizeExternalDet };
 
   })(); // end CSDE
 
@@ -3440,8 +3617,8 @@
   }
 
   function _onRealtimeDetection(det) {
-    S.detections.unshift(det);
-    if (S.detections.length > 1000) S.detections.pop();
+    // Deduplicate realtime detection against existing session detections
+    S.detections = CSDE.mergeDetections(S.detections, [det]);
     _updateStats({});
     if (S.activeTab === 'detections') _renderDetectionsList(S.detections);
     if (S.activeTab === 'overview')   _renderOverviewContent();
