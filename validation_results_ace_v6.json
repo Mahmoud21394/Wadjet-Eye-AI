@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-04-25T09:40:43.015Z",
+  "timestamp": "2026-04-25T10:28:02.917Z",
   "engine": "ACE-v6",
   "total": 15,
   "passed": 15,
@@ -10,7 +10,7 @@
       "id": "T01",
       "description": "Ransomware kill-chain → incident Critical (score ≥90)",
       "status": "PASS",
-      "detail": "score=100, severity=critical, chainType=ransomware, chainRisk=100"
+      "detail": "score=100, severity=critical, chainType=ransomware-apt, chainRisk=100"
     },
     {
       "id": "T02",
