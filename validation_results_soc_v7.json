@@ -1,0 +1,84 @@
+{
+  "suite": "SOC-v7-Production-Hardening",
+  "timestamp": "2026-04-25T09:40:36.486Z",
+  "passed": 15,
+  "failed": 0,
+  "total": 15,
+  "results": [
+    {
+      "id": "T16",
+      "desc": "Log tampering: EventID 1102 → P1 critical verdict TRUE_POSITIVE",
+      "status": "pass"
+    },
+    {
+      "id": "T17",
+      "desc": "Audit policy tamper: EventID 4719 → P1 critical",
+      "status": "pass"
+    },
+    {
+      "id": "T18",
+      "desc": "Security service stop: EventID 7036 (EventLog) → P1",
+      "status": "pass"
+    },
+    {
+      "id": "T19",
+      "desc": "Password spray: 6 users same source IP → CSDE-WIN-025 T1110.003",
+      "status": "pass"
+    },
+    {
+      "id": "T20",
+      "desc": "Credential stuffing: 12 accounts, multiple IPs → CSDE-WIN-026 T1110.004",
+      "status": "pass"
+    },
+    {
+      "id": "T21",
+      "desc": "WSL detection: bash.exe on Windows → CSDE-WIN-028, OS=windows",
+      "status": "pass"
+    },
+    {
+      "id": "T22",
+      "desc": "OS guard: Linux cron rule (CSDE-LNX-003) silent on pure Windows event",
+      "status": "pass"
+    },
+    {
+      "id": "T23",
+      "desc": "OS guard: Windows CSDE-WIN-014 silent on Linux auditd event",
+      "status": "pass"
+    },
+    {
+      "id": "T24",
+      "desc": "Web shell exploit chain: w3wp.exe → cmd.exe → net user /add",
+      "status": "pass"
+    },
+    {
+      "id": "T25",
+      "desc": "Cross-user isolation: alice+bob+charlie from different IPs → separate incidents",
+      "status": "pass"
+    },
+    {
+      "id": "T26",
+      "desc": "Brute force success: CSDE-WIN-003 fires with verdict TRUE_POSITIVE",
+      "status": "pass"
+    },
+    {
+      "id": "T27",
+      "desc": "Verdict TRUE_POSITIVE: ransomware chain → confidence ≥ 90, verdict confirmed",
+      "status": "pass"
+    },
+    {
+      "id": "T28",
+      "desc": "FP suppression: Veeam backup process → no critical incident",
+      "status": "pass"
+    },
+    {
+      "id": "T29",
+      "desc": "logCategory fix: EventID 4688 procdump→lsass fires CSDE-WIN-014",
+      "status": "pass"
+    },
+    {
+      "id": "T30",
+      "desc": "Ransomware + log tampering combo → riskScore=100, P1, TRUE_POSITIVE",
+      "status": "pass"
+    }
+  ]
+}
