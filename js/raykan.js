@@ -179,6 +179,7 @@
   // ── State ───────────────────────────────────────────────────────
   const S = {
     detections   : [],
+    incidents    : [],   // correlated incident groups (parent + children)
     timeline     : [],
     chains       : [],
     anomalies    : [],
@@ -260,6 +261,428 @@
 
     // ── Severity weights (higher = worse) ──────────────────────────
     const SEV_WEIGHT = { critical: 100, high: 80, medium: 50, low: 20, informational: 5 };
+
+    // ════════════════════════════════════════════════════════════════
+    //  LOG SCHEMA REGISTRY  (Schema-First Validation Gate)
+    //  Each log-source category declares:
+    //    eventIdRanges   — accepted numeric EventID ranges (inclusive)  [optional]
+    //    requiredFields  — fields that MUST be present (one of each sub-array)
+    //    forbiddenFields — fields that must be ABSENT for this category
+    //    keywords        — message/source keywords that confirm membership
+    //    os              — expected OS for this log category
+    //
+    //  A rule may carry `logCategory` pointing to a key here.
+    //  _validateEventSchema() returns true only when the event
+    //  satisfies the declared constraints for that category —
+    //  preventing cross-category rule evaluation.
+    // ════════════════════════════════════════════════════════════════
+    const LOG_SCHEMA = {
+
+      // ── Windows Security Event Log ──────────────────────────────
+      windows_security: {
+        os: 'windows',
+        eventIdRanges: [[1102,1102],[4608,4799],[4900,4999],[5136,5145],[5152,5158],[5888,5889]],
+        requiredFields: [['EventID']],
+        forbiddenFields: [],
+        keywords: ['security','winlogbeat','winsec'],
+        description: 'Windows Security Event Log (EVTX channel: Security)',
+      },
+
+      // ── Windows System / Service Event Log ──────────────────────
+      windows_system: {
+        os: 'windows',
+        eventIdRanges: [[7000,7099],[7045,7045],[4697,4697],[6005,6009]],
+        requiredFields: [['EventID']],
+        forbiddenFields: [],
+        keywords: ['system','scm','service control'],
+        description: 'Windows System Event Log (EVTX channel: System)',
+      },
+
+      // ── Windows PowerShell / ScriptBlock Log ────────────────────
+      windows_powershell: {
+        os: 'windows',
+        eventIdRanges: [[400,403],[600,600],[4100,4106]],
+        requiredFields: [['EventID']],
+        forbiddenFields: [],
+        keywords: ['powershell','microsoft-windows-powershell'],
+        description: 'Windows PowerShell / Script-Block log',
+      },
+
+      // ── Sysmon (Microsoft Sysinternals) ─────────────────────────
+      sysmon: {
+        os: 'windows',
+        eventIdRanges: [[1,30]],
+        requiredFields: [['EventID']],
+        forbiddenFields: [],
+        keywords: ['sysmon','microsoft-windows-sysmon'],
+        description: 'Microsoft Sysmon operational log (channel: Microsoft-Windows-Sysmon/Operational)',
+      },
+
+      // ── Windows Authentication Events ───────────────────────────
+      windows_auth: {
+        os: 'windows',
+        eventIdRanges: [[4624,4625],[4634,4648],[4768,4776]],
+        requiredFields: [['EventID']],
+        forbiddenFields: [],
+        keywords: ['logon','authentication','kerberos','ntlm'],
+        description: 'Windows logon/authentication events',
+      },
+
+      // ── Linux syslog / auth.log ─────────────────────────────────
+      linux_syslog: {
+        os: 'linux',
+        eventIdRanges: [],          // Linux logs have no numeric EventID
+        requiredFields: [['message','msg','raw']],
+        forbiddenFields: ['EventID'],
+        keywords: ['syslog','auth.log','secure','kern.log','pam_unix','sshd'],
+        description: 'Linux syslog / auth.log (rsyslog / syslog-ng)',
+      },
+
+      // ── Linux auditd ─────────────────────────────────────────────
+      linux_auditd: {
+        os: 'linux',
+        eventIdRanges: [],
+        requiredFields: [['message','msg','raw']],
+        forbiddenFields: ['EventID'],
+        keywords: ['auditd','audit.log','type=syscall','type=execve','auid='],
+        description: 'Linux auditd kernel audit records',
+      },
+
+      // ── Firewall / Network Flow ──────────────────────────────────
+      firewall: {
+        os: 'any',
+        eventIdRanges: [[5152,5159]],  // Windows Filtering Platform
+        requiredFields: [['destIp','DestinationIp','DestinationAddress','dest_ip']],
+        forbiddenFields: [],
+        keywords: ['firewall','paloalto','fortinet','checkpoint','wfp','filter'],
+        description: 'Firewall allow/deny records and Windows Filtering Platform',
+      },
+
+      // ── Web Access / Proxy Log ───────────────────────────────────
+      web: {
+        os: 'any',
+        eventIdRanges: [],
+        requiredFields: [['url','uri','request','http_method']],
+        forbiddenFields: [],
+        keywords: ['apache','nginx','iis','squid','bluecoat','access_log','http'],
+        description: 'Web server / proxy access log',
+      },
+
+      // ── Database Audit Log ───────────────────────────────────────
+      database: {
+        os: 'any',
+        eventIdRanges: [],
+        requiredFields: [['query','sql','statement','db_name']],
+        forbiddenFields: [],
+        keywords: ['mssql','mysql','oracle','postgresql','dbaudit','sql server'],
+        description: 'Database audit / query log',
+      },
+    };
+
+    // ── Schema Validation Gate ────────────────────────────────────
+    // Returns true  → event passes the schema for this rule's logCategory
+    // Returns false → event does NOT match expected log category; skip rule
+    // If the rule has no logCategory, always returns true (backward compat)
+    function _validateEventSchema(rule, event) {
+      const cat = rule.logCategory;
+      if (!cat) return true;                      // no schema constraint → pass
+      const schema = LOG_SCHEMA[cat];
+      if (!schema) return true;                   // unknown category → pass
+
+      // ── OS gate ────────────────────────────────────────────────
+      if (schema.os !== 'any') {
+        const evOs = event._os || _detectOS(event);
+        if (evOs !== 'unknown' && evOs !== schema.os) return false;
+      }
+
+      // ── EventID range gate ──────────────────────────────────────
+      if (schema.eventIdRanges && schema.eventIdRanges.length > 0) {
+        const eid = parseInt(event.EventID, 10);
+        if (!isNaN(eid)) {
+          const inRange = schema.eventIdRanges.some(([lo, hi]) => eid >= lo && eid <= hi);
+          if (!inRange) return false;
+        }
+        // If no EventID at all, fail for categories that require one
+        else if (schema.requiredFields && schema.requiredFields.some(g => g.includes('EventID'))) {
+          return false;
+        }
+      }
+
+      // ── Required-field gate ─────────────────────────────────────
+      // Each sub-array is an OR group: at least ONE field in the group must exist
+      if (schema.requiredFields) {
+        for (const group of schema.requiredFields) {
+          const satisfied = group.some(f => {
+            const v = event[f];
+            return v !== undefined && v !== null && v !== '';
+          });
+          if (!satisfied) return false;
+        }
+      }
+
+      // ── Forbidden-field gate ────────────────────────────────────
+      if (schema.forbiddenFields) {
+        for (const f of schema.forbiddenFields) {
+          if (event[f] !== undefined && event[f] !== null && event[f] !== '') return false;
+        }
+      }
+
+      return true;   // all gates passed
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  CROSS-LOG LINKER
+    //  Links related events ACROSS log sources using:
+    //    • Process ID (PID) matching within same host
+    //    • Timestamp proximity (within CROSS_LINK_WINDOW_MS)
+    //    • Host + User identity alignment
+    //
+    //  Returns a Map<eventIndex, Set<eventIndex>> of linked event pairs.
+    //  Also decorates each event with a _linkedEventIds array.
+    //  Example: EventID 4688 (process creation) + EventID 5156 (WFP network
+    //  event) with matching PID on same host → linked as same process activity.
+    // ════════════════════════════════════════════════════════════════
+    const CROSS_LINK_WINDOW_MS = 10_000; // 10-second proximity window
+
+    // Log-source category classifier for an event
+    function _classifyEventSource(event) {
+      const eid = parseInt(event.EventID, 10);
+      const src = (event.source || event.log_source || event.logsource || event.Channel || '').toLowerCase();
+      const msg = (event.message || event.msg || event.raw || '').toLowerCase();
+
+      // Sysmon (low EventIDs 1-30, or explicit channel)
+      if (src.includes('sysmon') || (!isNaN(eid) && eid >= 1 && eid <= 30 &&
+          (event.Image || event.TargetFilename || event.DestinationIp || event.SourceIp))) {
+        return 'sysmon';
+      }
+      // PowerShell
+      if (!isNaN(eid) && eid >= 4100 && eid <= 4106) return 'windows_powershell';
+      // Windows Security
+      if (!isNaN(eid) && eid >= 4608 && eid <= 5158) return 'windows_security';
+      // Windows System/Service
+      if (!isNaN(eid) && (eid === 7045 || eid === 4697 || (eid >= 7000 && eid <= 7099))) return 'windows_system';
+      // Firewall (WFP)
+      if (!isNaN(eid) && eid >= 5152 && eid <= 5159) return 'firewall';
+      // Linux syslog
+      if (src.includes('syslog') || src.includes('auth') || msg.includes('pam_unix') || msg.includes('sshd')) return 'linux_syslog';
+      // Linux auditd
+      if (src.includes('auditd') || msg.includes('type=syscall') || msg.includes('auid=')) return 'linux_auditd';
+      // Web
+      if (event.url || event.uri || event.http_method || src.includes('apache') || src.includes('nginx')) return 'web';
+      // Database
+      if (event.query || event.sql || event.db_name || src.includes('mssql') || src.includes('mysql')) return 'database';
+      return 'unknown';
+    }
+
+    function _crossLinkEvents(events) {
+      // Index events by PID on each host for fast O(1) lookup
+      // Key: `${host}::${pid}` → array of event indices
+      const pidIndex = new Map();
+      // Key: `${host}::${user}` → array of event indices (for user-based linking)
+      const identityIndex = new Map();
+
+      events.forEach((ev, idx) => {
+        // Classify source once
+        ev._logSource = ev._logSource || _classifyEventSource(ev);
+
+        const host = (ev.computer || ev.Computer || '').toLowerCase();
+        const pid  = (ev.ProcessId || ev.pid || ev.SubjectProcessId || ev.NewProcessId || '').toString().trim();
+        const user = (ev.user || '').toLowerCase();
+        const ts   = new Date(ev.timestamp || 0).getTime();
+
+        // Store normalized metadata on event for later use
+        ev._hostKey  = host;
+        ev._pid      = pid;
+        ev._tsMs     = ts;
+
+        // Index by PID + host
+        if (pid && pid !== '0' && host) {
+          const key = `${host}::${pid}`;
+          if (!pidIndex.has(key)) pidIndex.set(key, []);
+          pidIndex.get(key).push(idx);
+        }
+
+        // Index by user + host
+        if (user && host) {
+          const key = `${host}::${user}`;
+          if (!identityIndex.has(key)) identityIndex.set(key, []);
+          identityIndex.get(key).push(idx);
+        }
+      });
+
+      // Build adjacency map: eventIdx → Set of linked eventIdx
+      const links = new Map(); // idx → Set<idx>
+      const ensureLink = (a, b) => {
+        if (a === b) return;
+        if (!links.has(a)) links.set(a, new Set());
+        if (!links.has(b)) links.set(b, new Set());
+        links.get(a).add(b);
+        links.get(b).add(a);
+      };
+
+      // ── Link 1: Same PID on same host, different log sources ────
+      pidIndex.forEach((idxList) => {
+        if (idxList.length < 2) return;
+        for (let i = 0; i < idxList.length; i++) {
+          for (let j = i + 1; j < idxList.length; j++) {
+            const a = events[idxList[i]];
+            const b = events[idxList[j]];
+            // Only link if from different log source categories
+            if (a._logSource !== b._logSource) {
+              ensureLink(idxList[i], idxList[j]);
+            }
+          }
+        }
+      });
+
+      // ── Link 2: Timestamp proximity + same host + same user ─────
+      identityIndex.forEach((idxList) => {
+        if (idxList.length < 2) return;
+        // Sort by timestamp
+        const sorted = idxList.slice().sort((a, b) => events[a]._tsMs - events[b]._tsMs);
+        for (let i = 0; i < sorted.length - 1; i++) {
+          const a = events[sorted[i]];
+          const b = events[sorted[i + 1]];
+          const gap = Math.abs(b._tsMs - a._tsMs);
+          if (gap <= CROSS_LINK_WINDOW_MS && a._logSource !== b._logSource) {
+            ensureLink(sorted[i], sorted[i + 1]);
+          }
+        }
+      });
+
+      // ── Decorate events with _linkedEventIds ────────────────────
+      links.forEach((linkedSet, idx) => {
+        events[idx]._linkedEventIds = Array.from(linkedSet);
+      });
+
+      return links;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  TEMPORAL-IDENTITY CORRELATION ENGINE  (60-second window)
+    //  Groups deduplicated alerts that:
+    //    • Share the same Device/HostID  AND
+    //    • Share the same User/AccountID (or SYSTEM-level)  AND
+    //    • Occur within CORR_WINDOW_MS of each other
+    //  Into a single Incident with:
+    //    • parent alert  — highest-severity/riskScore detection
+    //    • child alerts  — all other detections in the group
+    //    • incidentId, severity, riskScore, mitreTactics[]
+    // ════════════════════════════════════════════════════════════════
+    const CORR_WINDOW_MS = 60_000; // 60-second temporal identity window
+
+    function _correlateIncidents(dedupDets) {
+      if (!dedupDets.length) return { incidents: [], standaloneDetections: [] };
+
+      // Sort by first_seen ascending for sweep
+      const sorted = [...dedupDets].sort((a, b) => {
+        const ta = new Date(a.first_seen || a.timestamp || 0).getTime();
+        const tb = new Date(b.first_seen || b.timestamp || 0).getTime();
+        return ta - tb;
+      });
+
+      // Group: key = `${host}::${user_or_system}`
+      // Within each group, sweep through time-sorted detections and cluster
+      // those within CORR_WINDOW_MS of their predecessor.
+      const entityGroups = new Map();
+
+      sorted.forEach(det => {
+        const host = (det.computer || det.host || 'unknown').toLowerCase().trim();
+        const user = (det.user || 'system').toLowerCase().trim();
+        // SYSTEM-level detections group with any user on same host
+        const userKey = (user === 'system' || user === 'nt authority\\system' || !user) ? '*' : user;
+        const key = `${host}::${userKey}`;
+        if (!entityGroups.has(key)) entityGroups.set(key, []);
+        entityGroups.get(key).push(det);
+      });
+
+      const incidents = [];
+      const assignedIds = new Set();
+
+      entityGroups.forEach((dets) => {
+        if (!dets.length) return;
+
+        // Build time clusters within CORR_WINDOW_MS
+        // Cluster seed = first detection; expand while next det is within window of cluster's last_seen
+        let cluster = [dets[0]];
+        let clusterEnd = new Date(dets[0].last_seen || dets[0].first_seen || dets[0].timestamp || 0).getTime();
+
+        const flushCluster = () => {
+          if (cluster.length < 2) {
+            // Standalone — don't form an incident
+            cluster = [];
+            return;
+          }
+          // Build incident from cluster
+          // Parent = highest riskScore, then highest severity
+          const sortedCluster = [...cluster].sort((a, b) => {
+            const rDiff = (b.riskScore || 0) - (a.riskScore || 0);
+            if (rDiff !== 0) return rDiff;
+            return (SEV_WEIGHT[b.aggregated_severity || b.severity] || 0)
+                 - (SEV_WEIGHT[a.aggregated_severity || a.severity] || 0);
+          });
+          const parent   = sortedCluster[0];
+          const children = sortedCluster.slice(1);
+
+          const incidentTs   = cluster[0].first_seen || cluster[0].timestamp;
+          const incidentLast = cluster[cluster.length - 1].last_seen || cluster[cluster.length - 1].timestamp;
+          const allTactics   = [...new Set(cluster.map(d => d.mitre?.tactic || '').filter(Boolean))];
+          const allTechniques= [...new Set(cluster.map(d => d.mitre?.technique || d.technique || '').filter(Boolean))];
+          const highestSev   = cluster.reduce((best, d) => {
+            const w = SEV_WEIGHT[d.aggregated_severity || d.severity] || 0;
+            return w > (SEV_WEIGHT[best] || 0) ? (d.aggregated_severity || d.severity) : best;
+          }, 'low');
+          const totalRisk    = Math.min(100, Math.round(cluster.reduce((s, d) => s + (d.riskScore || 0), 0) / cluster.length * 1.2));
+
+          const incId = 'INC-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2,6).toUpperCase();
+          // Tag all detections with their incident ID
+          cluster.forEach(d => {
+            d._incidentId = incId;
+            d._isParent   = (d === parent);
+            assignedIds.add(d.id);
+          });
+
+          incidents.push({
+            incidentId   : incId,
+            parent,
+            children,
+            all          : cluster,
+            severity     : highestSev,
+            riskScore    : totalRisk,
+            first_seen   : incidentTs,
+            last_seen    : incidentLast,
+            duration_ms  : new Date(incidentLast||0).getTime() - new Date(incidentTs||0).getTime(),
+            host         : parent.computer || parent.host || '',
+            user         : parent.user || '',
+            mitreTactics : allTactics,
+            techniques   : allTechniques,
+            detectionCount: cluster.length,
+            childCount   : children.length,
+            correlationBasis: 'temporal-identity-60s',
+          });
+          cluster = [];
+        };
+
+        for (let i = 1; i < dets.length; i++) {
+          const detTs = new Date(dets[i].first_seen || dets[i].timestamp || 0).getTime();
+          if (detTs - clusterEnd <= CORR_WINDOW_MS) {
+            cluster.push(dets[i]);
+            const detEnd = new Date(dets[i].last_seen || dets[i].first_seen || dets[i].timestamp || 0).getTime();
+            if (detEnd > clusterEnd) clusterEnd = detEnd;
+          } else {
+            flushCluster();
+            cluster = [dets[i]];
+            clusterEnd = new Date(dets[i].last_seen || dets[i].first_seen || dets[i].timestamp || 0).getTime();
+          }
+        }
+        flushCluster();
+      });
+
+      // Standalone = not assigned to any incident
+      const standaloneDetections = dedupDets.filter(d => !assignedIds.has(d.id));
+
+      return { incidents, standaloneDetections };
+    }
 
     // ── OS detection helpers ─────────────────────────────────────
     // Returns 'windows' | 'linux' | 'unknown' for a single event
@@ -375,7 +798,7 @@
 
       {
         id: 'CSDE-WIN-001', title: 'Windows Logon Failure',
-        os: 'windows', severity: 'medium', category: 'authentication',
+        os: 'windows', severity: 'medium', category: 'authentication', logCategory: 'windows_auth',
         mitre: { technique: 'T1110', name: 'Brute Force', tactic: 'credential-access' },
         tags: ['attack.credential_access', 'attack.t1110'],
         riskScore: 45,
@@ -399,7 +822,7 @@
 
       {
         id: 'CSDE-WIN-002', title: 'Multiple Failed Logons — Brute Force',
-        os: 'windows', severity: 'high', category: 'authentication',
+        os: 'windows', severity: 'high', category: 'authentication', logCategory: 'windows_auth',
         mitre: { technique: 'T1110.003', name: 'Password Spraying', tactic: 'credential-access' },
         tags: ['attack.credential_access', 'attack.t1110.003'],
         riskScore: 70,
@@ -440,7 +863,7 @@
 
       {
         id: 'CSDE-WIN-003', title: 'Successful Logon After Multiple Failures',
-        os: 'windows', severity: 'critical', category: 'authentication',
+        os: 'windows', severity: 'critical', category: 'authentication', logCategory: 'windows_auth',
         mitre: { technique: 'T1110', name: 'Brute Force — Successful Compromise', tactic: 'credential-access' },
         tags: ['attack.credential_access', 'attack.t1110', 'attack.t1078'],
         riskScore: 92,
@@ -705,7 +1128,7 @@
 
       {
         id: 'CSDE-WIN-013', title: 'Shadow Copy Deletion (Ransomware Indicator)',
-        os: 'windows', severity: 'critical', category: 'impact',
+        os: 'windows', severity: 'critical', category: 'impact', logCategory: 'windows_security',
         mitre: { technique: 'T1490', name: 'Inhibit System Recovery', tactic: 'impact' },
         tags: ['attack.impact', 'attack.t1490'],
         riskScore: 98,
@@ -722,7 +1145,7 @@
 
       {
         id: 'CSDE-WIN-014', title: 'LSASS / Credential Dump Attempt',
-        os: 'windows', severity: 'critical', category: 'credential-access',
+        os: 'windows', severity: 'critical', category: 'credential-access', logCategory: 'windows_security',
         mitre: { technique: 'T1003.001', name: 'LSASS Memory', tactic: 'credential-access' },
         tags: ['attack.credential_access', 'attack.t1003.001'],
         riskScore: 97,
@@ -749,7 +1172,7 @@
 
       {
         id: 'CSDE-WIN-015', title: 'Scheduled Task Created for Persistence',
-        os: 'windows', severity: 'high', category: 'persistence',
+        os: 'windows', severity: 'high', category: 'persistence', logCategory: 'windows_security',
         mitre: { technique: 'T1053.005', name: 'Scheduled Task/Job: Scheduled Task', tactic: 'persistence' },
         tags: ['attack.persistence', 'attack.t1053.005'],
         riskScore: 73,
@@ -764,7 +1187,7 @@
 
       {
         id: 'CSDE-WIN-016', title: 'WMI Remote Execution',
-        os: 'windows', severity: 'high', category: 'execution',
+        os: 'windows', severity: 'high', category: 'execution', logCategory: 'windows_security',
         mitre: { technique: 'T1047', name: 'Windows Management Instrumentation', tactic: 'execution' },
         tags: ['attack.execution', 'attack.t1047'],
         riskScore: 77,
@@ -783,7 +1206,7 @@
 
       {
         id: 'CSDE-WIN-017', title: 'PowerShell Spawned from Office/Browser (Spear Phishing)',
-        os: 'windows', severity: 'critical', category: 'execution',
+        os: 'windows', severity: 'critical', category: 'execution', logCategory: 'windows_security',
         mitre: { technique: 'T1059.001', name: 'PowerShell', tactic: 'execution' },
         tags: ['attack.execution', 'attack.t1059.001', 'attack.t1566.001'],
         riskScore: 98,
@@ -813,7 +1236,7 @@
 
       {
         id: 'CSDE-WIN-018', title: 'Suspicious Script Block Execution (PowerShell EventID 4104)',
-        os: 'windows', severity: 'high', category: 'execution',
+        os: 'windows', severity: 'high', category: 'execution', logCategory: 'windows_powershell',
         mitre: { technique: 'T1059.001', name: 'PowerShell', tactic: 'execution' },
         tags: ['attack.execution', 'attack.t1059.001'],
         riskScore: 80,
@@ -842,7 +1265,7 @@
 
       {
         id: 'CSDE-WIN-019', title: 'Service Installed in Suspicious Path (T1543.003)',
-        os: 'windows', severity: 'critical', category: 'persistence',
+        os: 'windows', severity: 'critical', category: 'persistence', logCategory: 'windows_system',
         mitre: { technique: 'T1543.003', name: 'Windows Service', tactic: 'persistence' },
         tags: ['attack.persistence', 'attack.t1543.003'],
         riskScore: 92,
@@ -861,7 +1284,7 @@
 
       {
         id: 'CSDE-WIN-020', title: 'Admin Share Access / Lateral Movement via SMB',
-        os: 'windows', severity: 'high', category: 'lateral-movement',
+        os: 'windows', severity: 'high', category: 'lateral-movement', logCategory: 'windows_security',
         mitre: { technique: 'T1021.002', name: 'Remote Services: SMB/Windows Admin Shares', tactic: 'lateral-movement' },
         tags: ['attack.lateral_movement', 'attack.t1021.002'],
         riskScore: 72,
@@ -883,7 +1306,7 @@
 
       {
         id: 'CSDE-WIN-021', title: 'Ransomware Indicator: Encrypted File Extension Created',
-        os: 'windows', severity: 'critical', category: 'impact',
+        os: 'windows', severity: 'critical', category: 'impact', logCategory: 'sysmon',
         mitre: { technique: 'T1486', name: 'Data Encrypted for Impact', tactic: 'impact' },
         tags: ['attack.impact', 'attack.t1486'],
         riskScore: 99,
@@ -900,7 +1323,7 @@
 
       {
         id: 'CSDE-WIN-022', title: 'C2 Network Connection (Process to External IP)',
-        os: 'windows', severity: 'high', category: 'command-and-control',
+        os: 'windows', severity: 'high', category: 'command-and-control', logCategory: 'sysmon',
         mitre: { technique: 'T1071.001', name: 'Application Layer Protocol: Web Protocols', tactic: 'command-and-control' },
         tags: ['attack.command_and_control', 'attack.t1071.001'],
         riskScore: 85,
@@ -935,7 +1358,7 @@
 
       {
         id: 'CSDE-LNX-001', title: 'SSH Brute Force Attempt (Linux)',
-        os: 'linux', severity: 'high', category: 'authentication',
+        os: 'linux', severity: 'high', category: 'authentication', logCategory: 'linux_syslog',
         mitre: { technique: 'T1110.003', name: 'Password Spraying', tactic: 'credential-access' },
         tags: ['attack.credential_access', 'attack.t1110.003'],
         riskScore: 65,
@@ -949,7 +1372,7 @@
 
       {
         id: 'CSDE-LNX-002', title: 'Sudo Privilege Escalation (Linux)',
-        os: 'linux', severity: 'high', category: 'privilege-escalation',
+        os: 'linux', severity: 'high', category: 'privilege-escalation', logCategory: 'linux_syslog',
         mitre: { technique: 'T1548.003', name: 'Sudo and Sudo Caching', tactic: 'privilege-escalation' },
         tags: ['attack.privilege_escalation', 'attack.t1548.003'],
         riskScore: 72,
@@ -962,7 +1385,7 @@
 
       {
         id: 'CSDE-LNX-003', title: 'Suspicious Cron Job Modification (Linux)',
-        os: 'linux', severity: 'medium', category: 'persistence',
+        os: 'linux', severity: 'medium', category: 'persistence', logCategory: 'linux_syslog',
         mitre: { technique: 'T1053.003', name: 'Cron', tactic: 'persistence' },
         tags: ['attack.persistence', 'attack.t1053.003'],
         riskScore: 58,
@@ -977,7 +1400,7 @@
 
       {
         id: 'CSDE-LNX-004', title: 'Reverse Shell Indicator (Linux)',
-        os: 'linux', severity: 'critical', category: 'command-and-control',
+        os: 'linux', severity: 'critical', category: 'command-and-control', logCategory: 'linux_auditd',
         mitre: { technique: 'T1059.004', name: 'Unix Shell', tactic: 'execution' },
         tags: ['attack.execution', 'attack.t1059.004', 'attack.command_and_control'],
         riskScore: 95,
@@ -1464,6 +1887,11 @@
       const sessionId = 'CSDE-' + Math.random().toString(36).slice(2,10).toUpperCase();
       const startTs  = Date.now();
 
+      // ── Cross-Log Linking: build PID/identity adjacency BEFORE rule eval ─
+      // Decorates each event with _linkedEventIds, _logSource, _hostKey, _pid, _tsMs
+      _crossLinkEvents(events);
+      let schemaSkipped = 0; // counter for schema gate misses
+
       // ── Per-event rule matching (O(n × rules)) ─────────────────
       events.forEach((event, idx) => {
         timeline.push(_buildTimelineEntry(event, null));
@@ -1471,6 +1899,16 @@
         RULES.forEach(rule => {
           if (rule.matchBatch) return; // batch handled separately
           if (!_osMatch(rule, event)) return;
+
+          // ── Schema-First Validation Gate ───────────────────────
+          // Skip this rule entirely if the event does not match the
+          // rule's declared log category (wrong EventID range, wrong OS,
+          // missing required fields, or forbidden fields present).
+          if (!_validateEventSchema(rule, event)) {
+            schemaSkipped++;
+            return;
+          }
+
           try {
             if (!rule.match(event)) return;
             // Check all variant sub-rules to label which variant fired
@@ -1500,6 +1938,18 @@
               narrative  : rule.narrative ? rule.narrative(event) : rule.title,
               timestamp  : event.timestamp,
               category   : rule.category,
+              logCategory: rule.logCategory || null,
+              // Enrich detection with cross-log link info
+              linkedEvents: event._linkedEventIds && event._linkedEventIds.length
+                ? event._linkedEventIds.map(li => ({
+                    idx: li,
+                    EventID: events[li]?.EventID,
+                    logSource: events[li]?._logSource,
+                    host: events[li]?.computer || '',
+                    user: events[li]?.user || '',
+                    timestamp: events[li]?.timestamp || '',
+                  }))
+                : [],
             };
             rawDets.push(det);
             if (timeline[idx]) timeline[idx].detection = det.id;
@@ -1510,7 +1960,7 @@
       // ── Batch rule matching (O(n) per batch rule) ───────────────
       RULES.filter(r => r.matchBatch).forEach(rule => {
         // OS filter: check at least one event matches OS
-        const eligible = events.filter(e => _osMatch(rule, e));
+        const eligible = events.filter(e => _osMatch(rule, e) && _validateEventSchema(rule, e));
         if (!eligible.length) return;
         try {
           const results = rule.matchBatch(eligible);
@@ -1540,6 +1990,12 @@
       // ── DEDUPLICATION ─────────────────────────────────────────────
       const dedupedDets = _dedupDetections(filteredDets);
 
+      // ── Temporal-Identity Correlation (60-second window) ──────────
+      // Groups deduplicated alerts by host+user within 60 s into Incidents
+      const correlationResult = _correlateIncidents(dedupedDets);
+      const incidents          = correlationResult.incidents;
+      // Tag each detection with incident metadata (already done inside _correlateIncidents)
+
       // ── Attack chains (from deduplicated detections) ───────────
       const chains = _buildAttackChain(dedupedDets, events);
 
@@ -1552,14 +2008,16 @@
       const duration = Date.now() - startTs;
 
       console.log(
-        `[CSDE v3] ${events.length} events → ${rawDets.length} raw → ${dedupedDets.length} deduped detections, ` +
-        `${chains.length} chains, risk=${riskScore} (${duration}ms)`
+        `[CSDE v4] ${events.length} events → ${rawDets.length} raw → ${dedupedDets.length} deduped, ` +
+        `${incidents.length} incidents, ${chains.length} chains, risk=${riskScore} ` +
+        `(schema_skipped=${schemaSkipped}, ${duration}ms)`
       );
 
       return {
         success  : true,
         sessionId, processed: events.length,
         detections: dedupedDets,
+        incidents,
         timeline,
         chains,
         anomalies,
@@ -1567,11 +2025,14 @@
         duration,
         engine   : 'CSDE-offline',
         _meta: {
-          rulesEvaluated : RULES.length,
-          rawDetections  : rawDets.length,
-          dedupedDetections: dedupedDets.length,
-          eventsAnalyzed : events.length,
-          dedupWindowMs  : CFG.DEDUP_WINDOW_MS,
+          rulesEvaluated    : RULES.length,
+          rawDetections     : rawDets.length,
+          dedupedDetections : dedupedDets.length,
+          incidentsFormed   : incidents.length,
+          schemaSkipped,
+          eventsAnalyzed    : events.length,
+          dedupWindowMs     : CFG.DEDUP_WINDOW_MS,
+          correlWindowMs    : CORR_WINDOW_MS,
         },
       };
     }
@@ -1815,6 +2276,7 @@
       return {
         ...backendResult,
         detections: combined,
+        incidents : csdeResult.incidents || [],
         timeline  : csdeResult.timeline.length ? csdeResult.timeline : normalizeDetections_inner(backendResult.timeline),
         chains    : csdeResult.chains.length   ? csdeResult.chains   : normalizeDetections_inner(backendResult.chains),
         anomalies : csdeResult.anomalies.length ? csdeResult.anomalies : normalizeDetections_inner(backendResult.anomalies),
@@ -1918,7 +2380,12 @@
       return scenarios[scMap[scenario]] || scenarios.brute_force_compromise;
     }
 
-    return { analyzeEvents, getSampleEvents, mergeDetections, processBackendResult, _dedupDetections, _normalizeRuleName, _baseRuleId, _canonicalSlug, _normalizeExternalDet, _inferEventsOs, _inferOsFromTitle };
+    return { analyzeEvents, getSampleEvents, mergeDetections, processBackendResult,
+             _dedupDetections, _normalizeRuleName, _baseRuleId, _canonicalSlug, _normalizeExternalDet,
+             _inferEventsOs, _inferOsFromTitle,
+             // New in CSDE v4
+             _validateEventSchema, _crossLinkEvents, _correlateIncidents,
+             LOG_SCHEMA, _classifyEventSource };
 
   })(); // end CSDE
 
@@ -2073,9 +2540,9 @@
   <div class="rk-stats-row">
     ${_statCard('Events',      '0',  '#60a5fa', 'rk-s-events')}
     ${_statCard('Detections',  '0',  '#ef4444', 'rk-s-dets')}
+    ${_statCard('Incidents',   '0',  '#ef4444', 'rk-s-incidents')}
     ${_statCard('Anomalies',   '0',  '#f59e0b', 'rk-s-anom')}
     ${_statCard('Chains',      '0',  '#a78bfa', 'rk-s-chains')}
-    ${_statCard('Rules',       '0',  '#34d399', 'rk-s-rules')}
     ${_statCard('Risk Score',  '—',  '#ef4444', 'rk-s-risk')}
   </div>
 
@@ -2086,6 +2553,7 @@
     ${_tabBtn('ingest',      '📥',  'Log Ingest')}
     ${_tabBtn('timeline',    '⏱',  'Timeline')}
     ${_tabBtn('detections',  '🚨',  'Detections')}
+    ${_tabBtn('incidents',   '🎯',  'Incidents')}
     ${_tabBtn('chains',      '🔗',  'Attack Chains')}
     ${_tabBtn('investigate', '🕵️',  'Investigate')}
     ${_tabBtn('ioc',         '🔎',  'IOC Lookup')}
@@ -2159,6 +2627,7 @@
       case 'ingest':      return _tplIngest();
       case 'timeline':    return _tplTimeline();
       case 'detections':  return _tplDetections();
+      case 'incidents':   return _tplIncidents();
       case 'chains':      return _tplChains();
       case 'investigate': return _tplInvestigate();
       case 'ioc':         return _tplIOC();
@@ -2173,6 +2642,7 @@
   function _afterTabRender(id) {
     if (id === 'overview')    { _renderOverviewContent(); }
     if (id === 'detections')  { _renderDetectionsList(S.detections); }
+    if (id === 'incidents')   { _renderIncidentsList(S.incidents); }
     if (id === 'chains')      { _renderChainsList(S.chains); }
     if (id === 'timeline')    { _renderTimelineList(S.timeline); }
     if (id === 'anomalies')   { _renderAnomaliesList(S.anomalies); }
@@ -2530,6 +3000,179 @@
   // ════════════════════════════════════════════════════════════════
   //  DETECTIONS TAB
   // ════════════════════════════════════════════════════════════════
+  // ════════════════════════════════════════════════════════════════
+  //  INCIDENTS TAB  (Temporal-Identity Correlation view)
+  //  Shows ONE consolidated incident per correlated alert cluster,
+  //  with expandable child alerts and cross-log link information.
+  // ════════════════════════════════════════════════════════════════
+  function _tplIncidents() {
+    return `
+<div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+    <div>
+      <div style="font-size:13px;color:#e6edf3;font-weight:600;">SOC Incident View</div>
+      <div style="font-size:12px;color:#8b949e;margin-top:2px;">
+        Correlated alerts grouped by Device/Host &amp; User within a 60-second temporal window.
+        Each incident shows one parent alert and expandable child alerts.
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <span id="rk-inc-badge" style="font-size:11px;padding:4px 10px;background:rgba(239,68,68,0.1);color:#ef4444;border-radius:10px;font-weight:700;">0 Incidents</span>
+      <button class="rk-btn rk-btn-ghost" style="font-size:11px;" onclick="RAYKAN_UI._setTab('detections')">All Detections →</button>
+    </div>
+  </div>
+  <div id="rk-inc-list" style="display:flex;flex-direction:column;gap:14px;"></div>
+</div>`;
+  }
+
+  // ── Render the incidents list ──────────────────────────────────
+  function _renderIncidentsList(incidents) {
+    const el = document.getElementById('rk-inc-list');
+    if (!el) return;
+
+    const badge = document.getElementById('rk-inc-badge');
+    if (badge) badge.textContent = `${incidents.length} Incident${incidents.length !== 1 ? 's' : ''}`;
+
+    if (!incidents.length) {
+      el.innerHTML = `
+<div style="padding:60px;text-align:center;color:#4b5563;font-size:13px;">
+  <div style="font-size:24px;margin-bottom:8px;">🎯</div>
+  No correlated incidents yet.<br/>
+  <span style="font-size:11px;">Incidents are formed when 2+ alerts share the same host/user within 60 seconds.</span><br/>
+  <span style="font-size:11px;color:#374151;">Run a demo or ingest logs to see consolidated incident view.</span>
+</div>`;
+      return;
+    }
+
+    el.innerHTML = incidents.map((inc, i) => _renderIncidentCard(inc, i)).join('');
+
+    // Attach expand/collapse listeners
+    el.querySelectorAll('[data-inc-toggle]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id   = btn.dataset.incToggle;
+        const body = document.getElementById(`rk-inc-body-${id}`);
+        if (!body) return;
+        const open = body.style.display !== 'none';
+        body.style.display = open ? 'none' : 'block';
+        btn.textContent = open ? '▶ Show child alerts' : '▼ Hide child alerts';
+      });
+    });
+  }
+
+  function _renderIncidentCard(inc, i) {
+    const parent   = inc.parent || {};
+    const children = inc.children || [];
+    const sev   = inc.severity || parent.aggregated_severity || parent.severity || 'medium';
+    const incId = inc.incidentId || `INC-${i}`;
+    const shortId = incId.split('-').slice(-2).join('-');
+
+    // Tactic pills
+    const tacticPills = (inc.mitreTactics || []).map(t =>
+      `<span style="font-size:9px;padding:2px 6px;background:rgba(167,139,250,0.12);color:#a78bfa;border-radius:6px;">${t.replace(/-/g,' ')}</span>`
+    ).join('');
+
+    // Technique tags
+    const techTags = (inc.techniques || []).slice(0, 6).map(t =>
+      `<span class="rk-tag" style="color:#a78bfa;font-size:10px;">${t}</span>`
+    ).join('');
+
+    // Duration label
+    const durMs  = inc.duration_ms || 0;
+    const durStr = durMs < 1000 ? `${durMs}ms`
+                 : durMs < 60000 ? `${Math.round(durMs/1000)}s`
+                 : `${Math.round(durMs/60000)}min`;
+
+    // Schema validation / cross-log badge from parent
+    const schemaNote = parent.logCategory
+      ? `<span style="font-size:9px;padding:1px 6px;background:rgba(52,211,153,0.1);color:#34d399;border-radius:6px;" title="Schema validated — log category: ${parent.logCategory}">✔ ${parent.logCategory}</span>`
+      : '';
+    const crossLinks = parent.linkedEvents && parent.linkedEvents.length
+      ? `<span style="font-size:9px;padding:1px 6px;background:rgba(96,165,250,0.1);color:#60a5fa;border-radius:6px;">🔗 ${parent.linkedEvents.length} cross-log link${parent.linkedEvents.length>1?'s':''}</span>`
+      : '';
+
+    // Child alert rows
+    const childRows = children.map(c => {
+      const cs = c.aggregated_severity || c.severity || 'medium';
+      const cm = c.mitre?.technique || c.technique || '';
+      const cLinked = c.linkedEvents && c.linkedEvents.length
+        ? `<span style="font-size:9px;color:#60a5fa;" title="Cross-log linked events">🔗×${c.linkedEvents.length}</span>`
+        : '';
+      return `
+<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;
+            background:rgba(13,17,23,0.8);border-radius:6px;border:1px solid #21262d;margin-bottom:4px;">
+  <div style="width:6px;height:6px;border-radius:50%;background:${_sev(cs).color};flex-shrink:0;"></div>
+  <div style="flex:1;min-width:0;">
+    <div style="font-size:12px;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+      ${c.detection_name || c.ruleName || c.title || 'Alert'}
+    </div>
+    <div style="font-size:10px;color:#6b7280;margin-top:1px;">
+      ${c.category ? `<span style="color:#8b949e;">${c.category}</span> · ` : ''}
+      ${cm ? `<span style="color:#a78bfa;">${cm}</span> · ` : ''}
+      ${_fmtTime(c.first_seen || c.timestamp)}
+      ${cLinked ? ' · ' + cLinked : ''}
+      ${c.logCategory ? `<span style="color:#34d399;"> · ✔${c.logCategory}</span>` : ''}
+    </div>
+  </div>
+  <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
+    ${_sevBadge(cs)}
+    <button class="rk-entity-btn" onclick="RAYKAN_UI._showDetDetail('${c.id||''}')" style="font-size:10px;padding:3px 8px;">Detail</button>
+  </div>
+</div>`;
+    }).join('');
+
+    return `
+<div class="rk-card" style="padding:0;overflow:hidden;border:1px solid ${_sev(sev).color}33;">
+  <!-- Incident Header -->
+  <div style="padding:14px 18px;background:${_sev(sev).color}0a;display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+    <div style="flex:1;min-width:0;">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+        <span style="font-size:10px;font-family:monospace;color:#4b5563;background:#0d1117;padding:1px 6px;border-radius:4px;">${shortId}</span>
+        ${_sevBadge(sev)}
+        <span style="font-size:12px;font-weight:700;color:#e6edf3;">${parent.detection_name || parent.ruleName || 'Incident'}</span>
+        <span style="font-size:10px;padding:2px 7px;background:rgba(239,68,68,0.1);color:#ef4444;border-radius:8px;font-weight:700;">PARENT</span>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
+        <span style="font-size:11px;color:#8b949e;">🖥 ${inc.host || '—'}</span>
+        <span style="font-size:11px;color:#60a5fa;">👤 ${inc.user || '—'}</span>
+        <span style="font-size:11px;color:#6b7280;">⏱ ${durStr} span</span>
+        <span style="font-size:11px;color:#6b7280;">${inc.detectionCount} alert${inc.detectionCount>1?'s':''} correlated</span>
+        ${schemaNote}
+        ${crossLinks}
+      </div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:4px;">${tacticPills}</div>
+      ${techTags ? `<div style="display:flex;gap:4px;flex-wrap:wrap;">${techTags}</div>` : ''}
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;">
+      <span style="font-weight:800;color:${_riskColor(inc.riskScore||0)};font-size:16px;">${inc.riskScore||'—'}<span style="font-size:10px;color:#6b7280;">/100</span></span>
+      <span style="font-size:10px;color:#6b7280;">${_fmtTime(inc.first_seen)}</span>
+      <div style="display:flex;gap:6px;">
+        <button class="rk-entity-btn" onclick="RAYKAN_UI._showDetDetail('${parent.id||''}')">View Parent →</button>
+        <button class="rk-entity-btn" onclick="RAYKAN_UI._invEntity('${inc.host||''}')">Investigate</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Parent narrative -->
+  ${parent.narrative || parent.description ? `
+  <div style="padding:10px 18px;background:rgba(96,165,250,0.04);border-bottom:1px solid #21262d;">
+    <div style="font-size:11px;color:#6b7280;margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px;">Narrative</div>
+    <div style="font-size:12px;color:#e6edf3;line-height:1.5;">${parent.narrative || parent.description}</div>
+  </div>` : ''}
+
+  <!-- Child alerts section -->
+  ${children.length > 0 ? `
+  <div style="padding:10px 18px 0 18px;">
+    <button data-inc-toggle="${incId}" style="background:none;border:none;color:#60a5fa;font-size:11px;cursor:pointer;padding:0;margin-bottom:8px;font-weight:600;">
+      ▶ Show child alerts (${children.length})
+    </button>
+    <div id="rk-inc-body-${incId}" style="display:none;padding-bottom:10px;">
+      ${childRows}
+    </div>
+  </div>` : `<div style="padding:8px 18px 12px;font-size:11px;color:#4b5563;">No child alerts — standalone detection.</div>`}
+
+</div>`;
+  }
+
   function _tplDetections() {
     return `
 <div>
@@ -2807,6 +3450,7 @@
 
       // Guaranteed iterable arrays regardless of response shape
       S.detections  = normalizeDetections(result.detections);
+      S.incidents   = Array.isArray(result.incidents) ? result.incidents : [];
       S.timeline    = normalizeDetections(result.timeline);
       S.chains      = normalizeDetections(result.chains);
       S.anomalies   = normalizeDetections(result.anomalies);
@@ -2959,9 +3603,11 @@
       const tl    = normalizeDetections(r.timeline);
       const chs   = normalizeDetections(r.chains);
       const anoms = normalizeDetections(r.anomalies);
+      const incs  = Array.isArray(r.incidents) ? r.incidents : [];
 
       // Use CSDE.mergeDetections to cross-analysis deduplicate
       S.detections  = CSDE.mergeDetections(S.detections, dets);
+      S.incidents   = [...incs, ...(S.incidents || [])];
       S.timeline    = [...tl, ...S.timeline];
       S.chains      = [...chs,   ...S.chains];
       S.anomalies   = [...anoms, ...S.anomalies];
@@ -2973,8 +3619,8 @@
         _showToast(`✓ ${events.length} events → ${S.detections.length} detection(s) [deduped], ${chs.length} chain(s) | Risk: ${r.riskScore}`, 'success');
       }
       if (res) res.innerHTML = _ingestSummaryCard(r);
-      // Auto-navigate to detections if any found
-      if (dets.length) setTimeout(() => _setTab('detections'), 800);
+      // Auto-navigate: prefer incidents tab when incidents were formed, else detections
+      if (dets.length) setTimeout(() => _setTab(incs.length ? 'incidents' : 'detections'), 800);
     } catch(e) {
       if (res) res.innerHTML = `<div style="color:#ef4444;padding:20px;border-radius:8px;background:rgba(239,68,68,0.08);">
         <div style="font-weight:700;margin-bottom:6px;">⚠ Analysis Error</div>
@@ -2989,6 +3635,7 @@
     const detsLen   = normalizeDetections(r.detections).length;
     const anomsLen  = normalizeDetections(r.anomalies).length;
     const chsLen    = normalizeDetections(r.chains).length;
+    const incsLen   = Array.isArray(r.incidents) ? r.incidents.length : 0;
     const isOffline = r.engine === 'CSDE-offline';
     const isHybrid  = r.engine === 'CSDE+Backend';
     const rawDets   = r._meta?.rawDetections || r._meta?.backendRaw || detsLen;
@@ -2996,14 +3643,17 @@
     const csdeCount = r._meta?.csdeDetections || 0;
     const backendExtra = r._meta?.backendExtraAdded || 0;
     const osMismatch = r._meta?.osMismatchFiltered || 0;
+    const schemaSkipped = r._meta?.schemaSkipped || 0;
+    const incidentsFrmd = r._meta?.incidentsFormed || incsLen;
     const dedupSaving = rawDets > deduped ? rawDets - deduped : 0;
     const eventsOs   = r._meta?.eventsOs || '';
+    const correlWin  = ((r._meta?.correlWindowMs || 60000) / 1000);
 
     // Build engine badge
     const engineBadge = isOffline
-      ? `<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(96,165,250,0.12);color:#60a5fa;font-weight:700;">OFFLINE — CSDE</span>`
+      ? `<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(96,165,250,0.12);color:#60a5fa;font-weight:700;">OFFLINE — CSDE v4</span>`
       : isHybrid
-      ? `<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(52,211,153,0.12);color:#34d399;font-weight:700;">SMART ANALYSIS — CSDE + Backend</span>`
+      ? `<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(52,211,153,0.12);color:#34d399;font-weight:700;">SMART ANALYSIS — CSDE v4 + Backend</span>`
       : `<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(167,139,250,0.12);color:#a78bfa;font-weight:700;">Backend Engine</span>`;
 
     // Smart analysis breakdown (only shown for hybrid mode)
@@ -3013,17 +3663,25 @@
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;color:#9ca3af;">
     <span>Backend raw rule matches:</span><span style="color:#f97316;font-weight:600;">${rawDets} detections</span>
     <span>OS mismatch filtered:</span><span style="color:#6b7280;font-weight:600;">−${osMismatch} (${eventsOs} host, Linux rules removed)</span>
+    ${schemaSkipped ? `<span>Schema gate skipped:</span><span style="color:#6b7280;font-weight:600;">−${schemaSkipped} (wrong log category)</span>` : ''}
     <span>CSDE precise detections:</span><span style="color:#34d399;font-weight:600;">${csdeCount}</span>
     <span>Backend unique additions:</span><span style="color:#60a5fa;font-weight:600;">+${backendExtra}</span>
     <span style="color:#e6edf3;font-weight:700;">Final verified detections:</span><span style="color:#ef4444;font-weight:700;">${deduped}</span>
   </div>
   <div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.06);color:#6b7280;">
-    Noise reduction: ${rawDets} → ${deduped} (${Math.round((1-deduped/rawDets)*100)}% false positives eliminated)
+    Noise reduction: ${rawDets} → ${deduped} (${Math.round((1-deduped/Math.max(rawDets,1))*100)}% false positives eliminated)
   </div>
 </div>` : (dedupSaving > 0 ? `
 <div style="margin-top:10px;padding:8px 12px;background:rgba(52,211,153,0.06);border:1px solid rgba(52,211,153,0.15);border-radius:6px;font-size:11px;color:#34d399;">
   Deduplication: ${rawDets} raw → ${deduped} unique detection(s) | Window: ${((r._meta?.dedupWindowMs||60000)/1000)}s
+  ${schemaSkipped ? ` | Schema gate blocked ${schemaSkipped} cross-category rule evaluations` : ''}
 </div>` : '');
+
+    // Correlation summary
+    const correlSummary = incidentsFrmd > 0 ? `
+<div style="margin-top:8px;padding:8px 12px;background:rgba(239,68,68,0.04);border:1px solid rgba(239,68,68,0.15);border-radius:6px;font-size:11px;color:#ef4444;">
+  🎯 <strong>${incidentsFrmd} incident${incidentsFrmd>1?'s':''}</strong> formed by correlating alerts within ${correlWin}s temporal window (same host + user)
+</div>` : '';
 
     return `<div class="rk-card" style="padding:16px;">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
@@ -3032,18 +3690,20 @@
     ${dedupSaving > 0 ? `<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(52,211,153,0.12);color:#34d399;font-weight:700;">🧹 ${dedupSaving} noise eliminated</span>` : ''}
   </div>
   <div class="rk-grid-3" style="gap:8px;">
-    ${_miniStat('Events',          r._meta?.eventsAnalyzed || r.processed || 0, '#60a5fa')}
-    ${_miniStat('Raw Rule Matches', rawDets,             '#f97316')}
-    ${_miniStat('Verified Detections', deduped,         '#ef4444')}
-    ${_miniStat('Anomalies',       anomsLen,            '#f59e0b')}
-    ${_miniStat('Attack Chains',   chsLen,              '#a78bfa')}
-    ${_miniStat('Risk Score',      r.riskScore||0, r.riskScore >= 80 ? '#ef4444' : r.riskScore >= 50 ? '#f97316' : '#34d399')}
+    ${_miniStat('Events',             r._meta?.eventsAnalyzed || r.processed || 0, '#60a5fa')}
+    ${_miniStat('Raw Rule Matches',   rawDets,             '#f97316')}
+    ${_miniStat('Verified Detections',deduped,             '#ef4444')}
+    ${_miniStat('Incidents',          incidentsFrmd,       '#ef4444')}
+    ${_miniStat('Attack Chains',      chsLen,              '#a78bfa')}
+    ${_miniStat('Risk Score',         r.riskScore||0, r.riskScore >= 80 ? '#ef4444' : r.riskScore >= 50 ? '#f97316' : '#34d399')}
   </div>
   ${smartBreakdown}
-  <div style="margin-top:12px;display:flex;gap:8px;">
-    <button class="rk-btn rk-btn-primary" onclick="RAYKAN_UI._setTab('detections')" style="font-size:11px;">View Detections →</button>
+  ${correlSummary}
+  <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+    <button class="rk-btn rk-btn-primary" onclick="RAYKAN_UI._setTab('incidents')"  style="font-size:11px;">🎯 Incidents →</button>
+    <button class="rk-btn rk-btn-ghost"   onclick="RAYKAN_UI._setTab('detections')" style="font-size:11px;">All Detections →</button>
     <button class="rk-btn rk-btn-ghost"   onclick="RAYKAN_UI._setTab('chains')"     style="font-size:11px;">Attack Chains →</button>
-    <button class="rk-btn rk-btn-ghost"   onclick="RAYKAN_UI._setTab('timeline')"  style="font-size:11px;">Timeline →</button>
+    <button class="rk-btn rk-btn-ghost"   onclick="RAYKAN_UI._setTab('timeline')"   style="font-size:11px;">Timeline →</button>
   </div>
 </div>`;
   }
@@ -3144,9 +3804,11 @@
       const tl    = normalizeDetections(r.timeline);
       const chs   = normalizeDetections(r.chains);
       const anoms = normalizeDetections(r.anomalies);
+      const incs  = Array.isArray(r.incidents) ? r.incidents : [];
 
       // Cross-analysis dedup merge (handles repeated uploads)
       S.detections  = CSDE.mergeDetections(S.detections, dets);
+      S.incidents   = [...incs, ...(S.incidents || [])];
       if (msg) msg.textContent = `✓ Done — ${S.detections.length} detection(s) [deduped]${r.engine === 'CSDE-offline' ? ' [Offline]' : ''}`;
 
       S.timeline    = [...tl,    ...S.timeline];
@@ -3160,8 +3822,8 @@
       const res = document.getElementById('rk-ingest-result');
       if (res) res.innerHTML = _ingestSummaryCard(r);
       _showToast(`${file.name}: ${S.detections.length} detection(s)${r.engine === 'CSDE-offline' ? ' (offline engine)' : ''}`, dets.length ? 'success' : 'info');
-      // Auto-navigate to detections if any found
-      if (dets.length) setTimeout(() => _setTab('detections'), 800);
+      // Auto-navigate: prefer incidents tab when incidents were formed, else detections
+      if (dets.length) setTimeout(() => _setTab(incs.length ? 'incidents' : 'detections'), 800);
     } catch(e) {
       if (msg) msg.textContent = '✗ Error: ' + e.message;
       _showToast('Upload failed: ' + e.message, 'error');
@@ -3992,13 +4654,14 @@
   // ════════════════════════════════════════════════════════════════
   function _updateStats(result) {
     const set = (id, v) => { const el=document.getElementById(id); if(el) el.textContent=v; };
-    set('rk-s-events', (result.processed||0).toLocaleString());
-    set('rk-s-dets',   S.detections.length.toLocaleString());
-    set('rk-s-anom',   S.anomalies.length.toLocaleString());
-    set('rk-s-chains', S.chains.length.toLocaleString());
-    set('rk-s-risk',   S.riskScore || '—');
-    set('rk-last-upd', S.lastUpdated?.toLocaleTimeString() || '—');
-    set('rk-session-id', S.sessionId ? S.sessionId.slice(0,8)+'…' : '—');
+    set('rk-s-events',    (result.processed||0).toLocaleString());
+    set('rk-s-dets',      S.detections.length.toLocaleString());
+    set('rk-s-anom',      S.anomalies.length.toLocaleString());
+    set('rk-s-chains',    S.chains.length.toLocaleString());
+    set('rk-s-incidents', (S.incidents||[]).length.toLocaleString());
+    set('rk-s-risk',      S.riskScore || '—');
+    set('rk-last-upd',    S.lastUpdated?.toLocaleTimeString() || '—');
+    set('rk-session-id',  S.sessionId ? S.sessionId.slice(0,8)+'…' : '—');
 
     const badge = document.getElementById('rk-risk-badge');
     if (badge) {
@@ -4136,6 +4799,8 @@
     _showDetDetail,
     _invEntity,
     _activateGeneratedRule,
+    _renderIncidentsList,
+    _renderIncidentCard,
     getState: () => S,
   };
 
