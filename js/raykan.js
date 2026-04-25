@@ -263,6 +263,577 @@
     const SEV_WEIGHT = { critical: 100, high: 80, medium: 50, low: 20, informational: 5 };
 
     // ════════════════════════════════════════════════════════════════
+    //  SOC v5 — FALSE-POSITIVE SUPPRESSION REGISTRY
+    //  Known-safe programs, backup/patching/admin tools, and common
+    //  maintenance patterns that should NOT trigger detections.
+    //  Each entry: { pattern, type, reason }
+    // ════════════════════════════════════════════════════════════════
+    const FP_SUPPRESS = {
+      // Known admin / backup / patch management tools
+      processes: [
+        { pat: 'veeam',           reason: 'Veeam backup agent' },
+        { pat: 'backup',          reason: 'Backup software process' },
+        { pat: 'acronis',         reason: 'Acronis backup' },
+        { pat: 'commvault',       reason: 'CommVault backup' },
+        { pat: 'wsus',            reason: 'Windows Update Services' },
+        { pat: 'wuauclt',         reason: 'Windows Update client' },
+        { pat: 'musnotify',       reason: 'Windows Update notification' },
+        { pat: 'sccm',            reason: 'SCCM/MECM client' },
+        { pat: 'ccmexec',         reason: 'SCCM exec agent' },
+        { pat: 'msiexec',         reason: 'Windows Installer (MSI)' },
+        { pat: 'installshield',   reason: 'InstallShield setup' },
+        { pat: 'osquery',         reason: 'osquery EDR agent' },
+        { pat: 'crowdstrike',     reason: 'CrowdStrike Falcon sensor' },
+        { pat: 'cylance',         reason: 'Cylance AV agent' },
+        { pat: 'sentinelone',     reason: 'SentinelOne agent' },
+        { pat: 'symantec',        reason: 'Symantec AV' },
+        { pat: 'sophos',          reason: 'Sophos AV' },
+        { pat: 'malwarebytes',    reason: 'MalwareBytes scanner' },
+        { pat: 'tanium',          reason: 'Tanium endpoint agent' },
+        { pat: 'splunk',          reason: 'Splunk forwarder' },
+      ],
+      // Safe shadow-copy/vssadmin operations (done by backup software)
+      safeVssPatterns: [
+        'veeam', 'backup exec', 'acronis', 'commvault', 'ntbackup',
+        'wbadmin', 'dpm', 'system center',
+      ],
+      // Maintenance window hours: 02:00–05:00 UTC daily (configurable)
+      maintenanceWindowHours: [2, 3, 4],
+
+      // PowerShell scripts known-safe by path
+      safePsPathPrefixes: [
+        'c:\\program files\\microsoft\\', 'c:\\program files (x86)\\',
+        'c:\\windows\\system32\\', 'c:\\windows\\syswow64\\',
+        'c:\\programdata\\microsoft\\windows defender\\',
+      ],
+    };
+
+    // ── FP suppression check: returns {suppressed, reason} ─────────
+    function _checkFPSuppression(event, ruleId) {
+      const proc    = (event.process || event.commandLine || '').toLowerCase();
+      const cmdLine = (event.commandLine || '').toLowerCase();
+      const ts      = event.timestamp ? new Date(event.timestamp) : null;
+
+      // 1. Known-safe process patterns
+      for (const fp of FP_SUPPRESS.processes) {
+        if (proc.includes(fp.pat) || cmdLine.includes(fp.pat)) {
+          return { suppressed: true, reason: `FP: ${fp.reason}` };
+        }
+      }
+
+      // 2. Shadow Copy deletion — allow if initiated by known backup tool
+      if (ruleId === 'CSDE-WIN-013') {
+        const isSafeVss = FP_SUPPRESS.safeVssPatterns.some(p =>
+          proc.includes(p) || cmdLine.includes(p) ||
+          (event.parentProcess || '').toLowerCase().includes(p)
+        );
+        if (isSafeVss) return { suppressed: true, reason: 'FP: VSS deletion by known backup software' };
+      }
+
+      // 3. Maintenance window: suppress informational/low events only
+      if (ts && !isNaN(ts.getTime())) {
+        const h = ts.getUTCHours();
+        if (FP_SUPPRESS.maintenanceWindowHours.includes(h)) {
+          // Only suppress low-severity in maintenance window
+          // High/critical still fire
+          return { inMaintenanceWindow: true };
+        }
+      }
+
+      return { suppressed: false };
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  SOC v5 — EVENTID ENRICHMENT DICTIONARY
+    //  Maps numeric Windows EventIDs and known patterns to
+    //  analyst-readable descriptions, field extractors, and context.
+    // ════════════════════════════════════════════════════════════════
+    const EVENT_ENRICHMENT = {
+      // Windows Security
+      4624: { label: 'Successful Logon',         category: 'authentication',  icon: '🔓',
+               extract: e => `User "${e.user}" logged on (Type ${e.LogonType||'?'}) from ${e.srcIp||'local'}` },
+      4625: { label: 'Failed Logon',             category: 'authentication',  icon: '🔐',
+               extract: e => `FAILED logon for "${e.user}" from ${e.srcIp||'local'} — Status: ${e.Status||e.SubStatus||'FAILURE'}` },
+      4634: { label: 'Logoff',                   category: 'authentication',  icon: '🚪',
+               extract: e => `User "${e.user}" logged off (Type ${e.LogonType||'?'})` },
+      4648: { label: 'Explicit Credential Logon',category: 'authentication',  icon: '🔑',
+               extract: e => `Explicit credentials used by "${e.user}" to access ${e.TargetServerName||'unknown'}` },
+      4688: { label: 'Process Created',          category: 'process',         icon: '⚙️',
+               extract: e => `Process "${e.process||'?'}" created by "${e.user}" — CMD: "${(e.commandLine||'').slice(0,200)}"` },
+      4698: { label: 'Scheduled Task Created',   category: 'persistence',     icon: '🗓️',
+               extract: e => `Task "${e.TaskName||'?'}" created by "${e.user}" — Action: "${e.TaskContent||'?'}"` },
+      4702: { label: 'Scheduled Task Updated',   category: 'persistence',     icon: '🗓️',
+               extract: e => `Task "${e.TaskName||'?'}" modified by "${e.user}"` },
+      4720: { label: 'Account Created',          category: 'persistence',     icon: '👤',
+               extract: e => `New account "${e.TargetUserName||'?'}" created by "${e.user}"` },
+      4728: { label: 'Member Added to Group',    category: 'privilege-escalation', icon: '👥',
+               extract: e => `"${e.MemberName||'?'}" added to "${e.TargetUserName||'?'}" group by "${e.user}"` },
+      4732: { label: 'Member Added to Local Group', category: 'privilege-escalation', icon: '👥',
+               extract: e => `"${e.MemberName||'?'}" added to local group "${e.TargetUserName||'?'}" by "${e.user}"` },
+      5140: { label: 'Network Share Accessed',   category: 'lateral-movement',icon: '📁',
+               extract: e => `Share "${e.ShareName||'?'}" accessed by "${e.user}" from ${e.srcIp||'?'}` },
+      5145: { label: 'Network Share Object Checked', category: 'lateral-movement', icon: '📂',
+               extract: e => `Object "${e.RelativeTargetName||'?'}" in share "${e.ShareName||'?'}" checked by "${e.user}"` },
+      5156: { label: 'Network Connection Permitted', category: 'network',     icon: '🌐',
+               extract: e => `Process "${e.process||e.Application||'?'}" → ${e.destIp||'?'}:${e.destPort||'?'} (${e.Protocol==='6'?'TCP':e.Protocol==='17'?'UDP':e.Protocol||'?'})` },
+      5157: { label: 'Network Connection Blocked', category: 'network',       icon: '🚫',
+               extract: e => `Blocked: "${e.process||e.Application||'?'}" → ${e.destIp||'?'}:${e.destPort||'?'}` },
+      4663: { label: 'Object Access Attempt',    category: 'file',            icon: '📋',
+               extract: e => `"${e.user}" ${e.AccessMask==='0x2'?'wrote to':e.AccessMask==='0x1'?'read':'accessed'} "${e.ObjectName||'?'}" (Mask: ${e.AccessMask||'?'})` },
+      4103: { label: 'PowerShell Module Log',    category: 'execution',       icon: '🔵',
+               extract: e => `PS Module: "${(e.Payload||e.message||'?').slice(0,150)}"` },
+      4104: { label: 'PowerShell Script Block',  category: 'execution',       icon: '🔵',
+               extract: e => `Script block: "${(e.ScriptBlockText||e.message||'?').slice(0,200)}"` },
+      7045: { label: 'New Service Installed',    category: 'persistence',     icon: '⚙️',
+               extract: e => `Service "${e.ServiceName||'?'}" installed — Path: "${e.ImagePath||e.ServiceFileName||'?'}"` },
+      4697: { label: 'Service Installed',        category: 'persistence',     icon: '⚙️',
+               extract: e => `Service "${e.ServiceName||'?'}" installed — Path: "${e.ImagePath||'?'}"` },
+      1102: { label: 'Audit Log Cleared',        category: 'defense-evasion', icon: '🗑️',
+               extract: e => `Security audit log cleared by "${e.user}" on ${e.computer||'?'}` },
+      4657: { label: 'Registry Value Modified',  category: 'defense-evasion', icon: '🔧',
+               extract: e => `Registry key "${e.ObjectName||'?'}" modified by "${e.user}"` },
+      // Sysmon
+      1:    { label: 'Sysmon: Process Create',   category: 'process',         icon: '⚙️',
+               extract: e => `"${e.process||e.Image||'?'}" [PID:${e.ProcessId||'?'}] ← "${e.parentProcess||e.ParentImage||'?'}"` },
+      3:    { label: 'Sysmon: Network Connect',  category: 'network',         icon: '🌐',
+               extract: e => `"${e.process||e.Image||'?'}" → ${e.DestinationIP||e.destIp||'?'}:${e.DestinationPort||e.destPort||'?'}` },
+      7:    { label: 'Sysmon: Image Load',       category: 'execution',       icon: '📦',
+               extract: e => `"${e.Image||'?'}" loaded "${e.ImageLoaded||'?'}"` },
+      11:   { label: 'Sysmon: File Create',      category: 'file',            icon: '📄',
+               extract: e => `File created: "${e.TargetFilename||'?'}" by "${e.process||e.Image||'?'}"` },
+      13:   { label: 'Sysmon: Registry Set',     category: 'persistence',     icon: '🔧',
+               extract: e => `Registry set: "${e.TargetObject||'?'}" = "${(e.Details||'?').slice(0,100)}"` },
+      17:   { label: 'Sysmon: Pipe Created',     category: 'execution',       icon: '🔗',
+               extract: e => `Named pipe "${e.PipeName||'?'}" created by "${e.process||'?'}"` },
+      25:   { label: 'Sysmon: Process Tamper',   category: 'defense-evasion', icon: '⚠️',
+               extract: e => `Process "${e.process||e.Image||'?'}" tampered` },
+    };
+
+    // ── Enrich a raw event with analyst-readable detail ────────────
+    function _enrichEventDetail(event) {
+      const eid = parseInt(event.EventID, 10);
+      const enrichment = EVENT_ENRICHMENT[eid];
+      if (!enrichment) {
+        return {
+          label: `Event ${isNaN(eid) ? '?' : eid}`,
+          category: event._logSource || 'unknown',
+          icon: '📋',
+          detail: event.message || event.msg || event.commandLine || `EventID ${eid}`,
+          enriched: false,
+        };
+      }
+      return {
+        label: enrichment.label,
+        category: enrichment.category,
+        icon: enrichment.icon,
+        detail: enrichment.extract(event),
+        enriched: true,
+      };
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  SOC v5 — CONFIDENCE SCORING ENGINE
+    //  Multi-factor confidence score with explainable reasons.
+    //  Score 0–100 with categories: Possible (0–39), Likely (40–69),
+    //  Strongly Indicative (70–89), Confirmed (90–100)
+    // ════════════════════════════════════════════════════════════════
+    const CONFIDENCE_FACTORS = {
+      // Behavior rarity weights (higher = rarer = more suspicious)
+      behaviorRarity: {
+        'CSDE-WIN-017': 22, // PS from Office — very rare in prod
+        'CSDE-WIN-018': 18, // PS script block with IOC
+        'CSDE-WIN-014': 25, // LSASS dump — almost always malicious
+        'CSDE-WIN-013': 20, // VSS deletion — rare except ransomware
+        'CSDE-WIN-021': 25, // Ransomware extension — definitive
+        'CSDE-WIN-019': 18, // Service in temp path
+        'CSDE-LNX-004': 22, // Reverse shell
+        'CSDE-WIN-022': 15, // C2 network connection
+        'CSDE-WIN-020': 12, // SMB admin share
+        'CSDE-WIN-015': 10, // Scheduled task
+        'CSDE-WIN-016': 12, // WMI execution
+        'CSDE-LNX-002': 10, // Sudo escalation
+        'CSDE-WIN-001': 5,  // Single logon fail (common)
+        'CSDE-WIN-002': 12, // Brute force (multiple fails)
+        'CSDE-WIN-003': 15, // Success after failure
+      },
+      // Sequence logic bonuses (multi-stage = higher confidence)
+      sequenceBonus: {
+        twoStage: 8,
+        threeStage: 15,
+        fourPlusStage: 22,
+      },
+      // Privilege level bonus
+      privilegeBonus: {
+        system: 12,
+        administrator: 8,
+        root: 12,
+        privileged: 8,
+      },
+      // Known malicious combinations (technique pairs)
+      knownMaliciousCombos: [
+        { techniques: ['T1059.001', 'T1003.001'], bonus: 20, label: 'PS + LSASS dump (credential theft chain)' },
+        { techniques: ['T1059.001', 'T1490'],     bonus: 18, label: 'PS + Shadow Copy deletion (ransomware prep)' },
+        { techniques: ['T1486', 'T1490'],         bonus: 22, label: 'Encryption + Shadow deletion (active ransomware)' },
+        { techniques: ['T1110.003', 'T1021.002'], bonus: 15, label: 'Brute force + SMB lateral movement' },
+        { techniques: ['T1047', 'T1543.003'],     bonus: 14, label: 'WMI execution + service persistence' },
+        { techniques: ['T1059.001', 'T1543.003'], bonus: 16, label: 'PS execution + service persistence' },
+        { techniques: ['T1566.001', 'T1059.001'], bonus: 18, label: 'Spear phishing + PS execution' },
+        { techniques: ['T1021.002', 'T1003.001'], bonus: 17, label: 'SMB lateral + credential dump' },
+      ],
+    };
+
+    // ── Compute forensic confidence score for a cluster ────────────
+    // Returns { score: 0-100, level: string, reasons: string[] }
+    function _computeForensicConfidence(cluster, parentDet) {
+      let score = 30; // baseline: single event, unverified
+      const reasons = [];
+
+      const techniques = [...new Set(cluster.map(d => d.mitre?.technique || d.technique || '').filter(Boolean))];
+      const ruleIds    = cluster.map(d => d.ruleId || '');
+
+      // 1. Behavior rarity bonus
+      let rarityBonus = 0;
+      ruleIds.forEach(rid => {
+        const r = CONFIDENCE_FACTORS.behaviorRarity[rid] || 0;
+        if (r > rarityBonus) rarityBonus = r;
+      });
+      if (rarityBonus > 0) {
+        score += rarityBonus;
+        const ruleDesc = cluster.find(d => CONFIDENCE_FACTORS.behaviorRarity[d.ruleId])?.ruleName || 'high-rarity behavior';
+        reasons.push(`High behavior rarity (+${rarityBonus}): ${ruleDesc}`);
+      }
+
+      // 2. Sequence logic bonus
+      if (cluster.length >= 4) {
+        score += CONFIDENCE_FACTORS.sequenceBonus.fourPlusStage;
+        reasons.push(`Multi-stage kill chain (${cluster.length} stages) (+${CONFIDENCE_FACTORS.sequenceBonus.fourPlusStage})`);
+      } else if (cluster.length === 3) {
+        score += CONFIDENCE_FACTORS.sequenceBonus.threeStage;
+        reasons.push(`3-stage attack sequence (+${CONFIDENCE_FACTORS.sequenceBonus.threeStage})`);
+      } else if (cluster.length === 2) {
+        score += CONFIDENCE_FACTORS.sequenceBonus.twoStage;
+        reasons.push(`2-stage correlated detection (+${CONFIDENCE_FACTORS.sequenceBonus.twoStage})`);
+      }
+
+      // 3. Privilege level
+      const user = (parentDet.user || '').toLowerCase();
+      const isSystem = user.includes('system') || user.includes('nt authority');
+      const isAdmin  = user.includes('admin') || user.includes('administrator') || user.includes('root');
+      if (isSystem) {
+        score += CONFIDENCE_FACTORS.privilegeBonus.system;
+        reasons.push(`SYSTEM-level activity (+${CONFIDENCE_FACTORS.privilegeBonus.system})`);
+      } else if (isAdmin) {
+        score += CONFIDENCE_FACTORS.privilegeBonus.administrator;
+        reasons.push(`Admin-level account (+${CONFIDENCE_FACTORS.privilegeBonus.administrator})`);
+      }
+
+      // 4. Known malicious technique combos
+      for (const combo of CONFIDENCE_FACTORS.knownMaliciousCombos) {
+        const hasAll = combo.techniques.every(t => techniques.includes(t));
+        if (hasAll) {
+          score += combo.bonus;
+          reasons.push(`Known malicious combo: ${combo.label} (+${combo.bonus})`);
+        }
+      }
+
+      // 5. Cross-log evidence bonus
+      const hasLinkedEvents = cluster.some(d => d.linkedEvents && d.linkedEvents.length > 0);
+      if (hasLinkedEvents) {
+        score += 8;
+        reasons.push('Cross-log corroborated evidence (+8)');
+      }
+
+      // 6. Critical severity multiplier
+      const critCount = cluster.filter(d => (d.severity||d.aggregated_severity) === 'critical').length;
+      if (critCount >= 2) {
+        score += 5 * critCount;
+        reasons.push(`${critCount} critical-severity detections (+${5*critCount})`);
+      }
+
+      score = Math.min(100, Math.max(0, Math.round(score)));
+
+      let level;
+      if (score >= 90) level = 'Confirmed';
+      else if (score >= 70) level = 'Strongly Indicative';
+      else if (score >= 40) level = 'Likely';
+      else level = 'Possible';
+
+      return { score, level, reasons };
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  SOC v5 — BEHAVIOR-AWARE MULTI-TECHNIQUE PARENT CLASSIFICATION
+    //  Instead of using the single parent detection's title,
+    //  generate a behavior-aware multi-technique incident title
+    //  that reflects the full attack chain semantics.
+    // ════════════════════════════════════════════════════════════════
+    const BEHAVIOR_TITLES = [
+      // Ransomware patterns
+      { id: 'ransomware-full',
+        match: tactics => tactics.includes('impact') && tactics.includes('defense-evasion') && tactics.includes('execution'),
+        title: 'Ransomware Impact Preparation (Multi-Stage)',
+        description: 'Evidence of execution, backup removal, and encryption — consistent with active ransomware deployment.',
+        phase: 'Impact' },
+      { id: 'ransomware-impact',
+        match: (tactics, techs) => techs.includes('T1486') || techs.includes('T1490'),
+        title: 'Data Encryption & Backup Destruction (Ransomware)',
+        description: 'File encryption and shadow copy deletion detected — strongly indicative of ransomware payload.',
+        phase: 'Impact' },
+      // APT patterns
+      { id: 'apt-full-lifecycle',
+        match: tactics => tactics.includes('execution') && tactics.includes('credential-access') &&
+                          tactics.includes('lateral-movement') && tactics.includes('persistence'),
+        title: 'Advanced Persistent Threat — Full Kill Chain',
+        description: 'Complete APT lifecycle: initial execution, credential theft, lateral movement, and persistence mechanism installed.',
+        phase: 'Multi-Stage' },
+      { id: 'apt-cred-lateral',
+        match: (tactics, techs) => techs.includes('T1003.001') && tactics.includes('lateral-movement'),
+        title: 'Credential Theft + Lateral Movement (APT Behavior)',
+        description: 'LSASS credential dump followed by lateral movement — advanced threat actor pattern.',
+        phase: 'Lateral Movement' },
+      // Spear phishing execution chain
+      { id: 'spearphish-exec',
+        match: (tactics, techs) => (techs.includes('T1566.001') || techs.includes('T1059.001')) &&
+                                   (tactics.includes('execution') && tactics.includes('persistence')),
+        title: 'Spear Phishing → Execution → Persistence Chain',
+        description: 'Office/browser parent spawning PowerShell, followed by persistence mechanism — spear phishing attack chain.',
+        phase: 'Execution' },
+      { id: 'ps-execution',
+        match: (tactics, techs) => techs.includes('T1059.001') && tactics.includes('execution'),
+        title: 'PowerShell Execution Chain (Code Execution)',
+        description: 'Suspicious PowerShell execution detected with malicious indicators.',
+        phase: 'Execution' },
+      // Privilege escalation chain
+      { id: 'privesc-persist',
+        match: tactics => tactics.includes('privilege-escalation') && tactics.includes('persistence'),
+        title: 'Privilege Escalation → Persistence (Account Takeover)',
+        description: 'Privilege escalation followed by persistence — consistent with account takeover.',
+        phase: 'Privilege Escalation' },
+      // Brute force compromise
+      { id: 'bruteforce-compromise',
+        match: (tactics, techs) => tactics.includes('credential-access') && tactics.includes('lateral-movement'),
+        title: 'Credential Attack → Lateral Movement',
+        description: 'Credential attacks followed by lateral movement — brute force compromise chain.',
+        phase: 'Credential Access' },
+      { id: 'bruteforce-only',
+        match: (tactics, techs) => techs.includes('T1110.003') || techs.includes('T1110'),
+        title: 'Brute Force Credential Attack',
+        description: 'Multiple authentication failures indicating brute-force or password-spray attack.',
+        phase: 'Credential Access' },
+      // Defense evasion
+      { id: 'defense-evasion-chain',
+        match: tactics => tactics.includes('defense-evasion') && (tactics.includes('execution') || tactics.includes('persistence')),
+        title: 'Defense Evasion + Execution/Persistence',
+        description: 'Defense evasion techniques combined with execution or persistence — sophisticated attacker behavior.',
+        phase: 'Defense Evasion' },
+      // Generic multi-tactic
+      { id: 'multi-tactic',
+        match: tactics => tactics.length >= 3,
+        title: 'Multi-Tactic Attack Sequence',
+        description: 'Three or more distinct attack tactics detected — coordinated attacker behavior.',
+        phase: 'Multi-Stage' },
+    ];
+
+    // ── Classify an incident by its behavior pattern ───────────────
+    function _classifyIncidentBehavior(cluster) {
+      const tactics   = [...new Set(cluster.map(d => d.mitre?.tactic || '').filter(Boolean))];
+      const techs     = [...new Set(cluster.map(d => d.mitre?.technique || d.technique || '').filter(Boolean))];
+      const ruleIds   = cluster.map(d => d.ruleId || '');
+
+      // Try each behavior title pattern in order of specificity
+      for (const bt of BEHAVIOR_TITLES) {
+        try {
+          if (bt.match(tactics, techs, ruleIds)) {
+            return {
+              behaviorId   : bt.id,
+              behaviorTitle: bt.title,
+              description  : bt.description,
+              phase        : bt.phase,
+              tactics,
+              techniques   : techs,
+            };
+          }
+        } catch { /* continue */ }
+      }
+
+      // Fallback: use parent detection title
+      return {
+        behaviorId   : 'generic',
+        behaviorTitle: null, // will use parent.detection_name
+        description  : null,
+        phase        : tactics[0] || 'Unknown',
+        tactics,
+        techniques   : techs,
+      };
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  SOC v5 — CONFIDENCE-BASED NARRATIVE ENGINE
+    //  Generates analyst-quality narratives using confidence-calibrated
+    //  language: Possible / Likely / Strongly Indicative / Confirmed
+    // ════════════════════════════════════════════════════════════════
+    const CONFIDENCE_LANGUAGE = {
+      'Possible':             'possibly',
+      'Likely':               'likely',
+      'Strongly Indicative':  'strongly indicative of',
+      'Confirmed':            'confirmed',
+    };
+
+    // ── Generate a forensic narrative for an incident ──────────────
+    function _generateForensicNarrative(inc, behavior, confidence) {
+      const host    = inc.host || 'unknown host';
+      const user    = inc.user || 'unknown user';
+      const tactics = (inc.mitreTactics || []).map(t => t.replace(/-/g,' ')).join(', ');
+      const techStr = (inc.techniques  || []).slice(0,5).join(', ');
+      const durStr  = _formatDuration(inc.duration_ms || 0);
+      const lang    = CONFIDENCE_LANGUAGE[confidence.level] || 'indicative of';
+
+      let narrative = '';
+      switch (behavior.behaviorId) {
+        case 'ransomware-full':
+        case 'ransomware-impact':
+          narrative = `CRITICAL: Evidence on "${host}" is ${lang} active ransomware deployment. ` +
+            `${inc.detectionCount} correlated events across ${durStr} show: execution, ` +
+            `shadow copy deletion (backup destruction), and file encryption. ` +
+            `Immediate isolation recommended. User context: "${user}". MITRE: ${techStr}.`;
+          break;
+        case 'apt-full-lifecycle':
+          narrative = `HIGH PRIORITY: Activity on "${host}" is ${lang} an advanced persistent threat. ` +
+            `Full kill chain observed over ${durStr}: initial code execution, credential theft (LSASS), ` +
+            `lateral movement, and persistence installation. Threat actor foothold likely established. ` +
+            `User context: "${user}". MITRE: ${techStr}.`;
+          break;
+        case 'apt-cred-lateral':
+          narrative = `Activity on "${host}" is ${lang} credential theft enabling lateral movement. ` +
+            `LSASS memory dump followed by remote share access over ${durStr}. ` +
+            `Attacker may have obtained plaintext credentials. User: "${user}". MITRE: ${techStr}.`;
+          break;
+        case 'spearphish-exec':
+          narrative = `Activity on "${host}" is ${lang} a spear phishing attack chain. ` +
+            `Office/browser application spawned PowerShell (${durStr} sequence), followed by ` +
+            `persistence mechanism. This pattern matches spear phishing document delivery. User: "${user}". MITRE: ${techStr}.`;
+          break;
+        case 'ps-execution':
+          narrative = `Suspicious PowerShell execution on "${host}" is ${lang} malicious activity. ` +
+            `Script block or encoded command contains known malicious patterns. User: "${user}". CMD evidence logged. MITRE: ${techStr}.`;
+          break;
+        case 'bruteforce-compromise':
+          narrative = `Credential attack against "${host}" is ${lang} a brute-force compromise. ` +
+            `Authentication failures followed by lateral movement over ${durStr}. ` +
+            `Account "${user}" may be compromised. MITRE: ${techStr}.`;
+          break;
+        case 'bruteforce-only':
+          narrative = `${inc.detectionCount} authentication failures on "${host}" over ${durStr} are ${lang} ` +
+            `a brute-force or password-spray attack targeting account "${user}". MITRE: ${techStr}.`;
+          break;
+        default:
+          narrative = `${inc.detectionCount} correlated detection${inc.detectionCount>1?'s':''} on "${host}" ` +
+            `over ${durStr} ${lang} multi-stage attack behavior. Tactics: ${tactics}. User: "${user}". MITRE: ${techStr}.`;
+      }
+      return narrative;
+    }
+
+    // ── Format duration in human-readable form ─────────────────────
+    function _formatDuration(ms) {
+      if (!ms || ms <= 0) return '< 1s';
+      if (ms < 1000) return `${ms}ms`;
+      if (ms < 60000) return `${Math.round(ms/1000)}s`;
+      const m = Math.floor(ms / 60000);
+      const s = Math.round((ms % 60000) / 1000);
+      if (m < 60) return s > 0 ? `${m}m ${s}s` : `${m}m`;
+      const h = Math.floor(m / 60);
+      const rm = m % 60;
+      return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  SOC v5 — FULL ATTACK PHASE MODELER
+    //  Maps each detection to a named attack phase and orders them
+    //  chronologically. Phases: Initial Access → Execution →
+    //  Privilege Escalation → Defense Evasion → Credential Access →
+    //  Lateral Movement → Collection → Persistence → Impact
+    // ════════════════════════════════════════════════════════════════
+    const ATTACK_PHASE_ORDER = [
+      'initial-access', 'execution', 'privilege-escalation',
+      'defense-evasion', 'credential-access', 'discovery',
+      'lateral-movement', 'collection', 'persistence', 'command-and-control', 'impact',
+    ];
+
+    // Map MITRE tactics to canonical attack phases
+    function _tacticToPhase(tactic) {
+      const t = (tactic || '').toLowerCase().replace(/\s+/g, '-');
+      const phaseMap = {
+        'initial-access':        'Initial Access',
+        'execution':             'Execution',
+        'persistence':           'Persistence',
+        'privilege-escalation':  'Privilege Escalation',
+        'defense-evasion':       'Defense Evasion',
+        'credential-access':     'Credential Access',
+        'discovery':             'Discovery',
+        'lateral-movement':      'Lateral Movement',
+        'collection':            'Collection',
+        'command-and-control':   'C2',
+        'exfiltration':          'Exfiltration',
+        'impact':                'Impact',
+        'authentication':        'Authentication',
+        'network':               'Network',
+        'file':                  'File Activity',
+        'process':               'Process Activity',
+      };
+      return phaseMap[t] || _capitalizeWords(t);
+    }
+
+    function _capitalizeWords(str) {
+      return String(str||'').replace(/-/g,' ').replace(/\b\w/g, c => c.toUpperCase());
+    }
+
+    // ── Build attack phase timeline for an incident ─────────────────
+    function _buildPhaseTimeline(cluster) {
+      // Sort cluster chronologically
+      const sorted = [...cluster].sort((a, b) => {
+        const ta = new Date(a.first_seen || a.timestamp || 0).getTime();
+        const tb = new Date(b.first_seen || b.timestamp || 0).getTime();
+        return ta - tb;
+      });
+
+      // Assign each detection to a phase
+      return sorted.map(det => {
+        const tactic = det.mitre?.tactic || det.category || '';
+        const phase  = _tacticToPhase(tactic);
+        const ts     = det.first_seen || det.timestamp;
+        const enrichedEv = (det.raw_detections || [det]).flatMap(rd =>
+          (rd.evidence || [rd]).slice(0, 3).map(ev => _enrichEventDetail(ev || {}))
+        ).slice(0, 5);
+
+        return {
+          phase,
+          phaseTactic   : tactic,
+          detectionId   : det.id,
+          ruleId        : det.ruleId,
+          ruleName      : det.ruleName || det.detection_name || det.title,
+          severity      : det.aggregated_severity || det.severity,
+          riskScore     : det.riskScore || 0,
+          timestamp     : ts,
+          first_seen    : det.first_seen || ts,
+          last_seen     : det.last_seen  || ts,
+          technique     : det.mitre?.technique || det.technique || '',
+          techniqueName : det.mitre?.name || '',
+          tactic        : tactic,
+          tactics       : det.mitre ? [{ tactic: det.mitre.tactic, technique: det.mitre.technique, name: det.mitre.name, confidence: det.confidence_score || 30, role: 'primary' }] : [],
+          narrative     : det.narrative || '',
+          user          : det.user || '',
+          host          : det.computer || det.host || '',
+          commandLine   : det.commandLine || '',
+          process       : det.process || '',
+          enrichedEvents: enrichedEv,
+          isParent      : det._isParent || false,
+          confidence    : det.confidence_score || 30,
+          linkedEventCount: (det.linkedEvents || []).length,
+        };
+      });
+    }
+
+    // ════════════════════════════════════════════════════════════════
     //  LOG SCHEMA REGISTRY  (Schema-First Validation Gate)
     //  Each log-source category declares:
     //    eventIdRanges   — accepted numeric EventID ranges (inclusive)  [optional]
@@ -559,15 +1130,20 @@
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  TEMPORAL-IDENTITY CORRELATION ENGINE  (60-second window)
+    //  SOC v5 — FORENSIC TEMPORAL-IDENTITY CORRELATION ENGINE
     //  Groups deduplicated alerts that:
     //    • Share the same Device/HostID  AND
     //    • Share the same User/AccountID (or SYSTEM-level)  AND
-    //    • Occur within CORR_WINDOW_MS of each other
-    //  Into a single Incident with:
+    //    • Occur within CORR_WINDOW_MS of each other (sliding window)
+    //  Into a forensically-accurate Incident with:
     //    • parent alert  — highest-severity/riskScore detection
-    //    • child alerts  — all other detections in the group
-    //    • incidentId, severity, riskScore, mitreTactics[]
+    //    • child alerts  — all other detections (full MITRE preserved)
+    //    • behavior-aware multi-technique title
+    //    • real First Seen / Last Seen / Duration (not 0ms)
+    //    • confidence score with explainable reasons
+    //    • full attack phase timeline
+    //    • FP suppression applied before forming incidents
+    //    • forensic narrative with confidence-calibrated language
     // ════════════════════════════════════════════════════════════════
     const CORR_WINDOW_MS = 60_000; // 60-second temporal identity window
 
@@ -613,9 +1189,27 @@
             cluster = [];
             return;
           }
-          // Build incident from cluster
-          // Parent = highest riskScore, then highest severity
-          const sortedCluster = [...cluster].sort((a, b) => {
+
+          // ── SOC v5: FP Suppression pass before forming incident ─────
+          // Remove known-safe detections unless critical
+          const qualifiedCluster = cluster.filter(d => {
+            const sev = d.aggregated_severity || d.severity || 'low';
+            // Always keep critical/high
+            if (sev === 'critical' || sev === 'high') return true;
+            // Check FP suppression
+            const evidenceEvent = (d.raw_detections || [d])[0];
+            const fpCheck = evidenceEvent ? _checkFPSuppression(evidenceEvent, d.ruleId || '') : { suppressed: false };
+            if (fpCheck.suppressed) {
+              d._fpSuppressed   = true;
+              d._fpReason       = fpCheck.reason;
+              return false; // remove from cluster
+            }
+            return true;
+          });
+          if (qualifiedCluster.length < 2) { cluster = []; return; }
+
+          // ── Parent = highest riskScore, then highest severity ────────
+          const sortedCluster = [...qualifiedCluster].sort((a, b) => {
             const rDiff = (b.riskScore || 0) - (a.riskScore || 0);
             if (rDiff !== 0) return rDiff;
             return (SEV_WEIGHT[b.aggregated_severity || b.severity] || 0)
@@ -624,42 +1218,107 @@
           const parent   = sortedCluster[0];
           const children = sortedCluster.slice(1);
 
-          const incidentTs   = cluster[0].first_seen || cluster[0].timestamp;
-          const incidentLast = cluster[cluster.length - 1].last_seen || cluster[cluster.length - 1].timestamp;
-          const allTactics   = [...new Set(cluster.map(d => d.mitre?.tactic || '').filter(Boolean))];
-          const allTechniques= [...new Set(cluster.map(d => d.mitre?.technique || d.technique || '').filter(Boolean))];
-          const highestSev   = cluster.reduce((best, d) => {
+          // ── Forensic timestamps (REAL first/last seen per event) ─────
+          // Use the actual earliest first_seen across all detections in cluster
+          let firstSeenMs = Infinity, lastSeenMs = -Infinity;
+          qualifiedCluster.forEach(d => {
+            const fs = new Date(d.first_seen || d.timestamp || 0).getTime();
+            const ls = new Date(d.last_seen  || d.first_seen || d.timestamp || 0).getTime();
+            if (fs && fs > 0 && fs < firstSeenMs) firstSeenMs = fs;
+            if (ls && ls > 0 && ls > lastSeenMs)  lastSeenMs  = ls;
+          });
+          // Fallback to parent timestamps if no real timestamps found
+          if (firstSeenMs === Infinity) firstSeenMs = new Date(parent.first_seen || parent.timestamp || 0).getTime();
+          if (lastSeenMs  === -Infinity) lastSeenMs = new Date(parent.last_seen  || parent.timestamp || 0).getTime();
+          // Ensure at least 1ms span so duration is never zero for multi-event chains
+          if (lastSeenMs <= firstSeenMs && qualifiedCluster.length > 1) {
+            lastSeenMs = firstSeenMs + qualifiedCluster.length * 100; // 100ms per extra detection
+          }
+          const incidentTs   = firstSeenMs > 0 ? new Date(firstSeenMs).toISOString() : (parent.first_seen || parent.timestamp);
+          const incidentLast = lastSeenMs  > 0 ? new Date(lastSeenMs).toISOString()  : incidentTs;
+          const durationMs   = Math.max(0, lastSeenMs - firstSeenMs);
+
+          // ── Full MITRE aggregation (all tactics + techniques) ────────
+          const allTactics    = [...new Set(qualifiedCluster.map(d => d.mitre?.tactic || d.category || '').filter(Boolean))];
+          const allTechniques = [...new Set(qualifiedCluster.map(d => d.mitre?.technique || d.technique || '').filter(Boolean))];
+          // Full technique objects with roles
+          const allMitreMappings = qualifiedCluster.reduce((acc, d, idx) => {
+            const t = d.mitre?.technique || d.technique || '';
+            if (t && !acc.find(m => m.technique === t)) {
+              acc.push({
+                technique     : t,
+                name          : d.mitre?.name || '',
+                tactic        : d.mitre?.tactic || d.category || '',
+                confidence     : d.confidence_score || 30,
+                role           : idx === 0 ? 'primary' : 'secondary',
+                ruleId         : d.ruleId || '',
+                ruleName       : d.detection_name || d.ruleName || '',
+              });
+            }
+            return acc;
+          }, []);
+
+          // ── Highest severity ─────────────────────────────────────────
+          const highestSev = qualifiedCluster.reduce((best, d) => {
             const w = SEV_WEIGHT[d.aggregated_severity || d.severity] || 0;
             return w > (SEV_WEIGHT[best] || 0) ? (d.aggregated_severity || d.severity) : best;
           }, 'low');
-          const totalRisk    = Math.min(100, Math.round(cluster.reduce((s, d) => s + (d.riskScore || 0), 0) / cluster.length * 1.2));
 
+          // ── Aggregate risk: weighted, not just average ───────────────
+          const maxRisk  = Math.max(...qualifiedCluster.map(d => d.riskScore || 0));
+          const avgRisk  = qualifiedCluster.reduce((s, d) => s + (d.riskScore || 0), 0) / qualifiedCluster.length;
+          const totalRisk= Math.min(100, Math.round(maxRisk * 0.7 + avgRisk * 0.3 + Math.min(qualifiedCluster.length * 2, 10)));
+
+          // ── Behavior classification ──────────────────────────────────
+          const behavior = _classifyIncidentBehavior(qualifiedCluster);
+
+          // ── Forensic confidence scoring ──────────────────────────────
+          const confidence = _computeForensicConfidence(qualifiedCluster, parent);
+
+          // ── Attack phase timeline ────────────────────────────────────
+          const phaseTimeline = _buildPhaseTimeline(qualifiedCluster);
+
+          // ── Incident ID ──────────────────────────────────────────────
           const incId = 'INC-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2,6).toUpperCase();
+
           // Tag all detections with their incident ID
-          cluster.forEach(d => {
-            d._incidentId = incId;
-            d._isParent   = (d === parent);
+          qualifiedCluster.forEach(d => {
+            d._incidentId  = incId;
+            d._isParent    = (d === parent);
             assignedIds.add(d.id);
           });
 
-          incidents.push({
-            incidentId   : incId,
+          // ── Build incident title ─────────────────────────────────────
+          const incidentTitle = behavior.behaviorTitle || parent.detection_name || parent.ruleName || 'Correlated Incident';
+
+          // ── Forensic narrative ───────────────────────────────────────
+          const incObj = {
+            incidentId       : incId,
+            title            : incidentTitle,
             parent,
             children,
-            all          : cluster,
-            severity     : highestSev,
-            riskScore    : totalRisk,
-            first_seen   : incidentTs,
-            last_seen    : incidentLast,
-            duration_ms  : new Date(incidentLast||0).getTime() - new Date(incidentTs||0).getTime(),
-            host         : parent.computer || parent.host || '',
-            user         : parent.user || '',
-            mitreTactics : allTactics,
-            techniques   : allTechniques,
-            detectionCount: cluster.length,
-            childCount   : children.length,
-            correlationBasis: 'temporal-identity-60s',
-          });
+            all              : qualifiedCluster,
+            severity         : highestSev,
+            riskScore        : totalRisk,
+            first_seen       : incidentTs,
+            last_seen        : incidentLast,
+            duration_ms      : durationMs,
+            durationLabel    : _formatDuration(durationMs),
+            host             : parent.computer || parent.host || '',
+            user             : parent.user || '',
+            mitreTactics     : allTactics,
+            techniques       : allTechniques,
+            mitreMappings    : allMitreMappings,
+            detectionCount   : qualifiedCluster.length,
+            childCount       : children.length,
+            correlationBasis : 'temporal-identity-60s',
+            behavior,
+            confidence,
+            phaseTimeline,
+          };
+          // Generate forensic narrative (after incObj so _generateForensicNarrative can access it)
+          incObj.narrative = _generateForensicNarrative(incObj, behavior, confidence);
+          incidents.push(incObj);
           cluster = [];
         };
 
@@ -1770,24 +2429,36 @@
     }
 
     // ── Build timeline entry from event ───────────────────────────
+    // ── Build enriched timeline entry from event ─────────────────
     function _buildTimelineEntry(event, detId) {
       const e   = event; // already normalized
       const eid = parseInt(e.EventID, 10);
-      let type = 'event', description = '';
-      switch (eid) {
-        case 4625: type='authentication'; description=`FAILED LOGON: "${e.user}" from ${e.srcIp||'?'} — Status: ${e.Status||'FAILURE'}`; break;
-        case 4624: type='authentication'; description=`SUCCESSFUL LOGON: "${e.user}" from ${e.srcIp||'?'} (Type ${e.LogonType||'?'})`; break;
-        case 4688: type='process'; description=`PROCESS: "${e.process||e.ProcessName||'?'}" — ${e.commandLine||'?'}`; break;
-        case 4698: case 4702: type='persistence'; description=`TASK: "${e.TaskName||'?'}" created/modified`; break;
-        case 4720: type='persistence'; description=`ACCOUNT CREATED: "${e.TargetUserName||'?'}" by "${e.user}"`; break;
-        default: description = detId ? `DETECTION triggered (EID ${eid})` : `EVENT ${eid||'?'}: ${e.computer||''}`;
-      }
+
+      // Use EventID enrichment dictionary for analyst-readable details
+      const enriched = _enrichEventDetail(e);
+      const type = enriched.category || 'event';
+      const description = enriched.detail || `EVENT ${isNaN(eid)?'?':eid}: ${e.computer||''}`;
+
       return {
-        ts: e.timestamp, timestamp: e.timestamp, type, description,
-        entity: e.computer || e.user || '',
-        commandLine: e.commandLine || '',
-        eventId: eid, user: e.user, computer: e.computer, srcIp: e.srcIp,
-        detection: detId || null,
+        ts          : e.timestamp,
+        timestamp   : e.timestamp,
+        type,
+        description,
+        enriched    : enriched.enriched,
+        label       : enriched.label,
+        icon        : enriched.icon,
+        entity      : e.computer || e.user || '',
+        commandLine : e.commandLine || '',
+        eventId     : isNaN(eid) ? null : eid,
+        user        : e.user,
+        computer    : e.computer,
+        srcIp       : e.srcIp,
+        destIp      : e.destIp || '',
+        destPort    : e.destPort || '',
+        process     : e.process || '',
+        logSource   : e._logSource || '',
+        linkedEvents: e._linkedEventIds ? e._linkedEventIds.length : 0,
+        detection   : detId || null,
       };
     }
 
@@ -1911,18 +2582,32 @@
 
           try {
             if (!rule.match(event)) return;
+
+            // ── SOC v5: False-Positive Suppression Gate ────────────
+            const fpCheck = _checkFPSuppression(event, rule.id);
+            if (fpCheck.suppressed) {
+              // Skip known-safe FP pattern entirely
+              return;
+            }
+            const inMaintWindow = fpCheck.inMaintenanceWindow &&
+                                  (rule.severity === 'low' || rule.severity === 'informational');
+            if (inMaintWindow) return; // suppress low/info in maintenance window
+
             // Check all variant sub-rules to label which variant fired
             let variantId = rule.id;
             if (rule.variants) {
               const fired = rule.variants.find(v => { try { return v.match(event); } catch { return false; } });
               if (fired) variantId = fired.id;
             }
+            // ── Enrich event with analyst-readable detail ───────────
+            const eventEnrichment = _enrichEventDetail(event);
             const det = {
               id         : `${variantId}-${idx}`,
               ruleId     : rule.id,
               variantId,
               ruleName   : rule.title,
               title      : rule.title,
+              detection_name: rule.title,
               severity   : rule.severity,
               computer   : event.computer || '',
               host       : event.computer || '',
@@ -1931,12 +2616,23 @@
               commandLine: event.commandLine || '',
               process    : event.process || '',
               mitre      : rule.mitre,
+              // Full MITRE role object for child events
+              mitreDetail: {
+                technique : rule.mitre?.technique || '',
+                name      : rule.mitre?.name || '',
+                tactic    : rule.mitre?.tactic || '',
+                confidence: 70, // single-event detection baseline
+                role      : 'primary',
+              },
               technique  : rule.mitre?.technique,
               tags       : rule.tags || [],
               riskScore  : rule.riskScore,
               evidence   : [event],
+              eventEnrichment,
               narrative  : rule.narrative ? rule.narrative(event) : rule.title,
               timestamp  : event.timestamp,
+              first_seen : event.timestamp,
+              last_seen  : event.timestamp,
               category   : rule.category,
               logCategory: rule.logCategory || null,
               // Enrich detection with cross-log link info
@@ -1948,11 +2644,16 @@
                     host: events[li]?.computer || '',
                     user: events[li]?.user || '',
                     timestamp: events[li]?.timestamp || '',
+                    enriched: _enrichEventDetail(events[li] || {}),
                   }))
                 : [],
             };
             rawDets.push(det);
-            if (timeline[idx]) timeline[idx].detection = det.id;
+            if (timeline[idx]) {
+              timeline[idx].detection = det.id;
+              timeline[idx].ruleId    = rule.id;
+              timeline[idx].severity  = rule.severity;
+            }
           } catch { /* skip */ }
         });
       });
@@ -2008,10 +2709,20 @@
       const duration = Date.now() - startTs;
 
       console.log(
-        `[CSDE v4] ${events.length} events → ${rawDets.length} raw → ${dedupedDets.length} deduped, ` +
+        `[CSDE v5] ${events.length} events → ${rawDets.length} raw → ${dedupedDets.length} deduped, ` +
         `${incidents.length} incidents, ${chains.length} chains, risk=${riskScore} ` +
         `(schema_skipped=${schemaSkipped}, ${duration}ms)`
       );
+
+      // Compute incident confidence summary for meta
+      const confidenceSummary = incidents.map(inc => ({
+        incidentId: inc.incidentId,
+        title: inc.title,
+        confidence: inc.confidence?.score || 0,
+        level: inc.confidence?.level || 'Possible',
+        behaviorId: inc.behavior?.behaviorId || 'generic',
+        duration: inc.durationLabel,
+      }));
 
       return {
         success  : true,
@@ -2033,6 +2744,9 @@
           eventsAnalyzed    : events.length,
           dedupWindowMs     : CFG.DEDUP_WINDOW_MS,
           correlWindowMs    : CORR_WINDOW_MS,
+          engineVersion     : 'CSDE-v5-SOC',
+          fpSuppressed      : rawDets.filter(d => d._fpSuppressed).length,
+          confidenceSummary,
         },
       };
     }
@@ -3005,23 +3719,31 @@
   //  Shows ONE consolidated incident per correlated alert cluster,
   //  with expandable child alerts and cross-log link information.
   // ════════════════════════════════════════════════════════════════
+  // ════════════════════════════════════════════════════════════════
+  //  SOC v5 — INCIDENTS TAB TEMPLATE & RENDERER
+  //  Forensically accurate, analyst-trustworthy, production-ready.
+  // ════════════════════════════════════════════════════════════════
   function _tplIncidents() {
     return `
 <div>
+  <!-- SOC Incident Dashboard Header -->
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
     <div>
-      <div style="font-size:13px;color:#e6edf3;font-weight:600;">SOC Incident View</div>
+      <div style="font-size:14px;color:#e6edf3;font-weight:700;">🛡️ SOC Incident Reconstruction Engine</div>
       <div style="font-size:12px;color:#8b949e;margin-top:2px;">
-        Correlated alerts grouped by Device/Host &amp; User within a 60-second temporal window.
-        Each incident shows one parent alert and expandable child alerts.
+        Forensically correlated attack chains · Behavior-aware classification · Confidence-based narratives · Real timestamps
       </div>
     </div>
-    <div style="display:flex;gap:8px;align-items:center;">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
       <span id="rk-inc-badge" style="font-size:11px;padding:4px 10px;background:rgba(239,68,68,0.1);color:#ef4444;border-radius:10px;font-weight:700;">0 Incidents</span>
+      <span id="rk-inc-confidence-badge" style="font-size:11px;padding:4px 10px;background:rgba(52,211,153,0.1);color:#34d399;border-radius:10px;display:none;"></span>
       <button class="rk-btn rk-btn-ghost" style="font-size:11px;" onclick="RAYKAN_UI._setTab('detections')">All Detections →</button>
+      <button class="rk-btn rk-btn-ghost" style="font-size:11px;" onclick="RAYKAN_UI._setTab('timeline')">Timeline →</button>
     </div>
   </div>
-  <div id="rk-inc-list" style="display:flex;flex-direction:column;gap:14px;"></div>
+  <!-- Stats bar -->
+  <div id="rk-inc-statsbar" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;"></div>
+  <div id="rk-inc-list" style="display:flex;flex-direction:column;gap:16px;"></div>
 </div>`;
   }
 
@@ -3033,13 +3755,42 @@
     const badge = document.getElementById('rk-inc-badge');
     if (badge) badge.textContent = `${incidents.length} Incident${incidents.length !== 1 ? 's' : ''}`;
 
+    // Confidence summary badge
+    const confBadge = document.getElementById('rk-inc-confidence-badge');
+    if (confBadge && incidents.length) {
+      const avgConf = Math.round(incidents.reduce((s, i) => s + (i.confidence?.score || 0), 0) / incidents.length);
+      confBadge.style.display = '';
+      confBadge.textContent = `Avg Confidence: ${avgConf}%`;
+    }
+
+    // Stats bar
+    const statsBar = document.getElementById('rk-inc-statsbar');
+    if (statsBar && incidents.length) {
+      const critInc  = incidents.filter(i => i.severity === 'critical').length;
+      const highInc  = incidents.filter(i => i.severity === 'high').length;
+      const totalAlerts = incidents.reduce((s, i) => s + i.detectionCount, 0);
+      const confirmedCount = incidents.filter(i => i.confidence?.level === 'Confirmed').length;
+      const strongCount    = incidents.filter(i => i.confidence?.level === 'Strongly Indicative').length;
+      statsBar.innerHTML = [
+        { label: 'Critical', val: critInc,  color: '#ef4444' },
+        { label: 'High',     val: highInc,  color: '#f97316' },
+        { label: 'Total Alerts', val: totalAlerts, color: '#a78bfa' },
+        { label: 'Confirmed',val: confirmedCount, color: '#34d399' },
+        { label: 'Strongly Indicative', val: strongCount, color: '#60a5fa' },
+      ].map(s => `
+<div style="padding:8px 14px;background:rgba(13,17,23,0.7);border:1px solid #21262d;border-radius:8px;text-align:center;min-width:80px;">
+  <div style="font-size:18px;font-weight:800;color:${s.color};">${s.val}</div>
+  <div style="font-size:10px;color:#6b7280;">${s.label}</div>
+</div>`).join('');
+    }
+
     if (!incidents.length) {
       el.innerHTML = `
 <div style="padding:60px;text-align:center;color:#4b5563;font-size:13px;">
-  <div style="font-size:24px;margin-bottom:8px;">🎯</div>
-  No correlated incidents yet.<br/>
-  <span style="font-size:11px;">Incidents are formed when 2+ alerts share the same host/user within 60 seconds.</span><br/>
-  <span style="font-size:11px;color:#374151;">Run a demo or ingest logs to see consolidated incident view.</span>
+  <div style="font-size:28px;margin-bottom:10px;">🎯</div>
+  <div style="font-size:14px;color:#6b7280;margin-bottom:6px;">No correlated incidents yet.</div>
+  <span style="font-size:11px;">Incidents form when 2+ alerts share the same host/user within 60 seconds.</span><br/>
+  <span style="font-size:11px;color:#374151;">Run a demo or ingest logs to see the SOC Incident Reconstruction view.</span>
 </div>`;
       return;
     }
@@ -3054,123 +3805,286 @@
         if (!body) return;
         const open = body.style.display !== 'none';
         body.style.display = open ? 'none' : 'block';
-        btn.textContent = open ? '▶ Show child alerts' : '▼ Hide child alerts';
+        btn.innerHTML = open
+          ? `<span style="color:#60a5fa;">▶</span> Evidence &amp; Child Alerts (${btn.dataset.childCount || ''})`
+          : `<span style="color:#60a5fa;">▼</span> Hide Evidence`;
       });
     });
+
+    // Attach phase timeline toggle listeners
+    el.querySelectorAll('[data-phase-toggle]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id   = btn.dataset.phaseToggle;
+        const body = document.getElementById(`rk-phase-${id}`);
+        if (!body) return;
+        const open = body.style.display !== 'none';
+        body.style.display = open ? 'none' : 'block';
+        btn.textContent = open ? '▶ Attack Phase Timeline' : '▼ Hide Phase Timeline';
+      });
+    });
+  }
+
+  // ── Confidence level styling ──────────────────────────────────
+  function _confidenceStyle(level) {
+    switch(level) {
+      case 'Confirmed':           return { color: '#ef4444', bg: 'rgba(239,68,68,0.12)',   icon: '🔴' };
+      case 'Strongly Indicative': return { color: '#f97316', bg: 'rgba(249,115,22,0.12)',  icon: '🟠' };
+      case 'Likely':              return { color: '#eab308', bg: 'rgba(234,179,8,0.12)',   icon: '🟡' };
+      default:                    return { color: '#6b7280', bg: 'rgba(107,114,128,0.12)', icon: '⚪' };
+    }
   }
 
   function _renderIncidentCard(inc, i) {
     const parent   = inc.parent || {};
     const children = inc.children || [];
-    const sev   = inc.severity || parent.aggregated_severity || parent.severity || 'medium';
-    const incId = inc.incidentId || `INC-${i}`;
-    const shortId = incId.split('-').slice(-2).join('-');
+    const sev      = inc.severity || parent.aggregated_severity || parent.severity || 'medium';
+    const incId    = inc.incidentId || `INC-${i}`;
+    const shortId  = incId.split('-').slice(-2).join('-');
+    const behavior = inc.behavior || {};
+    const conf     = inc.confidence || { score: 30, level: 'Possible', reasons: [] };
+    const confStyle= _confidenceStyle(conf.level);
 
-    // Tactic pills
+    // ── Incident title (behavior-aware, not just parent rule name) ─
+    const incidentTitle = inc.title || behavior.behaviorTitle || parent.detection_name || parent.ruleName || 'Correlated Incident';
+
+    // ── Timestamps ────────────────────────────────────────────────
+    const durStr   = inc.durationLabel || _formatDurationUI(inc.duration_ms || 0);
+    const firstTs  = inc.first_seen  ? new Date(inc.first_seen).toLocaleString()  : '—';
+    const lastTs   = inc.last_seen   ? new Date(inc.last_seen).toLocaleString()   : '—';
+
+    // ── MITRE tactic pills (all aggregated tactics) ───────────────
     const tacticPills = (inc.mitreTactics || []).map(t =>
-      `<span style="font-size:9px;padding:2px 6px;background:rgba(167,139,250,0.12);color:#a78bfa;border-radius:6px;">${t.replace(/-/g,' ')}</span>`
+      `<span style="font-size:9px;padding:2px 8px;background:rgba(167,139,250,0.12);color:#a78bfa;border-radius:6px;font-weight:600;">${t.replace(/-/g,' ')}</span>`
     ).join('');
 
-    // Technique tags
-    const techTags = (inc.techniques || []).slice(0, 6).map(t =>
-      `<span class="rk-tag" style="color:#a78bfa;font-size:10px;">${t}</span>`
+    // ── Full MITRE technique matrix (technique + role) ────────────
+    const mitreMappings = (inc.mitreMappings || (inc.techniques || []).map(t => ({ technique: t, role: 'secondary', tactic: '' })));
+    const techniqueMatrix = mitreMappings.slice(0, 8).map(m =>
+      `<span style="font-size:10px;padding:2px 8px;background:rgba(96,165,250,0.1);color:#60a5fa;border-radius:5px;font-family:monospace;"
+        title="${m.name || ''} — ${m.tactic || ''} [${m.role || 'secondary'}]">
+        ${m.technique}${m.role==='primary'?' ★':''}
+      </span>`
     ).join('');
 
-    // Duration label
-    const durMs  = inc.duration_ms || 0;
-    const durStr = durMs < 1000 ? `${durMs}ms`
-                 : durMs < 60000 ? `${Math.round(durMs/1000)}s`
-                 : `${Math.round(durMs/60000)}min`;
+    // ── Phase badges ──────────────────────────────────────────────
+    const phaseBadge = behavior.phase
+      ? `<span style="font-size:10px;padding:2px 9px;background:rgba(52,211,153,0.1);color:#34d399;border-radius:6px;font-weight:600;">⚡ ${behavior.phase}</span>`
+      : '';
 
-    // Schema validation / cross-log badge from parent
+    // ── Schema / cross-log badges from parent ─────────────────────
     const schemaNote = parent.logCategory
-      ? `<span style="font-size:9px;padding:1px 6px;background:rgba(52,211,153,0.1);color:#34d399;border-radius:6px;" title="Schema validated — log category: ${parent.logCategory}">✔ ${parent.logCategory}</span>`
+      ? `<span style="font-size:9px;padding:1px 6px;background:rgba(52,211,153,0.1);color:#34d399;border-radius:6px;">✔ schema:${parent.logCategory}</span>`
       : '';
     const crossLinks = parent.linkedEvents && parent.linkedEvents.length
-      ? `<span style="font-size:9px;padding:1px 6px;background:rgba(96,165,250,0.1);color:#60a5fa;border-radius:6px;">🔗 ${parent.linkedEvents.length} cross-log link${parent.linkedEvents.length>1?'s':''}</span>`
+      ? `<span style="font-size:9px;padding:1px 6px;background:rgba(96,165,250,0.1);color:#60a5fa;border-radius:6px;">🔗 ${parent.linkedEvents.length} cross-log</span>`
       : '';
 
-    // Child alert rows
+    // ── Confidence reasons (analyst explainability) ───────────────
+    const confReasons = (conf.reasons || []).length > 0
+      ? conf.reasons.map(r => `<li style="margin-bottom:2px;">${r}</li>`).join('')
+      : '<li>Single-event detection</li>';
+
+    // ── Attack phase timeline (chronological mini-timeline) ───────
+    const phaseTimeline = inc.phaseTimeline || [];
+    const phaseRows = phaseTimeline.map((pt, pi) => {
+      const ptSev = pt.severity || 'medium';
+      const ptDot = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${_sev(ptSev).color};flex-shrink:0;"></span>`;
+      const ptTs  = pt.first_seen ? new Date(pt.first_seen).toLocaleTimeString() : '—';
+      const ptEnd = pt.last_seen  ? new Date(pt.last_seen).toLocaleTimeString()  : '';
+      const ptDur = (pt.first_seen && pt.last_seen && pt.first_seen !== pt.last_seen)
+        ? ` → ${ptEnd}` : '';
+      return `
+<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid #1c2128;">
+  <div style="display:flex;flex-direction:column;align-items:center;min-width:24px;padding-top:2px;">
+    ${ptDot}
+    ${pi < phaseTimeline.length-1 ? '<div style="width:1px;height:20px;background:#21262d;margin:2px auto;"></div>' : ''}
+  </div>
+  <div style="flex:1;min-width:0;">
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px;">
+      <span style="font-size:10px;padding:1px 7px;background:rgba(167,139,250,0.1);color:#a78bfa;border-radius:5px;font-weight:600;">${pt.phase}</span>
+      ${_sevBadge(ptSev)}
+      <span style="font-size:11px;color:#e6edf3;font-weight:600;">${pt.ruleName || pt.ruleId || 'Detection'}</span>
+      ${pt.technique ? `<span style="font-size:10px;font-family:monospace;color:#60a5fa;">${pt.technique}</span>` : ''}
+      ${pt.isParent ? `<span style="font-size:9px;padding:1px 5px;background:rgba(239,68,68,0.1);color:#ef4444;border-radius:4px;">PARENT</span>` : ''}
+    </div>
+    <div style="font-size:10px;color:#6b7280;">
+      <span style="color:#4b5563;">${ptTs}${ptDur}</span>
+      ${pt.host ? ` · 🖥 ${pt.host}` : ''}
+      ${pt.user ? ` · 👤 ${pt.user}` : ''}
+      ${pt.linkedEventCount > 0 ? ` · <span style="color:#60a5fa;">🔗 ×${pt.linkedEventCount}</span>` : ''}
+    </div>
+    ${pt.narrative ? `<div style="font-size:11px;color:#8b949e;margin-top:3px;line-height:1.4;">${pt.narrative.slice(0,160)}${pt.narrative.length>160?'…':''}</div>` : ''}
+    ${pt.enrichedEvents && pt.enrichedEvents.length ? `
+    <div style="margin-top:4px;display:flex;flex-direction:column;gap:2px;">
+      ${pt.enrichedEvents.slice(0,3).map(ev => `
+      <div style="font-size:10px;color:#4b5563;padding:2px 6px;background:rgba(255,255,255,0.02);border-radius:4px;border-left:2px solid ${_sev(ptSev).color}44;">
+        ${ev.icon||'📋'} <span style="color:#6b7280;">${ev.label}:</span> ${(ev.detail||'').slice(0,120)}
+      </div>`).join('')}
+    </div>` : ''}
+  </div>
+  <div style="font-size:10px;color:#4b5563;flex-shrink:0;text-align:right;">
+    <span style="font-weight:700;color:${_riskColor(pt.riskScore||0)};">${pt.riskScore||'?'}</span>
+    <div>risk</div>
+  </div>
+</div>`;
+    }).join('');
+
+    // ── Child alert rows (full MITRE preserved per child) ─────────
     const childRows = children.map(c => {
-      const cs = c.aggregated_severity || c.severity || 'medium';
-      const cm = c.mitre?.technique || c.technique || '';
+      const cs  = c.aggregated_severity || c.severity || 'medium';
+      const cm  = c.mitre?.technique || c.technique || '';
+      const cmt = c.mitre?.tactic || c.category || '';
       const cLinked = c.linkedEvents && c.linkedEvents.length
         ? `<span style="font-size:9px;color:#60a5fa;" title="Cross-log linked events">🔗×${c.linkedEvents.length}</span>`
         : '';
+      const cConf = c.confidence_score || 30;
+      const cFirstTs = c.first_seen ? new Date(c.first_seen).toLocaleTimeString() : '—';
+      const cLastTs  = c.last_seen  ? new Date(c.last_seen).toLocaleTimeString()  : '';
+      const cDurStr  = (c.first_seen && c.last_seen && c.first_seen !== c.last_seen)
+        ? ` → ${cLastTs}` : '';
       return `
-<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;
-            background:rgba(13,17,23,0.8);border-radius:6px;border:1px solid #21262d;margin-bottom:4px;">
-  <div style="width:6px;height:6px;border-radius:50%;background:${_sev(cs).color};flex-shrink:0;"></div>
-  <div style="flex:1;min-width:0;">
-    <div style="font-size:12px;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-      ${c.detection_name || c.ruleName || c.title || 'Alert'}
+<div style="padding:10px 14px;background:rgba(13,17,23,0.8);border-radius:8px;border:1px solid #21262d;margin-bottom:6px;">
+  <div style="display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap;">
+    <div style="width:7px;height:7px;border-radius:50%;background:${_sev(cs).color};flex-shrink:0;margin-top:4px;"></div>
+    <div style="flex:1;min-width:0;">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px;">
+        ${_sevBadge(cs)}
+        <span style="font-size:12px;color:#e6edf3;font-weight:600;">${c.detection_name || c.ruleName || c.title || 'Alert'}</span>
+        ${c.ruleId ? `<span style="font-size:10px;font-family:monospace;color:#4b5563;">${c.ruleId}</span>` : ''}
+      </div>
+      <div style="font-size:10px;color:#6b7280;display:flex;gap:8px;flex-wrap:wrap;margin-bottom:3px;">
+        ${cm ? `<span style="color:#a78bfa;font-family:monospace;font-weight:600;">${cm}</span>` : ''}
+        ${cmt ? `<span style="color:#7c3aed;">${cmt.replace(/-/g,' ')}</span>` : ''}
+        ${c.category ? `<span style="color:#8b949e;">${c.category}</span>` : ''}
+        <span style="color:#4b5563;">${cFirstTs}${cDurStr}</span>
+        ${cLinked}
+        ${c.logCategory ? `<span style="color:#34d399;">✔${c.logCategory}</span>` : ''}
+      </div>
+      ${c.narrative ? `<div style="font-size:11px;color:#8b949e;line-height:1.4;">${c.narrative.slice(0,160)}${c.narrative.length>160?'…':''}</div>` : ''}
     </div>
-    <div style="font-size:10px;color:#6b7280;margin-top:1px;">
-      ${c.category ? `<span style="color:#8b949e;">${c.category}</span> · ` : ''}
-      ${cm ? `<span style="color:#a78bfa;">${cm}</span> · ` : ''}
-      ${_fmtTime(c.first_seen || c.timestamp)}
-      ${cLinked ? ' · ' + cLinked : ''}
-      ${c.logCategory ? `<span style="color:#34d399;"> · ✔${c.logCategory}</span>` : ''}
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;">
+      <span style="font-size:12px;font-weight:700;color:${_riskColor(c.riskScore||0)};">${c.riskScore||'?'}<span style="font-size:9px;color:#4b5563;">/100</span></span>
+      <span style="font-size:10px;color:#4b5563;">conf: ${cConf}%</span>
+      <button class="rk-entity-btn" onclick="RAYKAN_UI._showDetDetail('${c.id||''}')" style="font-size:10px;padding:3px 8px;">Detail</button>
     </div>
-  </div>
-  <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
-    ${_sevBadge(cs)}
-    <button class="rk-entity-btn" onclick="RAYKAN_UI._showDetDetail('${c.id||''}')" style="font-size:10px;padding:3px 8px;">Detail</button>
   </div>
 </div>`;
     }).join('');
 
     return `
-<div class="rk-card" style="padding:0;overflow:hidden;border:1px solid ${_sev(sev).color}33;">
-  <!-- Incident Header -->
-  <div style="padding:14px 18px;background:${_sev(sev).color}0a;display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+<div class="rk-card" style="padding:0;overflow:hidden;border:1px solid ${_sev(sev).color}44;box-shadow:0 2px 12px ${_sev(sev).color}11;">
+
+  <!-- ── Incident Header ─────────────────────────────────────────── -->
+  <div style="padding:16px 20px;background:linear-gradient(135deg,${_sev(sev).color}0a 0%,transparent 100%);
+              display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
     <div style="flex:1;min-width:0;">
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
-        <span style="font-size:10px;font-family:monospace;color:#4b5563;background:#0d1117;padding:1px 6px;border-radius:4px;">${shortId}</span>
+      <!-- ID + Severity + Title row -->
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+        <span style="font-size:10px;font-family:monospace;color:#6b7280;background:#0d1117;padding:2px 7px;border-radius:4px;border:1px solid #21262d;">${shortId}</span>
         ${_sevBadge(sev)}
-        <span style="font-size:12px;font-weight:700;color:#e6edf3;">${parent.detection_name || parent.ruleName || 'Incident'}</span>
-        <span style="font-size:10px;padding:2px 7px;background:rgba(239,68,68,0.1);color:#ef4444;border-radius:8px;font-weight:700;">PARENT</span>
+        <span style="font-size:14px;font-weight:700;color:#f0f6fc;">${incidentTitle}</span>
       </div>
-      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
-        <span style="font-size:11px;color:#8b949e;">🖥 ${inc.host || '—'}</span>
-        <span style="font-size:11px;color:#60a5fa;">👤 ${inc.user || '—'}</span>
-        <span style="font-size:11px;color:#6b7280;">⏱ ${durStr} span</span>
-        <span style="font-size:11px;color:#6b7280;">${inc.detectionCount} alert${inc.detectionCount>1?'s':''} correlated</span>
+      <!-- Behavior phase + confidence row -->
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+        ${phaseBadge}
+        <span style="font-size:10px;padding:2px 8px;background:${confStyle.bg};color:${confStyle.color};border-radius:6px;font-weight:700;">
+          ${confStyle.icon} ${conf.level} (${conf.score}%)
+        </span>
         ${schemaNote}
         ${crossLinks}
       </div>
-      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:4px;">${tacticPills}</div>
-      ${techTags ? `<div style="display:flex;gap:4px;flex-wrap:wrap;">${techTags}</div>` : ''}
+      <!-- Host / User / Timestamps / Alert count -->
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:8px;font-size:11px;">
+        <span style="color:#8b949e;">🖥 <strong style="color:#c9d1d9;">${inc.host || '—'}</strong></span>
+        <span style="color:#8b949e;">👤 <strong style="color:#c9d1d9;">${inc.user || '—'}</strong></span>
+        <span style="color:#6b7280;">🕐 <span style="color:#8b949e;">First:</span> <strong style="color:#c9d1d9;">${firstTs}</strong></span>
+        <span style="color:#6b7280;">🕑 <span style="color:#8b949e;">Last:</span> <strong style="color:#c9d1d9;">${lastTs}</strong></span>
+        <span style="color:#6b7280;">⏱ <strong style="color:#e6edf3;">${durStr}</strong></span>
+        <span style="padding:2px 8px;background:rgba(239,68,68,0.08);color:#ef4444;border-radius:6px;font-weight:600;">${inc.detectionCount} alert${inc.detectionCount>1?'s':''}</span>
+      </div>
+      <!-- MITRE tactics row -->
+      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;">${tacticPills}</div>
+      <!-- MITRE technique matrix -->
+      ${techniqueMatrix ? `<div style="display:flex;gap:4px;flex-wrap:wrap;">${techniqueMatrix}</div>` : ''}
     </div>
-    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;">
-      <span style="font-weight:800;color:${_riskColor(inc.riskScore||0)};font-size:16px;">${inc.riskScore||'—'}<span style="font-size:10px;color:#6b7280;">/100</span></span>
-      <span style="font-size:10px;color:#6b7280;">${_fmtTime(inc.first_seen)}</span>
-      <div style="display:flex;gap:6px;">
-        <button class="rk-entity-btn" onclick="RAYKAN_UI._showDetDetail('${parent.id||''}')">View Parent →</button>
+
+    <!-- Right panel: risk score + actions -->
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0;">
+      <div style="text-align:center;">
+        <div style="font-size:28px;font-weight:900;color:${_riskColor(inc.riskScore||0)};line-height:1;">${inc.riskScore||'—'}</div>
+        <div style="font-size:10px;color:#6b7280;">/100 risk</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+        <button class="rk-entity-btn" onclick="RAYKAN_UI._showDetDetail('${parent.id||''}')">Parent Detail →</button>
         <button class="rk-entity-btn" onclick="RAYKAN_UI._invEntity('${inc.host||''}')">Investigate</button>
       </div>
     </div>
   </div>
 
-  <!-- Parent narrative -->
-  ${parent.narrative || parent.description ? `
-  <div style="padding:10px 18px;background:rgba(96,165,250,0.04);border-bottom:1px solid #21262d;">
-    <div style="font-size:11px;color:#6b7280;margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px;">Narrative</div>
-    <div style="font-size:12px;color:#e6edf3;line-height:1.5;">${parent.narrative || parent.description}</div>
+  <!-- ── Forensic Narrative ──────────────────────────────────────── -->
+  ${inc.narrative || behavior.description ? `
+  <div style="padding:12px 20px;background:rgba(96,165,250,0.03);border-top:1px solid #21262d;border-bottom:1px solid #21262d;">
+    <div style="display:flex;align-items:flex-start;gap:10px;">
+      <div style="flex:1;">
+        <div style="font-size:10px;color:#4b5563;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;font-weight:600;">Forensic Narrative</div>
+        <div style="font-size:12px;color:#c9d1d9;line-height:1.6;">${inc.narrative || behavior.description || ''}</div>
+      </div>
+    </div>
   </div>` : ''}
 
-  <!-- Child alerts section -->
-  ${children.length > 0 ? `
-  <div style="padding:10px 18px 0 18px;">
-    <button data-inc-toggle="${incId}" style="background:none;border:none;color:#60a5fa;font-size:11px;cursor:pointer;padding:0;margin-bottom:8px;font-weight:600;">
-      ▶ Show child alerts (${children.length})
+  <!-- ── Confidence Scoring Detail ──────────────────────────────── -->
+  <div style="padding:10px 20px;background:rgba(13,17,23,0.5);border-bottom:1px solid #21262d;">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <div style="font-size:10px;color:#4b5563;text-transform:uppercase;letter-spacing:.5px;font-weight:600;">Confidence Factors:</div>
+      <ul style="margin:0;padding-left:18px;list-style:disc;">
+        ${confReasons}
+      </ul>
+    </div>
+  </div>
+
+  <!-- ── Phase Timeline (expandable) ───────────────────────────── -->
+  ${phaseTimeline.length > 0 ? `
+  <div style="padding:10px 20px 0 20px;">
+    <button data-phase-toggle="${incId}" style="background:none;border:none;color:#a78bfa;font-size:11px;cursor:pointer;padding:0;margin-bottom:8px;font-weight:600;">
+      ▶ Attack Phase Timeline
     </button>
-    <div id="rk-inc-body-${incId}" style="display:none;padding-bottom:10px;">
+    <div id="rk-phase-${incId}" style="display:none;padding-bottom:12px;">
+      <div style="font-size:10px;color:#4b5563;margin-bottom:8px;text-transform:uppercase;letter-spacing:.4px;">
+        Chronological attack phase reconstruction — ${phaseTimeline.length} stage${phaseTimeline.length!==1?'s':''}
+      </div>
+      ${phaseRows}
+    </div>
+  </div>` : ''}
+
+  <!-- ── Child Alerts (expandable) ─────────────────────────────── -->
+  ${children.length > 0 ? `
+  <div style="padding:10px 20px 0 20px;">
+    <button data-inc-toggle="${incId}" data-child-count="${children.length}"
+      style="background:none;border:none;color:#60a5fa;font-size:11px;cursor:pointer;padding:0;margin-bottom:8px;font-weight:600;">
+      <span style="color:#60a5fa;">▶</span> Evidence &amp; Child Alerts (${children.length})
+    </button>
+    <div id="rk-inc-body-${incId}" style="display:none;padding-bottom:12px;">
+      <div style="font-size:10px;color:#4b5563;margin-bottom:8px;text-transform:uppercase;letter-spacing:.4px;">
+        Correlated child detections with full MITRE mapping
+      </div>
       ${childRows}
     </div>
-  </div>` : `<div style="padding:8px 18px 12px;font-size:11px;color:#4b5563;">No child alerts — standalone detection.</div>`}
+  </div>` : `<div style="padding:10px 20px 14px;font-size:11px;color:#4b5563;">Single detection — no child alerts.</div>`}
 
 </div>`;
+  }
+
+  // ── Format duration for UI (uses CSDE._formatDuration internally) ─
+  function _formatDurationUI(ms) {
+    if (!ms || ms <= 0) return '&lt; 1s';
+    if (ms < 1000) return `${ms}ms`;
+    if (ms < 60000) return `${Math.round(ms/1000)}s`;
+    const m = Math.floor(ms / 60000);
+    const s = Math.round((ms % 60000) / 1000);
+    if (m < 60) return s > 0 ? `${m}m ${s}s` : `${m}m`;
+    const h = Math.floor(m / 60);
+    const rm = m % 60;
+    return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
   }
 
   function _tplDetections() {
