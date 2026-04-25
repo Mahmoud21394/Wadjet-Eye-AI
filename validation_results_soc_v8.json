@@ -1,0 +1,114 @@
+{
+  "suite": "SOC-v8-Attack-Chain-Reconstruction",
+  "date": "2026-04-25T09:40:29.722Z",
+  "passed": 21,
+  "failed": 0,
+  "total": 21,
+  "results": [
+    {
+      "id": "T31",
+      "desc": "Stage ordering: execution before persistence (no reversal)",
+      "status": "PASS"
+    },
+    {
+      "id": "T32",
+      "desc": "OS guard: Linux cron rule DOES NOT fire on Windows event",
+      "status": "PASS"
+    },
+    {
+      "id": "T33",
+      "desc": "OS guard: Windows rule DOES NOT fire on Linux syslog",
+      "status": "PASS"
+    },
+    {
+      "id": "T34",
+      "desc": "Cross-user isolation: alice and bob stay in separate incidents",
+      "status": "PASS"
+    },
+    {
+      "id": "T35",
+      "desc": "CSDE-WIN-003 fires only when failures precede success",
+      "status": "PASS"
+    },
+    {
+      "id": "T40",
+      "desc": "CSDE-WIN-003 does NOT fire when success precedes all failures",
+      "status": "PASS"
+    },
+    {
+      "id": "T41",
+      "desc": "CSDE-WIN-003 fires correctly for failures→success sequence",
+      "status": "PASS"
+    },
+    {
+      "id": "T36",
+      "desc": "Causal violation detected: ransomware impact before execution",
+      "status": "PASS"
+    },
+    {
+      "id": "T37",
+      "desc": "Valid execution→persistence chain: no causal violations",
+      "status": "PASS"
+    },
+    {
+      "id": "T38",
+      "desc": "execution→credential-access→lateral-movement ordering correct",
+      "status": "PASS"
+    },
+    {
+      "id": "T39",
+      "desc": "CSDE-WIN-025 password spray fires correctly",
+      "status": "PASS"
+    },
+    {
+      "id": "T42",
+      "desc": "killChainStages includes rawEvidenceLogs, confidence, causalEdges",
+      "status": "PASS"
+    },
+    {
+      "id": "T43",
+      "desc": "chainValid=true for clean causal chain",
+      "status": "PASS"
+    },
+    {
+      "id": "T44",
+      "desc": "analyzeEvents output includes incidentSummaries",
+      "status": "PASS"
+    },
+    {
+      "id": "T45",
+      "desc": "DAG stageConfidence has one entry per node",
+      "status": "PASS"
+    },
+    {
+      "id": "T46",
+      "desc": "Full SOC output format: attackChainId, verdict, severity, techniques",
+      "status": "PASS"
+    },
+    {
+      "id": "T47",
+      "desc": "Linux and Windows detections stay in separate OS buckets",
+      "status": "PASS"
+    },
+    {
+      "id": "T48",
+      "desc": "engineVersion is CSDE-v8-ACE-Hardened",
+      "status": "PASS"
+    },
+    {
+      "id": "T49",
+      "desc": "Web shell → PowerShell → persistence chain builds correctly",
+      "status": "PASS"
+    },
+    {
+      "id": "T50",
+      "desc": "Log tampering (EventID 1102) still triggers P1 escalation",
+      "status": "PASS"
+    },
+    {
+      "id": "T51",
+      "desc": "incidentSummaries include chainValid and causalViolations fields",
+      "status": "PASS"
+    }
+  ]
+}
