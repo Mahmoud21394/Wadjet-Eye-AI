@@ -340,24 +340,25 @@
     // Valid causal edges: A can precede B in an attack chain
     // key = source tactic, value = Set of valid successor tactics
     const VALID_CAUSAL_EDGES = {
-      'initial-access':       new Set(['execution','persistence','privilege-escalation','defense-evasion','discovery','lateral-movement']),
+      'initial-access':       new Set(['execution','persistence','privilege-escalation','defense-evasion','discovery','lateral-movement','credential-access']),
       'execution':            new Set(['persistence','privilege-escalation','defense-evasion','credential-access','discovery','lateral-movement','collection','command-and-control','impact']),
-      'persistence':          new Set(['execution','privilege-escalation','defense-evasion','credential-access','discovery','lateral-movement','collection','impact']),
-      'privilege-escalation': new Set(['defense-evasion','credential-access','discovery','lateral-movement','collection','command-and-control','impact','execution']),
+      'persistence':          new Set(['execution','privilege-escalation','defense-evasion','credential-access','discovery','lateral-movement','collection','command-and-control','impact']),
+      'privilege-escalation': new Set(['defense-evasion','credential-access','discovery','lateral-movement','collection','command-and-control','impact','execution','persistence']),
       'defense-evasion':      new Set(['execution','persistence','privilege-escalation','credential-access','discovery','lateral-movement','collection','command-and-control','impact']),
-      'credential-access':    new Set(['discovery','lateral-movement','privilege-escalation','defense-evasion','collection','command-and-control','impact','execution']),
-      'discovery':            new Set(['lateral-movement','collection','execution','credential-access','command-and-control','impact']),
+      // credential-access CAN lead to persistence (attacker creds → create account / schedule task)
+      'credential-access':    new Set(['discovery','lateral-movement','privilege-escalation','defense-evasion','collection','command-and-control','impact','execution','persistence','exfiltration']),
+      'discovery':            new Set(['lateral-movement','collection','execution','credential-access','command-and-control','impact','privilege-escalation','persistence']),
       'lateral-movement':     new Set(['execution','persistence','privilege-escalation','defense-evasion','credential-access','discovery','collection','command-and-control','impact']),
-      'collection':           new Set(['exfiltration','command-and-control','impact']),
-      'command-and-control':  new Set(['collection','exfiltration','impact','execution','lateral-movement']),
-      'exfiltration':         new Set(['impact']),
-      'impact':               new Set([]), // terminal
+      'collection':           new Set(['exfiltration','command-and-control','impact','defense-evasion']),
+      'command-and-control':  new Set(['collection','exfiltration','impact','execution','lateral-movement','defense-evasion']),
+      'exfiltration':         new Set(['impact','defense-evasion']),
+      // impact is NOT truly terminal: ransomware often followed by log clearing (defense-evasion)
+      'impact':               new Set(['defense-evasion','exfiltration']),
       // ── Authentication alias — logon failures PRECEDE successful logon / execution ──
-      // Chronological: multiple failures (credential-access) → success (authentication) → execution
-      'authentication':       new Set(['execution','lateral-movement','privilege-escalation','discovery','credential-access','persistence','defense-evasion','collection','command-and-control']),
+      'authentication':       new Set(['execution','lateral-movement','privilege-escalation','discovery','credential-access','persistence','defense-evasion','collection','command-and-control','impact']),
       // ── Reconnaissance ────────────────────────────────────────────
-      'reconnaissance':       new Set(['initial-access','resource-development','execution','discovery']),
-      'resource-development': new Set(['initial-access','execution']),
+      'reconnaissance':       new Set(['initial-access','resource-development','execution','discovery','credential-access']),
+      'resource-development': new Set(['initial-access','execution','credential-access']),
     };
 
     // Admin vs Attacker intent signals
@@ -1898,16 +1899,33 @@
           }
 
           // ── Guard 4: Same-host restriction for process/execution events ──
-          // Execution, persistence, and privilege-escalation detections on
-          // different hosts CANNOT be directly grouped (they can only be
-          // stitched later by _mergeFragmentedChains using identity overlap).
+          // Execution, persistence, credential-access, and privilege-escalation
+          // detections on different hosts CANNOT be directly grouped unless:
+          //   • The key is IP-based (same attacker IP on both hosts), OR
+          //   • The key is session-based, OR
+          //   • The key is user-based (u:username) AND one side is lateral-movement,
+          //     initial-access, or command-and-control (the bridge tactic), OR
+          //   • Both detections are on the SAME user (same adversary pivoting)
+          //     and the time gap is within the ACE proximity window (already checked).
           const localTactics = new Set(['execution','persistence','privilege-escalation','credential-access']);
-          const aIsLocal = localTactics.has(mA.tactic);
-          const bIsLocal = localTactics.has(mB.tactic);
+          const bridgeTactics = new Set(['lateral-movement','initial-access','command-and-control']);
+          const aIsLocal  = localTactics.has(mA.tactic);
+          const bIsLocal  = localTactics.has(mB.tactic);
+          const aIsBridge = bridgeTactics.has(mA.tactic);
+          const bIsBridge = bridgeTactics.has(mB.tactic);
           if (aIsLocal && bIsLocal && mA.host && mB.host && mA.host !== mB.host) {
-            // Different-host local-execution events cannot be in the same initial bucket
-            // (they're stitched by the merge step when a lateral-movement bridge exists)
-            if (!key.startsWith('ip:') && !key.startsWith('session:')) continue;
+            // Different-host local-execution events cannot be directly grouped
+            // UNLESS: ip-keyed, session-keyed, or user-keyed cross-host with same user
+            const sameUser = mA.user && mB.user && mA.user === mB.user;
+            if (!key.startsWith('ip:') && !key.startsWith('session:') && !sameUser) continue;
+          }
+          // Allow local-tactic → bridge-tactic cross-host merging (e.g., credential-access on
+          // DC01 → lateral-movement on FILE-SERVER by same user is valid and expected)
+          if ((aIsLocal && bIsBridge || aIsBridge && bIsLocal) &&
+              mA.host && mB.host && mA.host !== mB.host) {
+            const sameUser = mA.user && mB.user && mA.user === mB.user;
+            if (!key.startsWith('ip:') && !key.startsWith('session:') && !sameUser) continue;
+            // Valid cross-host pivot — proceed to union
           }
 
           union(idxA, idxB);
@@ -2047,9 +2065,9 @@
 
     // ── Step 4: Chain-merge algorithm ─────────────────────────────
     // Merges two buckets into one when:
-    //   • same adversary identity (shared user+srcIP)
+    //   • same adversary identity (shared user+srcIP), OR same non-system user, OR same srcIP
     //   • gap ≤ ACE_MERGE_GAP_MS
-    //   • attack phases continue (don't restart at Initial Access)
+    //   • same OS (windows buckets never merge with linux buckets)
     function _mergeFragmentedChains(buckets) {
       if (buckets.length < 2) return buckets;
 
@@ -2065,7 +2083,27 @@
         const keys = new Set();
         b.forEach(d => _detectionAdversaryKey(d).keys.forEach(k => keys.add(k)));
         const tactics = new Set(b.map(d => (d.mitre?.tactic||d.category||'').toLowerCase().replace(/\s+/g,'-')));
-        return { sorted, firstTs, lastTs, keys, tactics };
+
+        // Extract non-system users and source IPs for cross-bucket identity matching
+        const users = new Set();
+        const srcIps = new Set();
+        const osSet  = new Set();
+        b.forEach(d => {
+          const u = (d.user || '').toLowerCase().trim();
+          const uNorm = u.includes('\\') ? u.split('\\').pop() : u;
+          const isSystem = !uNorm || uNorm === 'system' || uNorm.includes('nt authority') ||
+                           uNorm.endsWith('$') || uNorm.includes('network service') ||
+                           uNorm.includes('local service');
+          if (!isSystem && uNorm) users.add(uNorm);
+          const ip = (d.srcIp || '').replace('::ffff:','').trim();
+          if (ip && ip !== '-') srcIps.add(ip);
+          // OS of bucket
+          const rid = d.ruleId || '';
+          if (rid.startsWith('CSDE-WIN')) osSet.add('windows');
+          else if (rid.startsWith('CSDE-LNX')) osSet.add('linux');
+        });
+        const os = osSet.size === 1 ? [...osSet][0] : 'unknown';
+        return { sorted, firstTs, lastTs, keys, tactics, users, srcIps, os };
       });
 
       const merged = new Array(buckets.length).fill(false);
@@ -2076,15 +2114,19 @@
         let combined = [...buckets[i]];
         for (let j = i + 1; j < buckets.length; j++) {
           if (merged[j]) continue;
+
+          // ── OS compatibility: never merge Windows and Linux chains ──
+          if (meta[i].os !== 'unknown' && meta[j].os !== 'unknown' && meta[i].os !== meta[j].os) continue;
+
           const gap = Math.abs(meta[j].firstTs - meta[i].lastTs);
           if (gap > CFG.ACE_MERGE_GAP_MS) continue;
 
-          // Check shared adversary key
-          const sharedKey = [...meta[i].keys].some(k => meta[j].keys.has(k));
-          if (!sharedKey) continue;
+          // ── Identity overlap: shared adversary key, same user, or same srcIP ──
+          const sharedKey  = [...meta[i].keys].some(k => meta[j].keys.has(k));
+          const sharedUser = [...meta[i].users].some(u => meta[j].users.has(u));
+          const sharedIp   = [...meta[i].srcIps].some(ip => meta[j].srcIps.has(ip));
+          if (!sharedKey && !sharedUser && !sharedIp) continue;
 
-          // Check phase continuation (j doesn't restart from Initial Access
-          // unless i also had initial-access — allow any combination)
           // Merge if gap is within limit and identity overlaps
           combined = combined.concat(buckets[j]);
           merged[j] = true;
@@ -2092,6 +2134,8 @@
           meta[i].lastTs = Math.max(meta[i].lastTs, meta[j].lastTs);
           meta[j].keys.forEach(k => meta[i].keys.add(k));
           meta[j].tactics.forEach(t => meta[i].tactics.add(t));
+          meta[j].users.forEach(u => meta[i].users.add(u));
+          meta[j].srcIps.forEach(ip => meta[i].srcIps.add(ip));
         }
         result.push(combined);
       }
@@ -2241,6 +2285,7 @@
         const incidentTitle = behavior.behaviorTitle || parent.detection_name || parent.ruleName || 'Correlated Incident';
 
         const incObj = {
+          id               : incId,          // canonical .id field expected by UI and API
           incidentId       : incId,
           title            : incidentTitle,
           parent,
@@ -3680,32 +3725,50 @@
         let chainType = 'generic';
         let chainName = '';
         const phases = dag.phaseSequence;
+        const hasRansomware  = techniques.some(t => t === 'T1486' || t === 'T1490');
+        const hasCredDump    = techniques.some(t => t.startsWith('T1003'));
+        const hasLateral     = phases.includes('lateral-movement') || crossHost;
+        const hasExecution   = phases.includes('execution');
+        const hasPersistence = phases.includes('persistence');
+        const hasInitial     = phases.includes('initial-access') || phases.includes('credential-access');
+        const hasLogTamper   = techniques.some(t => t === 'T1070.001' || t === 'T1070');
 
-        if (techniques.includes('T1486') || techniques.includes('T1490')) {
+        // Priority order: full APT first, then ransomware, then sub-chains
+        if (hasRansomware && hasCredDump && hasLateral) {
+          chainType = 'full-apt-ransomware';
+          chainName = 'Full APT Kill Chain — Credential Theft → Lateral Movement → Ransomware';
+        } else if (hasRansomware && hasLateral) {
+          chainType = 'ransomware-apt';
+          chainName = 'APT Ransomware — Lateral Movement → Ransomware';
+        } else if (hasRansomware) {
           chainType = 'ransomware';
           chainName = 'Ransomware Kill Chain';
-        } else if (techniques.includes('T1003.001') || techniques.includes('T1003')) {
-          if (phases.includes('lateral-movement') || crossHost) {
-            chainType = 'apt';
-            chainName = 'APT — Credential Theft + Lateral Movement';
-          } else {
-            chainType = 'credential-theft';
-            chainName = 'Credential Theft Chain';
-          }
-        } else if (phases.includes('lateral-movement') || crossHost) {
+        } else if (hasCredDump && hasLateral) {
+          chainType = 'apt';
+          chainName = 'APT — Credential Theft → Lateral Movement';
+        } else if (hasCredDump && hasPersistence && hasExecution) {
+          chainType = 'apt';
+          chainName = 'APT — Credential Access → Execution → Persistence';
+        } else if (hasCredDump) {
+          chainType = 'credential-theft';
+          chainName = 'Credential Theft Chain';
+        } else if (hasLateral && hasInitial) {
+          chainType = 'apt';
+          chainName = 'APT — Initial Access → Lateral Movement';
+        } else if (hasLateral) {
           chainType = 'lateral-movement';
           chainName = 'Cross-Host Lateral Movement Chain';
-        } else if (phases.includes('initial-access') && phases.includes('execution') && phases.includes('persistence')) {
+        } else if (hasInitial && hasExecution && hasPersistence) {
           chainType = 'initial-compromise';
           chainName = 'Initial Compromise → Execution → Persistence';
-        } else if (phases.includes('credential-access') && phases.includes('execution')) {
+        } else if (phases.includes('credential-access') && hasExecution) {
           chainType = 'credential-exec';
           chainName = 'Credential Access → Execution Chain';
         } else if (phases.length >= 3) {
           chainType = 'multi-stage';
           chainName = `Multi-Stage Attack (${phases.length} phases)`;
         } else {
-          chainName = `Attack Chain on ${entities[0] || 'Unknown Host'}`;
+          chainName = `Attack Chain — ${entities[0] || 'Unknown Host'}`;
         }
 
         // Build stages array (DAG nodes in STRICT CHRONOLOGICAL order)
@@ -4057,7 +4120,15 @@
 
       const filteredDets = rawDets.filter(d => {
         const superseder = supersedeMap[d.ruleId];
-        if (superseder && rawDets.some(b => b.ruleId === superseder && b.user === d.user)) return false;
+        if (superseder) {
+          // Supersede if a better rule fired for the same user OR same host+srcIp
+          const betterExists = rawDets.some(b =>
+            b.ruleId === superseder &&
+            (b.user === d.user ||
+             (b.computer === d.computer && b.srcIp && b.srcIp === d.srcIp))
+          );
+          if (betterExists) return false;
+        }
         // Suppress individual CSDE-WIN-001 events when spray/stuffing covers them
         if (d.ruleId === 'CSDE-WIN-001' && sprayIps.has(d.srcIp)) return false;
         if (d.ruleId === 'CSDE-WIN-001' && hasStuffing) return false;
@@ -4129,6 +4200,7 @@
 
         return {
           // ── Identifiers ────────────────────────────────────────────
+          id               : inc.id || inc.incidentId,   // canonical .id field
           incidentId       : inc.incidentId,
           attackChainId    : inc.incidentId,
           title            : inc.title,
