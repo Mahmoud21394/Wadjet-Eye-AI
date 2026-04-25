@@ -293,6 +293,8 @@
       'T1566.001':18, // Spear Phishing Attachment
       'T1566':    16, // Phishing
       'T1110.003':14, // Password Spraying
+      'T1110.001':12, // Brute Force Password Guessing
+      'T1110.004':13, // Credential Stuffing
       'T1110':    12, // Brute Force
       'T1098':    20, // Account Manipulation
       'T1078':    18, // Valid Accounts (abuse)
@@ -300,10 +302,16 @@
       'T1053':    14, // Scheduled Task/Job
       'T1497':    12, // Virtualization/Sandbox Evasion
       'T1562':    15, // Impair Defenses
+      'T1562.002':28, // Disable Windows Event Logging (log tamper)
       'T1070':    14, // Indicator Removal
+      'T1070.001':30, // Clear Windows Event Logs (log tamper — critical)
       'T1055':    20, // Process Injection
       'T1134':    18, // Access Token Manipulation
       'T1027':    12, // Obfuscated Files
+      'T1190':    26, // Exploit Public-Facing Application
+      'T1489':    22, // Service Stop
+      'T1202':    10, // Indirect Command Execution (WSL)
+      'T1059.004':18, // Unix Shell (reverse shell)
     };
 
     // MITRE tactic phase order (lower index = earlier in kill chain)
@@ -574,6 +582,14 @@
         'CSDE-WIN-001': 5,  // Single logon fail (common)
         'CSDE-WIN-002': 12, // Brute force (multiple fails)
         'CSDE-WIN-003': 15, // Success after failure
+        // NEW v7
+        'CSDE-WIN-023': 30, // Log cleared — definitive compromise
+        'CSDE-WIN-024': 28, // Audit policy tampered
+        'CSDE-WIN-027': 25, // Security service stopped
+        'CSDE-WIN-025': 22, // Password spray
+        'CSDE-WIN-026': 18, // Credential stuffing
+        'CSDE-WIN-028': 12, // WSL execution
+        'CSDE-WIN-029': 28, // Web shell / exploit
       },
       // Sequence logic bonuses (multi-stage = higher confidence)
       sequenceBonus: {
@@ -1010,19 +1026,57 @@
     const LOG_SCHEMA = {
 
       // ── Windows Security Event Log ──────────────────────────────
+      // FIX v7: Added 4688 (process creation) and 1102 (audit log cleared)
+      // to windows_security ranges; removed overly-strict range gating for
+      // rules that fire on 4688 (common process creation event).
       windows_security: {
         os: 'windows',
-        eventIdRanges: [[1102,1102],[4608,4799],[4900,4999],[5136,5145],[5152,5158],[5888,5889]],
+        eventIdRanges: [[1100,1110],[4608,4799],[4900,4999],[5136,5145],[5152,5158],[5888,5889]],
         requiredFields: [['EventID']],
         forbiddenFields: [],
         keywords: ['security','winlogbeat','winsec'],
         description: 'Windows Security Event Log (EVTX channel: Security)',
       },
 
+      // ── Windows Process Creation (EventID 4688) ──────────────────
+      // NEW v7: Dedicated schema for process-creation rules (CSDE-WIN-013,
+      // CSDE-WIN-014, CSDE-WIN-016, CSDE-WIN-017). Prevents rules that need
+      // 4688 from being blocked by the narrow windows_security range.
+      windows_process_creation: {
+        os: 'windows',
+        eventIdRanges: [[4688,4688],[4656,4663],[4670,4670]],
+        requiredFields: [['EventID']],
+        forbiddenFields: [],
+        keywords: ['process','4688','process creation','new process'],
+        description: 'Windows process creation events (Security: EventID 4688)',
+      },
+
+      // ── Windows Log-Tampering Events ─────────────────────────────
+      // NEW v7: For log-clearing, audit-policy, and service-stop rules.
+      windows_tamper: {
+        os: 'windows',
+        eventIdRanges: [[1100,1110],[4616,4616],[4719,4719],[4906,4908],[6005,6009],[7034,7036],[7040,7040],[7045,7045]],
+        requiredFields: [['EventID']],
+        forbiddenFields: [],
+        keywords: ['1102','4719','log cleared','audit policy','tamper'],
+        description: 'Windows log-clearing and audit-policy tampering events',
+      },
+
+      // ── Windows Account-Management Events ───────────────────────
+      // NEW v7: Covers account creation / group membership events natively.
+      windows_account: {
+        os: 'windows',
+        eventIdRanges: [[4720,4730],[4732,4760],[4762,4767],[4780,4799]],
+        requiredFields: [['EventID']],
+        forbiddenFields: [],
+        keywords: ['account','group','member','4720','4728','4732'],
+        description: 'Windows account management events',
+      },
+
       // ── Windows System / Service Event Log ──────────────────────
       windows_system: {
         os: 'windows',
-        eventIdRanges: [[7000,7099],[7045,7045],[4697,4697],[6005,6009]],
+        eventIdRanges: [[7000,7099],[4697,4697],[6005,6009]],
         requiredFields: [['EventID']],
         forbiddenFields: [],
         keywords: ['system','scm','service control'],
@@ -1040,10 +1094,12 @@
       },
 
       // ── Sysmon (Microsoft Sysinternals) ─────────────────────────
+      // FIX v7: Require at least one Sysmon-specific field to confirm
+      // this is really Sysmon and not a Linux event with low EIDs.
       sysmon: {
         os: 'windows',
         eventIdRanges: [[1,30]],
-        requiredFields: [['EventID']],
+        requiredFields: [['EventID'],['Image','ParentImage','TargetFilename','DestinationIp','SourceIp','PipeName','source','Channel']],
         forbiddenFields: [],
         keywords: ['sysmon','microsoft-windows-sysmon'],
         description: 'Microsoft Sysmon operational log (channel: Microsoft-Windows-Sysmon/Operational)',
@@ -1114,6 +1170,11 @@
     // Returns true  → event passes the schema for this rule's logCategory
     // Returns false → event does NOT match expected log category; skip rule
     // If the rule has no logCategory, always returns true (backward compat)
+    // FIX v7: Softened EventID range gate — if the event OS matches AND has
+    // EventID, but EID falls outside declared ranges, only skip if the
+    // schema's requiredFields demand a specific EventID match (auth/sysmon).
+    // This prevents process-creation events (4688) from being blocked by
+    // overly narrow ranges when the rule fires on 4688 directly.
     function _validateEventSchema(rule, event) {
       const cat = rule.logCategory;
       if (!cat) return true;                      // no schema constraint → pass
@@ -1127,14 +1188,23 @@
       }
 
       // ── EventID range gate ──────────────────────────────────────
+      // Only enforce if schema declares ranges AND the event has an EventID
       if (schema.eventIdRanges && schema.eventIdRanges.length > 0) {
         const eid = parseInt(event.EventID, 10);
         if (!isNaN(eid)) {
           const inRange = schema.eventIdRanges.some(([lo, hi]) => eid >= lo && eid <= hi);
-          if (!inRange) return false;
-        }
-        // If no EventID at all, fail for categories that require one
-        else if (schema.requiredFields && schema.requiredFields.some(g => g.includes('EventID'))) {
+          if (!inRange) {
+            // Hard-fail ONLY for schemas that exclusively care about specific EID ranges
+            // (auth, sysmon, tamper, powershell). For general windows_security / windows_process_creation,
+            // the OS gate is sufficient — the rule's own match() predicate checks EID.
+            const hardSchemas = ['windows_auth','sysmon','windows_powershell','windows_tamper',
+                                 'linux_syslog','linux_auditd','firewall','web','database'];
+            if (hardSchemas.includes(cat)) return false;
+            // For windows_security, windows_process_creation, windows_system, windows_account:
+            // trust the rule's own match() to check EID — don't block here.
+          }
+        } else if (schema.requiredFields && schema.requiredFields.some(g => g.includes('EventID'))) {
+          // No EventID at all for a schema that requires one
           return false;
         }
       }
@@ -1691,6 +1761,12 @@
     }
 
     // ── Step 2: Union-Find for adversary bucket merging ───────────
+    // FIX v7: Added strict correlation guards:
+    //   1. Never merge detections from different users unless cross-host confirmed
+    //      by shared source IP (prevents unrelated events grouping).
+    //   2. System accounts (SYSTEM, NT AUTHORITY) use host-only correlation,
+    //      not cross-user identity (prevents all-SYSTEM events becoming one incident).
+    //   3. Time proximity enforced strictly per CFG.ACE_PROXIMITY_WINDOW_MS.
     function _buildAdversaryBuckets(dedupDets) {
       // parent array for union-find
       const parent = dedupDets.map((_, i) => i);
@@ -1708,7 +1784,7 @@
       });
 
       // Union detections that share any identity key AND are within proximity window
-      keyToIdx.forEach((idxList) => {
+      keyToIdx.forEach((idxList, key) => {
         if (idxList.length < 2) return;
         const sorted = idxList.slice().sort((a, b) => {
           const ta = new Date(dedupDets[a].first_seen || dedupDets[a].timestamp || 0).getTime();
@@ -1716,11 +1792,32 @@
           return ta - tb;
         });
         for (let i = 0; i < sorted.length - 1; i++) {
-          const ta = new Date(dedupDets[sorted[i]].first_seen   || dedupDets[sorted[i]].timestamp   || 0).getTime();
-          const tb = new Date(dedupDets[sorted[i+1]].first_seen || dedupDets[sorted[i+1]].timestamp || 0).getTime();
-          if (Math.abs(tb - ta) <= CFG.ACE_PROXIMITY_WINDOW_MS) {
-            union(sorted[i], sorted[i+1]);
+          const idxA = sorted[i], idxB = sorted[i+1];
+          const detA = dedupDets[idxA], detB = dedupDets[idxB];
+          const ta = new Date(detA.first_seen || detA.timestamp || 0).getTime();
+          const tb = new Date(detB.first_seen || detB.timestamp || 0).getTime();
+          if (Math.abs(tb - ta) > CFG.ACE_PROXIMITY_WINDOW_MS) continue;
+
+          // ── Strict cross-user guard (FIX v7) ─────────────────────────
+          // Cross-user merging ONLY allowed when:
+          //   a) key is IP-based (attacker pivoting from same IP), OR
+          //   b) one detection is a system/service account (host-level events)
+          const userA = (detA.user||'').toLowerCase().trim();
+          const userB = (detB.user||'').toLowerCase().trim();
+          const userANorm = userA.includes('\\') ? userA.split('\\').pop() : userA;
+          const userBNorm = userB.includes('\\') ? userB.split('\\').pop() : userB;
+          const bothNonSystem = userANorm && userBNorm &&
+                                !userANorm.includes('$') && !userANorm.includes('system') &&
+                                !userANorm.includes('nt authority') &&
+                                !userBNorm.includes('$') && !userBNorm.includes('system') &&
+                                !userBNorm.includes('nt authority');
+          // If both are real user accounts (non-system), require same user
+          if (bothNonSystem && userANorm !== userBNorm) {
+            // Only allow merge if key is IP-based (same attacker, different accounts)
+            if (!key.startsWith('ip:')) continue;
           }
+
+          union(idxA, idxB);
         }
       });
 
@@ -2024,8 +2121,52 @@
             dominated: attackerCount > adminCount ? 'attacker' : adminCount > attackerCount ? 'admin' : 'ambiguous',
           },
           aceScore,
+          // ── P1 Escalation: auto-escalate when log-tampering is detected ──
+          // FIX v7: Any detection with p1Escalate=true forces the incident to
+          // critical severity and adds a P1 escalation notice.
+          p1Escalated: qualifiedCluster.some(d => {
+            const rule = RULES.find(r => r.id === d.ruleId);
+            return rule && rule.p1Escalate;
+          }),
+          logTamperingDetected: qualifiedCluster.some(d =>
+            d.ruleId === 'CSDE-WIN-023' || d.ruleId === 'CSDE-WIN-024' || d.ruleId === 'CSDE-WIN-027'
+          ),
+          // ── SOC-Ready Verdict ────────────────────────────────────────────
+          // Deterministic TRUE_POSITIVE / FALSE_POSITIVE / PARTIAL verdict
+          // based on confidence score, behavior classification, and intent signals.
+          verdict: (() => {
+            if (qualifiedCluster.some(d => d.ruleId === 'CSDE-WIN-023' || d.ruleId === 'CSDE-WIN-024' ||
+                d.ruleId === 'CSDE-WIN-027')) return 'TRUE_POSITIVE'; // log tampering = always TP
+            if (confidence.score >= 70) return 'TRUE_POSITIVE';
+            if (confidence.score >= 40 && attackerCount > 0) return 'TRUE_POSITIVE';
+            if (adminCount > 0 && attackerCount === 0 && confidence.score < 50) return 'FALSE_POSITIVE';
+            return 'PARTIAL'; // uncertain — needs analyst review
+          })(),
+          verdictReason: (() => {
+            if (qualifiedCluster.some(d => d.ruleId === 'CSDE-WIN-023' || d.ruleId === 'CSDE-WIN-024' ||
+                d.ruleId === 'CSDE-WIN-027')) return 'Log tampering detected — definitive attacker action';
+            if (confidence.score >= 90) return `High confidence (${confidence.score}/100): ${confidence.reasons[0]||''}`;
+            if (confidence.score >= 70) return `Strongly indicative (${confidence.score}/100): ${confidence.reasons[0]||''}`;
+            if (adminCount > 0 && attackerCount === 0) return `Admin-intent signals dominant (admin:${adminCount}, attacker:${attackerCount})`;
+            return `Confidence ${confidence.score}/100 — analyst review recommended`;
+          })(),
         };
         incObj.narrative = _generateForensicNarrative(incObj, behavior, confidence);
+
+        // ── P1 Auto-Escalation ────────────────────────────────────────────
+        // FIX v7: Force critical severity and 100 risk for log-tampering incidents.
+        // Log-clearing and audit-policy changes are definitive attacker actions.
+        if (incObj.p1Escalated || incObj.logTamperingDetected) {
+          incObj.severity    = 'critical';
+          incObj.riskScore   = 100;
+          incObj.p1Priority  = true;
+          incObj.p1Reason    = 'Log-tampering or security-service-stop detected — automatic P1 escalation';
+          // Prepend P1 notice to narrative
+          incObj.narrative = `⚠️ P1 AUTO-ESCALATION: ${incObj.p1Reason}.\n\n` + incObj.narrative;
+          incObj.verdict       = 'TRUE_POSITIVE';
+          incObj.verdictReason = 'Log tampering is a definitive attacker action — no false-positive scenario';
+        }
+
         incidents.push(incObj);
       });
 
@@ -2038,18 +2179,52 @@
 
     // ── OS detection helpers ─────────────────────────────────────
     // Returns 'windows' | 'linux' | 'unknown' for a single event
+    // FIX v7: Hardened OS detection — sysmon EIDs 1-30 are Windows,
+    // high EIDs (4608+) are Windows, explicit linux keywords take priority.
+    // WSL detected separately (bash.exe on Windows = windows OS).
     function _detectOS(e) {
       if (e._os) return e._os;
       const eid = parseInt(e.EventID, 10);
-      // Windows: Security/System EventIDs in typical Windows ranges
-      if (!isNaN(eid) && eid >= 1000 && eid <= 65535) return 'windows';
-      // Linux: syslog / auditd / auth keywords
-      const src = (e.source || e.log_source || e.logsource || '').toLowerCase();
+
+      // ── Explicit Linux log-source keywords (highest priority) ──────
+      const src = (e.source || e.log_source || e.logsource || e.Channel || '').toLowerCase();
       const msg  = (e.message || e.msg || e.raw || '').toLowerCase();
-      if (src.includes('syslog') || src.includes('auditd') || src.includes('auth.log')) return 'linux';
-      if (msg.includes('sudo') || msg.includes('ssh') || msg.includes('pam_unix')) return 'linux';
-      // Windows field hints
-      if (e.Computer || e.SubjectUserName || e.TargetUserName || e.CommandLine) return 'windows';
+      if (src.includes('syslog') || src.includes('auth.log') || src.includes('auditd') ||
+          src.includes('kern.log') || src.includes('secure')) return 'linux';
+      // Linux message keywords — only if no conflicting Windows fields present
+      const hasWindowsFields = !!(e.EventID || e.Computer || e.SubjectUserName ||
+                                  e.TargetUserName || e.CommandLine || e.NewProcessName ||
+                                  e.Image || e.ParentImage);
+      if (!hasWindowsFields) {
+        if (msg.includes('pam_unix') || msg.includes('sshd') ||
+            (msg.includes('sudo') && msg.includes('tty=')) ||
+            msg.includes('audit(')) return 'linux';
+      }
+
+      // ── Sysmon: EventIDs 1–30 WITH Sysmon-specific fields ─────────
+      if (!isNaN(eid) && eid >= 1 && eid <= 30) {
+        if (e.Image || e.ParentImage || e.TargetFilename || e.DestinationIp ||
+            e.SourceIp || e.PipeName || src.includes('sysmon')) return 'windows';
+      }
+
+      // ── Windows Security / System EventIDs (always Windows) ───────
+      if (!isNaN(eid) && (
+          (eid >= 1100 && eid <= 1110) ||   // Security audit
+          (eid >= 4608 && eid <= 4799) ||   // Security logon/account
+          (eid >= 4900 && eid <= 4999) ||   // Security policy
+          (eid >= 5000 && eid <= 5200) ||   // Security network
+          (eid >= 6005 && eid <= 6009) ||   // System startup/shutdown
+          (eid >= 7000 && eid <= 7099) ||   // Service Control Manager
+          eid === 4697 || eid === 7045       // Service install
+      )) return 'windows';
+
+      // ── PowerShell EventIDs ────────────────────────────────────────
+      if (!isNaN(eid) && eid >= 4100 && eid <= 4106) return 'windows';
+
+      // ── Windows field hints (strong evidence) ─────────────────────
+      if (e.Computer || e.SubjectUserName || e.TargetUserName ||
+          e.CommandLine || e.NewProcessName || e.Image || e.ParentImage) return 'windows';
+
       return 'unknown';
     }
 
@@ -2173,42 +2348,54 @@
       },
 
       {
-        id: 'CSDE-WIN-002', title: 'Multiple Failed Logons — Brute Force',
+        id: 'CSDE-WIN-002', title: 'Multiple Failed Logons — Brute Force (Same Account)',
         os: 'windows', severity: 'high', category: 'authentication', logCategory: 'windows_auth',
-        mitre: { technique: 'T1110.003', name: 'Password Spraying', tactic: 'credential-access' },
-        tags: ['attack.credential_access', 'attack.t1110.003'],
+        // FIX v7: This rule is strictly per-user per-IP brute force (T1110.001).
+        // Password spray (T1110.003) is handled by CSDE-WIN-025.
+        mitre: { technique: 'T1110.001', name: 'Brute Force: Password Guessing', tactic: 'credential-access' },
+        tags: ['attack.credential_access', 'attack.t1110.001'],
         riskScore: 70,
         match: () => false, // batch only
         matchBatch: (events) => {
           const fails = events.filter(e => parseInt(e.EventID,10) === 4625);
           if (fails.length < CFG.MIN_BRUTE_FORCE_COUNT) return null;
-          // Group by user+srcIp (O(n) with Map)
+
+          // Group by user+srcIp — same user, same IP = brute force (not spray)
           const grouped = new Map();
           fails.forEach(e => {
-            const key = `${e.user||'?'}|${e.srcIp||'?'}`;
+            const u  = (e.user||'?').toLowerCase();
+            const ip = e.srcIp||e.SourceIP||e.IpAddress||'?';
+            const key = `${u}|${ip}`;
             if (!grouped.has(key)) grouped.set(key, []);
             grouped.get(key).push(e);
           });
+
           const results = [];
           grouped.forEach((evts, key) => {
             if (evts.length >= CFG.MIN_BRUTE_FORCE_COUNT) {
               const [user, srcIp] = key.split('|');
+              const isCritical = evts.length >= 10;
+              const times = evts.map(e=>new Date(e.timestamp||0).getTime()).filter(t=>t>0).sort();
+              const spanMs = times.length>=2 ? times[times.length-1]-times[0] : 0;
+              const ratePerMin = spanMs > 0 ? (evts.length/(spanMs/60000)).toFixed(1) : '?';
               results.push({
                 id: `CSDE-WIN-002-${user}`,
-                ruleId: 'CSDE-WIN-002', ruleName: 'Multiple Failed Logons — Brute Force',
-                severity: evts.length >= 10 ? 'critical' : 'high',
-                user, computer: evts[0].computer || 'DC01', srcIp,
+                ruleId: 'CSDE-WIN-002', ruleName: 'Multiple Failed Logons — Brute Force (Same Account)',
+                severity: isCritical ? 'critical' : 'high',
+                user, computer: evts[0].computer || '', srcIp,
                 count: evts.length,
-                mitre: { technique: 'T1110.003', name: 'Password Spraying', tactic: 'credential-access' },
-                tags: ['attack.credential_access', 'attack.t1110.003'],
+                mitre: { technique: 'T1110.001', name: 'Brute Force: Password Guessing', tactic: 'credential-access' },
+                tags: ['attack.credential_access', 'attack.t1110.001'],
                 riskScore: Math.min(40 + evts.length * 10, 95),
                 evidence: evts,
-                narrative: `${evts.length} consecutive failed logon attempts for "${user}" from ${srcIp} — brute-force activity detected`,
+                narrative: `${evts.length} failed logon attempts for "${user}" from ${srcIp} ` +
+                           `(rate: ${ratePerMin}/min) — targeted brute-force attack (T1110.001)`,
                 timestamp: evts[0].timestamp,
+                bruteMeta: { user, srcIp, attempts: evts.length, spanMs, ratePerMin },
               });
             }
           });
-          return results;
+          return results.length ? results : null;
         },
         narrative: () => '',
       },
@@ -2480,7 +2667,7 @@
 
       {
         id: 'CSDE-WIN-013', title: 'Shadow Copy Deletion (Ransomware Indicator)',
-        os: 'windows', severity: 'critical', category: 'impact', logCategory: 'windows_security',
+        os: 'windows', severity: 'critical', category: 'impact', logCategory: 'windows_process_creation',
         mitre: { technique: 'T1490', name: 'Inhibit System Recovery', tactic: 'impact' },
         tags: ['attack.impact', 'attack.t1490'],
         riskScore: 98,
@@ -2497,7 +2684,7 @@
 
       {
         id: 'CSDE-WIN-014', title: 'LSASS / Credential Dump Attempt',
-        os: 'windows', severity: 'critical', category: 'credential-access', logCategory: 'windows_security',
+        os: 'windows', severity: 'critical', category: 'credential-access', logCategory: 'windows_process_creation',
         mitre: { technique: 'T1003.001', name: 'LSASS Memory', tactic: 'credential-access' },
         tags: ['attack.credential_access', 'attack.t1003.001'],
         riskScore: 97,
@@ -2524,7 +2711,7 @@
 
       {
         id: 'CSDE-WIN-015', title: 'Scheduled Task Created for Persistence',
-        os: 'windows', severity: 'high', category: 'persistence', logCategory: 'windows_security',
+        os: 'windows', severity: 'high', category: 'persistence', logCategory: 'windows_process_creation',
         mitre: { technique: 'T1053.005', name: 'Scheduled Task/Job: Scheduled Task', tactic: 'persistence' },
         tags: ['attack.persistence', 'attack.t1053.005'],
         riskScore: 73,
@@ -2539,7 +2726,7 @@
 
       {
         id: 'CSDE-WIN-016', title: 'WMI Remote Execution',
-        os: 'windows', severity: 'high', category: 'execution', logCategory: 'windows_security',
+        os: 'windows', severity: 'high', category: 'execution', logCategory: 'windows_process_creation',
         mitre: { technique: 'T1047', name: 'Windows Management Instrumentation', tactic: 'execution' },
         tags: ['attack.execution', 'attack.t1047'],
         riskScore: 77,
@@ -2558,7 +2745,7 @@
 
       {
         id: 'CSDE-WIN-017', title: 'PowerShell Spawned from Office/Browser (Spear Phishing)',
-        os: 'windows', severity: 'critical', category: 'execution', logCategory: 'windows_security',
+        os: 'windows', severity: 'critical', category: 'execution', logCategory: 'windows_process_creation',
         mitre: { technique: 'T1059.001', name: 'PowerShell', tactic: 'execution' },
         tags: ['attack.execution', 'attack.t1059.001', 'attack.t1566.001'],
         riskScore: 98,
@@ -2637,6 +2824,7 @@
       {
         id: 'CSDE-WIN-020', title: 'Admin Share Access / Lateral Movement via SMB',
         os: 'windows', severity: 'high', category: 'lateral-movement', logCategory: 'windows_security',
+        // EventIDs 5140/5145 ARE in the windows_security range [5136,5145] — no change needed
         mitre: { technique: 'T1021.002', name: 'Remote Services: SMB/Windows Admin Shares', tactic: 'lateral-movement' },
         tags: ['attack.lateral_movement', 'attack.t1021.002'],
         riskScore: 72,
@@ -2764,6 +2952,256 @@
         },
         narrative: e => `Reverse shell indicator on ${e.computer||'unknown'}: "${(e.commandLine||e.message||'?').slice(0,120)}"`,
       },
+
+      // ══════════════════════════════════════════════════════════════
+      // REMEDIATION v7 — NEW CRITICAL RULES
+      // ══════════════════════════════════════════════════════════════
+
+      // ── LOG TAMPERING RULES (auto-escalate to P1) ─────────────────
+
+      {
+        id: 'CSDE-WIN-023', title: 'Security Audit Log Cleared (Log Tampering)',
+        os: 'windows', severity: 'critical', category: 'defense-evasion',
+        logCategory: 'windows_tamper',
+        // P1 escalation flag: log-clearing is definitive compromise indicator
+        p1Escalate: true,
+        mitre: { technique: 'T1070.001', name: 'Indicator Removal: Clear Windows Event Logs', tactic: 'defense-evasion' },
+        tags: ['attack.defense_evasion', 'attack.t1070.001', 'log_tampering', 'p1'],
+        riskScore: 100,
+        match: e => {
+          const eid = parseInt(e.EventID, 10);
+          // EventID 1102 = Security log cleared; 1100 = audit log service stopped
+          return eid === 1102 || eid === 1100;
+        },
+        narrative: e => {
+          const eid = parseInt(e.EventID, 10);
+          return eid === 1102
+            ? `⚠️ P1-ESCALATION: Security event log CLEARED by "${e.user||'unknown'}" on ${e.computer||'unknown'}. ` +
+              `This is a definitive evidence-destruction action. Immediate isolation and forensic acquisition required.`
+            : `⚠️ P1-ESCALATION: Windows Event Log service STOPPED on ${e.computer||'unknown'}. ` +
+              `Log collection interrupted — possible pre-attack log-tampering.`;
+        },
+      },
+
+      {
+        id: 'CSDE-WIN-024', title: 'Audit Policy Tampered (Log Tampering)',
+        os: 'windows', severity: 'critical', category: 'defense-evasion',
+        logCategory: 'windows_tamper',
+        p1Escalate: true,
+        mitre: { technique: 'T1562.002', name: 'Impair Defenses: Disable Windows Event Logging', tactic: 'defense-evasion' },
+        tags: ['attack.defense_evasion', 'attack.t1562.002', 'log_tampering', 'p1'],
+        riskScore: 98,
+        match: e => {
+          const eid = parseInt(e.EventID, 10);
+          const cmd = (e.commandLine || '').toLowerCase();
+          // EventID 4719 = system audit policy changed; 4906 = CrashOnAuditFail changed
+          // Also catch auditpol.exe disabling via command line
+          return eid === 4719 || eid === 4906 ||
+                 (eid === 4688 && cmd.includes('auditpol') && (cmd.includes('/set') || cmd.includes('/clear') || cmd.includes('disable')));
+        },
+        narrative: e => {
+          const eid = parseInt(e.EventID, 10);
+          return eid === 4719
+            ? `⚠️ P1-ESCALATION: System audit policy MODIFIED by "${e.user||'unknown'}" on ${e.computer||'unknown'}. ` +
+              `Attackers disable auditing to evade detection. MITRE T1562.002.`
+            : `⚠️ P1-ESCALATION: Audit policy manipulation via "${e.commandLine||'auditpol'}" on ${e.computer||'unknown'} ` +
+              `by "${e.user||'unknown'}". Definitive defense-evasion action.`;
+        },
+      },
+
+      {
+        id: 'CSDE-WIN-027', title: 'Security Service / Event Log Service Stopped',
+        os: 'windows', severity: 'critical', category: 'defense-evasion',
+        logCategory: 'windows_tamper',
+        p1Escalate: true,
+        mitre: { technique: 'T1489', name: 'Service Stop', tactic: 'impact' },
+        tags: ['attack.impact', 'attack.t1489', 'log_tampering', 'p1'],
+        riskScore: 95,
+        match: e => {
+          const eid = parseInt(e.EventID, 10);
+          const cmd = (e.commandLine || '').toLowerCase();
+          const svcName = (e.ServiceName || e.param1 || e.message || '').toLowerCase();
+          // Service stopped events
+          if (eid === 7036 && (svcName.includes('eventlog') || svcName.includes('windows event log') ||
+              svcName.includes('security center') || svcName.includes('defender') ||
+              svcName.includes('sense') || svcName.includes('wdnissvc'))) return true;
+          // net stop / sc stop security services via process creation
+          if (eid === 4688 && (cmd.includes('net stop') || cmd.includes('sc stop') || cmd.includes('sc config')) &&
+              (cmd.includes('eventlog') || cmd.includes('windefend') || cmd.includes('sense') ||
+               cmd.includes('defender') || cmd.includes('mssecflt') || cmd.includes('securityhealthservice'))) return true;
+          return false;
+        },
+        narrative: e => `⚠️ P1-ESCALATION: Security-critical service STOPPED — "${e.ServiceName||e.commandLine||'?'}" on ${e.computer||'unknown'} ` +
+          `by "${e.user||'unknown'}". Disabling event logging or AV is a pre-attack defense-evasion step.`,
+      },
+
+      // ── PASSWORD SPRAY DETECTION (cross-user, same source IP) ───────
+
+      {
+        id: 'CSDE-WIN-025', title: 'Password Spray Attack (Multiple Users, Same Source)',
+        os: 'windows', severity: 'critical', category: 'credential-access',
+        logCategory: 'windows_auth',
+        mitre: { technique: 'T1110.003', name: 'Password Spraying', tactic: 'credential-access' },
+        tags: ['attack.credential_access', 'attack.t1110.003'],
+        riskScore: 96,
+        match: () => false, // batch only
+        matchBatch: (events) => {
+          const fails = events.filter(e => parseInt(e.EventID,10) === 4625);
+          if (fails.length < 3) return null;
+
+          // Group failures by source IP: password spray = one IP → many users
+          const byIp = new Map();
+          fails.forEach(e => {
+            const ip = e.srcIp || e.SourceIP || e.IpAddress || '';
+            if (!ip || ip === '127.0.0.1' || ip === '::1' || ip === '-') return;
+            if (!byIp.has(ip)) byIp.set(ip, new Map());
+            const users = byIp.get(ip);
+            const u = (e.user || '?').toLowerCase();
+            if (!users.has(u)) users.set(u, []);
+            users.get(u).push(e);
+          });
+
+          const results = [];
+          byIp.forEach((userMap, srcIp) => {
+            const uniqueUsers = userMap.size;
+            if (uniqueUsers < 3) return; // Need >= 3 distinct users from same IP = spray
+
+            const allEvts = [...userMap.values()].flat();
+            const userList = [...userMap.keys()];
+            const hosts = [...new Set(allEvts.map(e => e.computer || '?'))];
+
+            // Time-span analysis
+            const times = allEvts.map(e => new Date(e.timestamp||0).getTime()).filter(t=>t>0).sort();
+            const spanMs = times.length >= 2 ? times[times.length-1] - times[0] : 0;
+            const ratePerMin = spanMs > 0 ? (allEvts.length / (spanMs/60000)).toFixed(1) : '?';
+
+            results.push({
+              id: `CSDE-WIN-025-${srcIp}`,
+              ruleId: 'CSDE-WIN-025', ruleName: 'Password Spray Attack (Multiple Users, Same Source)',
+              severity: 'critical',
+              user: userList.slice(0,5).join(','),
+              computer: hosts[0] || '', srcIp,
+              mitre: { technique: 'T1110.003', name: 'Password Spraying', tactic: 'credential-access' },
+              tags: ['attack.credential_access', 'attack.t1110.003'],
+              riskScore: Math.min(70 + uniqueUsers * 5, 96),
+              evidence: allEvts.slice(0,10),
+              narrative: `PASSWORD SPRAY from ${srcIp}: ${allEvts.length} failures across ${uniqueUsers} distinct user accounts ` +
+                         `(${userList.slice(0,5).join(', ')}${uniqueUsers>5?'…':''}) on ${hosts.join(',')} ` +
+                         `— rate ${ratePerMin} attempts/min. Classic T1110.003 password-spray pattern.`,
+              timestamp: allEvts[0]?.timestamp,
+              sprayMeta: { srcIp, uniqueUsers, totalAttempts: allEvts.length, spanMs, ratePerMin, userList, hosts },
+            });
+          });
+          return results.length ? results : null;
+        },
+        narrative: () => '',
+      },
+
+      // ── CREDENTIAL STUFFING (many accounts, multiple IPs, rapid) ────
+
+      {
+        id: 'CSDE-WIN-026', title: 'Credential Stuffing Attack (High-Volume Multi-Account)',
+        os: 'windows', severity: 'high', category: 'credential-access',
+        logCategory: 'windows_auth',
+        mitre: { technique: 'T1110.004', name: 'Credential Stuffing', tactic: 'credential-access' },
+        tags: ['attack.credential_access', 'attack.t1110.004'],
+        riskScore: 88,
+        match: () => false, // batch only
+        matchBatch: (events) => {
+          const fails = events.filter(e => parseInt(e.EventID,10) === 4625);
+          if (fails.length < 10) return null; // needs volume
+
+          // Credential stuffing: many accounts, many source IPs, rapid rate
+          const byUser = new Map();
+          const ipSet  = new Set();
+          fails.forEach(e => {
+            const u = (e.user||'?').toLowerCase();
+            const ip = e.srcIp||'';
+            if (!byUser.has(u)) byUser.set(u, []);
+            byUser.get(u).push(e);
+            if (ip && ip !== '127.0.0.1') ipSet.add(ip);
+          });
+
+          const uniqueUsers = byUser.size;
+          const uniqueIps   = ipSet.size;
+          // Credential stuffing = many users, possibly many IPs (botnet)
+          if (uniqueUsers < 5 || (uniqueIps === 1 && uniqueUsers < 10)) return null;
+
+          const times = fails.map(e=>new Date(e.timestamp||0).getTime()).filter(t=>t>0).sort();
+          const spanMs = times.length>=2 ? times[times.length-1]-times[0] : 0;
+          const ratePerMin = spanMs > 0 ? (fails.length/(spanMs/60000)).toFixed(1) : '?';
+
+          return [{
+            id: 'CSDE-WIN-026-batch',
+            ruleId: 'CSDE-WIN-026', ruleName: 'Credential Stuffing Attack (High-Volume Multi-Account)',
+            severity: 'high',
+            user: [...byUser.keys()].slice(0,3).join(','),
+            computer: fails[0]?.computer || '', srcIp: fails[0]?.srcIp || '',
+            mitre: { technique: 'T1110.004', name: 'Credential Stuffing', tactic: 'credential-access' },
+            tags: ['attack.credential_access', 'attack.t1110.004'],
+            riskScore: Math.min(50 + uniqueUsers * 2 + uniqueIps * 3, 88),
+            evidence: fails.slice(0,10),
+            narrative: `CREDENTIAL STUFFING: ${fails.length} failures across ${uniqueUsers} users from ${uniqueIps} source IP(s) ` +
+                       `— rate ${ratePerMin} attempts/min. Likely automated credential-list attack (T1110.004).`,
+            timestamp: fails[0]?.timestamp,
+          }];
+        },
+        narrative: () => '',
+      },
+
+      // ── WSL / UNIX-ON-WINDOWS DETECTION ──────────────────────────
+
+      {
+        id: 'CSDE-WIN-028', title: 'Windows Subsystem for Linux (WSL) Execution',
+        os: 'windows', severity: 'medium', category: 'execution',
+        // No logCategory — fires on any Windows process creation event
+        mitre: { technique: 'T1202', name: 'Indirect Command Execution', tactic: 'defense-evasion' },
+        tags: ['attack.defense_evasion', 'attack.t1202', 'wsl'],
+        riskScore: 65,
+        match: e => {
+          if (parseInt(e.EventID,10) !== 4688) return false;
+          const proc = (e.process||e.Image||e.NewProcessName||e.ProcessName||'').toLowerCase();
+          const cmd  = (e.commandLine||'').toLowerCase();
+          // bash.exe, wsl.exe, wslhost.exe, ubuntu.exe etc.
+          return proc.includes('bash.exe') || proc.includes('wsl.exe') || proc.includes('wslhost') ||
+                 proc.includes('ubuntu') || proc.includes('kali') || proc.includes('debian') ||
+                 cmd.includes('wsl.exe') || cmd.includes('bash.exe') || cmd.includes('wsl --') ||
+                 // WSL-specific paths
+                 proc.includes('\\wsl\\') || cmd.includes('/mnt/c/');
+        },
+        narrative: e => `WSL/Unix-on-Windows execution on ${e.computer||'unknown'}: "${e.process||'?'}" — ` +
+          `Command: "${(e.commandLine||'?').slice(0,150)}". May be used to bypass Windows security controls.`,
+      },
+
+      // ── EXPLOIT → EXECUTION → PERSISTENCE CHAIN (single-event anchor) ─
+
+      {
+        id: 'CSDE-WIN-029', title: 'Public-Facing Exploit / Web Shell Execution',
+        os: 'windows', severity: 'critical', category: 'initial-access',
+        // No logCategory — matches IIS/web server process spawning shells
+        mitre: { technique: 'T1190', name: 'Exploit Public-Facing Application', tactic: 'initial-access' },
+        tags: ['attack.initial_access', 'attack.t1190', 'webshell'],
+        riskScore: 97,
+        match: e => {
+          if (parseInt(e.EventID,10) !== 4688) return false;
+          const parent = (e.parentProcess||e.ParentImage||e.ParentProcessName||'').toLowerCase();
+          const proc   = (e.process||e.Image||e.ProcessName||'').toLowerCase();
+          const cmd    = (e.commandLine||'').toLowerCase();
+          // Web server / app pool spawning suspicious shells
+          const webParents = ['w3wp.exe','httpd.exe','apache','nginx','tomcat','jboss','websphere',
+                              'iisexpress.exe','inetinfo.exe','php-cgi.exe','php.exe','node.exe'];
+          const isWebParent = webParents.some(p => parent.includes(p));
+          if (!isWebParent) return false;
+          // Suspicious child processes from web parent
+          const suspChildren = ['cmd.exe','powershell','wscript','cscript','mshta','rundll32',
+                                'net.exe','net1.exe','certutil','bitsadmin','reg.exe','whoami'];
+          return suspChildren.some(s => proc.includes(s)) ||
+                 cmd.includes('whoami') || cmd.includes('/add') || cmd.includes('download');
+        },
+        narrative: e => `⚠️ WEB SHELL / EXPLOIT: Web server "${e.parentProcess||'?'}" spawned "${e.process||'?'}" on ${e.computer||'unknown'}. ` +
+          `Command: "${(e.commandLine||'?').slice(0,200)}". Classic web-shell execution pattern (T1190).`,
+      },
+
     ];
 
     // ════════════════════════════════════════════════════════════════
@@ -3397,14 +3835,28 @@
 
       // ── Supersession: drop lower-confidence per-event detections ─
       // If a batch rule fired for same user, drop individual per-event matches
+      // FIX v7: Added spray/stuffing supersession; CSDE-WIN-025/026 supersede
+      // individual CSDE-WIN-001 logon-failure events (no duplicate spam).
       const supersedeMap = {
         'CSDE-WIN-001': 'CSDE-WIN-002', // individual fail → superseded by batch brute force
         'CSDE-WIN-006': 'CSDE-WIN-003', // generic logon  → superseded by brute force success
       };
+      // Additional: if CSDE-WIN-025 (spray) or CSDE-WIN-026 (stuffing) fired,
+      // suppress CSDE-WIN-002 (per-user brute-force) for overlapping source IPs
+      const sprayDets   = rawDets.filter(d => d.ruleId === 'CSDE-WIN-025');
+      const stuffDets   = rawDets.filter(d => d.ruleId === 'CSDE-WIN-026');
+      const sprayIps    = new Set(sprayDets.map(d => d.srcIp).filter(Boolean));
+      const hasStuffing = stuffDets.length > 0;
+
       const filteredDets = rawDets.filter(d => {
         const superseder = supersedeMap[d.ruleId];
-        if (!superseder) return true;
-        return !rawDets.some(b => b.ruleId === superseder && b.user === d.user);
+        if (superseder && rawDets.some(b => b.ruleId === superseder && b.user === d.user)) return false;
+        // Suppress individual CSDE-WIN-001 events when spray/stuffing covers them
+        if (d.ruleId === 'CSDE-WIN-001' && sprayIps.has(d.srcIp)) return false;
+        if (d.ruleId === 'CSDE-WIN-001' && hasStuffing) return false;
+        // Suppress brute-force (per-user) when spray already covers same IP
+        if (d.ruleId === 'CSDE-WIN-002' && sprayIps.has(d.srcIp)) return false;
+        return true;
       });
 
       // ── DEDUPLICATION ─────────────────────────────────────────────
@@ -3428,20 +3880,52 @@
       const duration = Date.now() - startTs;
 
       console.log(
-        `[CSDE v5] ${events.length} events → ${rawDets.length} raw → ${dedupedDets.length} deduped, ` +
+        `[CSDE v7] ${events.length} events → ${rawDets.length} raw → ${dedupedDets.length} deduped, ` +
         `${incidents.length} incidents, ${chains.length} chains, risk=${riskScore} ` +
         `(schema_skipped=${schemaSkipped}, ${duration}ms)`
       );
 
       // Compute incident confidence summary for meta
       const confidenceSummary = incidents.map(inc => ({
-        incidentId: inc.incidentId,
-        title: inc.title,
-        confidence: inc.confidence?.score || 0,
-        level: inc.confidence?.level || 'Possible',
-        behaviorId: inc.behavior?.behaviorId || 'generic',
-        duration: inc.durationLabel,
+        incidentId       : inc.incidentId,
+        title            : inc.title,
+        confidence       : inc.confidence?.score || 0,
+        level            : inc.confidence?.level || 'Possible',
+        behaviorId       : inc.behavior?.behaviorId || 'generic',
+        duration         : inc.durationLabel,
+        verdict          : inc.verdict || 'PARTIAL',
+        verdictReason    : inc.verdictReason || '',
+        p1Priority       : inc.p1Priority || false,
+        logTampering     : inc.logTamperingDetected || false,
+        severity         : inc.severity,
+        riskScore        : inc.riskScore,
+        mitreTactics     : inc.mitreTactics || [],
+        techniques       : inc.techniques || [],
+        host             : inc.host,
+        user             : inc.user,
+        allHosts         : inc.allHosts || [],
+        first_seen       : inc.first_seen,
+        last_seen        : inc.last_seen,
+        // SOC-ready output format
+        attackChainId    : inc.incidentId,
+        killChainStages  : (inc.phaseTimeline || []).map(p => ({
+          phase      : p.phase,
+          technique  : p.technique,
+          techniqueName: p.techniqueName,
+          tactic     : p.phaseTactic,
+          ruleId     : p.ruleId,
+          ruleName   : p.ruleName,
+          host       : p.host,
+          timestamp  : p.timestamp,
+          severity   : p.severity,
+        })),
       }));
+
+      // Summary: P1 alerts that need immediate action
+      const p1Incidents = incidents.filter(i => i.p1Priority);
+      const logTamperCount = incidents.filter(i => i.logTamperingDetected).length;
+      const truePositives  = incidents.filter(i => i.verdict === 'TRUE_POSITIVE').length;
+      const falsePositives = incidents.filter(i => i.verdict === 'FALSE_POSITIVE').length;
 
       return {
         success  : true,
@@ -3454,6 +3938,15 @@
         riskScore,
         duration,
         engine   : 'CSDE-offline',
+        // SOC-grade output
+        p1Incidents,
+        logTamperingDetected: logTamperCount > 0,
+        verdictSummary: {
+          truePositives,
+          falsePositives,
+          partial: incidents.length - truePositives - falsePositives,
+          total  : incidents.length,
+        },
         _meta: {
           rulesEvaluated    : RULES.length,
           rawDetections     : rawDets.length,
@@ -3463,8 +3956,12 @@
           eventsAnalyzed    : events.length,
           dedupWindowMs     : CFG.DEDUP_WINDOW_MS,
           correlWindowMs    : CORR_WINDOW_MS,
-          engineVersion     : 'CSDE-v5-SOC',
+          engineVersion     : 'CSDE-v7-SOC-Hardened',
           fpSuppressed      : rawDets.filter(d => d._fpSuppressed).length,
+          p1Count           : p1Incidents.length,
+          logTamperCount,
+          truePositives,
+          falsePositives,
           confidenceSummary,
         },
       };
