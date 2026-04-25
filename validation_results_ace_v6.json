@@ -1,0 +1,100 @@
+{
+  "timestamp": "2026-04-25T06:00:45.597Z",
+  "engine": "ACE-v6",
+  "total": 15,
+  "passed": 15,
+  "failed": 0,
+  "pass_rate": "100.0%",
+  "tests": [
+    {
+      "id": "T01",
+      "description": "Ransomware kill-chain → incident Critical (score ≥90)",
+      "status": "PASS",
+      "detail": "score=100, severity=critical, chainType=ransomware, chainRisk=100"
+    },
+    {
+      "id": "T02",
+      "description": "Kerberos attack chain → incident Critical (score ≥90)",
+      "status": "PASS",
+      "detail": "score=100, crossHost=true, hosts=[\"CORPDC01\",\"CORPDC02\"]"
+    },
+    {
+      "id": "T03",
+      "description": "Lateral movement (SMB+PsExec) → cross-host incident (score ≥71)",
+      "status": "PASS",
+      "detail": "score=79, hosts=[\"HOST-A\",\"HOST-B\",\"HOST-C\"]"
+    },
+    {
+      "id": "T04",
+      "description": "Benign admin activity (WSUS/Veeam) → Low risk or no attack incident",
+      "status": "PASS",
+      "detail": "riskScore=0, incidents=0, attackIncs=0"
+    },
+    {
+      "id": "T05",
+      "description": "Cross-host stitching (3 hosts, same user+IP) → unified chain",
+      "status": "PASS",
+      "detail": "cross chain hosts=[\"DC01\",\"ENDPOINT01\",\"SERVER01\"], chains=1"
+    },
+    {
+      "id": "T06",
+      "description": "Causal DAG rejects execution-before-logon (invalid edge)",
+      "status": "PASS",
+      "detail": "detections=2, incidents=1, invalidEdges=0"
+    },
+    {
+      "id": "T07",
+      "description": "Multi-factor ACE scoring → Critical band (score ≥90)",
+      "status": "PASS",
+      "detail": "topScore=100, band=Critical, reasons=[\"Technique severity: T1490 (+28)\",\"4-phase attack chain (+14)\",\"SYSTEM-privilege execution (+12)\"]"
+    },
+    {
+      "id": "T08",
+      "description": "Chain-merge: fragmented chains (25-min gap) → merged into one chain",
+      "status": "PASS",
+      "detail": "merged chain hosts=[\"HOST2\",\"HOST1\"], riskScore=100"
+    },
+    {
+      "id": "T09",
+      "description": "Forensic timeline: duration_ms > 0, first_seen < last_seen",
+      "status": "PASS",
+      "detail": "inc0: duration=150000ms, fs=2024-11-15T09:02:30.000Z, ls=2024-11-15T09:05:00.000Z, timelineOrdered=true"
+    },
+    {
+      "id": "T10",
+      "description": "MITRE phase coverage: ≥4 distinct phases across chain",
+      "status": "PASS",
+      "detail": "phases=6: [\"impact\",\"credential-access\",\"persistence\",\"execution\",\"command-and-control\",\"lateral-movement\"]"
+    },
+    {
+      "id": "T11",
+      "description": "Intent inference: admin activity separated from attacker",
+      "status": "PASS",
+      "detail": "attackerInc=true, dominated=attacker, score=85"
+    },
+    {
+      "id": "T12",
+      "description": "APT chain: spear-phishing → PowerShell → persistence",
+      "status": "PASS",
+      "detail": "dets=3, ruleIds=[\"CSDE-WIN-019\",\"CSDE-WIN-008\",\"CSDE-WIN-015\"]"
+    },
+    {
+      "id": "T13",
+      "description": "Schema gate: Linux SSH rule not firing on Windows events",
+      "status": "PASS",
+      "detail": "lnxRuleFired=false, winRuleFired=true, allRuleIds=[\"CSDE-WIN-002\"]"
+    },
+    {
+      "id": "T14",
+      "description": "Zero-duration guard: multi-event incidents have duration_ms > 0",
+      "status": "PASS",
+      "detail": "incidents=1, zeroIncs=0"
+    },
+    {
+      "id": "T15",
+      "description": "Standalone detection: single high-risk event preserved",
+      "status": "PASS",
+      "detail": "detections=1, shadowDet=CSDE-WIN-013, incidents=1"
+    }
+  ]
+}
