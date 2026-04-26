@@ -1,0 +1,159 @@
+{
+  "suite": "BCE v10 — Behavior-Driven Attack Chain Validation",
+  "timestamp": "2026-04-26T05:43:45.750Z",
+  "results": "30/30",
+  "passed": 30,
+  "failed": 0,
+  "tests": [
+    {
+      "id": "T101",
+      "name": "incidentSummaries always have .id field",
+      "status": "PASSED"
+    },
+    {
+      "id": "T102",
+      "name": "stageCount >= 3 for incidents involving credential_access",
+      "status": "PASSED"
+    },
+    {
+      "id": "T103",
+      "name": "inferred stages inserted for mid-stage detections with shallow chains",
+      "status": "PASSED"
+    },
+    {
+      "id": "T104",
+      "name": "inferred killChainStages have inferred:true marker",
+      "status": "PASSED"
+    },
+    {
+      "id": "T105",
+      "name": "inferred stages have confidence < 80 (lower than observed)",
+      "status": "PASSED"
+    },
+    {
+      "id": "T106",
+      "name": "killChainStages have non-empty tacticRole labels",
+      "status": "PASSED"
+    },
+    {
+      "id": "T107",
+      "name": "incidentSummaries have progressiveRisk > 0",
+      "status": "PASSED"
+    },
+    {
+      "id": "T108",
+      "name": "no single-stage incidents for lateral_movement detections",
+      "status": "PASSED"
+    },
+    {
+      "id": "T109",
+      "name": "no single-stage incidents for impact tactic",
+      "status": "PASSED"
+    },
+    {
+      "id": "T110",
+      "name": "no single-stage incidents for privilege_escalation",
+      "status": "PASSED"
+    },
+    {
+      "id": "T111",
+      "name": "behavioral fingerprinting overrides generic detection for procdump",
+      "status": "PASSED"
+    },
+    {
+      "id": "T112",
+      "name": "TACTIC_ADAPTIVE_WINDOWS config defined in engine",
+      "status": "PASSED"
+    },
+    {
+      "id": "T113",
+      "name": "chain-aware progressive risk: impact-stage incident has risk >= 70",
+      "status": "PASSED"
+    },
+    {
+      "id": "T114",
+      "name": "Windows and Linux detections never fuse into the same incident",
+      "status": "PASSED"
+    },
+    {
+      "id": "T115",
+      "name": "full APT chain has ≥5 stages and all expected MITRE techniques",
+      "status": "PASSED"
+    },
+    {
+      "id": "T116",
+      "name": "chainGraph.nodes.length matches stageCount",
+      "status": "PASSED"
+    },
+    {
+      "id": "T117",
+      "name": "chainGraph.edges present for multi-stage incidents",
+      "status": "PASSED"
+    },
+    {
+      "id": "T118",
+      "name": "hasInferredStages flag is accurate (matches actual inferred count)",
+      "status": "PASSED"
+    },
+    {
+      "id": "T119",
+      "name": "observedStages + inferredStages = stageCount",
+      "status": "PASSED"
+    },
+    {
+      "id": "T120",
+      "name": "incidentSummaries have non-empty rootCauseSummary",
+      "status": "PASSED"
+    },
+    {
+      "id": "T121",
+      "name": "dominantIntent is 'attacker' for high-confidence attacker incidents",
+      "status": "PASSED"
+    },
+    {
+      "id": "T122",
+      "name": "tacticRole labels cover required lifecycle roles for full APT chain",
+      "status": "PASSED"
+    },
+    {
+      "id": "T123",
+      "name": "mitreMappings non-empty for every incident",
+      "status": "PASSED"
+    },
+    {
+      "id": "T124",
+      "name": "engine version is CSDE-v10-BCE-Hardened",
+      "status": "PASSED"
+    },
+    {
+      "id": "T125",
+      "name": "BCE_MIN_CHAIN_DEPTH=3 enforced for mid-stage tactics",
+      "status": "PASSED"
+    },
+    {
+      "id": "T126",
+      "name": "chainValid=true for correctly ordered APT attack sequence",
+      "status": "PASSED"
+    },
+    {
+      "id": "T127",
+      "name": "killChainStages have severity field per stage",
+      "status": "PASSED"
+    },
+    {
+      "id": "T128",
+      "name": "credential_access detection produces multi-stage incident (not single-stage)",
+      "status": "PASSED"
+    },
+    {
+      "id": "T129",
+      "name": "chain name reflects full APT kill chain for full APT scenario",
+      "status": "PASSED"
+    },
+    {
+      "id": "T130",
+      "name": "all incidentSummaries have verdict field (TRUE_POSITIVE/FALSE_POSITIVE/PARTIAL)",
+      "status": "PASSED"
+    }
+  ]
+}

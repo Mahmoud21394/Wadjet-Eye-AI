@@ -263,7 +263,131 @@
       ACE_MIN_NODES_FOR_GRAPH  : 1,         // Min nodes to form an attack graph
       ACE_MERGE_GAP_MS         : 1_800_000, // Chain-merge gap (30 min same adversary)
       ACE_CAUSAL_EDGE_MAX_GAP  : 7_200_000, // Max causal edge time gap (2 hours)
+      // ── Behavioral-Chain Engine (BCE) — v10 ───────────────────
+      BCE_MIN_CHAIN_DEPTH      : 3,         // Minimum logical stages per incident
+      BCE_INFER_STAGES         : true,      // Insert inferred stages when telemetry gaps exist
+      BCE_INFER_CONFIDENCE_BASE: 40,        // Base confidence % for inferred stages
+      BCE_PROGRESSIVE_RISK     : true,      // Scale risk by stage depth + progression
+      BCE_ADAPTIVE_WINDOWS     : true,      // Use per-tactic time windows (not fixed)
     };
+
+    // ── Adaptive time windows per tactic (ms) ─────────────────────
+    // Execution happens in seconds; lateral movement can span hours
+    const TACTIC_ADAPTIVE_WINDOWS = {
+      'execution'           : 300_000,      // 5 minutes
+      'persistence'         : 3_600_000,    // 1 hour
+      'privilege-escalation': 600_000,      // 10 minutes
+      'defense-evasion'     : 600_000,      // 10 minutes
+      'credential-access'   : 3_600_000,    // 1 hour
+      'discovery'           : 1_800_000,    // 30 minutes
+      'lateral-movement'    : 7_200_000,    // 2 hours
+      'collection'          : 3_600_000,    // 1 hour
+      'exfiltration'        : 7_200_000,    // 2 hours
+      'impact'              : 3_600_000,    // 1 hour
+      'initial-access'      : 3_600_000,    // 1 hour
+      'command-and-control' : 7_200_000,    // 2 hours
+      'reconnaissance'      : 86_400_000,   // 24 hours
+    };
+
+    // ── Behavioral Fingerprint Map — Tool → Tactic+Technique ──────
+    // Maps specific attacker tools, patterns, commands to precise ATT&CK classification
+    // This overrides generic detections with precise behavioral context
+    const BEHAVIORAL_FINGERPRINTS = {
+      // Credential dumping tools
+      'mimikatz'    : { tactic:'credential-access',   technique:'T1003.001', name:'LSASS Memory',               severity:'critical', role:'credential_access'  },
+      'procdump'    : { tactic:'credential-access',   technique:'T1003.001', name:'LSASS Memory',               severity:'critical', role:'credential_access'  },
+      'gsecdump'    : { tactic:'credential-access',   technique:'T1003',     name:'OS Credential Dumping',      severity:'critical', role:'credential_access'  },
+      'pwdump'      : { tactic:'credential-access',   technique:'T1003',     name:'OS Credential Dumping',      severity:'critical', role:'credential_access'  },
+      'fgdump'      : { tactic:'credential-access',   technique:'T1003',     name:'OS Credential Dumping',      severity:'critical', role:'credential_access'  },
+      'wce'         : { tactic:'credential-access',   technique:'T1003.001', name:'LSASS Memory',               severity:'critical', role:'credential_access'  },
+      // Remote access / lateral movement
+      'psexec'      : { tactic:'lateral-movement',    technique:'T1021.002', name:'SMB/Windows Admin Shares',   severity:'high',     role:'lateral_movement'   },
+      'wmiexec'     : { tactic:'lateral-movement',    technique:'T1047',     name:'Windows Management Instrumentation', severity:'high', role:'lateral_movement' },
+      'smbexec'     : { tactic:'lateral-movement',    technique:'T1021.002', name:'SMB/Windows Admin Shares',   severity:'high',     role:'lateral_movement'   },
+      'meterpreter' : { tactic:'command-and-control', technique:'T1071.001', name:'Web Protocols',              severity:'critical', role:'execution'          },
+      'cobalt'      : { tactic:'command-and-control', technique:'T1071.001', name:'Web Protocols',              severity:'critical', role:'execution'          },
+      'empire'      : { tactic:'execution',           technique:'T1059.001', name:'PowerShell',                 severity:'critical', role:'execution'          },
+      'beacon'      : { tactic:'command-and-control', technique:'T1071.001', name:'Web Protocols',              severity:'critical', role:'execution'          },
+      // Ransomware / impact
+      'vssadmin'    : { tactic:'impact',              technique:'T1490',     name:'Inhibit System Recovery',    severity:'critical', role:'impact'             },
+      'wbadmin'     : { tactic:'impact',              technique:'T1490',     name:'Inhibit System Recovery',    severity:'critical', role:'impact'             },
+      'bcdedit'     : { tactic:'impact',              technique:'T1490',     name:'Inhibit System Recovery',    severity:'critical', role:'impact'             },
+      // Defense evasion
+      'wevtutil'    : { tactic:'defense-evasion',     technique:'T1070.001', name:'Clear Windows Event Logs',   severity:'high',     role:'defense_evasion'    },
+      // Reconnaissance
+      'nmap'        : { tactic:'reconnaissance',      technique:'T1046',     name:'Network Service Discovery',  severity:'medium',   role:'discovery'          },
+      'nessus'      : { tactic:'reconnaissance',      technique:'T1046',     name:'Network Service Discovery',  severity:'low',      role:'discovery'          },
+      'masscan'     : { tactic:'reconnaissance',      technique:'T1046',     name:'Network Service Discovery',  severity:'medium',   role:'discovery'          },
+      // Persistence
+      'schtasks'    : { tactic:'persistence',         technique:'T1053.005', name:'Scheduled Task',             severity:'high',     role:'persistence'        },
+      'at.exe'      : { tactic:'persistence',         technique:'T1053.002', name:'At',                         severity:'high',     role:'persistence'        },
+      // Execution
+      'mshta'       : { tactic:'execution',           technique:'T1218.005', name:'Mshta',                      severity:'high',     role:'execution'          },
+      'regsvr32'    : { tactic:'execution',           technique:'T1218.010', name:'Regsvr32',                   severity:'high',     role:'execution'          },
+      'wscript'     : { tactic:'execution',           technique:'T1059.005', name:'Visual Basic',               severity:'high',     role:'execution'          },
+      'cscript'     : { tactic:'execution',           technique:'T1059.005', name:'Visual Basic',               severity:'high',     role:'execution'          },
+      'certutil'    : { tactic:'defense-evasion',     technique:'T1140',     name:'Deobfuscate/Decode Files',   severity:'high',     role:'defense_evasion'    },
+      'bitsadmin'   : { tactic:'command-and-control', technique:'T1197',     name:'BITS Jobs',                  severity:'high',     role:'execution'          },
+    };
+
+    // ── Inferred stage templates per tactic ───────────────────────
+    // When a mid/late-stage detection fires, infer what MUST have preceded it
+    // Format: tactic → [ { tactic, technique, name, confidence, role } ]
+    const INFERRED_PRECURSORS = {
+      'credential-access': [
+        { tactic:'initial-access',  technique:'T1078',     name:'Valid Accounts (Inferred)',        confidence:55, role:'initial_access'    },
+        { tactic:'execution',       technique:'T1059.001', name:'Command Execution (Inferred)',     confidence:50, role:'execution'         },
+      ],
+      'lateral-movement': [
+        { tactic:'initial-access',  technique:'T1078',     name:'Initial Access (Inferred)',        confidence:60, role:'initial_access'    },
+        { tactic:'credential-access',technique:'T1078.002',name:'Credential Use (Inferred)',        confidence:65, role:'credential_access' },
+      ],
+      'impact': [
+        { tactic:'initial-access',  technique:'T1190',     name:'Initial Compromise (Inferred)',   confidence:50, role:'initial_access'    },
+        { tactic:'execution',       technique:'T1059',     name:'Execution Stage (Inferred)',       confidence:55, role:'execution'         },
+        { tactic:'defense-evasion', technique:'T1070',     name:'Defense Evasion (Inferred)',       confidence:45, role:'defense_evasion'   },
+      ],
+      'privilege-escalation': [
+        { tactic:'initial-access',  technique:'T1078',     name:'Initial Access (Inferred)',        confidence:55, role:'initial_access'    },
+        { tactic:'execution',       technique:'T1059',     name:'Execution Stage (Inferred)',       confidence:50, role:'execution'         },
+      ],
+      'exfiltration': [
+        { tactic:'initial-access',  technique:'T1078',     name:'Initial Access (Inferred)',        confidence:60, role:'initial_access'    },
+        { tactic:'collection',      technique:'T1005',     name:'Data Collection (Inferred)',       confidence:55, role:'collection'        },
+      ],
+      'collection': [
+        { tactic:'initial-access',  technique:'T1078',     name:'Initial Access (Inferred)',        confidence:55, role:'initial_access'    },
+        { tactic:'discovery',       technique:'T1083',     name:'File Discovery (Inferred)',        confidence:50, role:'discovery'         },
+      ],
+    };
+
+    // ── Progressive risk escalation weights by stage depth ────────
+    // The deeper into the kill chain, the higher the risk ceiling
+    const STAGE_DEPTH_RISK_MULTIPLIER = {
+      'initial-access'      : 0.4,   // Early: low risk
+      'execution'           : 0.55,
+      'persistence'         : 0.60,
+      'privilege-escalation': 0.70,
+      'defense-evasion'     : 0.65,
+      'credential-access'   : 0.75,
+      'discovery'           : 0.60,
+      'lateral-movement'    : 0.85,  // Late: high risk
+      'collection'          : 0.80,
+      'command-and-control' : 0.82,
+      'exfiltration'        : 0.90,
+      'impact'              : 1.00,  // Terminal: maximum risk
+    };
+
+    // ── Asset criticality roles (for risk amplification) ──────────
+    const CRITICAL_ASSET_PATTERNS = [
+      /\bDC\d*\b/i,        // Domain Controller
+      /\bAD\b/i,           // Active Directory
+      /\b(domain.?controller|PDC|BDC)\b/i,
+      /\b(exchange|mail.?server|smtp)\b/i,
+      /\b(backup|veeam|commvault)\b/i,
+      /\b(file.?server|FS\d*|NAS)\b/i,
+      /\b(database|SQL|oracle|mongo)\b/i,
+    ];
 
     // ── Severity weights (higher = worse) ──────────────────────────
     const SEV_WEIGHT = { critical: 100, high: 80, medium: 50, low: 20, informational: 5 };
@@ -928,6 +1052,240 @@
       return String(str||'').replace(/-/g,' ').replace(/\b\w/g, c => c.toUpperCase());
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  BCE v10 — BEHAVIORAL FINGERPRINT CLASSIFIER
+    //  Scans a detection's process name + command line for known
+    //  attacker tools and overrides/refines tactic+technique assignment.
+    // ════════════════════════════════════════════════════════════════
+    function _applyBehavioralFingerprint(det) {
+      const cmd   = (det.commandLine || '').toLowerCase();
+      const proc  = (det.process     || det.NewProcessName || '').toLowerCase().replace(/.*[\\\/]/, '');
+      const combined = cmd + ' ' + proc;
+
+      for (const [tool, fp] of Object.entries(BEHAVIORAL_FINGERPRINTS)) {
+        if (combined.includes(tool)) {
+          // Only override if fingerprint is more specific than current
+          const curPhase   = PHASE_ORDER[(det.mitre?.tactic || '').toLowerCase().replace(/\s+/g,'-')] ?? 99;
+          const fpPhase    = PHASE_ORDER[fp.tactic] ?? 99;
+          // Always apply if no MITRE assigned yet; otherwise only if fingerprint is later in kill chain
+          if (!det.mitre?.technique || fpPhase >= curPhase) {
+            det._fingerprintedTool = tool;
+            det._fingerprintSource = 'behavioral';
+            // Only override if not already set by a more specific rule
+            if (!det.mitre || !det.mitre.technique || det.mitre.technique.length < fp.technique.length) {
+              det.mitre = { technique: fp.technique, name: fp.name, tactic: fp.tactic };
+              det.technique = fp.technique;
+              det._role = fp.role;
+            }
+            if ((SEV_WEIGHT[fp.severity] || 0) > (SEV_WEIGHT[det.aggregated_severity || det.severity] || 0)) {
+              det.aggregated_severity = fp.severity;
+            }
+          }
+          break;
+        }
+      }
+      return det;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  BCE v10 — ADAPTIVE TIME WINDOW SELECTOR
+    //  Returns the appropriate correlation window in ms for a given tactic.
+    //  Unlike fixed windows, this adapts to how fast each tactic moves.
+    // ════════════════════════════════════════════════════════════════
+    function _getAdaptiveWindow(tactic) {
+      if (!CFG.BCE_ADAPTIVE_WINDOWS) return CFG.ACE_PROXIMITY_WINDOW_MS;
+      const t = (tactic || '').toLowerCase().replace(/\s+/g, '-');
+      return TACTIC_ADAPTIVE_WINDOWS[t] || CFG.ACE_PROXIMITY_WINDOW_MS;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  BCE v10 — CONTEXTUAL INFERENCE ENGINE
+    //  When a mid/late-stage detection fires without observed preceding
+    //  stages, this engine inserts logically required inferred stages
+    //  to prevent single-node incident collapse.
+    //
+    //  Rules:
+    //  • Only infer stages NOT already present in the cluster
+    //  • Each inferred stage is marked inferred:true with confidence score
+    //  • Inferred stages are inserted BEFORE the first observed stage
+    //  • Minimum chain depth enforced (BCE_MIN_CHAIN_DEPTH = 3)
+    // ════════════════════════════════════════════════════════════════
+    function _inferMissingStages(cluster, firstObservedTs) {
+      if (!CFG.BCE_INFER_STAGES) return [];
+
+      // Collect observed tactics in this cluster
+      const observedTactics = new Set(
+        cluster.map(d => (d.mitre?.tactic || d.category || '').toLowerCase().replace(/\s+/g,'-'))
+               .filter(Boolean)
+      );
+
+      // Find the "deepest" observed tactic (latest in kill chain)
+      let deepestPhase = 0;
+      let deepestTactic = '';
+      observedTactics.forEach(t => {
+        const p = PHASE_ORDER[t] ?? 0;
+        if (p > deepestPhase) { deepestPhase = p; deepestTactic = t; }
+      });
+
+      // Only infer if the deepest observed tactic is mid/late stage
+      const MID_LATE = new Set(['credential-access','lateral-movement','impact',
+                                'privilege-escalation','exfiltration','collection']);
+      if (!MID_LATE.has(deepestTactic)) return [];
+
+      const templates = INFERRED_PRECURSORS[deepestTactic] || [];
+      const inferred  = [];
+      let   inferTs   = firstObservedTs - 180_000; // place inferred stages 3min before first real
+
+      for (const tmpl of templates) {
+        // Skip if this tactic is already observed
+        if (observedTactics.has(tmpl.tactic)) continue;
+
+        const confScore = Math.min(
+          CFG.BCE_INFER_CONFIDENCE_BASE + (deepestPhase * 3),
+          75  // cap inferred confidence at 75%
+        );
+
+        const inferredStage = {
+          id               : `INFERRED-${tmpl.tactic.toUpperCase().replace(/-/g,'_')}-${Date.now()}`,
+          ruleId           : `BCE-INFER-${tmpl.tactic.toUpperCase().replace(/-/g,'_')}`,
+          detection_name   : tmpl.name,
+          ruleName         : tmpl.name,
+          title            : tmpl.name,
+          severity         : 'medium',
+          aggregated_severity: 'medium',
+          riskScore        : Math.round(confScore * 0.6),
+          confidence_score : confScore,
+          event_count      : 0,
+          // MITRE
+          mitre            : { technique: tmpl.technique, name: tmpl.name, tactic: tmpl.tactic },
+          technique        : tmpl.technique,
+          category         : tmpl.tactic,
+          // Inherit host/user from cluster parent
+          computer         : cluster[0]?.computer || cluster[0]?.host || '',
+          host             : cluster[0]?.computer || cluster[0]?.host || '',
+          user             : cluster[0]?.user || '',
+          srcIp            : cluster[0]?.srcIp || '',
+          // Temporal placement — before first real event
+          first_seen       : new Date(inferTs).toISOString(),
+          last_seen        : new Date(inferTs).toISOString(),
+          timestamp        : new Date(inferTs).toISOString(),
+          // Inferred metadata
+          inferred         : true,
+          inferredFrom     : deepestTactic,
+          inferredConfidence: confScore,
+          _role            : tmpl.role,
+          raw_detections   : [],
+          variants_triggered: [],
+          evidence         : [],
+        };
+
+        inferred.push(inferredStage);
+        inferTs -= 60_000; // space each inferred stage 1 min apart
+      }
+
+      return inferred;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  BCE v10 — MINIMUM CHAIN DEPTH ENFORCER
+    //  Guarantees that every incident has at least BCE_MIN_CHAIN_DEPTH
+    //  logical stages. Calls the inference engine if needed.
+    //  Returns the (potentially expanded) cluster.
+    // ════════════════════════════════════════════════════════════════
+    function _enforceMinimumChainDepth(cluster) {
+      if (!cluster.length) return cluster;
+      const targetDepth = CFG.BCE_MIN_CHAIN_DEPTH;
+      if (cluster.length >= targetDepth) return cluster;
+
+      // Sort by timestamp to find first observed event
+      const sorted = [...cluster].sort((a, b) => {
+        return new Date(a.first_seen||a.timestamp||0) - new Date(b.first_seen||b.timestamp||0);
+      });
+      const firstTs = new Date(sorted[0].first_seen || sorted[0].timestamp || 0).getTime();
+
+      // Try to infer missing preceding stages
+      const inferredStages = _inferMissingStages(cluster, firstTs);
+
+      // Combine observed + inferred, sorted by timestamp
+      const combined = [...inferredStages, ...cluster].sort((a, b) => {
+        return new Date(a.first_seen||a.timestamp||0) - new Date(b.first_seen||b.timestamp||0);
+      });
+
+      return combined.length >= targetDepth ? combined : combined;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  BCE v10 — CHAIN-AWARE PROGRESSIVE RISK SCORER
+    //  Unlike event-based scoring, this computes risk based on:
+    //    • Number of stages (depth amplifier)
+    //    • Deepest tactic reached (progression multiplier)
+    //    • Privileged asset targeting (DC, Exchange, backup)
+    //    • Observed vs inferred stages (quality discount)
+    //    • Cross-host pivot presence
+    // ════════════════════════════════════════════════════════════════
+    function _computeProgressiveRisk(cluster, crossHost) {
+      if (!CFG.BCE_PROGRESSIVE_RISK || !cluster.length) {
+        return cluster.reduce((s, d) => Math.max(s, d.riskScore || 0), 0);
+      }
+
+      // 1. Base: aggregate individual riskScores (observed only, cap contribution)
+      const observed = cluster.filter(d => !d.inferred);
+      const baseRisk = observed.reduce((s, d) => s + Math.min(d.riskScore || 0, 40), 0);
+
+      // 2. Find deepest phase reached
+      const deepestTactic = observed.reduce((best, d) => {
+        const tac = (d.mitre?.tactic || d.category || '').toLowerCase().replace(/\s+/g,'-');
+        const ph  = PHASE_ORDER[tac] ?? 0;
+        const bph = PHASE_ORDER[best] ?? 0;
+        return ph > bph ? tac : best;
+      }, 'initial-access');
+      const progressionMult = STAGE_DEPTH_RISK_MULTIPLIER[deepestTactic] || 0.4;
+
+      // 3. Stage depth amplifier — more stages = higher confidence = higher risk
+      const depthBonus = Math.min((observed.length - 1) * 8, 30);
+
+      // 4. Critical asset bonus — DC or backup targeted = +15
+      const criticalAsset = observed.some(d => {
+        const host = (d.computer || d.host || '');
+        return CRITICAL_ASSET_PATTERNS.some(rx => rx.test(host));
+      });
+      const assetBonus = criticalAsset ? 15 : 0;
+
+      // 5. Cross-host pivot bonus
+      const crossHostBonus = crossHost ? 12 : 0;
+
+      // 6. Combine with progression multiplier
+      const rawScore = (baseRisk * progressionMult) + depthBonus + assetBonus + crossHostBonus;
+      return Math.min(Math.round(rawScore), 100);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  BCE v10 — DETECTION ROLE CLASSIFIER
+    //  Assigns each detection an explicit lifecycle role
+    //  (initial_access, execution, persistence, etc.)
+    //  Used for stage labelling and chain-completeness checks.
+    // ════════════════════════════════════════════════════════════════
+    function _classifyDetectionRole(det) {
+      if (det._role) return det._role;
+      const tactic = (det.mitre?.tactic || det.category || '').toLowerCase().replace(/\s+/g,'-');
+      const roleMap = {
+        'initial-access'      : 'initial_access',
+        'execution'           : 'execution',
+        'persistence'         : 'persistence',
+        'privilege-escalation': 'privilege_escalation',
+        'defense-evasion'     : 'defense_evasion',
+        'credential-access'   : 'credential_access',
+        'discovery'           : 'discovery',
+        'lateral-movement'    : 'lateral_movement',
+        'collection'          : 'collection',
+        'exfiltration'        : 'exfiltration',
+        'impact'              : 'impact',
+        'command-and-control' : 'command_and_control',
+        'reconnaissance'      : 'reconnaissance',
+      };
+      return roleMap[tactic] || 'execution';
+    }
+
     // ── Build attack phase timeline for an incident ─────────────────
     // ════════════════════════════════════════════════════════════════
     //  ACE v6 — FORENSIC PHASE TIMELINE BUILDER
@@ -1054,6 +1412,10 @@
           isParent        : det._isParent || false,
           confidence      : stageConf,
           linkedEventCount: (det.linkedEvents || []).length,
+          // ── BCE v10: Inferred stage markers ────────────────────
+          inferred          : !!(det.inferred),
+          inferredFrom      : det.inferredFrom || null,
+          inferredConfidence: det.inferredConfidence || null,
         };
       });
     }
@@ -2041,6 +2403,7 @@
       edges.forEach(e => { outDegree[e.from]++; inDegree[e.to]++; });
 
       const stageConfidence = nodes.map((n, idx) => {
+        if (n.inferred) return n.inferredConfidence || CFG.BCE_INFER_CONFIDENCE_BASE;
         const baseRisk     = n.riskScore || 0;
         const evCount      = (n.raw_detections || [n]).reduce((s, rd) => s + ((rd.evidence || []).length || 1), 0);
         const techWeight   = TECHNIQUE_SEV_WEIGHT[n.mitre?.technique || n.technique || ''] || 5;
@@ -2180,8 +2543,20 @@
         });
         if (!qualifiedCluster.length) return;
 
+        // ── BCE Step 1: Behavioral Fingerprinting ─────────────────
+        // Apply tool/command pattern overrides for precise tactic classification
+        qualifiedCluster.forEach(d => _applyBehavioralFingerprint(d));
+
+        // ── BCE Step 2: Assign detection lifecycle roles ──────────
+        qualifiedCluster.forEach(d => { d._role = _classifyDetectionRole(d); });
+
+        // ── BCE Step 3: Enforce minimum chain depth (infer stages) ─
+        // If only 1-2 observed stages for mid/late-stage tactics, infer precursors
+        const depthEnforcedCluster = _enforceMinimumChainDepth(qualifiedCluster);
+        const hasInferredStages    = depthEnforcedCluster.some(d => d.inferred);
+
         // ── Intent classification ─────────────────────────────────
-        const intentSignals = qualifiedCluster.map(d => {
+        const intentSignals = depthEnforcedCluster.filter(d => !d.inferred).map(d => {
           const ev = (d.raw_detections || [d])[0] || {};
           return _classifyIntent(ev, d);
         });
@@ -2194,10 +2569,10 @@
           return;
         }
 
-        // ── Build Causal DAG ─────────────────────────────────────
-        const dag = _buildCausalDAG(qualifiedCluster);
+        // ── Build Causal DAG (includes inferred stages) ───────────
+        const dag = _buildCausalDAG(depthEnforcedCluster);
 
-        // ── Parent = highest riskScore then severity ─────────────
+        // ── Parent = highest riskScore then severity (observed only) ─
         const sortedCluster = [...qualifiedCluster].sort((a, b) => {
           const rDiff = (b.riskScore || 0) - (a.riskScore || 0);
           if (rDiff !== 0) return rDiff;
@@ -2209,6 +2584,7 @@
 
         // ── Forensic timestamps — real First Seen / Last Seen ────
         let firstSeenMs = Infinity, lastSeenMs = -Infinity;
+        // Use ONLY observed stages for timestamps (not inferred)
         qualifiedCluster.forEach(d => {
           const fs = new Date(d.first_seen || d.timestamp || 0).getTime();
           const ls = new Date(d.last_seen  || d.first_seen || d.timestamp || 0).getTime();
@@ -2271,8 +2647,9 @@
         else if (confidence.score >= 40) confidence.level = 'Likely';
         else                             confidence.level = 'Possible';
 
-        // ── Attack phase timeline (causal, chronological) ─────────
-        const phaseTimeline = _buildPhaseTimeline(qualifiedCluster);
+        // ── Attack phase timeline (causal, chronological — includes inferred stages) ─
+        // Use depthEnforcedCluster so inferred precursor stages are in the timeline
+        const phaseTimeline = _buildPhaseTimeline(depthEnforcedCluster);
 
         const incId = 'INC-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2,6).toUpperCase();
 
@@ -4160,47 +4537,127 @@
       console.log(
         `[CSDE v8] ${events.length} events → ${rawDets.length} raw → ${dedupedDets.length} deduped, ` +
         `${incidents.length} incidents, ${chains.length} chains, risk=${riskScore} ` +
-        `(schema_skipped=${schemaSkipped}, ${duration}ms, engine=v8-ACE-Hardened)`
+        `(schema_skipped=${schemaSkipped}, ${duration}ms, engine=v10-BCE-Hardened)`
       );
 
-      // Compute incident confidence summary for meta
+      // ════════════════════════════════════════════════════════════
+      //  BCE v10 — ENRICHED INCIDENT SUMMARY BUILDER
+      //  Transforms each correlated incident into a fully-structured
+      //  analyst output with:
+      //    • Ordered kill-chain stages (observed + inferred)
+      //    • Per-stage confidence, inferred flag, tactic role label
+      //    • Aggregated chain risk score (progressive, depth-aware)
+      //    • MITRE tactic/technique per stage (never empty)
+      //    • Chain integrity assessment (valid/invalid + violations)
+      //    • Timeline graph data for UI visualization
+      // ════════════════════════════════════════════════════════════
       const confidenceSummary = incidents.map(inc => {
-        const phaseTimeline = inc.phaseTimeline || [];
-
-        // Chain validity: no causal violations, all stages have valid successors
+        const phaseTimeline    = inc.phaseTimeline || [];
         const causalViolations = inc.dag?.causalViolations || [];
         const chainValid       = causalViolations.length === 0;
+        const allDetections    = inc.all || [inc.parent, ...(inc.children||[])].filter(Boolean);
 
-        // Ordered kill-chain stages with full evidence and per-stage confidence
-        const killChainStages = phaseTimeline.map((p, si) => ({
-          stageIndex      : p.stageIndex ?? si,
-          phase           : p.phase,
-          technique       : p.technique,
-          techniqueName   : p.techniqueName,
-          tactic          : p.phaseTactic,
-          ruleId          : p.ruleId,
-          ruleName        : p.ruleName,
-          host            : p.host,
-          user            : p.user,
-          timestamp       : p.timestamp,
-          first_seen      : p.first_seen,
-          last_seen       : p.last_seen,
-          duration_ms     : p.duration_ms,
-          severity        : p.severity,
-          confidence      : p.confidence,           // per-stage 0-100 score
-          causalEdges     : p.causalEdges || [],     // forward edges to next stage(s)
-          hasCausalViolation: p.hasCausalViolation || false,
-          isHostTransition: p.isHostTransition || false,
-          rawEvidenceLogs : p.rawEvidenceLogs  || [],
-          narrative       : p.narrative || '',
-          commandLine     : p.commandLine || '',
-          process         : p.process || '',
-          srcIp           : p.srcIp || '',
-        }));
+        // ── Build ordered kill-chain stages (observed + inferred) ───
+        // Pull from phaseTimeline (which contains ALL stages incl inferred)
+        const killChainStages = phaseTimeline.map((p, si) => {
+          const isInferred = !!(p.inferred || p.inferredFrom);
+          return {
+            stageIndex        : p.stageIndex ?? si,
+            phase             : p.phase,
+            tacticRole        : p.phaseTactic || p.tactic || p.phase || 'unknown',
+            tactic            : p.phaseTactic || p.tactic || p.phase || 'unknown',
+            technique         : p.technique   || '',
+            techniqueName     : p.techniqueName || '',
+            ruleId            : p.ruleId       || (isInferred ? `BCE-INFER-${si}` : ''),
+            ruleName          : p.ruleName     || p.name || '',
+            host              : p.host         || '',
+            user              : p.user         || '',
+            timestamp         : p.timestamp    || p.first_seen || '',
+            first_seen        : p.first_seen   || p.timestamp  || '',
+            last_seen         : p.last_seen    || p.first_seen || p.timestamp || '',
+            duration_ms       : p.duration_ms  || 0,
+            severity          : p.severity     || 'medium',
+            // Per-stage confidence (inferred stages get their own score)
+            confidence        : isInferred
+                                  ? (p.inferredConfidence || CFG.BCE_INFER_CONFIDENCE_BASE)
+                                  : (p.confidence ?? (p.riskScore || 30)),
+            // Observed vs inferred
+            inferred          : isInferred,
+            inferredFrom      : p.inferredFrom || null,
+            inferredConfidence: isInferred ? (p.inferredConfidence || CFG.BCE_INFER_CONFIDENCE_BASE) : null,
+            // Causal chain metadata
+            causalEdges       : p.causalEdges || [],
+            hasCausalViolation: !!(p.hasCausalViolation),
+            isHostTransition  : !!(p.isHostTransition),
+            // Evidence
+            rawEvidenceLogs   : p.rawEvidenceLogs || [],
+            narrative         : p.narrative   || '',
+            commandLine       : p.commandLine || '',
+            process           : p.process     || '',
+            srcIp             : p.srcIp       || '',
+            // Attack chain visualization hints
+            _nodeType         : isInferred ? 'inferred' : 'observed',
+            _riskScore        : p.riskScore  || 0,
+          };
+        });
+
+        // ── Compute aggregated progressive risk (BCE chain-aware) ───
+        const observed       = allDetections.filter(d => !d.inferred);
+        const crossHostDetect= (inc.allHosts || []).length > 1;
+        const progressiveRisk= _computeProgressiveRisk(observed.length ? observed : allDetections, crossHostDetect);
+
+        // ── Build chain visualization graph data ──────────────────
+        // Each node has position hints for the UI SVG graph
+        // Synthesize edges from causalEdges in phaseTimeline
+        const synthEdges = [];
+        killChainStages.forEach((s, si) => {
+          const causalEdges = phaseTimeline[si]?.causalEdges || [];
+          causalEdges.forEach(ce => {
+            // Find the target stage index by matching edgeType
+            for (let ti = si + 1; ti < killChainStages.length; ti++) {
+              synthEdges.push({ from: si, to: ti, valid: !s.hasCausalViolation, gap_ms: ce.gap_ms || 0 });
+              break; // only add the immediate next edge
+            }
+          });
+          // Fallback: add sequential edges if no causal edges defined
+          if (!causalEdges.length && si < killChainStages.length - 1) {
+            synthEdges.push({ from: si, to: si + 1, valid: true, gap_ms: 0 });
+          }
+        });
+        // Also pull edges from the dag object (in case they're stored in the raw incident)
+        const dagEdgesRaw = (inc.dag?.edges || []);
+        const finalEdges = dagEdgesRaw.length > 0
+          ? dagEdgesRaw.map(e => ({ from: e.from, to: e.to, valid: e.valid !== false, gap_ms: e.gap_ms || 0 }))
+          : synthEdges;
+
+        const chainGraph = {
+          nodes: killChainStages.map((s, ni) => ({
+            id      : `node-${ni}`,
+            index   : ni,
+            label   : s.ruleName || s.technique || `Stage ${ni+1}`,
+            tactic  : s.tactic,
+            technique: s.technique,
+            severity: s.severity,
+            confidence: s.confidence,
+            inferred: s.inferred,
+            host    : s.host,
+            riskScore: s._riskScore,
+          })),
+          edges: finalEdges,
+          causalViolations,
+          isValid: chainValid,
+        };
+
+        // ── Root-cause / intent summary ────────────────────────────
+        const intentSignals   = inc.intentSignals || {};
+        const dominantIntent  = intentSignals.attackerCount > 0 ? 'attacker' : 'admin';
+        const rootCauseSummary= inc.behavior?.description
+          || (killChainStages[0]?.narrative ? `Attack initiated via: ${killChainStages[0].narrative.slice(0,120)}` : null)
+          || `${killChainStages.length}-stage attack chain by ${inc.user || 'unknown user'} on ${(inc.allHosts||[inc.host]).join(', ')}`;
 
         return {
           // ── Identifiers ────────────────────────────────────────────
-          id               : inc.id || inc.incidentId,   // canonical .id field
+          id               : inc.id || inc.incidentId,
           incidentId       : inc.incidentId,
           attackChainId    : inc.incidentId,
           title            : inc.title,
@@ -4208,7 +4665,7 @@
           confidence       : inc.confidence?.score || 0,
           level            : inc.confidence?.level || 'Possible',
           // ── Behavior ──────────────────────────────────────────────
-          behaviorId       : inc.behavior?.behaviorId || 'generic',
+          behaviorId       : inc.behavior?.behaviorId  || 'generic',
           behaviorTitle    : inc.behavior?.behaviorTitle || '',
           duration         : inc.durationLabel,
           duration_ms      : inc.duration_ms || 0,
@@ -4221,34 +4678,48 @@
           // ── Severity ───────────────────────────────────────────────
           severity         : inc.severity,
           riskScore        : inc.riskScore,
+          // Progressive risk (chain-aware, depth-weighted)
+          progressiveRisk,
           // ── MITRE ──────────────────────────────────────────────────
           mitreTactics     : inc.mitreTactics || [],
-          techniques       : inc.techniques || [],
+          techniques       : inc.techniques   || [],
           mitreMappings    : inc.mitreMappings || [],
           // ── Scope ──────────────────────────────────────────────────
           host             : inc.host,
           user             : inc.user,
-          allHosts         : inc.allHosts || [],
-          allUsers         : inc.allUsers || [],
+          allHosts         : inc.allHosts  || [],
+          allUsers         : inc.allUsers  || [],
           allSrcIps        : inc.allSrcIps || [],
           crossHost        : inc.crossHost || false,
           // ── Timestamps ─────────────────────────────────────────────
           first_seen       : inc.first_seen,
           last_seen        : inc.last_seen,
-          // ── Kill-chain stages (ordered, with evidence) ─────────────
+          // ── Ordered kill-chain stages (multi-stage, observed+inferred) ─
           killChainStages,
           stageCount       : killChainStages.length,
+          observedStages   : killChainStages.filter(s => !s.inferred).length,
+          inferredStages   : killChainStages.filter(s =>  s.inferred).length,
+          hasInferredStages: killChainStages.some(s => s.inferred),
+          // ── Chain visualization graph ──────────────────────────────
+          chainGraph,
           // ── Chain validity ─────────────────────────────────────────
           chainValid,
           causalViolations,
           phaseSequence    : inc.dag?.phaseSequence || [],
+          // ── Intent / root cause ────────────────────────────────────
+          dominantIntent,
+          rootCauseSummary,
+          intentSignals    : inc.intentSignals || {},
           // ── Evidence ───────────────────────────────────────────────
           detectionCount   : inc.detectionCount || 0,
+          // ── Narrative ─────────────────────────────────────────────
+          narrative        : inc.narrative || '',
+          aceScore         : inc.aceScore  || {},
         };
       });
 
       // Summary: P1 alerts that need immediate action
-      const p1Incidents = incidents.filter(i => i.p1Priority);
+      const p1Incidents    = incidents.filter(i => i.p1Priority);
       const logTamperCount = incidents.filter(i => i.logTamperingDetected).length;
       const truePositives  = incidents.filter(i => i.verdict === 'TRUE_POSITIVE').length;
       const falsePositives = incidents.filter(i => i.verdict === 'FALSE_POSITIVE').length;
@@ -4284,7 +4755,7 @@
           eventsAnalyzed    : events.length,
           dedupWindowMs     : CFG.DEDUP_WINDOW_MS,
           correlWindowMs    : CORR_WINDOW_MS,
-          engineVersion     : 'CSDE-v8-ACE-Hardened',
+          engineVersion     : 'CSDE-v10-BCE-Hardened',
           fpSuppressed      : rawDets.filter(d => d._fpSuppressed).length,
           p1Count           : p1Incidents.length,
           logTamperCount,
@@ -4292,9 +4763,12 @@
           falsePositives,
           confidenceSummary,
           // Chain validity summary
-          validChains       : chains.filter(c => c.chainValid).length,
-          invalidChains     : chains.filter(c => !c.chainValid).length,
+          validChains   : chains.filter(c => c.chainValid).length,
+          invalidChains : chains.filter(c => !c.chainValid).length,
           totalCausalViolations: chains.reduce((s, c) => s + (c.causalViolations?.length || 0), 0),
+          // BCE v10 chain stats
+          totalInferredStages: confidenceSummary.reduce((s,i) => s + (i.inferredStages||0), 0),
+          totalObservedStages: confidenceSummary.reduce((s,i) => s + (i.observedStages||0), 0),
         },
       };
     }
@@ -5288,9 +5762,9 @@
 <div>
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
     <div>
-      <div style="font-size:14px;color:#e6edf3;font-weight:700;">⚔️ ACE v6 — Adversary-Centric Attack Graph Engine</div>
+      <div style="font-size:14px;color:#e6edf3;font-weight:700;">⚔️ BCE v10 — Behavior-Driven Attack Chain Reconstruction Engine</div>
       <div style="font-size:12px;color:#8b949e;margin-top:2px;">
-        Cross-host adversary tracking · Causal DAG correlation · Multi-factor dynamic scoring · Forensic timeline
+        Multi-stage attack chains · Inferred stage filling · Visual chain flow · Chain-aware progressive risk · One-click SOC actions
       </div>
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -5372,7 +5846,21 @@
         if (!body) return;
         const open = body.style.display !== 'none';
         body.style.display = open ? 'none' : 'block';
-        btn.textContent = open ? '▶ Attack Phase Timeline' : '▼ Hide Phase Timeline';
+        btn.textContent = open ? `▶ Attack Phase Timeline (${(body.querySelectorAll('[style*="border-bottom"]')||[]).length} stages)` : '▼ Hide Phase Timeline';
+      });
+    });
+
+    // ── BCE v10: Chain-flow collapse toggle ─────────────────────
+    el.querySelectorAll('[data-chain-toggle]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id   = btn.dataset.chainToggle;
+        const flow = document.getElementById(`rk-chain-flow-${id}`);
+        const det  = document.getElementById(`rk-stage-details-${id}`);
+        if (!flow) return;
+        const open = flow.style.display !== 'none';
+        flow.style.display = open ? 'none' : 'block';
+        if (det) det.style.display = open ? 'none' : 'block';
+        btn.textContent = open ? '▶ expand' : '▼ collapse';
       });
     });
   }
@@ -5384,6 +5872,207 @@
       case 'Likely':              return { color: '#eab308', bg: 'rgba(234,179,8,0.12)',   icon: '🟡' };
       default:                    return { color: '#6b7280', bg: 'rgba(107,114,128,0.12)', icon: '⚪' };
     }
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  BCE v10 — INTERACTIVE ATTACK-CHAIN FLOW RENDERER
+  //  Renders each incident as an interactive visual attack chain with:
+  //    • SVG-based node graph (stages as colored boxes with arrows)
+  //    • Risk evolution bar (showing risk escalation across stages)
+  //    • Color-coded severity per stage node
+  //    • Inferred stages shown with dashed border + italic label
+  //    • One-click actions: Investigate, Isolate, Pivot to logs, Enrich IOC
+  //    • Root-cause / intent summary banner
+  //    • Collapsible evidence panels per stage
+  // ════════════════════════════════════════════════════════════════
+
+  // ── Tactic color map for chain nodes ──────────────────────────
+  const TACTIC_NODE_COLOR = {
+    'initial-access'      : '#7c3aed',  // purple
+    'execution'           : '#2563eb',  // blue
+    'persistence'         : '#0891b2',  // cyan
+    'privilege-escalation': '#0d9488',  // teal
+    'defense-evasion'     : '#059669',  // green
+    'credential-access'   : '#d97706',  // amber
+    'discovery'           : '#6366f1',  // indigo
+    'lateral-movement'    : '#dc2626',  // red
+    'collection'          : '#be185d',  // pink
+    'command-and-control' : '#9333ea',  // violet
+    'exfiltration'        : '#c2410c',  // orange-red
+    'impact'              : '#7f1d1d',  // dark red
+    'authentication'      : '#1d4ed8',  // blue
+    'unknown'             : '#374151',  // gray
+  };
+
+  // ── Build an SVG-based visual attack chain flow ────────────────
+  function _buildChainFlowSVG(stages, incId) {
+    if (!stages || !stages.length) return '';
+
+    const NODE_W    = 130;
+    const NODE_H    = 60;
+    const H_GAP     = 30;     // horizontal gap between nodes
+    const V_OFFSET  = 80;     // vertical center of nodes
+    const MAX_ROW   = 4;      // max nodes per row before wrapping
+    const ROW_GAP   = 100;    // vertical gap between rows
+
+    const rows   = [];
+    for (let i = 0; i < stages.length; i += MAX_ROW) rows.push(stages.slice(i, i + MAX_ROW));
+    const svgW   = Math.min(stages.length, MAX_ROW) * (NODE_W + H_GAP) + H_GAP;
+    const svgH   = rows.length * (NODE_H + ROW_GAP) + 20;
+
+    let svgContent = '';
+
+    // Arrow marker definition
+    svgContent += `<defs>
+      <marker id="arr-${incId}" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L8,3 z" fill="#4b5563"/>
+      </marker>
+      <marker id="arr-inferred-${incId}" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L8,3 z" fill="#374151"/>
+      </marker>
+      <marker id="arr-violation-${incId}" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L8,3 z" fill="#ef4444"/>
+      </marker>
+    </defs>`;
+
+    rows.forEach((rowStages, rowIdx) => {
+      const rowY = rowIdx * (NODE_H + ROW_GAP) + 10;
+
+      rowStages.forEach((stage, colIdx) => {
+        const globalIdx = rowIdx * MAX_ROW + colIdx;
+        const x = colIdx * (NODE_W + H_GAP) + 10;
+        const y = rowY;
+
+        const tactic    = (stage.tactic || stage.tacticRole || 'unknown').toLowerCase().replace(/\s+/g,'-');
+        const nodeColor = TACTIC_NODE_COLOR[tactic] || TACTIC_NODE_COLOR['unknown'];
+        const sevColor  = _sev(stage.severity || 'medium').color;
+        const isInferred= stage.inferred;
+        const conf      = stage.confidence || 0;
+
+        // Node box: dashed border for inferred, solid for observed
+        const borderStyle = isInferred ? `stroke-dasharray="5,3"` : '';
+        const opacity     = isInferred ? 'opacity="0.7"' : '';
+        const label       = (stage.ruleName || stage.technique || `Stage ${globalIdx+1}`);
+        const shortLabel  = label.length > 18 ? label.slice(0, 16) + '…' : label;
+        const techLabel   = stage.technique || '';
+
+        svgContent += `
+        <g class="rk-chain-node" data-stage="${globalIdx}" data-inc="${incId}"
+           onclick="RAYKAN_UI._toggleStageDetail('${incId}', ${globalIdx})"
+           style="cursor:pointer;" ${opacity}>
+          <!-- Node background -->
+          <rect x="${x}" y="${y}" width="${NODE_W}" height="${NODE_H}" rx="8"
+            fill="${nodeColor}22" stroke="${nodeColor}" stroke-width="1.5" ${borderStyle}/>
+          <!-- Severity accent bar at top -->
+          <rect x="${x}" y="${y}" width="${NODE_W}" height="4" rx="2" fill="${sevColor}"/>
+          <!-- Stage number circle -->
+          <circle cx="${x+14}" cy="${y+16}" r="9" fill="${nodeColor}"/>
+          <text x="${x+14}" y="${y+20}" text-anchor="middle" font-size="10" fill="white" font-weight="bold">${globalIdx+1}</text>
+          <!-- Inferred badge -->
+          ${isInferred ? `<text x="${x+NODE_W-4}" y="${y+13}" text-anchor="end" font-size="8" fill="#6b7280" font-style="italic">inferred</text>` : ''}
+          <!-- Main label -->
+          <text x="${x+NODE_W/2}" y="${y+30}" text-anchor="middle" font-size="10" fill="#e6edf3" font-weight="600">${shortLabel}</text>
+          <!-- Technique sub-label -->
+          ${techLabel ? `<text x="${x+NODE_W/2}" y="${y+43}" text-anchor="middle" font-size="9" fill="${nodeColor}" font-family="monospace">${techLabel}</text>` : ''}
+          <!-- Confidence bar at bottom -->
+          <rect x="${x+6}" y="${y+NODE_H-8}" width="${Math.round((NODE_W-12)*conf/100)}" height="3" rx="1" fill="${nodeColor}" opacity="0.6"/>
+          <text x="${x+NODE_W-6}" y="${y+NODE_H-4}" text-anchor="end" font-size="8" fill="#4b5563">${conf}%</text>
+        </g>`;
+
+        // Arrow to next node in same row
+        if (colIdx < rowStages.length - 1) {
+          const nextStage    = stages[globalIdx + 1];
+          const isViolation  = stage.hasCausalViolation || nextStage?.hasCausalViolation;
+          const isInfArrow   = isInferred || nextStage?.inferred;
+          const arrowColor   = isViolation ? '#ef4444' : (isInfArrow ? '#374151' : '#4b5563');
+          const markerId     = isViolation ? `arr-violation-${incId}` : (isInfArrow ? `arr-inferred-${incId}` : `arr-${incId}`);
+          const arrowStyle   = (isViolation || isInfArrow) ? 'stroke-dasharray="4,3"' : '';
+          const fromX        = x + NODE_W;
+          const midY         = y + NODE_H / 2;
+          const toX          = x + NODE_W + H_GAP;
+          svgContent += `
+          <line x1="${fromX}" y1="${midY}" x2="${toX-2}" y2="${midY}"
+            stroke="${arrowColor}" stroke-width="1.5" ${arrowStyle}
+            marker-end="url(#${markerId})"/>`;
+        }
+
+        // Vertical connector at end of row to next row start
+        if (colIdx === rowStages.length - 1 && rowIdx < rows.length - 1) {
+          const nextRowY = rowY + NODE_H + ROW_GAP;
+          svgContent += `
+          <line x1="${x+NODE_W/2}" y1="${y+NODE_H}" x2="${x+NODE_W/2}" y2="${y+NODE_H+20}"
+            stroke="#4b5563" stroke-width="1.5" stroke-dasharray="4,3"/>
+          <line x1="${x+NODE_W/2}" y1="${y+NODE_H+20}" x2="20" y2="${y+NODE_H+20}"
+            stroke="#4b5563" stroke-width="1.5" stroke-dasharray="4,3"/>
+          <line x1="20" y1="${y+NODE_H+20}" x2="20" y2="${nextRowY}"
+            stroke="#4b5563" stroke-width="1.5" stroke-dasharray="4,3"
+            marker-end="url(#arr-${incId})"/>`;
+        }
+      });
+    });
+
+    return `<svg width="100%" viewBox="0 0 ${svgW} ${svgH}" style="max-width:100%;overflow:visible;" xmlns="http://www.w3.org/2000/svg">
+      ${svgContent}
+    </svg>`;
+  }
+
+  // ── Build risk evolution bar chart ─────────────────────────────
+  function _buildRiskEvolutionBar(stages, incId) {
+    if (!stages || stages.length < 2) return '';
+
+    const W = 100 / stages.length;
+    const bars = stages.map((s, i) => {
+      const risk    = s._riskScore || s.confidence || 30;
+      const tactic  = (s.tactic || 'unknown').toLowerCase().replace(/\s+/g,'-');
+      const color   = TACTIC_NODE_COLOR[tactic] || '#374151';
+      const height  = Math.max(4, Math.round(risk * 0.4));
+      const label   = s.technique || (s.tacticRole||'').slice(0,8);
+      return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;" title="${s.ruleName||label}: risk ${risk}">
+        <div style="font-size:8px;color:${color};font-weight:700;">${risk}</div>
+        <div style="width:100%;height:${height}px;background:${color};border-radius:2px 2px 0 0;opacity:${s.inferred?0.4:0.85};
+          ${i>0 && stages[i-1] && (stages[i-1]._riskScore||0) < risk ? 'box-shadow:0 0 4px '+color+'66;' : ''}"></div>
+        <div style="font-size:7px;color:#4b5563;text-align:center;max-width:40px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">${label}</div>
+      </div>`;
+    }).join('');
+
+    return `<div style="padding:8px 16px;background:rgba(13,17,23,0.6);border-top:1px solid #21262d;">
+      <div style="font-size:9px;color:#4b5563;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;font-weight:600;">Risk Evolution →</div>
+      <div style="display:flex;align-items:flex-end;gap:2px;height:50px;">${bars}</div>
+    </div>`;
+  }
+
+  // ── Build collapsible stage detail panel ─────────────────────
+  function _buildStageDetail(stage, si, incId) {
+    const tactic   = (stage.tactic || 'unknown').toLowerCase().replace(/\s+/g,'-');
+    const nodeColor= TACTIC_NODE_COLOR[tactic] || '#374151';
+    return `<div id="rk-stage-${incId}-${si}"
+      style="display:none;padding:10px 14px;background:rgba(13,17,23,0.9);
+             border-radius:8px;border:1px solid ${nodeColor}44;margin-bottom:6px;">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+        ${_sevBadge(stage.severity||'medium')}
+        <span style="font-size:12px;color:#e6edf3;font-weight:600;">${stage.ruleName||stage.technique||`Stage ${si+1}`}</span>
+        ${stage.ruleId ? `<span style="font-size:10px;font-family:monospace;color:#4b5563;">${stage.ruleId}</span>` : ''}
+        ${stage.inferred ? `<span style="font-size:9px;padding:1px 6px;background:rgba(107,114,128,0.2);color:#6b7280;border-radius:4px;font-style:italic;">⚙ Inferred (${stage.inferredConfidence||stage.confidence}% confidence)</span>` : ''}
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:#8b949e;margin-bottom:6px;">
+        ${stage.technique ? `<span style="color:#a78bfa;font-family:monospace;font-weight:600;">${stage.technique}</span>` : ''}
+        ${stage.tactic    ? `<span style="color:${nodeColor};">${stage.tactic.replace(/-/g,' ')}</span>` : ''}
+        ${stage.host   ? `<span>🖥 ${stage.host}</span>` : ''}
+        ${stage.user   ? `<span>👤 ${stage.user}</span>` : ''}
+        ${stage.srcIp  ? `<span>🌐 ${stage.srcIp}</span>` : ''}
+        ${stage.timestamp ? `<span>🕐 ${new Date(stage.timestamp).toLocaleString()}</span>` : ''}
+      </div>
+      ${stage.narrative ? `<div style="font-size:11px;color:#c9d1d9;line-height:1.5;margin-bottom:6px;">${stage.narrative.slice(0,200)}${stage.narrative.length>200?'…':''}</div>` : ''}
+      ${stage.commandLine ? `<div style="font-size:10px;font-family:monospace;color:#60a5fa;background:#0d1117;padding:4px 8px;border-radius:4px;word-break:break-all;">${stage.commandLine.slice(0,200)}</div>` : ''}
+      ${stage.hasCausalViolation ? `<div style="font-size:10px;color:#ef4444;margin-top:6px;">⚠ Causal violation detected at this stage</div>` : ''}
+      <!-- One-click actions -->
+      <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+        <button class="rk-entity-btn" onclick="RAYKAN_UI._invEntity('${stage.host||''}')" style="font-size:10px;">🔍 Investigate Host</button>
+        <button class="rk-entity-btn" onclick="RAYKAN_UI._invEntity('${stage.user||''}')" style="font-size:10px;">👤 Investigate User</button>
+        ${stage.srcIp ? `<button class="rk-entity-btn" onclick="RAYKAN_UI.lookupIOCVal('${stage.srcIp}')" style="font-size:10px;">🌐 Enrich IP</button>` : ''}
+        ${stage.technique ? `<button class="rk-entity-btn" onclick="RAYKAN_UI._openMITRE('${stage.technique}')" style="font-size:10px;">🎯 MITRE ATT&CK</button>` : ''}
+      </div>
+    </div>`;
   }
 
   function _renderIncidentCard(inc, i) {
@@ -5468,18 +6157,43 @@
       ? conf.reasons.map(r => `<li style="margin-bottom:2px;">${r}</li>`).join('')
       : '<li>Single-event detection</li>';
 
-    // ── Phase timeline rows ────────────────────────────────────────
-    const phaseTimeline = inc.phaseTimeline || [];
+    // ── BCE v10: Build interactive attack-chain flow ───────────────
+    // Pull kill-chain stages from phaseTimeline (includes inferred stages)
+    const phaseTimeline   = inc.phaseTimeline || [];
+    const hasInferred     = phaseTimeline.some(p => p.inferred || p.inferredFrom);
+    const inferredCount   = phaseTimeline.filter(p => p.inferred || p.inferredFrom).length;
+    const observedCount   = phaseTimeline.filter(p => !p.inferred && !p.inferredFrom).length;
+
+    // Build stages array for visualization from phaseTimeline
+    const vizStages = phaseTimeline.map((p, si) => ({
+      ...p,
+      _riskScore  : p.riskScore || 0,
+      tactic      : p.phaseTactic || p.tactic || '',
+      tacticRole  : p.phaseTactic || p.tactic || '',
+      inferred    : !!(p.inferred || p.inferredFrom),
+      confidence  : p.confidence || (p.riskScore ? Math.min(p.riskScore, 100) : 30),
+    }));
+
+    // Visual attack-chain flow SVG
+    const chainFlowSVG = vizStages.length > 0 ? _buildChainFlowSVG(vizStages, incId) : '';
+
+    // Risk evolution bar
+    const riskEvolutionBar = vizStages.length >= 2 ? _buildRiskEvolutionBar(vizStages, incId) : '';
+
+    // Stage detail panels (initially hidden, shown on node click)
+    const stageDetails = vizStages.map((s, si) => _buildStageDetail(s, si, incId)).join('');
+
+    // ── Phase timeline rows (text fallback) ───────────────────────
     const phaseRows = phaseTimeline.map((pt, pi) => {
       const ptSev  = pt.severity || 'medium';
       const ptDot  = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${_sev(ptSev).color};flex-shrink:0;"></span>`;
       const ptTs   = pt.first_seen ? new Date(pt.first_seen).toLocaleTimeString() : '—';
-      const ptEnd  = pt.last_seen  ? new Date(pt.last_seen).toLocaleTimeString()  : '';
       const ptDur  = (pt.duration_ms && pt.duration_ms > 0) ? ` (${_formatDurationUI(pt.duration_ms)})` : '';
       const ptEdge = (pt.causalEdges || []).length > 0
         ? `<span style="font-size:9px;color:#4b5563;"> → ${pt.causalEdges[0]}</span>` : '';
       const hostTransition = pt.isHostTransition
         ? `<span style="font-size:9px;padding:1px 5px;background:rgba(167,139,250,0.1);color:#a78bfa;border-radius:4px;">🔀 host pivot</span>` : '';
+      const isInf = pt.inferred || pt.inferredFrom;
       return `
 <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid #1c2128;">
   <div style="display:flex;flex-direction:column;align-items:center;min-width:24px;padding-top:2px;">
@@ -5494,23 +6208,16 @@
       ${pt.technique ? `<span style="font-size:10px;font-family:monospace;color:#60a5fa;">${pt.technique}</span>` : ''}
       ${pt.isParent ? `<span style="font-size:9px;padding:1px 5px;background:rgba(239,68,68,0.1);color:#ef4444;border-radius:4px;">PARENT</span>` : ''}
       ${hostTransition}
+      ${isInf ? `<span style="font-size:9px;padding:1px 5px;background:rgba(107,114,128,0.15);color:#6b7280;border-radius:4px;font-style:italic;">⚙ inferred</span>` : ''}
     </div>
     <div style="font-size:10px;color:#6b7280;">
       <span style="color:#4b5563;">${ptTs}${ptDur}</span>
       ${pt.host ? ` · 🖥 ${pt.host}` : ''}
       ${pt.user ? ` · 👤 ${pt.user}` : ''}
       ${pt.srcIp ? ` · 🌐 ${pt.srcIp}` : ''}
-      ${pt.linkedEventCount > 0 ? ` · <span style="color:#60a5fa;">🔗 ×${pt.linkedEventCount}</span>` : ''}
       ${ptEdge}
     </div>
     ${pt.narrative ? `<div style="font-size:11px;color:#8b949e;margin-top:3px;line-height:1.4;">${pt.narrative.slice(0,160)}${pt.narrative.length>160?'…':''}</div>` : ''}
-    ${pt.enrichedEvents && pt.enrichedEvents.length ? `
-    <div style="margin-top:4px;display:flex;flex-direction:column;gap:2px;">
-      ${pt.enrichedEvents.slice(0,3).map(ev => `
-      <div style="font-size:10px;color:#4b5563;padding:2px 6px;background:rgba(255,255,255,0.02);border-radius:4px;border-left:2px solid ${_sev(ptSev).color}44;">
-        ${ev.icon||'📋'} <span style="color:#6b7280;">${ev.label}:</span> ${(ev.detail||'').slice(0,120)}
-      </div>`).join('')}
-    </div>` : ''}
   </div>
   <div style="font-size:10px;color:#4b5563;flex-shrink:0;text-align:right;">
     <span style="font-weight:700;color:${_riskColor(pt.riskScore||0)};">${pt.riskScore||'?'}</span>
@@ -5519,7 +6226,7 @@
 </div>`;
     }).join('');
 
-    // ── Child node rows (full MITRE preserved per node) ────────────
+    // ── Child node rows ────────────────────────────────────────────
     const childRows = children.map(c => {
       const cs  = c.aggregated_severity || c.severity || 'medium';
       const cm  = c.mitre?.technique || c.technique || '';
@@ -5581,6 +6288,7 @@
         ${basisBadge}
         ${intentHtml}
         ${dag.phaseSequence?.length ? `<span style="font-size:9px;padding:1px 6px;background:rgba(52,211,153,0.08);color:#34d399;border-radius:5px;">${dag.phaseSequence.length} phases</span>` : ''}
+        ${hasInferred ? `<span style="font-size:9px;padding:1px 6px;background:rgba(107,114,128,0.15);color:#6b7280;border-radius:5px;">⚙ ${inferredCount} inferred stage${inferredCount>1?'s':''}</span>` : ''}
       </div>
       <!-- Phase sequence DAG visualization -->
       ${phaseSeqHtml}
@@ -5598,29 +6306,56 @@
       ${techniqueMatrix ? `<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">${techniqueMatrix}</div>` : ''}
     </div>
 
-    <!-- Right panel: ACE risk score -->
+    <!-- Right panel: ACE risk score + one-click actions -->
     <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0;">
       <div style="text-align:center;">
         <div style="font-size:28px;font-weight:900;color:${_riskColor(inc.riskScore||0)};line-height:1;">${inc.riskScore||'—'}</div>
         <div style="font-size:10px;color:#6b7280;">/100 risk</div>
         <div style="font-size:9px;color:${bandColor};font-weight:700;">${aceScore.severityBand||''}</div>
       </div>
+      <!-- One-click actions -->
       <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
         <button class="rk-entity-btn" onclick="RAYKAN_UI._showDetDetail('${parent.id||''}')">Parent →</button>
-        <button class="rk-entity-btn" onclick="RAYKAN_UI._invEntity('${inc.host||''}')">Investigate</button>
+        <button class="rk-entity-btn" onclick="RAYKAN_UI._invEntity('${inc.host||''}')">🔍 Investigate</button>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+        <button class="rk-entity-btn" style="font-size:10px;background:rgba(239,68,68,0.1);color:#ef4444;border-color:#ef4444;" onclick="RAYKAN_UI._isolateHost('${inc.host||''}')">🔒 Isolate</button>
+        <button class="rk-entity-btn" style="font-size:10px;" onclick="RAYKAN_UI._pivotToLogs('${inc.incidentId||incId}')">📋 Logs</button>
       </div>
     </div>
   </div>
 
-  <!-- ── Forensic Narrative ─────────────────────────────────────── -->
+  <!-- ── Root Cause / Intent Summary Banner ─────────────────────── -->
   ${inc.narrative || behavior.description ? `
-  <div style="padding:12px 20px;background:rgba(96,165,250,0.03);border-top:1px solid #21262d;border-bottom:1px solid #21262d;">
-    <div style="font-size:10px;color:#4b5563;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;font-weight:600;">Forensic Narrative</div>
+  <div style="padding:10px 20px;background:rgba(96,165,250,0.03);border-top:1px solid #21262d;">
+    <div style="font-size:10px;color:#4b5563;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;font-weight:600;">🧠 Root Cause / Intent Summary</div>
     <div style="font-size:12px;color:#c9d1d9;line-height:1.6;">${inc.narrative || behavior.description || ''}</div>
   </div>` : ''}
 
+  <!-- ── BCE v10: Interactive Attack-Chain Flow Graph ──────────── -->
+  ${chainFlowSVG ? `
+  <div style="padding:14px 16px;border-top:1px solid #21262d;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <div>
+        <span style="font-size:11px;font-weight:700;color:#e6edf3;">⛓ Attack Chain Flow</span>
+        <span style="font-size:10px;color:#4b5563;margin-left:8px;">${observedCount} observed · ${inferredCount > 0 ? `${inferredCount} inferred (dashed)` : 'no inferred stages'}</span>
+      </div>
+      <button data-chain-toggle="${incId}" style="background:none;border:none;color:#60a5fa;font-size:10px;cursor:pointer;font-weight:600;">▼ collapse</button>
+    </div>
+    <div id="rk-chain-flow-${incId}" style="overflow-x:auto;padding:4px 0;">
+      ${chainFlowSVG}
+    </div>
+    <!-- Stage detail panels (shown when node is clicked) -->
+    <div id="rk-stage-details-${incId}" style="margin-top:8px;">
+      ${stageDetails}
+    </div>
+  </div>` : ''}
+
+  <!-- ── Risk Evolution Bar ─────────────────────────────────────── -->
+  ${riskEvolutionBar}
+
   <!-- ── ACE Scoring Factors ────────────────────────────────────── -->
-  <div style="padding:10px 20px;background:rgba(13,17,23,0.5);border-bottom:1px solid #21262d;">
+  <div style="padding:10px 20px;background:rgba(13,17,23,0.5);border-top:1px solid #21262d;">
     <div style="font-size:10px;color:#4b5563;text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:4px;">ACE Confidence Factors:</div>
     <ul style="margin:0;padding-left:18px;list-style:disc;font-size:11px;color:#8b949e;">
       ${confReasons}
@@ -5629,9 +6364,9 @@
 
   <!-- ── Phase Timeline (expandable) ───────────────────────────── -->
   ${phaseTimeline.length > 0 ? `
-  <div style="padding:10px 20px 0 20px;">
+  <div style="padding:10px 20px 0 20px;border-top:1px solid #21262d;">
     <button data-phase-toggle="${incId}" style="background:none;border:none;color:#a78bfa;font-size:11px;cursor:pointer;padding:0;margin-bottom:8px;font-weight:600;">
-      ▶ Attack Phase Timeline
+      ▶ Attack Phase Timeline (${phaseTimeline.length} stages)
     </button>
     <div id="rk-phase-${incId}" style="display:none;padding-bottom:12px;">
       ${phaseRows}
@@ -7027,6 +7762,68 @@
     }, 100);
   }
 
+  // ── BCE v10: Toggle stage detail panel in attack chain flow ────
+  function _toggleStageDetail(incId, stageIdx) {
+    const panel = document.getElementById(`rk-stage-${incId}-${stageIdx}`);
+    if (!panel) return;
+    const isOpen = panel.style.display !== 'none';
+    // Close all other stage panels in this incident
+    const container = document.getElementById(`rk-stage-details-${incId}`);
+    if (container) {
+      container.querySelectorAll('[id^="rk-stage-"]').forEach(p => {
+        if (p !== panel) p.style.display = 'none';
+      });
+    }
+    panel.style.display = isOpen ? 'none' : 'block';
+    if (!isOpen) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  // ── BCE v10: Open MITRE ATT&CK technique page ─────────────────
+  function _openMITRE(technique) {
+    if (!technique) return;
+    const base = 'https://attack.mitre.org/techniques/';
+    const path = technique.replace('.', '/');
+    window.open(base + path, '_blank', 'noopener');
+  }
+
+  // ── BCE v10: Isolate host (placeholder — triggers investigation) ─
+  function _isolateHost(host) {
+    if (!host) return;
+    const msg = `Host isolation initiated for: ${host}\n\nIn production, this would:\n• Block all inbound/outbound traffic\n• Quarantine the endpoint\n• Notify the SOC team`;
+    if (typeof _showToast === 'function') {
+      _showToast(`🔒 Isolation request sent for ${host}`, 'warning');
+    }
+    // Also open investigation
+    _invEntity(host);
+  }
+
+  // ── BCE v10: Pivot to logs for an incident ────────────────────
+  function _pivotToLogs(incidentId) {
+    if (!incidentId) return;
+    _setTab('timeline');
+    setTimeout(() => {
+      const filter = document.getElementById('rk-tl-filter');
+      if (filter) filter.value = 'detection';
+      if (typeof _filterTimeline === 'function') _filterTimeline();
+      if (typeof _showToast === 'function') {
+        _showToast(`Showing logs for incident ${incidentId}`, 'info');
+      }
+    }, 200);
+  }
+
+  // ── BCE v10: Lookup IOC value ──────────────────────────────────
+  function lookupIOCVal(val) {
+    if (!val) return;
+    _setTab('ioc');
+    setTimeout(() => {
+      const el = document.getElementById('rk-ioc-in');
+      if (el) {
+        el.value = val;
+        if (typeof lookupIOC === 'function') lookupIOC();
+      }
+    }, 200);
+  }
+
   // ════════════════════════════════════════════════════════════════
   //  HUNT MODE TOGGLE
   // ════════════════════════════════════════════════════════════════
@@ -7278,6 +8075,11 @@
     _loadMITRE,
     _showDetDetail,
     _invEntity,
+    _toggleStageDetail,
+    _openMITRE,
+    _isolateHost,
+    _pivotToLogs,
+    lookupIOCVal,
     _activateGeneratedRule,
     _renderIncidentsList,
     _renderIncidentCard,
