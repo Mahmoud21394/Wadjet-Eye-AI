@@ -7358,72 +7358,87 @@
 
 <div class="rk-root" id="rk-root">
 
-  <!-- Scanning sweep line overlay -->
-  <div class="rk-sweep-line" aria-hidden="true"></div>
-
-  <!-- ═══ HEADER ═══ -->
+  <!-- ═══ HEADER — Slim 52px command bar ═══ -->
   <div class="rk-hdr">
-    <!-- Logo -->
-    <div style="display:flex;align-items:center;gap:12px;flex-shrink:0;">
-      <div class="rk-logo-icon">⚔</div>
+
+    <!-- Brand mark -->
+    <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
+      <div class="rk-logo-icon" aria-hidden="true">⚔</div>
       <div>
         <div class="rk-logo-title">RAYKAN</div>
-        <div class="rk-logo-sub">AI Threat Hunting &amp; DFIR Engine v${RAYKAN_VERSION} · OFFLINE-CAPABLE</div>
+        <div class="rk-logo-sub">Wadjet Eye AI · v${RAYKAN_VERSION}</div>
       </div>
     </div>
+
+    <!-- Divider -->
+    <div style="width:1px;height:22px;background:rgba(255,255,255,0.07);flex-shrink:0;margin:0 4px;"></div>
 
     <!-- WS connection badge -->
-    <div id="rk-ws-badge" class="rk-ws-badge" style="margin-left:10px;">
-      <span id="rk-ws-dot" style="width:7px;height:7px;border-radius:50%;background:#1a3040;transition:all 0.3s;flex-shrink:0;"></span>
-      <span id="rk-ws-lbl" style="font-size:10px;">Offline</span>
+    <div id="rk-ws-badge" class="rk-ws-badge" style="display:flex;align-items:center;gap:5px;">
+      <span id="rk-ws-dot" style="width:6px;height:6px;border-radius:50%;background:var(--soc-text-4,#293A50);transition:all 0.3s;flex-shrink:0;"></span>
+      <span id="rk-ws-lbl">Offline</span>
     </div>
 
-    <div style="margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    <!-- Right-side controls -->
+    <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
+
+      <!-- Session ID — monospace, very subtle -->
+      <span style="font-size:9px;color:var(--soc-text-4,#293A50);font-family:'JetBrains Mono',monospace;letter-spacing:0.3px;">
+        SID·<span id="rk-session-id" style="color:var(--soc-text-3,#4A6080);">—</span>
+      </span>
+
       <!-- Risk badge -->
-      <div id="rk-risk-badge" style="padding:5px 14px;border-radius:20px;font-size:11px;font-weight:700;
-        font-family:'JetBrains Mono',monospace;background:rgba(107,114,128,0.1);
-        color:#3d5a6b;border:1px solid rgba(107,114,128,0.15);">
-        RISK: <span id="rk-risk-badge-val">—</span>
+      <div id="rk-risk-badge" style="font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;
+        padding:3px 10px;border-radius:5px;background:rgba(107,114,128,0.10);
+        color:var(--soc-text-3,#4A6080);border:1px solid rgba(107,114,128,0.14);letter-spacing:0.4px;">
+        RISK·<span id="rk-risk-badge-val">—</span>
       </div>
-      <!-- Session -->
-      <div style="font-size:10px;color:#1a3040;font-family:'JetBrains Mono',monospace;">
-        SID:<span id="rk-session-id" style="color:#2d4a5a;margin-left:3px;">—</span>
-      </div>
-      <!-- Actions -->
-      <button class="rk-hdr-btn rk-hdr-btn-ghost" onclick="RAYKAN_UI.exportResults()" title="Export JSON results">
-        ⬇ Export
+
+      <!-- Export -->
+      <button class="rk-hdr-btn rk-hdr-btn-ghost" onclick="RAYKAN_UI.exportResults()" title="Export results as JSON"
+        style="display:inline-flex;align-items:center;gap:4px;">
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 2v9M4 7l4 4 4-4M2 13h12"/>
+        </svg>
+        Export
       </button>
-      <button class="rk-hdr-btn rk-hdr-btn-demo" onclick="RAYKAN_UI.runSample('ransomware')">
-        ▶ Run Demo
+
+      <!-- Demo -->
+      <button class="rk-hdr-btn rk-hdr-btn-demo" onclick="RAYKAN_UI.runSample('ransomware')"
+        style="display:inline-flex;align-items:center;gap:4px;">
+        <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="4,2 14,8 4,14"/>
+        </svg>
+        Run Demo
       </button>
     </div>
   </div>
 
-  <!-- ═══ STATS ROW ═══ -->
+  <!-- ═══ KPI STRIP — Events | Detections | Incidents | Anomalies | Chains | Risk ═══ -->
   <div class="rk-stats-row">
-    ${_statCard('Events',      '0',  '#00d4ff', 'rk-s-events',  '—')}
-    ${_statCard('Detections',  '0',  '#ef4444', 'rk-s-dets',    '—')}
-    ${_statCard('Incidents',   '0',  '#f97316', 'rk-s-incidents','—')}
-    ${_statCard('Anomalies',   '0',  '#f59e0b', 'rk-s-anom',    '—')}
-    ${_statCard('Chains',      '0',  '#a78bfa', 'rk-s-chains',  '—')}
-    ${_statCard('Risk Score',  '—',  '#ef4444', 'rk-s-risk',    '—')}
+    ${_statCard('Events',       '0', '#00D4FF', 'rk-s-events',   '—')}
+    ${_statCard('Detections',   '0', '#EF4444', 'rk-s-dets',     '—')}
+    ${_statCard('Incidents',    '0', '#F97316', 'rk-s-incidents', '—')}
+    ${_statCard('Anomalies',    '0', '#F59E0B', 'rk-s-anom',     '—')}
+    ${_statCard('Attack Chains','0', '#A78BFA', 'rk-s-chains',   '—')}
+    ${_statCard('Risk Score',   '—', '#EF4444', 'rk-s-risk',     '—')}
   </div>
 
-  <!-- ═══ TABS ═══ -->
+  <!-- ═══ TAB BAR — SVG line icons, 36px height ═══ -->
   <div class="rk-tabs" id="rk-tab-bar">
-    ${_tabBtn('overview',    '◈',  'Overview')}
-    ${_tabBtn('hunt',        '◎',  'Threat Hunt')}
-    ${_tabBtn('ingest',      '⬆',  'Log Ingest')}
-    ${_tabBtn('timeline',    '◷',  'Timeline')}
-    ${_tabBtn('detections',  '⚡',  'Detections')}
-    ${_tabBtn('incidents',   '⚔',  'Incidents')}
-    ${_tabBtn('chains',      '⛓',  'Attack Chains')}
-    ${_tabBtn('investigate', '◉',  'Investigate')}
-    ${_tabBtn('ioc',         '⬡',  'IOC Lookup')}
-    ${_tabBtn('anomalies',   '◬',  'UEBA / Anomalies')}
-    ${_tabBtn('rules',       '≡',  'Rules')}
-    ${_tabBtn('mitre',       '⊞',  'MITRE')}
-    ${_tabBtn('rulegen',     '✦',  'AI Rule Gen')}
+    ${_tabBtn('overview',    '', 'Overview')}
+    ${_tabBtn('hunt',        '', 'Threat Hunt')}
+    ${_tabBtn('ingest',      '', 'Log Ingest')}
+    ${_tabBtn('timeline',    '', 'Timeline')}
+    ${_tabBtn('detections',  '', 'Detections')}
+    ${_tabBtn('incidents',   '', 'Incidents')}
+    ${_tabBtn('chains',      '', 'Attack Chains')}
+    ${_tabBtn('investigate', '', 'Investigate')}
+    ${_tabBtn('ioc',         '', 'IOC Lookup')}
+    ${_tabBtn('anomalies',   '', 'UEBA')}
+    ${_tabBtn('rules',       '', 'Rules')}
+    ${_tabBtn('mitre',       '', 'MITRE')}
+    ${_tabBtn('rulegen',     '', 'AI Rule Gen')}
   </div>
 
   <!-- ═══ BODY ═══ -->
@@ -7436,18 +7451,33 @@
   }
 
   // ── Helpers ────────────────────────────────────────────────────
+  // SVG line icons for each tab (stroke-only, 8pt grid)
+  const TAB_ICONS = {
+    overview:    '<svg class="soc-tab-icon" viewBox="0 0 16 16"><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>',
+    hunt:        '<svg class="soc-tab-icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="5"/><line x1="11" y1="11" x2="15" y2="15"/><line x1="7" y1="4" x2="7" y2="7"/><line x1="4" y1="7" x2="7" y2="7"/></svg>',
+    ingest:      '<svg class="soc-tab-icon" viewBox="0 0 16 16"><polyline points="8,2 8,10"/><polyline points="4,6 8,10 12,6"/><line x1="2" y1="14" x2="14" y2="14"/></svg>',
+    timeline:    '<svg class="soc-tab-icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><polyline points="8,4 8,8 11,10"/></svg>',
+    detections:  '<svg class="soc-tab-icon" viewBox="0 0 16 16"><polygon points="8,2 14,13 2,13"/><line x1="8" y1="7" x2="8" y2="10"/><circle cx="8" cy="12" r="0.5" fill="currentColor" stroke="none"/></svg>',
+    incidents:   '<svg class="soc-tab-icon" viewBox="0 0 16 16"><path d="M8 2L2 12h12L8 2z"/><line x1="8" y1="7" x2="8" y2="9"/><line x1="8" y1="11" x2="8" y2="11.5" stroke-width="2" stroke-linecap="round"/></svg>',
+    chains:      '<svg class="soc-tab-icon" viewBox="0 0 16 16"><circle cx="3" cy="8" r="2"/><circle cx="8" cy="8" r="2"/><circle cx="13" cy="8" r="2"/><line x1="5" y1="8" x2="6" y2="8"/><line x1="10" y1="8" x2="11" y2="8"/></svg>',
+    investigate: '<svg class="soc-tab-icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><line x1="10.5" y1="10.5" x2="14" y2="14"/><line x1="5" y1="7" x2="9" y2="7"/><line x1="7" y1="5" x2="7" y2="9"/></svg>',
+    ioc:         '<svg class="soc-tab-icon" viewBox="0 0 16 16"><path d="M8 1L1 4v5c0 4 7 6 7 6s7-2 7-6V4L8 1z"/><line x1="8" y1="6" x2="8" y2="9"/><circle cx="8" cy="11" r="0.5" fill="currentColor" stroke="none"/></svg>',
+    anomalies:   '<svg class="soc-tab-icon" viewBox="0 0 16 16"><polyline points="1,11 4,5 7,9 10,3 13,7 15,5"/></svg>',
+    rules:       '<svg class="soc-tab-icon" viewBox="0 0 16 16"><line x1="2" y1="4" x2="14" y2="4"/><line x1="2" y1="8" x2="10" y2="8"/><line x1="2" y1="12" x2="12" y2="12"/></svg>',
+    mitre:       '<svg class="soc-tab-icon" viewBox="0 0 16 16"><rect x="1" y="1" width="4" height="4" rx="0.5"/><rect x="6" y="1" width="4" height="4" rx="0.5"/><rect x="11" y="1" width="4" height="4" rx="0.5"/><rect x="1" y="6" width="4" height="4" rx="0.5"/><rect x="6" y="6" width="4" height="4" rx="0.5"/><rect x="11" y="6" width="4" height="4" rx="0.5"/><rect x="1" y="11" width="4" height="4" rx="0.5"/><rect x="6" y="11" width="4" height="4" rx="0.5"/><rect x="11" y="11" width="4" height="4" rx="0.5"/></svg>',
+    rulegen:     '<svg class="soc-tab-icon" viewBox="0 0 16 16"><polygon points="8,1 10,6 15,6 11,9 13,14 8,11 3,14 5,9 1,6 6,6"/></svg>',
+  };
+
   function _statCard(label, val, color, id, _trend) {
     return `<div class="rk-stat" style="--rk-stat-color:${color};">
-  <div class="rk-stat-val" id="${id}" style="color:${color};">${val}</div>
+  <div class="rk-stat-val" id="${id}">${val}</div>
   <div class="rk-stat-lbl">${label}</div>
-  <!-- Ambient inner glow -->
-  <div style="position:absolute;inset:0;pointer-events:none;
-    background:radial-gradient(ellipse at 50% 120%,${color}09,transparent 70%);"></div>
 </div>`;
   }
 
-  function _tabBtn(id, icon, label) {
-    return `<button class="rk-tab" data-tab="${id}" onclick="RAYKAN_UI._setTab('${id}')">${icon} ${label}</button>`;
+  function _tabBtn(id, _icon, label) {
+    const svgIcon = TAB_ICONS[id] || '';
+    return `<button class="rk-tab" data-tab="${id}" onclick="RAYKAN_UI._setTab('${id}')">${svgIcon}${label}</button>`;
   }
 
   function _sev(s) { return SEV[s] || SEV.informational; }

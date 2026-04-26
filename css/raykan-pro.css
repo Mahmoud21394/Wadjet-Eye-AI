@@ -1,0 +1,1309 @@
+/* ══════════════════════════════════════════════════════════════════════
+   RAYKAN  —  Professional SOC Dashboard v3.0
+   Design Language: Minimalist Industrial / Modern SaaS
+   Inspiration: CrowdStrike Falcon · SentinelOne · Darktrace
+   ──────────────────────────────────────────────────────────────────────
+   Philosophy:
+     • Every pixel must earn its place
+     • Information > decoration
+     • Reserve glow exclusively for active-threat alerts
+     • Sub-8h eye-strain tolerance: matte surfaces, low contrast borders
+     • 8-pt spacing grid (4 / 8 / 12 / 16 / 24 / 32 / 48)
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ──────────────────────────────────────────────────────────────────────
+   DESIGN TOKENS
+   ────────────────────────────────────────────────────────────────────── */
+:root {
+  /* Surfaces */
+  --pro-bg:           #0B0E14;
+  --pro-surface:      #0F1319;
+  --pro-surface-2:    #141A23;
+  --pro-surface-3:    #1A2130;
+  --pro-overlay:      rgba(11, 14, 20, 0.92);
+
+  /* Borders */
+  --pro-border:       rgba(255,255,255,0.06);
+  --pro-border-md:    rgba(255,255,255,0.10);
+  --pro-border-hi:    rgba(255,255,255,0.16);
+
+  /* Text */
+  --pro-text-1:       #E2E8F0;
+  --pro-text-2:       #94A3B8;
+  --pro-text-3:       #475569;
+  --pro-text-4:       #2D3F55;
+  --pro-text-mono:    #64B5CC;
+
+  /* Brand accents */
+  --pro-cyan:         #38BDF8;
+  --pro-cyan-dim:     rgba(56,189,248,0.12);
+  --pro-cyan-glow:    rgba(56,189,248,0.20);
+
+  /* Status — use ONLY for real alerts */
+  --pro-critical:     #E53E3E;
+  --pro-critical-dim: rgba(229,62,62,0.10);
+  --pro-high:         #DD6B20;
+  --pro-high-dim:     rgba(221,107,32,0.10);
+  --pro-medium:       #D69E2E;
+  --pro-medium-dim:   rgba(214,158,46,0.10);
+  --pro-low:          #3B82F6;
+  --pro-low-dim:      rgba(59,130,246,0.10);
+  --pro-green:        #38A169;
+  --pro-green-dim:    rgba(56,161,105,0.10);
+
+  /* Spacing */
+  --pro-sp-1: 4px;  --pro-sp-2: 8px;   --pro-sp-3: 12px;
+  --pro-sp-4: 16px; --pro-sp-5: 20px;  --pro-sp-6: 24px;
+
+  /* Radii */
+  --pro-r-sm:  4px;
+  --pro-r:     8px;
+  --pro-r-md: 10px;
+  --pro-r-lg: 14px;
+
+  /* Motion */
+  --pro-ease:  cubic-bezier(0.22, 1, 0.36, 1);
+  --pro-t:     160ms;
+  --pro-t-med: 240ms;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   GLOBAL BASE
+   ────────────────────────────────────────────────────────────────────── */
+.rk-root {
+  background: var(--pro-bg) !important;
+  color: var(--pro-text-1) !important;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif !important;
+  font-size: 13px !important;
+  -webkit-font-smoothing: antialiased !important;
+  -moz-osx-font-smoothing: grayscale !important;
+}
+
+/* Subtle dot-grid background — just enough to feel like a console */
+.rk-root::before {
+  background-image:
+    radial-gradient(circle, rgba(56,189,248,0.06) 1px, transparent 1px) !important;
+  background-size: 32px 32px !important;
+  animation: none !important;
+  opacity: 0.6;
+}
+
+/* Kill scanline — causes eye strain */
+.rk-root::after { display: none !important; }
+
+/* Sweep line — very subtle */
+.rk-sweep-line {
+  background: linear-gradient(90deg, transparent 0%, rgba(56,189,248,0.2) 50%, transparent 100%) !important;
+  box-shadow: none !important;
+  animation: rk-sweep 12s linear infinite !important;
+  height: 1px !important;
+  opacity: 0.4;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   HEADER  —  Slim single-line command bar
+   ────────────────────────────────────────────────────────────────────── */
+.rk-hdr {
+  height: 52px !important;
+  padding: 0 20px !important;
+  background: var(--pro-surface) !important;
+  border-bottom: 1px solid var(--pro-border) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: 0 1px 0 var(--pro-border) !important;
+  gap: 10px !important;
+}
+
+/* Logo — flat, no pulse ring */
+.rk-logo-icon {
+  width: 30px !important;
+  height: 30px !important;
+  border-radius: 6px !important;
+  background: #9B1C1C !important;
+  box-shadow: none !important;
+  animation: none !important;
+  font-size: 15px !important;
+}
+.rk-logo-icon::after { display: none !important; }
+
+.rk-logo-title {
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  letter-spacing: 3px !important;
+  background: none !important;
+  -webkit-text-fill-color: var(--pro-text-1) !important;
+  color: var(--pro-text-1) !important;
+  filter: none !important;
+}
+
+.rk-logo-sub {
+  font-size: 9px !important;
+  color: var(--pro-text-3) !important;
+  letter-spacing: 0.8px !important;
+  font-family: 'JetBrains Mono', monospace !important;
+}
+
+/* WS badge */
+.rk-ws-badge {
+  font-size: 10px !important;
+  padding: 2px 8px !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+  border: 1px solid var(--pro-border) !important;
+  color: var(--pro-text-3) !important;
+  box-shadow: none !important;
+}
+.rk-ws-badge.connected {
+  color: var(--pro-green) !important;
+  border-color: rgba(56,161,105,0.25) !important;
+  background: var(--pro-green-dim) !important;
+  box-shadow: none !important;
+}
+
+/* Risk badge — small numeric badge, no glow */
+#rk-risk-badge {
+  font-size: 10px !important;
+  padding: 3px 10px !important;
+  border-radius: var(--pro-r-sm) !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  letter-spacing: 0.5px !important;
+  animation: none !important;
+  border: 1px solid var(--pro-border-md) !important;
+}
+#rk-risk-badge.risk-critical {
+  background: var(--pro-critical-dim) !important;
+  color: var(--pro-critical) !important;
+  border-color: rgba(229,62,62,0.25) !important;
+  box-shadow: none !important;
+  animation: none !important;
+}
+#rk-risk-badge.risk-high {
+  background: var(--pro-high-dim) !important;
+  color: var(--pro-high) !important;
+  border-color: rgba(221,107,32,0.25) !important;
+}
+#rk-risk-badge.risk-medium {
+  background: var(--pro-medium-dim) !important;
+  color: var(--pro-medium) !important;
+  border-color: rgba(214,158,46,0.25) !important;
+}
+#rk-risk-badge.risk-low {
+  background: var(--pro-low-dim) !important;
+  color: var(--pro-low) !important;
+  border-color: rgba(59,130,246,0.25) !important;
+}
+
+/* Header buttons — tactile flat with micro-elevation */
+.rk-hdr-btn {
+  font-size: 11px !important;
+  padding: 5px 12px !important;
+  border-radius: var(--pro-r-sm) !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.2px !important;
+  transition: background var(--pro-t) var(--pro-ease),
+              border-color var(--pro-t) var(--pro-ease),
+              transform 80ms ease !important;
+}
+.rk-hdr-btn:hover { transform: none !important; }
+.rk-hdr-btn:active { transform: scale(0.97) !important; }
+.rk-hdr-btn::before { display: none !important; }
+
+.rk-hdr-btn-ghost {
+  background: transparent !important;
+  border: 1px solid var(--pro-border-md) !important;
+  color: var(--pro-text-2) !important;
+}
+.rk-hdr-btn-ghost:hover {
+  background: var(--pro-surface-2) !important;
+  border-color: var(--pro-border-hi) !important;
+  color: var(--pro-text-1) !important;
+}
+
+.rk-hdr-btn-demo {
+  background: #7F1D1D !important;
+  color: #FCA5A5 !important;
+  border: 1px solid rgba(239,68,68,0.25) !important;
+  box-shadow: none !important;
+}
+.rk-hdr-btn-demo:hover {
+  background: #991B1B !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   KPI STRIP  —  Professional minimal metric widgets
+   ────────────────────────────────────────────────────────────────────── */
+.rk-stats-row {
+  display: grid !important;
+  grid-template-columns: repeat(6, 1fr) !important;
+  background: var(--pro-surface) !important;
+  border-bottom: 1px solid var(--pro-border) !important;
+  gap: 0 !important;
+}
+
+.rk-stat {
+  padding: 10px 16px 9px !important;
+  background: transparent !important;
+  border-right: 1px solid var(--pro-border) !important;
+  position: relative;
+  overflow: hidden;
+  transition: background var(--pro-t) var(--pro-ease) !important;
+  cursor: default;
+}
+.rk-stat:last-child { border-right: none; }
+.rk-stat:hover { background: rgba(255,255,255,0.015) !important; }
+
+/* Remove old pseudo decorations */
+.rk-stat::before { display: none !important; }
+.rk-stat::after  { display: none !important; }
+
+/* Left accent bar — 2px colored strip */
+.rk-stat .pro-stat-accent {
+  position: absolute;
+  left: 0; top: 20%; bottom: 20%;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--rk-stat-color, #38BDF8);
+  opacity: 0.5;
+  transition: opacity var(--pro-t) var(--pro-ease);
+}
+.rk-stat:hover .pro-stat-accent { opacity: 1; }
+
+.rk-stat-val {
+  font-size: 20px !important;
+  font-weight: 600 !important;
+  font-family: 'JetBrains Mono', 'Roboto Mono', monospace !important;
+  line-height: 1.1 !important;
+  letter-spacing: -0.5px !important;
+  filter: none !important;
+  margin-left: 6px;
+}
+
+.rk-stat-lbl {
+  font-size: 9px !important;
+  color: var(--pro-text-3) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 1px !important;
+  font-weight: 500 !important;
+  margin-top: 2px !important;
+  margin-left: 6px;
+}
+.rk-stat-lbl::before { display: none !important; }
+
+/* Sparkline placeholder at bottom of KPI cell */
+.pro-sparkline {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 18px;
+  pointer-events: none;
+  opacity: 0.35;
+}
+
+/* Count-up */
+@keyframes pro-countup {
+  from { opacity: 0.5; transform: translateY(3px); }
+  to   { opacity: 1;   transform: translateY(0); }
+}
+.rk-stat-val.updated {
+  animation: pro-countup 0.3s var(--pro-ease) !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   TAB BAR  —  Subtle underline tabs with SVG line icons
+   ────────────────────────────────────────────────────────────────────── */
+.rk-tabs {
+  background: var(--pro-surface) !important;
+  border-bottom: 1px solid var(--pro-border) !important;
+  padding: 0 8px !important;
+  gap: 0 !important;
+}
+
+.rk-tab {
+  padding: 0 14px !important;
+  height: 38px !important;
+  font-size: 11px !important;
+  font-weight: 400 !important;
+  color: var(--pro-text-3) !important;
+  border-bottom: 2px solid transparent !important;
+  border-radius: 0 !important;
+  letter-spacing: 0.2px !important;
+  transition:
+    color var(--pro-t) var(--pro-ease),
+    border-color var(--pro-t) var(--pro-ease),
+    background var(--pro-t) var(--pro-ease) !important;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.rk-tab:hover {
+  color: var(--pro-text-2) !important;
+  background: rgba(255,255,255,0.02) !important;
+}
+.rk-tab.active {
+  color: var(--pro-text-1) !important;
+  font-weight: 500 !important;
+  border-bottom-color: var(--pro-cyan) !important;
+  background: transparent !important;
+  text-shadow: none !important;
+}
+.rk-tab.active::after { display: none !important; }
+
+/* Tab alert dot */
+.rk-tab-alert {
+  width: 4px !important;
+  height: 4px !important;
+  box-shadow: none !important;
+  animation: none !important;
+  opacity: 0.8;
+}
+
+/* Tab SVG icons */
+.pro-tab-icon {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   CARDS  —  Flat glassmorphism, no thick neon borders
+   ────────────────────────────────────────────────────────────────────── */
+.rk-card {
+  background: var(--pro-surface) !important;
+  border: 1px solid var(--pro-border) !important;
+  border-radius: var(--pro-r-lg) !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3) !important;
+  transition:
+    border-color var(--pro-t) var(--pro-ease),
+    box-shadow var(--pro-t) var(--pro-ease) !important;
+}
+.rk-card::before { display: none !important; }
+.rk-card:hover {
+  border-color: var(--pro-border-md) !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4) !important;
+}
+
+.rk-card-hdr {
+  padding: 11px 16px !important;
+  border-bottom: 1px solid var(--pro-border) !important;
+}
+.rk-card-title {
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  color: var(--pro-text-2) !important;
+  letter-spacing: 0.3px !important;
+  text-transform: none !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   INCIDENT CARDS  —  1px severity-corner tab, flat bg
+   ────────────────────────────────────────────────────────────────────── */
+.rk-inc-card {
+  background: var(--pro-surface) !important;
+  border: 1px solid var(--pro-border) !important;
+  border-radius: var(--pro-r-lg) !important;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.35) !important;
+  animation: pro-card-in var(--pro-t-med) var(--pro-ease) forwards !important;
+  position: relative;
+  overflow: hidden;
+}
+@keyframes pro-card-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.rk-inc-card:hover {
+  border-color: var(--pro-border-md) !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4) !important;
+  transform: none !important;
+}
+
+/* Severity — small corner tab (top-left) instead of full border */
+.rk-inc-card::before { display: none !important; }
+.rk-inc-card::after  { display: none !important; }
+
+/* Corner tab via JS-added data attribute */
+.rk-inc-card.sev-critical {
+  border-left: 2px solid var(--pro-critical) !important;
+  box-shadow: none !important;
+}
+.rk-inc-card.sev-high {
+  border-left: 2px solid var(--pro-high) !important;
+  box-shadow: none !important;
+}
+.rk-inc-card.sev-medium {
+  border-left: 2px solid var(--pro-medium) !important;
+  box-shadow: none !important;
+}
+.rk-inc-card.sev-low,
+.rk-inc-card.sev-informational {
+  border-left: 2px solid var(--pro-low) !important;
+  box-shadow: none !important;
+}
+
+/* Card header — compact, no gradient bg */
+.rk-inc-card-hdr {
+  padding: 11px 16px 9px !important;
+  background: transparent !important;
+}
+.rk-inc-card-hdr::after { display: none !important; }
+
+/* ──────────────────────────────────────────────────────────────────────
+   ATTACK CHAIN NODES  —  Sleek thin-border, vector connectors
+   ────────────────────────────────────────────────────────────────────── */
+
+/* Override existing soc-chain-node */
+.soc-chain-node-inner {
+  background: var(--pro-surface-2) !important;
+  border: 1px solid var(--pro-border-md) !important;
+  border-top: 2px solid var(--soc-node-color, var(--pro-cyan)) !important;
+  border-radius: var(--pro-r) !important;
+  padding: 8px 10px !important;
+  box-shadow: none !important;
+  transition:
+    border-color var(--pro-t) var(--pro-ease),
+    background var(--pro-t) var(--pro-ease) !important;
+}
+.soc-chain-node-inner::before { display: none !important; }
+
+.soc-chain-node:hover .soc-chain-node-inner {
+  background: var(--pro-surface-3) !important;
+  border-color: var(--soc-node-color, var(--pro-cyan)) !important;
+  box-shadow: none !important;
+}
+
+.soc-node-tactic {
+  font-size: 8px !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.8px !important;
+  text-transform: uppercase !important;
+  color: var(--soc-node-color, var(--pro-cyan)) !important;
+  opacity: 0.9;
+  margin-bottom: 4px !important;
+}
+
+.soc-node-name {
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  color: var(--pro-text-1) !important;
+  line-height: 1.35 !important;
+}
+
+.soc-node-technique {
+  background: transparent !important;
+  color: var(--pro-text-3) !important;
+  font-size: 8px !important;
+  padding: 0 !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  border-radius: 0 !important;
+  border: none !important;
+  letter-spacing: 0.3px;
+}
+
+/* Ghost progress bar at bottom of node */
+.pro-node-progress {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 2px;
+  background: var(--pro-border);
+  overflow: hidden;
+}
+.pro-node-progress-fill {
+  height: 100%;
+  background: var(--soc-node-color, var(--pro-cyan));
+  opacity: 0.5;
+  border-radius: 0 2px 2px 0;
+  transition: width 0.6s var(--pro-ease);
+}
+
+/* Connector — thin vector line with arrowhead */
+.soc-chain-connector {
+  width: 28px !important;
+  margin-top: 18px !important;
+}
+.soc-chain-connector::before {
+  height: 1px !important;
+  background: var(--pro-border-md) !important;
+}
+.soc-chain-connector::after {
+  border-left-width: 5px !important;
+  border-top-width: 3px !important;
+  border-bottom-width: 3px !important;
+  border-left-color: var(--pro-border-md) !important;
+  opacity: 0.8;
+}
+
+/* Node detail drill-down — flat glass panel */
+.soc-node-detail {
+  background: var(--pro-surface-2) !important;
+  border: 1px solid var(--pro-border-md) !important;
+  border-radius: var(--pro-r) !important;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.6) !important;
+  backdrop-filter: blur(16px) !important;
+  -webkit-backdrop-filter: blur(16px) !important;
+  padding: 10px !important;
+  width: 260px !important;
+  font-size: 11px !important;
+}
+
+.soc-chain-timeline {
+  padding: 14px 16px 10px !important;
+}
+
+/* Inferred node */
+.soc-chain-node.inferred .soc-chain-node-inner {
+  border-style: dashed !important;
+  opacity: 0.55 !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   ROOT CAUSE / INTENT SUMMARY  —  Focal point card
+   ────────────────────────────────────────────────────────────────────── */
+.pro-root-cause {
+  background: var(--pro-surface-2);
+  border: 1px solid var(--pro-border-md);
+  border-left: 3px solid var(--pro-cyan);
+  border-radius: var(--pro-r);
+  padding: 12px 16px;
+  position: relative;
+}
+.pro-root-cause-label {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--pro-text-3);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pro-root-cause-label::before {
+  content: '';
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--pro-cyan);
+}
+.pro-root-cause-text {
+  font-size: 12px;
+  color: var(--pro-text-1);
+  line-height: 1.6;
+  font-weight: 400;
+}
+
+/* Narrative inside inc-card */
+.pro-narrative-block {
+  padding: 10px 16px;
+  background: rgba(56,189,248,0.03);
+  border-top: 1px solid var(--pro-border);
+  border-left: 3px solid var(--pro-cyan);
+}
+.pro-narrative-block .pro-root-cause-label { margin-bottom: 5px; }
+.pro-narrative-block .pro-narrative-text {
+  font-size: 12px;
+  color: var(--pro-text-2);
+  line-height: 1.6;
+  font-weight: 400;
+}
+.pro-narrative-block.sev-critical { border-left-color: var(--pro-critical); }
+.pro-narrative-block.sev-high     { border-left-color: var(--pro-high); }
+.pro-narrative-block.sev-medium   { border-left-color: var(--pro-medium); }
+
+/* ──────────────────────────────────────────────────────────────────────
+   KPI BADGES & SEVERITY
+   ────────────────────────────────────────────────────────────────────── */
+.rk-badge {
+  font-size: 9px !important;
+  padding: 2px 6px !important;
+  border-radius: 3px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.4px !important;
+  text-transform: uppercase !important;
+}
+
+.rk-sev-critical {
+  background: var(--pro-critical-dim) !important;
+  color: var(--pro-critical) !important;
+  border: 1px solid rgba(229,62,62,0.2) !important;
+  box-shadow: none !important;
+}
+.rk-sev-high {
+  background: var(--pro-high-dim) !important;
+  color: var(--pro-high) !important;
+  border: 1px solid rgba(221,107,32,0.2) !important;
+}
+.rk-sev-medium {
+  background: var(--pro-medium-dim) !important;
+  color: var(--pro-medium) !important;
+  border: 1px solid rgba(214,158,46,0.2) !important;
+}
+.rk-sev-low {
+  background: var(--pro-low-dim) !important;
+  color: var(--pro-low) !important;
+  border: 1px solid rgba(59,130,246,0.2) !important;
+}
+.rk-sev-info {
+  background: rgba(100,181,204,0.08) !important;
+  color: var(--pro-text-3) !important;
+  border: 1px solid var(--pro-border) !important;
+}
+
+/* Risk badge — small pill */
+.soc-risk-badge {
+  font-size: 10px !important;
+  padding: 2px 8px !important;
+  border-radius: 3px !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  font-weight: 700 !important;
+  border-width: 1px !important;
+  border-style: solid !important;
+}
+.soc-risk-badge.critical { background: var(--pro-critical-dim) !important; color: var(--pro-critical) !important; border-color: rgba(229,62,62,0.2) !important; }
+.soc-risk-badge.high     { background: var(--pro-high-dim) !important;     color: var(--pro-high) !important;     border-color: rgba(221,107,32,0.2) !important; }
+.soc-risk-badge.medium   { background: var(--pro-medium-dim) !important;   color: var(--pro-medium) !important;   border-color: rgba(214,158,46,0.2) !important; }
+.soc-risk-badge.low      { background: var(--pro-low-dim) !important;      color: var(--pro-low) !important;      border-color: rgba(59,130,246,0.2) !important; }
+
+/* MITRE tactic pills */
+.soc-mitre-pill {
+  background: rgba(100,181,204,0.07) !important;
+  color: var(--pro-text-mono) !important;
+  border: 1px solid rgba(100,181,204,0.15) !important;
+  font-size: 8px !important;
+  padding: 1px 5px !important;
+  border-radius: 3px !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.3px !important;
+  text-transform: none !important;
+}
+/* Per-tactic slight variations */
+.soc-mitre-pill.tactic-initial-access,
+.soc-mitre-pill.tactic-command-and-control { color: #A78BFA !important; border-color: rgba(167,139,250,0.15) !important; background: rgba(167,139,250,0.07) !important; }
+.soc-mitre-pill.tactic-lateral-movement,
+.soc-mitre-pill.tactic-exfiltration        { color: #F87171 !important; border-color: rgba(248,113,113,0.15) !important; background: rgba(248,113,113,0.07) !important; }
+.soc-mitre-pill.tactic-credential-access,
+.soc-mitre-pill.tactic-impact              { color: #FCD34D !important; border-color: rgba(252,211,77,0.15) !important; background: rgba(252,211,77,0.07) !important; }
+
+/* Context chips */
+.soc-context-chip {
+  background: transparent !important;
+  border: 1px solid var(--pro-border) !important;
+  color: var(--pro-text-3) !important;
+  font-size: 10px !important;
+  padding: 1px 7px !important;
+  border-radius: 3px !important;
+  gap: 3px !important;
+}
+.soc-context-chip:hover {
+  background: var(--pro-surface-2) !important;
+  border-color: var(--pro-border-md) !important;
+  color: var(--pro-text-2) !important;
+}
+.soc-context-chip .chip-icon { font-size: 9px !important; }
+
+/* ──────────────────────────────────────────────────────────────────────
+   INCIDENT HEADER BAR  —  Professional compact layout
+   ────────────────────────────────────────────────────────────────────── */
+.soc-inc-header {
+  gap: 7px !important;
+  min-height: 32px !important;
+}
+
+.soc-inc-id {
+  font-size: 9px !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  color: var(--pro-text-3) !important;
+  background: var(--pro-surface-2) !important;
+  border: 1px solid var(--pro-border) !important;
+  padding: 2px 5px !important;
+  border-radius: 3px !important;
+  letter-spacing: 0.5px !important;
+}
+
+.soc-inc-title {
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  color: var(--pro-text-1) !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   DETECTION ROWS
+   ────────────────────────────────────────────────────────────────────── */
+.rk-det-row {
+  padding: 9px 14px !important;
+  border-bottom: 1px solid var(--pro-border) !important;
+  transition: background var(--pro-t) var(--pro-ease) !important;
+}
+.rk-det-row::before {
+  width: 2px !important;
+  border-radius: 0 !important;
+}
+.rk-det-row:hover { background: rgba(255,255,255,0.015) !important; }
+.rk-det-row:hover::before { background: var(--pro-cyan) !important; }
+
+/* ──────────────────────────────────────────────────────────────────────
+   BUTTONS — Tactile flat elements
+   ────────────────────────────────────────────────────────────────────── */
+.rk-btn {
+  font-size: 11px !important;
+  padding: 6px 13px !important;
+  border-radius: var(--pro-r-sm) !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.2px !important;
+  transition:
+    background var(--pro-t) var(--pro-ease),
+    border-color var(--pro-t) var(--pro-ease),
+    transform 80ms ease !important;
+}
+.rk-btn::after { display: none !important; }
+.rk-btn:hover  { transform: none !important; }
+.rk-btn:active { transform: scale(0.97) !important; }
+
+.rk-btn-primary {
+  background: #1E3A5F !important;
+  border: 1px solid #2563EB44 !important;
+  color: #93C5FD !important;
+  box-shadow: none !important;
+}
+.rk-btn-primary:hover {
+  background: #1E40AF !important;
+  border-color: #3B82F655 !important;
+  color: #BFDBFE !important;
+  box-shadow: none !important;
+}
+
+.rk-btn-red {
+  background: #451A1A !important;
+  border: 1px solid #EF444430 !important;
+  color: #FCA5A5 !important;
+  box-shadow: none !important;
+}
+.rk-btn-red:hover {
+  background: #7F1D1D !important;
+  box-shadow: none !important;
+}
+
+.rk-btn-cyan {
+  background: #0C2D3F !important;
+  border: 1px solid #38BDF830 !important;
+  color: #7DD3FC !important;
+  box-shadow: none !important;
+}
+.rk-btn-cyan:hover {
+  background: #0E3A50 !important;
+  border-color: #38BDF850 !important;
+  color: #BAE6FD !important;
+  box-shadow: none !important;
+}
+
+.rk-btn-ghost {
+  background: transparent !important;
+  border: 1px solid var(--pro-border-md) !important;
+  color: var(--pro-text-2) !important;
+  box-shadow: none !important;
+}
+.rk-btn-ghost:hover {
+  background: var(--pro-surface-2) !important;
+  border-color: var(--pro-border-hi) !important;
+  color: var(--pro-text-1) !important;
+  box-shadow: none !important;
+}
+
+.rk-btn-purple {
+  background: #2D1B5E !important;
+  border: 1px solid #7C3AED33 !important;
+  color: #C4B5FD !important;
+  box-shadow: none !important;
+}
+.rk-btn-purple:hover {
+  background: #3B1F7A !important;
+  box-shadow: none !important;
+}
+
+/* Entity buttons */
+.rk-entity-btn {
+  background: transparent !important;
+  border: 1px solid var(--pro-border-md) !important;
+  color: var(--pro-text-2) !important;
+  font-size: 10px !important;
+  border-radius: var(--pro-r-sm) !important;
+  padding: 3px 9px !important;
+  transition: all var(--pro-t) var(--pro-ease) !important;
+}
+.rk-entity-btn:hover {
+  background: var(--pro-surface-2) !important;
+  border-color: var(--pro-border-hi) !important;
+  color: var(--pro-text-1) !important;
+  box-shadow: none !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   INPUTS  —  Clean minimal glass
+   ────────────────────────────────────────────────────────────────────── */
+.rk-input {
+  background: var(--pro-surface-2) !important;
+  border: 1px solid var(--pro-border-md) !important;
+  border-radius: var(--pro-r-sm) !important;
+  color: var(--pro-text-1) !important;
+  font-size: 12px !important;
+  transition: border-color var(--pro-t) var(--pro-ease), box-shadow var(--pro-t) var(--pro-ease) !important;
+}
+.rk-input:focus {
+  border-color: rgba(56,189,248,0.4) !important;
+  background: var(--pro-surface-2) !important;
+  box-shadow: 0 0 0 2px rgba(56,189,248,0.08) !important;
+  outline: none !important;
+}
+.rk-input::placeholder { color: var(--pro-text-4) !important; }
+
+.rk-select {
+  background: var(--pro-surface-2) !important;
+  border: 1px solid var(--pro-border-md) !important;
+  color: var(--pro-text-2) !important;
+  font-size: 11px !important;
+  border-radius: var(--pro-r-sm) !important;
+}
+.rk-select:focus { border-color: rgba(56,189,248,0.4) !important; }
+
+/* ──────────────────────────────────────────────────────────────────────
+   PROGRESS / TELEMETRY  —  Ghost lines
+   ────────────────────────────────────────────────────────────────────── */
+.rk-progress {
+  height: 2px !important;
+  background: var(--pro-border) !important;
+  border-radius: 1px !important;
+}
+.rk-progress-bar {
+  height: 2px !important;
+  border-radius: 1px !important;
+  background: var(--pro-cyan) !important;
+  animation: none !important;
+  box-shadow: none !important;
+  transition: width 0.6s var(--pro-ease) !important;
+}
+.rk-progress-bar::after { display: none !important; }
+
+/* Severity bars */
+.soc-sev-bar-fill { box-shadow: none !important; }
+.soc-sev-bar-fill::after { display: none !important; }
+
+/* ──────────────────────────────────────────────────────────────────────
+   TIMELINE
+   ────────────────────────────────────────────────────────────────────── */
+.rk-timeline-item {
+  border-left: 1px solid var(--pro-border) !important;
+  padding: 8px 14px !important;
+  margin-left: 18px !important;
+}
+.rk-tl-dot {
+  width: 7px !important;
+  height: 7px !important;
+  box-shadow: none !important;
+  margin-left: -19px !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   TABLE
+   ────────────────────────────────────────────────────────────────────── */
+.rk-table th {
+  background: transparent !important;
+  color: var(--pro-text-3) !important;
+  font-size: 9px !important;
+  letter-spacing: 0.8px !important;
+  border-bottom: 1px solid var(--pro-border) !important;
+  padding: 8px 12px !important;
+}
+.rk-table td {
+  padding: 8px 12px !important;
+  font-size: 11px !important;
+  color: var(--pro-text-2) !important;
+  border-bottom: 1px solid var(--pro-border) !important;
+}
+.rk-table tr:hover td {
+  background: rgba(255,255,255,0.015) !important;
+  color: var(--pro-text-1) !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   TAGS  —  MITRE technique tags
+   ────────────────────────────────────────────────────────────────────── */
+.rk-tag {
+  background: transparent !important;
+  border: 1px solid var(--pro-border-md) !important;
+  color: var(--pro-text-mono) !important;
+  font-size: 9px !important;
+  padding: 1px 5px !important;
+  border-radius: 3px !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  letter-spacing: 0.2px !important;
+  transition: border-color var(--pro-t) var(--pro-ease) !important;
+}
+.rk-tag:hover {
+  border-color: var(--pro-border-hi) !important;
+  background: var(--pro-surface-2) !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   CHIPS
+   ────────────────────────────────────────────────────────────────────── */
+.rk-chip {
+  background: transparent !important;
+  border: 1px solid var(--pro-border) !important;
+  color: var(--pro-text-3) !important;
+  font-size: 10px !important;
+  border-radius: var(--pro-r-sm) !important;
+  padding: 3px 9px !important;
+}
+.rk-chip:hover {
+  background: var(--pro-surface-2) !important;
+  border-color: var(--pro-border-md) !important;
+  color: var(--pro-text-2) !important;
+  box-shadow: none !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   TOAST  —  Flat glass notifications
+   ────────────────────────────────────────────────────────────────────── */
+.rk-toast {
+  font-size: 11px !important;
+  border-radius: var(--pro-r) !important;
+  backdrop-filter: blur(16px) !important;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5) !important;
+}
+.rk-toast-success { background: rgba(5,36,20,0.95) !important; color: #4ADE80 !important; border-color: rgba(74,222,128,0.2) !important; }
+.rk-toast-error   { background: rgba(40,5,5,0.95)  !important; color: #F87171 !important; border-color: rgba(248,113,113,0.2) !important; }
+.rk-toast-info    { background: rgba(5,16,40,0.95)  !important; color: #93C5FD !important; border-color: rgba(147,197,253,0.2) !important; }
+.rk-toast-warning { background: rgba(40,26,5,0.95)  !important; color: #FCD34D !important; border-color: rgba(252,211,77,0.2) !important; }
+
+/* ──────────────────────────────────────────────────────────────────────
+   MODAL
+   ────────────────────────────────────────────────────────────────────── */
+.rk-modal {
+  background: rgba(9, 13, 20, 0.98) !important;
+  border: 1px solid var(--pro-border-md) !important;
+  border-radius: var(--pro-r-lg) !important;
+  backdrop-filter: blur(20px) !important;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.8) !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   OVERVIEW  —  Session risk donut
+   ────────────────────────────────────────────────────────────────────── */
+.soc-risk-donut {
+  filter: none !important;
+}
+.soc-risk-arc {
+  transition: stroke-dashoffset 1s var(--pro-ease), stroke 0.4s ease !important;
+  filter: none !important;
+}
+.soc-risk-number {
+  font-size: 24px !important;
+  font-weight: 700 !important;
+  color: var(--pro-text-1) !important;
+}
+.soc-risk-micro-label {
+  font-size: 7px !important;
+  color: var(--pro-text-3) !important;
+  letter-spacing: 0.8px !important;
+}
+.soc-risk-track { stroke: var(--pro-surface-3) !important; }
+
+/* ──────────────────────────────────────────────────────────────────────
+   ENGINE CARDS
+   ────────────────────────────────────────────────────────────────────── */
+.rk-engine-card {
+  background: var(--pro-surface) !important;
+  border: 1px solid var(--pro-border) !important;
+  border-radius: var(--pro-r) !important;
+  backdrop-filter: none !important;
+}
+.rk-engine-card:hover {
+  border-color: var(--pro-border-md) !important;
+  transform: none !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.35) !important;
+}
+.rk-engine-val {
+  font-size: 20px !important;
+  font-weight: 600 !important;
+  filter: none !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   SPINNER
+   ────────────────────────────────────────────────────────────────────── */
+.rk-spinner {
+  width: 24px !important;
+  height: 24px !important;
+  border: 1.5px solid var(--pro-border) !important;
+  border-top-color: var(--pro-cyan) !important;
+  box-shadow: none !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   UPLOAD ZONE
+   ────────────────────────────────────────────────────────────────────── */
+.rk-upload-zone {
+  border: 1.5px dashed var(--pro-border-md) !important;
+  background: transparent !important;
+  border-radius: var(--pro-r-lg) !important;
+}
+.rk-upload-zone::before { display: none !important; }
+.rk-upload-zone:hover,
+.rk-upload-zone.drag-over {
+  border-color: rgba(56,189,248,0.35) !important;
+  background: rgba(56,189,248,0.03) !important;
+  box-shadow: none !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   SECTION HEADERS
+   ────────────────────────────────────────────────────────────────────── */
+.rk-section-hdr-label {
+  color: var(--pro-text-3) !important;
+  font-size: 9px !important;
+  letter-spacing: 1px !important;
+}
+.rk-section-hdr-line {
+  background: linear-gradient(90deg, var(--pro-border-md), transparent) !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   NEON GLOW — Kill all ambient glow, keep only critical-alert use
+   ────────────────────────────────────────────────────────────────────── */
+.rk-glow-red    { filter: none !important; }
+.rk-glow-cyan   { filter: none !important; }
+.rk-glow-purple { filter: none !important; }
+.rk-glow-green  { filter: none !important; }
+
+/* Only active critical alerts get subtle glow */
+.rk-inc-card.sev-critical .soc-inc-id {
+  border-color: rgba(229,62,62,0.25) !important;
+  color: var(--pro-critical) !important;
+}
+
+/* Logo — keep minimal colored glow as brand signal */
+.rk-logo-icon {
+  box-shadow: 0 0 8px rgba(155,28,28,0.4) !important;
+}
+
+/* Live dot */
+.rk-live-dot {
+  background: var(--pro-green) !important;
+  box-shadow: 0 0 4px rgba(56,161,105,0.5) !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   HUNT CHIPS
+   ────────────────────────────────────────────────────────────────────── */
+.rk-hunt-chip {
+  background: transparent !important;
+  border: 1px solid var(--pro-border) !important;
+  color: var(--pro-text-3) !important;
+  font-size: 10px !important;
+}
+.rk-hunt-chip:hover {
+  background: var(--pro-surface-2) !important;
+  border-color: var(--pro-border-md) !important;
+  color: var(--pro-text-2) !important;
+  box-shadow: none !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   SCROLLBARS  —  Invisible until hover
+   ────────────────────────────────────────────────────────────────────── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.06) transparent;
+}
+*::-webkit-scrollbar        { width: 3px; height: 3px; }
+*::-webkit-scrollbar-track  { background: transparent; }
+*::-webkit-scrollbar-thumb  { background: rgba(255,255,255,0.06); border-radius: 2px; }
+*::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.12); }
+
+/* ──────────────────────────────────────────────────────────────────────
+   BREATHING ROOM  —  Increased padding between KPI strip and body
+   ────────────────────────────────────────────────────────────────────── */
+.rk-panel {
+  padding: 20px 22px !important;
+  animation: pro-panel-in 0.18s var(--pro-ease) !important;
+}
+@keyframes pro-panel-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   BCE v10 BANNER  —  Flat semi-transparent card
+   ────────────────────────────────────────────────────────────────────── */
+.pro-bce-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--pro-surface-2);
+  border: 1px solid var(--pro-border);
+  border-radius: var(--pro-r);
+  margin-bottom: 14px;
+}
+.pro-bce-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--pro-text-1);
+}
+.pro-bce-sub {
+  font-size: 10px;
+  color: var(--pro-text-3);
+  margin-top: 2px;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   DATA VISUALIZATION WIDGETS
+   ────────────────────────────────────────────────────────────────────── */
+
+/* Mini sparkline */
+.pro-sparkline-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.pro-sparkline-path {
+  fill: none;
+  stroke: var(--rk-stat-color, #38BDF8);
+  stroke-width: 1;
+  opacity: 0.5;
+}
+.pro-sparkline-area {
+  stroke: none;
+  opacity: 0.08;
+  fill: var(--rk-stat-color, #38BDF8);
+}
+
+/* Mini heatmap cell */
+.pro-heat-cell {
+  border-radius: 2px;
+  transition: opacity var(--pro-t) var(--pro-ease);
+  cursor: default;
+}
+.pro-heat-cell:hover { opacity: 1 !important; }
+
+/* Stat card change indicator */
+.pro-stat-delta {
+  position: absolute;
+  top: 9px;
+  right: 12px;
+  font-size: 9px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--pro-text-4);
+  font-weight: 500;
+}
+.pro-stat-delta.up   { color: var(--pro-green); }
+.pro-stat-delta.down { color: var(--pro-critical); }
+
+/* ──────────────────────────────────────────────────────────────────────
+   CHAIN CARD OVERVIEW
+   ────────────────────────────────────────────────────────────────────── */
+.rk-chain-preview {
+  background: var(--pro-surface) !important;
+  border: 1px solid var(--pro-border) !important;
+  backdrop-filter: none !important;
+}
+.rk-chain-preview:hover {
+  border-color: var(--pro-border-md) !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.35) !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   IOC / INGEST / GENERATED RULE
+   ────────────────────────────────────────────────────────────────────── */
+.rk-ioc-result-card {
+  background: var(--pro-surface) !important;
+  border: 1px solid var(--pro-border) !important;
+  backdrop-filter: none !important;
+}
+.rk-ingest-summary {
+  background: var(--pro-surface) !important;
+  border: 1px solid rgba(56,161,105,0.2) !important;
+  backdrop-filter: none !important;
+}
+.rk-gen-rule {
+  background: rgba(5,20,10,0.8) !important;
+  border: 1px solid rgba(56,161,105,0.18) !important;
+  backdrop-filter: none !important;
+}
+.rk-anom-card {
+  background: var(--pro-surface) !important;
+  border: 1px solid var(--pro-border) !important;
+  backdrop-filter: none !important;
+}
+.rk-anom-card:hover {
+  border-color: rgba(214,158,46,0.2) !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.35) !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   OV STATS (overview mini-stat cards)
+   ────────────────────────────────────────────────────────────────────── */
+.rk-ov-stat {
+  background: var(--pro-surface) !important;
+  border: 1px solid var(--pro-border) !important;
+  backdrop-filter: none !important;
+  border-radius: var(--pro-r) !important;
+}
+.rk-ov-stat:hover {
+  border-color: var(--pro-border-md) !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.35) !important;
+  transform: none !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   SCENARIO BUTTONS
+   ────────────────────────────────────────────────────────────────────── */
+.rk-scenario-btn {
+  background: var(--pro-surface-2) !important;
+  border: 1px solid var(--pro-border-md) !important;
+  color: var(--pro-text-2) !important;
+  font-size: 11px !important;
+  border-radius: var(--pro-r) !important;
+  transition: all var(--pro-t) var(--pro-ease) !important;
+}
+.rk-scenario-btn::before { display: none !important; }
+.rk-scenario-btn:hover {
+  background: var(--pro-surface-3) !important;
+  border-color: var(--pro-border-hi) !important;
+  color: var(--pro-text-1) !important;
+  transform: none !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   RESPONSIVE
+   ────────────────────────────────────────────────────────────────────── */
+@media (max-width: 1024px) {
+  .rk-stats-row { grid-template-columns: repeat(3, 1fr) !important; }
+}
+@media (max-width: 768px) {
+  .rk-stats-row { grid-template-columns: repeat(2, 1fr) !important; }
+  .rk-panel { padding: 14px !important; }
+  .rk-hdr { height: auto !important; padding: 8px 14px !important; }
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   REDUCED MOTION
+   ────────────────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
