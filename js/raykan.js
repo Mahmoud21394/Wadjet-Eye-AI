@@ -7546,22 +7546,45 @@
       <div style="font-size:12px;font-weight:700;color:#8b949e;margin-bottom:16px;text-transform:uppercase;letter-spacing:.5px;">
         🛡 Session Risk Score
       </div>
-      <div id="rk-risk-gauge" style="display:flex;align-items:center;gap:20px;">
-        <div style="position:relative;width:100px;height:100px;flex-shrink:0;">
-          <svg width="100" height="100" viewBox="0 0 100 100" style="transform:rotate(-90deg)">
-            <circle cx="50" cy="50" r="42" fill="none" stroke="#21262d" stroke-width="10"/>
-            <circle id="rk-risk-arc" cx="50" cy="50" r="42" fill="none" stroke="#ef4444"
-              stroke-width="10" stroke-dasharray="264" stroke-dashoffset="264"
-              stroke-linecap="round" style="transition:stroke-dashoffset 1s ease;"/>
+      <div id="rk-risk-gauge" style="display:flex;align-items:flex-start;gap:20px;">
+        <!-- SOC v2: Circular donut with gradient severity ring -->
+        <div class="soc-risk-donut-wrap">
+          <svg class="soc-risk-donut" viewBox="0 0 110 110">
+            <!-- Gradient def for severity ring -->
+            <defs>
+              <linearGradient id="rk-risk-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%"   stop-color="#22C55E"/>
+                <stop offset="40%"  stop-color="#F59E0B"/>
+                <stop offset="75%"  stop-color="#F97316"/>
+                <stop offset="100%" stop-color="#EF4444"/>
+              </linearGradient>
+            </defs>
+            <!-- Track -->
+            <circle class="soc-risk-track" cx="55" cy="55" r="46"/>
+            <!-- Active arc -->
+            <circle id="rk-risk-arc" class="soc-risk-arc" cx="55" cy="55" r="46"
+              stroke="#EF4444" stroke-dasharray="289" stroke-dashoffset="289"/>
           </svg>
-          <div id="rk-risk-num" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-            font-size:22px;font-weight:800;color:#e6edf3;">0</div>
+          <div class="soc-risk-center">
+            <div id="rk-risk-num" class="soc-risk-number">0</div>
+            <div class="soc-risk-micro-label">Risk Score</div>
+          </div>
         </div>
-        <div>
-          <div id="rk-risk-label" style="font-size:18px;font-weight:700;color:#22c55e;">Clean</div>
-          <div style="font-size:12px;color:#6b7280;margin-top:4px;">Based on ${S.detections.length} detections</div>
-          <div style="font-size:11px;color:#4b5563;margin-top:8px;">
-            Session: <span id="rk-ov-session" style="color:#6b7280;">—</span>
+        <div style="flex:1;min-width:0;">
+          <div id="rk-risk-label" style="font-size:17px;font-weight:700;color:#22C55E;margin-bottom:4px;">Clean</div>
+          <div style="font-size:11px;color:#4A6080;margin-bottom:2px;">Likelihood × Impact Score</div>
+          <div style="font-size:11px;color:#4A6080;margin-bottom:12px;">
+            Based on <span style="color:#8FA3BF;">${S.detections.length}</span> detection${S.detections.length!==1?'s':''}
+          </div>
+          <!-- Severity legend row -->
+          <div class="soc-risk-legend">
+            <div class="soc-risk-legend-item"><span class="soc-risk-legend-dot" style="background:#22C55E;"></span>Low</div>
+            <div class="soc-risk-legend-item"><span class="soc-risk-legend-dot" style="background:#F59E0B;"></span>Medium</div>
+            <div class="soc-risk-legend-item"><span class="soc-risk-legend-dot" style="background:#F97316;"></span>High</div>
+            <div class="soc-risk-legend-item"><span class="soc-risk-legend-dot" style="background:#EF4444;"></span>Critical</div>
+          </div>
+          <div style="font-size:9px;color:#2D4A5A;margin-top:6px;">
+            Session: <span id="rk-ov-session" style="color:#4A6080;">—</span>
           </div>
         </div>
       </div>
@@ -7648,9 +7671,11 @@
     const risk = S.riskScore || 0;
     const arc  = document.getElementById('rk-risk-arc');
     if (arc) {
-      const offset = 264 - (264 * risk / 100);
+      const circ  = 289;
+      const offset = circ - (circ * risk / 100);
       arc.style.strokeDashoffset = offset;
-      arc.style.stroke = risk >= 80 ? '#ef4444' : risk >= 60 ? '#f97316' : risk >= 40 ? '#eab308' : '#22c55e';
+      arc.style.stroke = risk >= 80 ? '#EF4444' : risk >= 60 ? '#F97316' : risk >= 40 ? '#F59E0B' : '#22C55E';
+      arc.style.filter = risk >= 60 ? `drop-shadow(0 0 6px ${risk >= 80 ? '#EF4444' : '#F97316'}55)` : 'none';
     }
     const num = document.getElementById('rk-risk-num');
     if (num) num.textContent = risk;
@@ -7667,12 +7692,12 @@
       S.detections.forEach(d => { if (counts[d.severity] !== undefined) counts[d.severity]++; });
       const total = S.detections.length || 1;
       bars.innerHTML = Object.entries(counts).map(([sev, cnt]) => `
-<div style="display:flex;align-items:center;gap:8px;">
-  <div style="width:55px;font-size:10px;color:${SEV[sev].color};text-transform:uppercase;font-weight:700;">${sev}</div>
-  <div class="rk-progress" style="flex:1;height:6px;">
-    <div class="rk-progress-bar" style="width:${(cnt/total*100).toFixed(0)}%;background:${SEV[sev].color};"></div>
+<div class="soc-sev-bar-row">
+  <div class="soc-sev-bar-label" style="color:${SEV[sev].color};">${sev}</div>
+  <div class="soc-sev-bar-track">
+    <div class="soc-sev-bar-fill" style="width:${(cnt/total*100).toFixed(0)}%;background:${SEV[sev].color};"></div>
   </div>
-  <div style="width:24px;font-size:10px;color:#6b7280;text-align:right;">${cnt}</div>
+  <div class="soc-sev-bar-count">${cnt}</div>
 </div>`).join('');
     }
 
@@ -8578,71 +8603,51 @@
 </div>`;
     }).join('');
 
-    const sevGlow = { critical:'rgba(239,68,68,0.12)', high:'rgba(249,115,22,0.08)', medium:'rgba(234,179,8,0.06)', low:'rgba(34,197,94,0.05)', informational:'rgba(107,114,128,0.04)' }[sev] || 'rgba(0,212,255,0.05)';
-    const sevBorderColor = _sev(sev).color;
+    // SOC v2 — compact risk badge class
+    const riskBadgeClass = (inc.riskScore||0) >= 80 ? 'critical' : (inc.riskScore||0) >= 60 ? 'high' : (inc.riskScore||0) >= 40 ? 'medium' : 'low';
+    // SOC v2 — MITRE tactic pills with color classes
+    const tacticPillsV2 = (inc.mitreTactics || []).slice(0, 5).map(t =>
+      `<span class="soc-mitre-pill tactic-${t}">${t.replace(/-/g,' ')}</span>`
+    ).join('');
+    // SOC v2 — context chips
+    const contextChips = [
+      ...hostList.map(h => `<span class="soc-context-chip"><span class="chip-icon">🖥</span>${h}</span>`),
+      ...userList.map(u => `<span class="soc-context-chip"><span class="chip-icon">👤</span>${u}</span>`),
+      ...ipList.map(ip => `<span class="soc-context-chip"><span class="chip-icon">🌐</span>${ip}</span>`),
+    ].join('');
+
     return `
-<div class="rk-inc-card sev-${sev}" style="padding:0;overflow:hidden;
-  border:1px solid ${sevBorderColor}44;
-  box-shadow:0 4px 24px rgba(0,0,0,0.4), 0 0 32px ${sevBorderColor}08;
-  border-radius:14px;margin-bottom:4px;">
+<div class="rk-inc-card sev-${sev}" style="margin-bottom:4px;">
 
-  <!-- ── Incident Header ────────────────────────────────────────── -->
-  <div class="rk-inc-card-hdr" style="padding:16px 20px;
-    background:linear-gradient(135deg,${sevGlow} 0%,rgba(8,14,24,0.98) 60%);
-    display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
-    <div style="flex:1;min-width:0;">
-      <!-- ID + Severity + Title row -->
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
-        <span style="font-size:10px;font-family:monospace;color:#6b7280;background:#0d1117;padding:2px 7px;border-radius:4px;border:1px solid #21262d;">${shortId}</span>
-        ${_sevBadge(sev)}
-        <span style="font-size:14px;font-weight:700;color:#f0f6fc;">${incidentTitle}</span>
+  <!-- ══ Intelligent Header Bar (SOC v2 — compact, single row) ════ -->
+  <div class="rk-inc-card-hdr">
+    <!-- Primary row: ID · sev · title · MITRE pills · risk badge · actions -->
+    <div class="soc-inc-header">
+      <span class="soc-inc-id">${shortId}</span>
+      ${_sevBadge(sev)}
+      <span class="soc-inc-title" title="${incidentTitle}">${incidentTitle}</span>
+      <!-- MITRE tactic pills (overflow hidden) -->
+      <div class="soc-inc-pills">
+        ${tacticPillsV2}
+        ${inc.detectionCount ? `<span class="rk-badge rk-sev-info" style="font-family:'JetBrains Mono',monospace;">${inc.detectionCount}A</span>` : ''}
+        ${durStr !== '—' && durStr ? `<span style="font-size:9px;color:var(--soc-text-3);white-space:nowrap;">⏱ ${durStr}</span>` : ''}
       </div>
-      <!-- Phase sequence + confidence + badges row -->
-      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
-        <span style="font-size:10px;padding:2px 8px;background:${confStyle.bg};color:${confStyle.color};border-radius:6px;font-weight:700;">
-          ${confStyle.icon} ${conf.level} (${conf.score}%)
-        </span>
-        <span style="font-size:10px;padding:2px 8px;background:rgba(52,211,153,0.08);color:${bandColor};border-radius:6px;font-weight:700;">
-          ACE: ${aceScore.score || conf.score || '—'} · ${aceScore.severityBand || ''}
-        </span>
-        ${crossHostBadge}
-        ${basisBadge}
-        ${intentHtml}
-        ${dag.phaseSequence?.length ? `<span style="font-size:9px;padding:1px 6px;background:rgba(52,211,153,0.08);color:#34d399;border-radius:5px;">${dag.phaseSequence.length} phases</span>` : ''}
-        ${hasInferred ? `<span style="font-size:9px;padding:1px 6px;background:rgba(107,114,128,0.15);color:#6b7280;border-radius:5px;">⚙ ${inferredCount} inferred stage${inferredCount>1?'s':''}</span>` : ''}
-      </div>
-      <!-- Phase sequence DAG visualization -->
-      ${phaseSeqHtml}
-      <!-- Identity row -->
-      ${identityHtml}
-      <!-- Timestamps row -->
-      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:6px;font-size:11px;">
-        <span style="color:#6b7280;">🕐 <span style="color:#8b949e;">First:</span> <strong style="color:#c9d1d9;">${firstTs}</strong></span>
-        <span style="color:#6b7280;">🕑 <span style="color:#8b949e;">Last:</span> <strong style="color:#c9d1d9;">${lastTs}</strong></span>
-        <span style="color:#6b7280;">⏱ <strong style="color:#e6edf3;">${durStr}</strong></span>
-        <span style="padding:2px 8px;background:rgba(239,68,68,0.08);color:#ef4444;border-radius:6px;font-weight:600;">${inc.detectionCount} alert${inc.detectionCount>1?'s':''}</span>
-      </div>
-      <!-- MITRE tactics + technique matrix -->
-      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px;">${tacticPills}</div>
-      ${techniqueMatrix ? `<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">${techniqueMatrix}</div>` : ''}
-    </div>
-
-    <!-- Right panel: ACE risk score + one-click actions -->
-    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0;">
-      <div style="text-align:center;">
-        <div style="font-size:28px;font-weight:900;color:${_riskColor(inc.riskScore||0)};line-height:1;">${inc.riskScore||'—'}</div>
-        <div style="font-size:10px;color:#6b7280;">/100 risk</div>
-        <div style="font-size:9px;color:${bandColor};font-weight:700;">${aceScore.severityBand||''}</div>
-      </div>
+      <!-- Risk badge -->
+      <span class="soc-risk-badge ${riskBadgeClass}">${inc.riskScore || '—'}<span style="font-size:8px;opacity:0.7;">/100</span></span>
       <!-- One-click actions -->
-      <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
-        <button class="rk-entity-btn" onclick="RAYKAN_UI._showDetDetail('${parent.id||''}')">Parent →</button>
-        <button class="rk-entity-btn" onclick="RAYKAN_UI._invEntity('${inc.host||''}')">🔍 Investigate</button>
+      <div style="display:flex;gap:4px;flex-shrink:0;">
+        <button class="rk-entity-btn" onclick="RAYKAN_UI._invEntity('${inc.host||''}')" style="padding:3px 8px;font-size:10px;" title="Investigate">🔍</button>
+        <button class="rk-entity-btn" onclick="RAYKAN_UI._isolateHost('${inc.host||''}')" style="padding:3px 8px;font-size:10px;background:rgba(239,68,68,0.08);color:#ef4444;border-color:rgba(239,68,68,0.25);" title="Isolate">🔒</button>
+        <button class="rk-entity-btn" onclick="RAYKAN_UI._pivotToLogs('${inc.incidentId||incId}')" style="padding:3px 8px;font-size:10px;" title="Pivot to Logs">📋</button>
       </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
-        <button class="rk-entity-btn" style="font-size:10px;background:rgba(239,68,68,0.1);color:#ef4444;border-color:#ef4444;" onclick="RAYKAN_UI._isolateHost('${inc.host||''}')">🔒 Isolate</button>
-        <button class="rk-entity-btn" style="font-size:10px;" onclick="RAYKAN_UI._pivotToLogs('${inc.incidentId||incId}')">📋 Logs</button>
-      </div>
+    </div>
+    <!-- Secondary row: context chips + confidence + timestamps (collapsed by default) -->
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:7px;padding-top:7px;border-top:1px solid rgba(255,255,255,0.04);">
+      ${contextChips}
+      <span style="font-size:9px;padding:1px 7px;background:${confStyle.bg};color:${confStyle.color};border-radius:5px;font-weight:700;white-space:nowrap;">${confStyle.icon} ${conf.level}</span>
+      ${crossHostBadge}
+      ${hasInferred ? `<span style="font-size:9px;padding:1px 6px;background:rgba(107,114,128,0.1);color:#6b7280;border-radius:4px;">⚙ ${inferredCount} inferred</span>` : ''}
+      <span style="font-size:9px;color:var(--soc-text-3);margin-left:auto;white-space:nowrap;">${firstTs} → ${lastTs}</span>
     </div>
   </div>
 
@@ -9617,123 +9622,138 @@
     el.innerHTML = chains.map((c, i) => _renderChainCard(c, i)).join('');
   }
 
+  // ── SOC v2: Horizontal kill-chain timeline renderer ──────────────────
+  function _buildHorizKillChain(stages, chainIdx) {
+    if (!stages || !stages.length) return '';
+    return `<div class="soc-chain-timeline"><div class="soc-chain-rail">` +
+      stages.map((s, si) => {
+        const tactic    = (s.tactic || s.phaseTactic || '').toLowerCase().replace(/\s+/g, '-');
+        const nodeCol   = TACTIC_NODE_COLOR[tactic] || '#3D6080';
+        const sev       = s.severity || 'medium';
+        const isInf     = !!(s.inferred || s.inferredFrom);
+        const tech      = s.technique || s.mitre?.technique || '';
+        const name      = s.ruleName || s.title || s.technique || 'Stage ' + (si+1);
+        const truncName = name.length > 28 ? name.slice(0,26) + '…' : name;
+        const detailId  = `soc-nd-${chainIdx}-${si}`;
+        return `
+      <div class="soc-chain-node${isInf ? ' inferred' : ''}" style="--soc-node-color:${nodeCol};"
+           onclick="(function(n){n.classList.toggle('expanded');
+             var d=document.getElementById('${detailId}');
+             if(d){d.style.display=n.classList.contains('expanded')?'block':'none';}
+           })(this)">
+        <div class="soc-chain-node-inner">
+          <div class="soc-node-tactic">${tactic.replace(/-/g,' ') || 'Unknown'}</div>
+          <div class="soc-node-name">${truncName}</div>
+          <div class="soc-node-footer">
+            ${tech ? `<span class="soc-node-technique">${tech}</span>` : ''}
+            <span class="soc-node-sev ${sev}">${sev.slice(0,4).toUpperCase()}</span>
+          </div>
+        </div>
+        <span class="soc-node-expand">▾</span>
+        <!-- Drill-down detail panel -->
+        <div class="soc-node-detail" id="${detailId}" style="display:none;">
+          <div style="font-size:10px;font-weight:700;color:${nodeCol};margin-bottom:6px;">${name}</div>
+          ${tech ? `<div style="font-size:9px;margin-bottom:4px;"><span style="color:#4A6080;">Technique:</span> <span style="color:#60A5FA;font-family:monospace;">${tech}</span></div>` : ''}
+          ${s.confidence ? `<div style="font-size:9px;margin-bottom:4px;"><span style="color:#4A6080;">Confidence:</span> <span style="color:#E8EDF5;">${s.confidence}%</span></div>` : ''}
+          ${s.narrative ? `<div style="font-size:9px;color:#8FA3BF;line-height:1.4;margin-top:4px;">${s.narrative.slice(0,200)}${s.narrative.length>200?'…':''}</div>` : ''}
+          ${isInf ? `<div style="font-size:8px;color:#6B7280;margin-top:4px;font-style:italic;">⚙ Inferred stage — based on behavioral correlation</div>` : ''}
+        </div>
+      </div>
+      ${si < stages.length-1 ? `
+      <div class="soc-chain-connector" style="--soc-node-color:${nodeCol}66;"></div>` : ''}`;
+      }).join('') +
+    `</div></div>`;
+  }
+
   function _renderChainCard(c, i) {
     const stages    = c.stages || c.steps || c.detections || [];
     const techniques= c.techniques || stages.map(s => s.technique || s.mitre?.technique).filter(Boolean);
-    const riskColor = c.riskScore >= 80 ? '#ef4444' : c.riskScore >= 60 ? '#f97316' : c.riskScore >= 40 ? '#eab308' : '#60a5fa';
+    const riskColor = c.riskScore >= 80 ? '#EF4444' : c.riskScore >= 60 ? '#F97316' : c.riskScore >= 40 ? '#F59E0B' : '#60A5FA';
+    const riskClass = c.riskScore >= 80 ? 'critical' : c.riskScore >= 60 ? 'high' : c.riskScore >= 40 ? 'medium' : 'low';
     const animDelay = (i * 0.06).toFixed(2);
+    const chainName = c.name || c.type || 'Multi-stage Attack';
+
+    // Build horizontal kill-chain timeline
+    const horizChain = _buildHorizKillChain(stages, i);
+
     return `
-<div class="rk-card" style="padding:0;overflow:hidden;animation:rk3-fade-up 0.35s ease-out ${animDelay}s both;">
-  <!-- Animated top border for chain severity -->
-  <div style="height:3px;background:linear-gradient(90deg,${riskColor}44,${riskColor},${riskColor}44);
-    background-size:200% 100%;animation:rk3-border-flow 2.5s linear infinite;"></div>
-  <div class="rk-card-hdr" style="background:rgba(${c.riskScore>=80?'239,68,68':c.riskScore>=60?'249,115,22':'0,212,255'},0.04);">
-    <div style="display:flex;align-items:center;gap:12px;">
-      <!-- Animated chain icon -->
-      <div style="width:38px;height:38px;border-radius:10px;background:rgba(${c.riskScore>=80?'239,68,68':'167,139,250'},0.12);
-        border:1px solid rgba(${c.riskScore>=80?'239,68,68':'167,139,250'},0.25);
-        display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;
-        box-shadow:0 0 16px rgba(${c.riskScore>=80?'239,68,68':'167,139,250'},0.15);">🔗</div>
-      <div>
-        <div style="font-size:13px;font-weight:700;color:#e2e8f0;">
-          Attack Chain #${i+1}
-          <span style="font-weight:400;color:#6b7280;margin-left:4px;">— ${c.name || c.type || 'Multi-stage Attack'}</span>
+<div class="rk-card" style="padding:0;overflow:hidden;animation:soc-card-in 0.3s ease-out ${animDelay}s both;">
+  <!-- Thin severity top bar -->
+  <div style="height:2px;background:linear-gradient(90deg,transparent,${riskColor},transparent);"></div>
+
+  <!-- Header: chain name, risk badge, techniques, entity chips -->
+  <div class="rk-card-hdr">
+    <div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1;">
+      <div style="width:32px;height:32px;border-radius:8px;
+        background:rgba(${c.riskScore>=80?'239,68,68':'167,139,250'},0.1);
+        border:1px solid rgba(${c.riskScore>=80?'239,68,68':'167,139,250'},0.2);
+        display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;">⛓</div>
+      <div style="min-width:0;">
+        <div style="font-size:12px;font-weight:700;color:#E8EDF5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+          Chain #${i+1} — <span style="font-weight:400;color:#8FA3BF;">${chainName}</span>
         </div>
-        <div style="font-size:11px;color:#4b6b8a;margin-top:3px;font-family:'JetBrains Mono',monospace;">
-          <span style="color:#3d6080;">${stages.length} stages</span>
-          ${c.entities?.length ? ` · <span style="color:#2d4a5a;">${c.entities.slice(0,3).join(', ')}</span>` : ''}
+        <div style="font-size:9px;color:#4A6080;margin-top:2px;font-family:'JetBrains Mono',monospace;">
+          ${stages.length} stage${stages.length!==1?'s':''}
+          ${c.entities?.length ? ` · ${c.entities.slice(0,2).join(', ')}` : ''}
         </div>
       </div>
     </div>
-    <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
-      <div style="padding:4px 12px;border-radius:16px;font-size:11px;font-weight:700;
-        font-family:'JetBrains Mono',monospace;
-        background:rgba(${c.riskScore>=80?'239,68,68':c.riskScore>=60?'249,115,22':'107,114,128'},0.12);
-        color:${riskColor};border:1px solid ${riskColor}44;">
-        RISK ${c.riskScore||'—'}
-      </div>
+    <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+      <span class="soc-risk-badge ${riskClass}">RISK ${c.riskScore||'—'}</span>
       ${_sevBadge(c.severity||'high')}
     </div>
   </div>
-  <div style="padding:18px;">
-    <!-- Chain node flow strip -->
-    <div style="display:flex;align-items:center;gap:0;flex-wrap:wrap;margin-bottom:16px;
-      padding:12px 14px;background:rgba(0,0,0,0.3);border-radius:10px;
-      border:1px solid rgba(0,212,255,0.07);">
-      ${stages.map((s, si) => {
-        const tactic   = (s.tactic||'').toLowerCase().replace(/\s+/g,'-');
-        const nodeCol  = TACTIC_NODE_COLOR[tactic] || '#3d6080';
-        return `
-        <div style="display:flex;align-items:center;gap:0;">
-          <div style="padding:6px 12px;border-radius:6px;font-size:10.5px;font-weight:600;
-            background:${nodeCol}18;border:1px solid ${nodeCol}55;color:#c9d1d9;
-            white-space:nowrap;font-family:'JetBrains Mono',monospace;
-            transition:all 0.2s;cursor:default;"
-            onmouseenter="this.style.background='${nodeCol}30';this.style.borderColor='${nodeCol}';this.style.boxShadow='0 0 12px ${nodeCol}33';"
-            onmouseleave="this.style.background='${nodeCol}18';this.style.borderColor='${nodeCol}55';this.style.boxShadow='none';">
-            <span style="color:${nodeCol};font-weight:700;margin-right:5px;">${si+1}</span>${s.ruleName||s.title||s.technique||'Step'}
-          </div>
-          ${si < stages.length-1 ? `
-          <svg width="28" height="12" viewBox="0 0 28 12" style="flex-shrink:0;">
-            <defs>
-              <marker id="ah-${i}-${si}" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-                <path d="M0,0 L0,6 L6,3 z" fill="${nodeCol}88"/>
-              </marker>
-            </defs>
-            <line x1="2" y1="6" x2="22" y2="6" stroke="${nodeCol}55" stroke-width="1.5"
-              stroke-dasharray="4,3" marker-end="url(#ah-${i}-${si})"/>
-          </svg>` : ''}
-        </div>`;
-      }).join('')}
-    </div>
-    <!-- MITRE techniques -->
-    ${techniques.length ? `
-    <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px;">
-      ${techniques.slice(0,10).map(t => `
-        <span style="padding:2px 8px;border-radius:5px;font-size:10px;font-weight:600;
-          background:rgba(167,139,250,0.10);color:#a78bfa;border:1px solid rgba(167,139,250,0.2);
-          font-family:'JetBrains Mono',monospace;">${t}</span>`).join('')}
-      ${techniques.length > 10 ? `<span style="color:#4b6b8a;font-size:10px;align-self:center;">+${techniques.length-10} more</span>` : ''}
-    </div>` : ''}
-    <!-- Entities -->
-    ${c.entities?.length ? `
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-      <span style="font-size:10px;color:#3d5a6b;font-weight:700;text-transform:uppercase;letter-spacing:1px;">Entities</span>
-      ${c.entities.map(e => `
-        <button class="rk-entity-btn" onclick="RAYKAN_UI._invEntity('${e}')"
-          style="font-size:10px;padding:3px 10px;">${e}</button>`).join('')}
-    </div>` : ''}
-  </div>
+
+  <!-- Horizontal kill-chain timeline -->
+  ${horizChain || '<div style="padding:16px;color:#4A6080;font-size:12px;text-align:center;">No stages available</div>'}
+
+  <!-- MITRE techniques row -->
+  ${techniques.length ? `
+  <div style="padding:0 16px 10px;display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
+    <span style="font-size:9px;color:#4A6080;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;margin-right:2px;">MITRE</span>
+    ${techniques.slice(0,10).map(t => `<span class="rk-tag" style="font-family:'JetBrains Mono',monospace;">${t}</span>`).join('')}
+    ${techniques.length > 10 ? `<span style="color:#4A6080;font-size:9px;">+${techniques.length-10} more</span>` : ''}
+  </div>` : ''}
+
+  <!-- Entity chips -->
+  ${c.entities?.length ? `
+  <div style="padding:0 16px 12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+    <span style="font-size:9px;color:#4A6080;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;">Entities</span>
+    ${c.entities.map(e => `<button class="rk-entity-btn" onclick="RAYKAN_UI._invEntity('${e}')">${e}</button>`).join('')}
+  </div>` : ''}
 </div>`;
   }
 
   function _chainPreview(c) {
     const stages = c.stages || c.steps || c.detections || [];
-    const riskColor = c.riskScore >= 80 ? '#ef4444' : c.riskScore >= 60 ? '#f97316' : '#a78bfa';
+    const riskColor = c.riskScore >= 80 ? '#EF4444' : c.riskScore >= 60 ? '#F97316' : '#A78BFA';
+    const riskClass = c.riskScore >= 80 ? 'critical' : c.riskScore >= 60 ? 'high' : c.riskScore >= 40 ? 'medium' : 'low';
     return `
 <div class="rk-chain-preview" style="margin-bottom:8px;">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-    <div style="font-size:11px;font-weight:700;color:#a78bfa;font-family:'JetBrains Mono',monospace;letter-spacing:0.5px;">
-      ⛓ ${c.name || c.type || 'Attack Chain'} · <span style="color:#4b6b8a;">${stages.length} stages</span>
+    <div style="font-size:11px;font-weight:700;color:#A78BFA;letter-spacing:0.3px;">
+      ⛓ <span style="color:#E8EDF5;">${c.name || c.type || 'Attack Chain'}</span>
+      <span style="color:#4A6080;font-weight:400;"> · ${stages.length} stage${stages.length!==1?'s':''}</span>
     </div>
-    ${c.riskScore ? `<div style="font-size:10px;font-weight:700;color:${riskColor};font-family:'JetBrains Mono',monospace;
-      padding:2px 8px;background:${riskColor}18;border:1px solid ${riskColor}38;border-radius:8px;">RISK ${c.riskScore}</div>` : ''}
+    ${c.riskScore ? `<span class="soc-risk-badge ${riskClass}" style="font-size:10px;">RISK ${c.riskScore}</span>` : ''}
   </div>
-  <div style="display:flex;align-items:center;gap:3px;flex-wrap:wrap;">
-    ${stages.slice(0, 5).map((s, i) => {
-      const tactic = (s.tactic||'').toLowerCase().replace(/\s+/g,'-');
-      const nc = TACTIC_NODE_COLOR[tactic] || '#2d4a5a';
+  <!-- Compact horizontal chain -->
+  <div style="display:flex;align-items:center;gap:3px;overflow-x:auto;padding-bottom:3px;">
+    ${stages.slice(0, 6).map((s, i) => {
+      const tactic = (s.tactic || s.phaseTactic || '').toLowerCase().replace(/\s+/g, '-');
+      const nc = TACTIC_NODE_COLOR[tactic] || '#2D4A5A';
+      const name = s.ruleName || s.title || 'Stage';
+      const shortName = name.length > 18 ? name.slice(0,16) + '…' : name;
       return `
-      <span style="display:inline-flex;align-items:center;padding:4px 10px;border-radius:5px;
-        font-size:10px;font-weight:600;font-family:'JetBrains Mono',monospace;
-        background:${nc}18;border:1px solid ${nc}44;color:#c9d1d9;white-space:nowrap;">
-        <span style="color:${nc};font-weight:800;margin-right:4px;">${i+1}</span>${s.ruleName||s.title||'Stage'}
+      <span style="display:inline-flex;align-items:center;padding:3px 8px;border-radius:5px;
+        font-size:9px;font-weight:600;background:${nc}14;border:1px solid ${nc}44;
+        color:#C9D1D9;white-space:nowrap;flex-shrink:0;">
+        <span style="color:${nc};font-weight:800;margin-right:3px;">${i+1}</span>${shortName}
       </span>
-      ${i < Math.min(stages.length-1, 4) ? `<span style="color:rgba(0,212,255,0.25);font-size:12px;padding:0 1px;">›</span>` : ''}`;
+      ${i < Math.min(stages.length-1, 5) ? '<span style="color:rgba(0,212,255,0.2);font-size:11px;flex-shrink:0;">›</span>' : ''}`;
     }).join('')}
-    ${stages.length > 5 ? `<span style="color:#4b6b8a;font-size:10px;padding:4px 8px;
-      border:1px solid rgba(0,212,255,0.10);border-radius:5px;font-family:'JetBrains Mono',monospace;">
-      +${stages.length-5} more</span>` : ''}
+    ${stages.length > 6 ? `<span style="font-size:9px;color:#4A6080;padding:3px 7px;
+      border:1px solid rgba(255,255,255,0.06);border-radius:4px;flex-shrink:0;">+${stages.length-6} more</span>` : ''}
   </div>
 </div>`;
   }
