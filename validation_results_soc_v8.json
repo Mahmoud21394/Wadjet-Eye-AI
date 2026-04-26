@@ -1,6 +1,6 @@
 {
   "suite": "SOC-v8-Attack-Chain-Reconstruction",
-  "date": "2026-04-25T10:28:02.703Z",
+  "date": "2026-04-26T05:43:52.296Z",
   "passed": 21,
   "failed": 0,
   "total": 21,
@@ -92,7 +92,7 @@
     },
     {
       "id": "T48",
-      "desc": "engineVersion is CSDE-v8-ACE-Hardened",
+      "desc": "engineVersion is CSDE-v8-ACE-Hardened or newer",
       "status": "PASS"
     },
     {

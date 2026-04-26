@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-04-25T10:28:02.917Z",
+  "timestamp": "2026-04-26T05:43:51.997Z",
   "engine": "ACE-v6",
   "total": 15,
   "passed": 15,
@@ -40,7 +40,7 @@
       "id": "T06",
       "description": "Causal DAG rejects execution-before-logon (invalid edge)",
       "status": "PASS",
-      "detail": "detections=2, incidents=1, invalidEdges=0"
+      "detail": "detections=2, incidents=1, invalidEdges=3"
     },
     {
       "id": "T07",
@@ -70,7 +70,7 @@
       "id": "T11",
       "description": "Intent inference: admin activity separated from attacker",
       "status": "PASS",
-      "detail": "attackerInc=true, dominated=attacker, score=85"
+      "detail": "attackerInc=true, dominated=attacker, score=97"
     },
     {
       "id": "T12",

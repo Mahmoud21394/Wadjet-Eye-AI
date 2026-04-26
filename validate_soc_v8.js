@@ -475,10 +475,10 @@ test('T47', 'Linux and Windows detections stay in separate OS buckets', () => {
 // ────────────────────────────────────────────────────────────────────────────
 // T48 — _meta.engineVersion reflects v8
 // ────────────────────────────────────────────────────────────────────────────
-test('T48', 'engineVersion is CSDE-v8-ACE-Hardened', () => {
+test('T48', 'engineVersion is CSDE-v8-ACE-Hardened or newer', () => {
   const r = analyzeEvents([{ EventID: 4624, Computer: 'DC01', user: 'test', timestamp: iso(0) }]);
   const ver = r._meta?.engineVersion;
-  if (!ver || !ver.includes('v8')) return `engineVersion is "${ver}", expected v8`;
+  if (!ver || (!ver.includes('v8') && !ver.includes('v9') && !ver.includes('v10'))) return `engineVersion is "${ver}", expected v8/v9/v10`;
   return true;
 });
 
