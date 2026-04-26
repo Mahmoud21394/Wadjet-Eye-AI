@@ -5116,12 +5116,1198 @@
       return scenarios[scMap[scenario]] || scenarios.brute_force_compromise;
     }
 
+
+    // ════════════════════════════════════════════════════════════════
+    //  LOG_NORM — MANDATORY UNIFIED NORMALIZATION LAYER  (Policy §1)
+    //  All telemetry sources normalized to ONE canonical schema BEFORE
+    //  any detection, classification, or MITRE assignment occurs.
+    //  Operates across: Windows | Firewall | Database | Cloud | App/API
+    // ════════════════════════════════════════════════════════════════
+    function _logNorm(raw) {
+      if (!raw || typeof raw !== 'object') return null;
+      const r = Object.assign({}, raw);
+
+      // ── Universal field aliases ────────────────────────────────
+      const ts = r.timestamp || r.TimeGenerated || r.TimeCreated ||
+                 r.time || r.date || r['@timestamp'] || r.eventTime ||
+                 r.occurred || r.created_at || new Date().toISOString();
+
+      const actor = r.user || r.User || r.SubjectUserName || r.TargetUserName ||
+                    r.username || r.actor || r.principal || r.identity ||
+                    r.source_user || r.src_user || r.initiator || '';
+
+      const target = r.target || r.object || r.resource || r.dest_resource ||
+                     r.process || r.NewProcessName || r.ProcessName || r.Image ||
+                     r.file || r.filename || r.table || r.db_object || r.url ||
+                     r.destIp || r.DestinationIp || r.dest_ip || r.dst_ip || '';
+
+      const action = r.action || r.activity || r.operation || r.event_action ||
+                     r.verb || r.method || r.http_method || r.commandLine ||
+                     r.CommandLine || r.cmdLine || r.query_type || r.db_action || '';
+
+      // ── Source-type detection (pre-norm) ─────────────────────
+      const rawSrc = (r.source || r.log_source || r.logsource || r.Channel ||
+                      r.source_type || r.log_type || r.type || '').toLowerCase();
+      const rawMsg = (r.message || r.msg || r.raw || r.description || '').toLowerCase();
+      const eid    = parseInt(r.EventID ?? r.eventId ?? r.event_id, 10);
+
+      let sourceType = 'endpoint';
+      if (r.query || r.sql || r.statement || r.db_name || r.database ||
+          rawSrc.match(/(mssql|mysql|oracle|postgres|mongo|db)/) ||
+          rawMsg.match(/(select|insert|update|delete|drop|grant|revoke)/)) {
+        sourceType = 'database';
+      } else if (r.url || r.uri || r.request || r.http_method || r.response_code ||
+                 r.status_code || rawSrc.match(/(apache|nginx|iis|squid|proxy|web)/) ||
+                 rawMsg.match(/(get |post |put |delete |http\/)/)) {
+        sourceType = 'application';
+      } else if (r.destIp || r.DestinationIp || r.dest_ip || r.dst_ip || r.bytes_in ||
+                 r.bytes_out || r.protocol || rawSrc.match(/(firewall|fw|palo|fortinet|checkpoint|nsg|acl|flow)/) ||
+                 (eid >= 5152 && eid <= 5159)) {
+        sourceType = 'network';
+      } else if (r.cloud_provider || r.awsRegion || r.azure_resource || r.gcp_project ||
+                 r.eventSource || r.recipientAccountId || r.subscriptionId || r.projectId ||
+                 rawSrc.match(/(aws|azure|gcp|cloudtrail|guard.?duty|sentinel|defender)/) ||
+                 rawMsg.match(/(arn:|resourceId:|projects\/|accounts\/)/)) {
+        sourceType = 'cloud';
+      }
+
+      // ── event_type classification (behavior-based) ────────────
+      let eventType = 'generic';
+      if (sourceType === 'endpoint') {
+        if (eid === 4688 || r.NewProcessName || r.Image) eventType = 'process_creation';
+        else if (eid === 4624 || eid === 4625 || eid === 4634 ||
+                 (r.LogonType !== undefined)) eventType = 'authentication';
+        else if (eid === 4688 && (r.commandLine || r.CommandLine)) eventType = 'command_execution';
+        else if (eid >= 4720 && eid <= 4767) eventType = 'account_management';
+        else if (eid === 1102 || eid === 4719 || eid === 4906) eventType = 'log_tampering';
+        else if (eid >= 5140 && eid <= 5145) eventType = 'file_share_access';
+        else if (eid === 4698 || eid === 4702 || eid === 4703 ||
+                 eid === 4704 || eid === 7045 || eid === 4697) eventType = 'scheduled_task_service';
+        else if (eid === 1 || r.Image) eventType = 'process_creation';      // Sysmon EID 1
+        else if (eid === 3 || r.DestinationIp) eventType = 'network_connection';
+        else if (eid === 11 || r.TargetFilename) eventType = 'file_created';
+        else if (eid === 13 || r.TargetObject) eventType = 'registry_write';
+      } else if (sourceType === 'network') {
+        const act = (r.action || r.direction || '').toLowerCase();
+        eventType = act.includes('deny') || act.includes('block') || act.includes('drop')
+          ? 'connection_blocked' : 'network_connection';
+      } else if (sourceType === 'database') {
+        const q = (r.query || r.sql || r.statement || '').toLowerCase();
+        if (q.match(/(select|read)/)) eventType = 'query_execution';
+        else if (q.match(/(insert|update|delete|merge)/)) eventType = 'data_modification';
+        else if (q.match(/(drop|truncate|alter)/)) eventType = 'schema_modification';
+        else if (q.match(/(grant|revoke|create user|alter user)/)) eventType = 'privilege_change';
+        else eventType = 'query_execution';
+      } else if (sourceType === 'cloud') {
+        const ev = (r.eventName || r.operationName || r.methodName || '').toLowerCase();
+        if (ev.match(/login|signin|authenticate|assume.?role/)) eventType = 'authentication';
+        else if (ev.match(/create|launch|start|deploy/)) eventType = 'resource_creation';
+        else if (ev.match(/delete|terminate|destroy|stop/)) eventType = 'resource_deletion';
+        else if (ev.match(/getobject|listbucket|describe|get|list/)) eventType = 'data_access';
+        else if (ev.match(/attach|put|update|modify|change/)) eventType = 'configuration_change';
+        else if (ev.match(/createpolicy|putpolicy|attach|grant/)) eventType = 'privilege_change';
+        else eventType = 'cloud_api_call';
+      } else if (sourceType === 'application') {
+        const code = parseInt(r.response_code || r.status_code || 0, 10);
+        if (code >= 400 && code < 500) eventType = 'auth_failure';
+        else if (code >= 500) eventType = 'server_error';
+        else if ((r.http_method || r.method || '').toUpperCase() === 'POST') eventType = 'api_write';
+        else eventType = 'http_request';
+      }
+
+      // ── Build unified normalized event ─────────────────────────
+      const norm = {
+        // ── Schema fields (Policy §1) ──────────────────────────
+        event_type    : eventType,
+        source_type   : sourceType,
+        actor         : actor,
+        action        : action,
+        target        : target,
+        context       : {
+          commandLine   : r.commandLine || r.CommandLine || r.cmdLine || '',
+          parentProcess : r.parentProcess || r.ParentProcessName || r.ParentImage || '',
+          query         : r.query || r.sql || r.statement || '',
+          port          : r.destPort || r.DestinationPort || r.dest_port || r.port || '',
+          protocol      : r.protocol || r.Protocol || '',
+          url           : r.url || r.uri || r.request || '',
+          cloudRegion   : r.awsRegion || r.region || r.location || '',
+          cloudResource : r.resourceId || r.arn || r.azure_resource || r.gcp_resource || '',
+        },
+        // ── Identity (enriched) ────────────────────────────────
+        actor_host    : r.computer || r.Computer || r.ComputerName || r.hostname || r.host || '',
+        actor_ip      : r.srcIp || r.SourceIP || r.SourceIPAddress || r.src_ip || r.IpAddress || r.clientIP || '',
+        dest_ip       : r.destIp || r.DestinationIp || r.DestinationAddress || r.dest_ip || r.dst_ip || '',
+        dest_port     : r.destPort || r.DestinationPort || r.dest_port || r.port || '',
+        // ── Time ───────────────────────────────────────────────
+        timestamp     : ts,
+        // ── Raw passthrough (for rule engine compat) ──────────
+        EventID       : isNaN(eid) ? r.EventID : eid,
+        commandLine   : r.commandLine || r.CommandLine || r.cmdLine || r.ProcessCmdLine || '',
+        process       : r.process || r.NewProcessName || r.ProcessName || r.Image || r.exe || '',
+        parentProcess : r.parentProcess || r.ParentProcessName || r.ParentProcess || r.ParentImage || '',
+        user          : actor,
+        computer      : r.computer || r.Computer || r.ComputerName || r.hostname || r.host || '',
+        srcIp         : r.srcIp || r.SourceIP || r.SourceIPAddress || r.src_ip || r.IpAddress || r.clientIP || '',
+        destIp        : r.destIp || r.DestinationIp || r.DestinationAddress || r.dest_ip || r.dst_ip || '',
+        destPort      : r.destPort || r.DestinationPort || r.dest_port || r.port || '',
+        LogonType     : r.LogonType || r.logon_type || '',
+        // Cloud-specific
+        cloudProvider : r.cloud_provider || r.eventSource?.split('.')[0] || '',
+        cloudEventName: r.eventName || r.operationName || r.methodName || '',
+        cloudRegion   : r.awsRegion || r.region || r.location || '',
+        cloudActor    : r.userIdentity?.arn || r.callerIdentity || actor,
+        cloudResource : r.resourceId || r.arn || r.requestParameters?.bucketName || '',
+        cloudSrcIp    : r.sourceIPAddress || r.clientIP || r.ipAddress || '',
+        // Database-specific
+        dbQuery       : r.query || r.sql || r.statement || '',
+        dbName        : r.db_name || r.database || r.databaseName || '',
+        dbUser        : actor,
+        dbTable       : r.table || r.object || r.db_object || '',
+        dbOperation   : r.operation || r.query_type || r.db_action || eventType,
+        // App/API-specific
+        httpMethod    : r.http_method || r.method || r.verb || '',
+        httpStatus    : r.response_code || r.status_code || r.http_status || '',
+        httpUrl       : r.url || r.uri || r.request_url || '',
+        httpUserAgent : r.user_agent || r.userAgent || r.UserAgent || '',
+        // Firewall/Network-specific
+        fwAction      : r.action || r.fw_action || r.disposition || '',
+        fwProtocol    : r.protocol || r.Protocol || r.proto || '',
+        fwBytes       : parseInt(r.bytes || r.bytes_total || 0, 10),
+        fwPkts        : parseInt(r.packets || r.pkt_count || 0, 10),
+        // Original raw event passthrough
+        _raw          : raw,
+        _os           : _detectOS(r),
+        _logSource    : sourceType,
+        _normVersion  : 'LOG_NORM-v1',
+      };
+      return norm;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  DOMAIN_CLASSIFIER  (Policy §2)
+    //  Returns the exact security domain for a normalized event.
+    //  Classification MUST occur BEFORE any detection logic.
+    //  Prevents cross-domain technique misassignment (§2 strict).
+    // ════════════════════════════════════════════════════════════════
+    const DOMAIN_CLASSIFIER = {
+      classify(norm) {
+        switch (norm.source_type) {
+          case 'endpoint'    : return 'endpoint';
+          case 'network'     : return 'network';
+          case 'database'    : return 'database';
+          case 'application' : return 'application';
+          case 'cloud'       : return 'cloud';
+          default            : return 'unknown';
+        }
+      },
+      // Domain-event_type compatibility matrix (Policy §2 enforcement)
+      isCompatible(domain, technique) {
+        if (!technique) return true;
+        const t = technique.toUpperCase();
+        // T1190 (Exploit Public-Facing App) — ONLY valid on network/application
+        if (t === 'T1190' && !['network','application','cloud'].includes(domain)) return false;
+        // T1003 (OS Credential Dumping) — endpoint ONLY
+        if (t.startsWith('T1003') && domain !== 'endpoint') return false;
+        // T1059 (Scripting) — endpoint ONLY
+        if (t.startsWith('T1059') && domain !== 'endpoint') return false;
+        // T1021 (Remote Services) — endpoint/network only
+        if (t.startsWith('T1021') && !['endpoint','network'].includes(domain)) return false;
+        // T1552 (Unsecured Credentials in DB) — database domain
+        if (t === 'T1552.001' && domain !== 'database') return false;
+        return true;
+      },
+    };
+
+    // ════════════════════════════════════════════════════════════════
+    //  CONTEXT_VALIDATOR  (Policy §3 — pre-detection gate)
+    //  Validates: required attributes exist, behavior matches domain,
+    //  sufficient evidence exists. Returns { valid, reason }.
+    //  If NOT valid → NO detection created.
+    // ════════════════════════════════════════════════════════════════
+    const CONTEXT_VALIDATOR = {
+      validate(norm, domain) {
+        if (!norm) return { valid: false, reason: 'null event' };
+        // Required attributes exist
+        if (!norm.timestamp) return { valid: false, reason: 'missing timestamp' };
+        if (!norm.source_type) return { valid: false, reason: 'missing source_type' };
+        if (!norm.event_type) return { valid: false, reason: 'missing event_type' };
+        // Domain-behavior consistency
+        if (domain === 'database') {
+          if (!norm.dbQuery && !norm.dbOperation)
+            return { valid: false, reason: 'database event missing query/operation' };
+        }
+        if (domain === 'network') {
+          if (!norm.dest_ip && !norm.actor_ip)
+            return { valid: false, reason: 'network event missing IP addresses' };
+        }
+        if (domain === 'cloud') {
+          if (!norm.cloudEventName && !norm.cloudResource && !norm.cloudActor)
+            return { valid: false, reason: 'cloud event missing event name/resource/actor' };
+        }
+        if (domain === 'application') {
+          if (!norm.httpUrl && !norm.httpMethod && !norm.httpStatus)
+            return { valid: false, reason: 'application event missing HTTP fields' };
+        }
+        return { valid: true, reason: 'ok' };
+      },
+    };
+
+    // ════════════════════════════════════════════════════════════════
+    //  MITRE_VALIDATOR  (Policy §8 — context-before-technique)
+    //  NEVER assigns technique unless full context is validated.
+    //  If uncertain → technique=null, confidence=LOW
+    // ════════════════════════════════════════════════════════════════
+    const MITRE_VALIDATOR = {
+      // Validate that technique assignment is domain-consistent
+      validate(technique, domain, norm, evidence) {
+        if (!technique) return { technique: null, confidence: 'LOW', reason: 'no technique proposed' };
+        if (!DOMAIN_CLASSIFIER.isCompatible(domain, technique)) {
+          return {
+            technique: null, confidence: 'LOW',
+            reason: `Technique ${technique} not valid for domain ${domain}`,
+          };
+        }
+        // T1190: requires web server or external exposure evidence
+        if (technique === 'T1190') {
+          const hasWebCtx = norm.httpUrl || norm.httpMethod || norm.httpStatus ||
+                            domain === 'application' || domain === 'network';
+          if (!hasWebCtx) return { technique: null, confidence: 'LOW',
+            reason: 'T1190 requires web/network context' };
+        }
+        // T1003: requires process evidence on endpoint
+        if (technique.startsWith('T1003')) {
+          const hasProcessCtx = norm.process || norm.commandLine || norm.EventID === 4688;
+          if (!hasProcessCtx || domain !== 'endpoint')
+            return { technique: null, confidence: 'LOW',
+              reason: 'T1003 requires endpoint process context' };
+        }
+        // Evidence-based confidence
+        const evidenceFields = [
+          norm.commandLine, norm.process, norm.actor, norm.actor_ip,
+          norm.dest_ip, norm.dbQuery, norm.cloudEventName, norm.httpUrl,
+        ].filter(Boolean).length;
+        const confidence = evidenceFields >= 4 ? 'HIGH' :
+                           evidenceFields >= 2 ? 'MEDIUM' : 'LOW';
+        return { technique, confidence, reason: 'validated' };
+      },
+    };
+
+    // ════════════════════════════════════════════════════════════════
+    //  EVIDENCE_FUSER  (Policy §5 — cross-field correlation)
+    //  Merges multi-field evidence into ONE unified detection.
+    //  One real-world behavior = ONE detection. No field-level splits.
+    // ════════════════════════════════════════════════════════════════
+    const EVIDENCE_FUSER = {
+      // Build a unified evidence block from multiple correlated events
+      fuse(events, domain) {
+        const block = {
+          fields_present  : [],
+          correlation_keys: [],
+          evidence_count  : events.length,
+          domain,
+        };
+        if (domain === 'endpoint') {
+          const procs = [...new Set(events.map(e => e.process).filter(Boolean))];
+          const cmds  = [...new Set(events.map(e => e.commandLine).filter(Boolean))];
+          const users = [...new Set(events.map(e => e.actor).filter(Boolean))];
+          const hosts = [...new Set(events.map(e => e.actor_host).filter(Boolean))];
+          const pProcs= [...new Set(events.map(e => e.parentProcess).filter(Boolean))];
+          if (procs.length)  { block.processes = procs;       block.fields_present.push('process'); }
+          if (cmds.length)   { block.commands   = cmds;       block.fields_present.push('commandLine'); }
+          if (users.length)  { block.users       = users;     block.fields_present.push('actor'); }
+          if (hosts.length)  { block.hosts       = hosts;     block.fields_present.push('host'); }
+          if (pProcs.length) { block.parentProcs = pProcs;    block.fields_present.push('parentProcess'); }
+          // Correlation key: process + commandLine + parentProcess (Policy §5)
+          block.correlation_keys.push(`proc::${procs[0]||'?'}::cmd::${cmds[0]?.slice(0,40)||'?'}::parent::${pProcs[0]||'?'}`);
+        } else if (domain === 'network') {
+          const srcIps  = [...new Set(events.map(e => e.actor_ip).filter(Boolean))];
+          const dstIps  = [...new Set(events.map(e => e.dest_ip).filter(Boolean))];
+          const ports   = [...new Set(events.map(e => e.dest_port).filter(Boolean))];
+          const actions = [...new Set(events.map(e => e.fwAction || e.action).filter(Boolean))];
+          if (srcIps.length)  { block.src_ips   = srcIps;   block.fields_present.push('src_ip'); }
+          if (dstIps.length)  { block.dst_ips   = dstIps;   block.fields_present.push('dst_ip'); }
+          if (ports.length)   { block.ports     = ports;    block.fields_present.push('port'); }
+          if (actions.length) { block.actions   = actions;  block.fields_present.push('action'); }
+          block.correlation_keys.push(`src::${srcIps[0]||'?'}::dst::${dstIps[0]||'?'}::port::${ports[0]||'?'}`);
+        } else if (domain === 'database') {
+          const users = [...new Set(events.map(e => e.dbUser).filter(Boolean))];
+          const tbls  = [...new Set(events.map(e => e.dbTable).filter(Boolean))];
+          const ops   = [...new Set(events.map(e => e.dbOperation).filter(Boolean))];
+          const dbs   = [...new Set(events.map(e => e.dbName).filter(Boolean))];
+          if (users.length) { block.db_users = users; block.fields_present.push('db_user'); }
+          if (tbls.length)  { block.tables    = tbls;  block.fields_present.push('table'); }
+          if (ops.length)   { block.operations= ops;   block.fields_present.push('operation'); }
+          if (dbs.length)   { block.databases = dbs;   block.fields_present.push('database'); }
+          block.correlation_keys.push(`user::${users[0]||'?'}::table::${tbls[0]||'?'}::op::${ops[0]||'?'}`);
+        } else if (domain === 'cloud') {
+          const actors    = [...new Set(events.map(e => e.cloudActor).filter(Boolean))];
+          const evtNames  = [...new Set(events.map(e => e.cloudEventName).filter(Boolean))];
+          const resources = [...new Set(events.map(e => e.cloudResource).filter(Boolean))];
+          const regions   = [...new Set(events.map(e => e.cloudRegion).filter(Boolean))];
+          if (actors.length)    { block.cloud_actors  = actors;    block.fields_present.push('cloud_actor'); }
+          if (evtNames.length)  { block.cloud_events  = evtNames;  block.fields_present.push('cloud_event'); }
+          if (resources.length) { block.cloud_resources=resources; block.fields_present.push('cloud_resource'); }
+          if (regions.length)   { block.cloud_regions = regions;   block.fields_present.push('cloud_region'); }
+          block.correlation_keys.push(`actor::${actors[0]||'?'}::evt::${evtNames[0]||'?'}::res::${resources[0]||'?'}`);
+        } else if (domain === 'application') {
+          const methods  = [...new Set(events.map(e => e.httpMethod).filter(Boolean))];
+          const statuses = [...new Set(events.map(e => e.httpStatus).filter(Boolean))];
+          const urls     = [...new Set(events.map(e => e.httpUrl).filter(Boolean))];
+          const actors   = [...new Set(events.map(e => e.actor || e.actor_ip).filter(Boolean))];
+          if (methods.length)  { block.http_methods  = methods;  block.fields_present.push('http_method'); }
+          if (statuses.length) { block.http_statuses = statuses; block.fields_present.push('http_status'); }
+          if (urls.length)     { block.urls           = urls;    block.fields_present.push('url'); }
+          if (actors.length)   { block.requestors     = actors;  block.fields_present.push('actor'); }
+          block.correlation_keys.push(`method::${methods[0]||'?'}::url::${urls[0]?.slice(0,40)||'?'}::status::${statuses[0]||'?'}`);
+        }
+        return block;
+      },
+    };
+
+    // ════════════════════════════════════════════════════════════════
+    //  CONFIDENCE_SCORER  (Policy §9 — mandatory confidence model)
+    //  Confidence = f(correlated fields, behavioral evidence, domain
+    //                 alignment, known vs unknown patterns)
+    // ════════════════════════════════════════════════════════════════
+    const CONFIDENCE_SCORER = {
+      score(evidenceBlock, hasKnownTool, domainMatch, techniqueValid) {
+        let score = 0;
+        const n = evidenceBlock.fields_present?.length || 0;
+        // Correlated fields contribution (0-40)
+        score += Math.min(n * 8, 40);
+        // Known tool / signature match (0-30)
+        if (hasKnownTool) score += 30;
+        // Domain alignment (0-20)
+        if (domainMatch) score += 20;
+        // Validated MITRE technique (0-10)
+        if (techniqueValid) score += 10;
+        score = Math.min(score, 100);
+        const level = score >= 80 ? 'HIGH' : score >= 50 ? 'MEDIUM' : 'LOW';
+        return { score, level };
+      },
+    };
+
+    // ════════════════════════════════════════════════════════════════
+    //  BEHAVIOR_DETECTOR  (Policy §4 — behavior-first model)
+    //  Domain-specific behavior rules. Each rule:
+    //    1. Domain-classified first
+    //    2. Context-validated before firing
+    //    3. Evidence-fused (no field-level splits)
+    //    4. MITRE-validated before assignment
+    //    5. Confidence-scored from multi-field correlation
+    // ════════════════════════════════════════════════════════════════
+    const BEHAVIOR_DETECTOR = {
+
+      // ── Domain-specific behavior rules ──────────────────────────
+      DOMAIN_RULES: {
+
+        // ════════ ENDPOINT DOMAIN ═══════════════════════════════
+        endpoint: [
+          {
+            id: 'BD-EP-001', name: 'Credential Dumping Tool Execution',
+            technique: 'T1003.001', tactic: 'credential-access', severity: 'critical',
+            match(norms) {
+              return norms.filter(n => {
+                const cmd  = (n.commandLine || '').toLowerCase();
+                const proc = (n.process || '').toLowerCase();
+                return n.event_type === 'process_creation' && (
+                  proc.includes('mimikatz') || cmd.includes('mimikatz') ||
+                  cmd.includes('sekurlsa') || cmd.includes('lsadump') ||
+                  (proc.includes('procdump') && cmd.includes('lsass')) ||
+                  cmd.includes('comsvcs.dll') ||
+                  (cmd.includes('rundll32') && cmd.includes('lsass'))
+                );
+              });
+            },
+            narrative: evts => `Credential dumping tool detected: "${evts[0]?.process||'unknown'}" executed ` +
+              `on ${evts[0]?.actor_host||'unknown'} by ${evts[0]?.actor||'unknown'}. ` +
+              `Command: ${evts[0]?.commandLine?.slice(0,120)||'N/A'}`,
+          },
+          {
+            id: 'BD-EP-002', name: 'Encoded PowerShell Execution',
+            technique: 'T1059.001', tactic: 'execution', severity: 'high',
+            match(norms) {
+              return norms.filter(n => {
+                const cmd  = (n.commandLine || '').toLowerCase();
+                const proc = (n.process || '').toLowerCase();
+                return n.event_type === 'process_creation' &&
+                  (proc.includes('powershell') || proc.includes('pwsh')) &&
+                  (cmd.includes('-enc') || cmd.includes('-encodedcommand') ||
+                   cmd.includes('bypass') || cmd.includes('-nop') || cmd.includes('invoke-expression'));
+              });
+            },
+            narrative: evts => `PowerShell obfuscated execution: "${evts[0]?.commandLine?.slice(0,150)||'N/A'}" ` +
+              `on ${evts[0]?.actor_host||'unknown'}`,
+          },
+          {
+            id: 'BD-EP-003', name: 'Lateral Movement via Remote Execution Tool',
+            technique: 'T1021.002', tactic: 'lateral-movement', severity: 'high',
+            match(norms) {
+              return norms.filter(n => {
+                const cmd  = (n.commandLine || '').toLowerCase();
+                const proc = (n.process || '').toLowerCase();
+                return n.event_type === 'process_creation' && (
+                  proc.includes('psexec') || cmd.includes('psexec') ||
+                  proc.includes('wmiexec') || cmd.includes('wmiexec') ||
+                  proc.includes('smbexec') || cmd.includes('smbexec') ||
+                  (proc.includes('wmic') && (cmd.includes('/node:') || cmd.includes('process call')))
+                );
+              });
+            },
+            narrative: evts => `Remote execution tool: "${evts[0]?.process||'?'}" — ` +
+              `cmd: "${evts[0]?.commandLine?.slice(0,100)||'?'}" on ${evts[0]?.actor_host||'unknown'}`,
+          },
+          {
+            id: 'BD-EP-004', name: 'Defense Evasion — Log Clearing / Audit Tampering',
+            technique: 'T1070.001', tactic: 'defense-evasion', severity: 'critical',
+            match(norms) {
+              return norms.filter(n => {
+                const cmd = (n.commandLine || '').toLowerCase();
+                const eid = n.EventID;
+                return (eid === 1102 || eid === 4719 || eid === 4906) ||
+                  (cmd.includes('wevtutil') && cmd.includes('cl')) ||
+                  (cmd.includes('clear-eventlog') || cmd.includes('clear-winlogevent'));
+              });
+            },
+            narrative: evts => `Log tampering / event log cleared on ${evts[0]?.actor_host||'unknown'} ` +
+              `by ${evts[0]?.actor||'unknown'}. EventID: ${evts[0]?.EventID||'?'}`,
+          },
+          {
+            id: 'BD-EP-005', name: 'Persistence — Scheduled Task / Service Installation',
+            technique: 'T1053.005', tactic: 'persistence', severity: 'high',
+            match(norms) {
+              return norms.filter(n => {
+                const cmd  = (n.commandLine || '').toLowerCase();
+                const proc = (n.process || '').toLowerCase();
+                const eid  = n.EventID;
+                return n.event_type === 'process_creation' &&
+                  (eid === 4698 || eid === 7045 || eid === 4697 ||
+                   proc.includes('schtasks') || cmd.includes('schtasks') ||
+                   (proc.includes('sc.exe') && (cmd.includes('create') || cmd.includes('config'))));
+              });
+            },
+            narrative: evts => `Persistence mechanism installed: sched-task/service ` +
+              `"${evts[0]?.commandLine?.slice(0,120)||'?'}" on ${evts[0]?.actor_host||'unknown'}`,
+          },
+          {
+            id: 'BD-EP-006', name: 'Data Collection / Staging Before Exfiltration',
+            technique: 'T1074.001', tactic: 'collection', severity: 'high',
+            match(norms) {
+              return norms.filter(n => {
+                const cmd  = (n.commandLine || '').toLowerCase();
+                const proc = (n.process || '').toLowerCase();
+                return n.event_type === 'process_creation' && (
+                  proc.includes('7z') || proc.includes('winrar') || proc.includes('winzip') ||
+                  cmd.includes(' a -t') || cmd.includes('compress') ||
+                  (proc.includes('xcopy') && cmd.includes('/s')) ||
+                  (proc.includes('robocopy') && cmd.includes('/mir'))
+                );
+              });
+            },
+            narrative: evts => `Data staging: "${evts[0]?.process||'?'}" compressing/copying data ` +
+              `"${evts[0]?.commandLine?.slice(0,120)||'?'}"`,
+          },
+          {
+            id: 'BD-EP-007', name: 'Impact — Ransomware / System Recovery Sabotage',
+            technique: 'T1490', tactic: 'impact', severity: 'critical',
+            match(norms) {
+              return norms.filter(n => {
+                const cmd  = (n.commandLine || '').toLowerCase();
+                const proc = (n.process || '').toLowerCase();
+                return n.event_type === 'process_creation' && (
+                  (proc.includes('vssadmin') && (cmd.includes('delete') || cmd.includes('resize'))) ||
+                  (proc.includes('wbadmin') && cmd.includes('delete')) ||
+                  (proc.includes('bcdedit') && (cmd.includes('recoveryenabled no') || cmd.includes('bootstatuspolicy'))) ||
+                  (proc.includes('wmic') && cmd.includes('shadowcopy') && cmd.includes('delete')) ||
+                  proc.includes('diskshadow')
+                );
+              });
+            },
+            narrative: evts => `Ransomware/Wiper — System recovery sabotage: ` +
+              `"${evts[0]?.commandLine?.slice(0,150)||'?'}" on ${evts[0]?.actor_host||'unknown'}`,
+          },
+        ],
+
+        // ════════ NETWORK DOMAIN ═════════════════════════════════
+        network: [
+          {
+            id: 'BD-NET-001', name: 'Port Scan / Network Reconnaissance',
+            technique: 'T1046', tactic: 'reconnaissance', severity: 'medium',
+            match(norms) {
+              // Multiple connections to different ports from same source in window
+              const bySource = new Map();
+              norms.filter(n => n.source_type === 'network').forEach(n => {
+                const k = n.actor_ip || n.srcIp || '';
+                if (!k) return;
+                if (!bySource.has(k)) bySource.set(k, new Set());
+                bySource.get(k).add(n.dest_port);
+              });
+              const scanners = [];
+              bySource.forEach((ports, src) => {
+                if (ports.size >= 5) scanners.push({ src, portCount: ports.size });
+              });
+              if (!scanners.length) return [];
+              return norms.filter(n => scanners.some(s => s.src === (n.actor_ip||n.srcIp)));
+            },
+            narrative: evts => `Port scanning from ${evts[0]?.actor_ip||'unknown'} — ` +
+              `${new Set(evts.map(e=>e.dest_port).filter(Boolean)).size} distinct ports probed`,
+          },
+          {
+            id: 'BD-NET-002', name: 'Suspicious Outbound Connection — C2 / Exfil Port',
+            technique: 'T1071.001', tactic: 'command-and-control', severity: 'high',
+            match(norms) {
+              const C2_PORTS = new Set([4444,4445,1337,31337,8888,9001,9002,2222,6667,6697,1194,8080]);
+              return norms.filter(n => {
+                const port = parseInt(n.dest_port || 0, 10);
+                return n.source_type === 'network' && n.fwAction !== 'deny' &&
+                       n.fwAction !== 'block' && n.fwAction !== 'drop' &&
+                       C2_PORTS.has(port);
+              });
+            },
+            narrative: evts => `C2/Exfil outbound connection to ${evts[0]?.dest_ip||'?'}:${evts[0]?.dest_port||'?'} ` +
+              `from ${evts[0]?.actor_ip||'?'}`,
+          },
+          {
+            id: 'BD-NET-003', name: 'Firewall Policy Violation — Repeated Blocked Connections',
+            technique: null, tactic: 'initial-access', severity: 'medium',
+            match(norms) {
+              const blocked = norms.filter(n =>
+                n.source_type === 'network' &&
+                (n.fwAction === 'deny' || n.fwAction === 'block' || n.fwAction === 'drop')
+              );
+              const bySrc = new Map();
+              blocked.forEach(n => {
+                const k = n.actor_ip || '';
+                if (!k) return;
+                if (!bySrc.has(k)) bySrc.set(k, []);
+                bySrc.get(k).push(n);
+              });
+              const suspicious = [];
+              bySrc.forEach((evts, src) => { if (evts.length >= 5) suspicious.push(...evts); });
+              return suspicious;
+            },
+            narrative: evts => `Repeated firewall blocks from ${evts[0]?.actor_ip||'?'} — ` +
+              `${evts.length} blocked connections`,
+          },
+          {
+            id: 'BD-NET-004', name: 'Data Exfiltration — Large Outbound Transfer',
+            technique: 'T1041', tactic: 'exfiltration', severity: 'high',
+            match(norms) {
+              return norms.filter(n =>
+                n.source_type === 'network' &&
+                n.fwBytes > 50_000_000 && // 50MB threshold
+                n.fwAction !== 'deny' && n.fwAction !== 'block'
+              );
+            },
+            narrative: evts => `Large outbound transfer: ${(evts[0]?.fwBytes/1048576).toFixed(1)}MB ` +
+              `from ${evts[0]?.actor_ip||'?'} to ${evts[0]?.dest_ip||'?'}`,
+          },
+        ],
+
+        // ════════ DATABASE DOMAIN ════════════════════════════════
+        database: [
+          {
+            id: 'BD-DB-001', name: 'Bulk Data Extraction — Mass SELECT Query',
+            technique: 'T1005', tactic: 'collection', severity: 'high',
+            match(norms) {
+              return norms.filter(n => {
+                const q = (n.dbQuery || '').toLowerCase();
+                return n.source_type === 'database' &&
+                  n.dbOperation === 'query_execution' &&
+                  q.includes('select') &&
+                  (q.includes('*') || q.includes('limit 0') || !q.includes('where') ||
+                   q.includes('dump') || q.includes('into outfile') || q.includes('into dumpfile'));
+              });
+            },
+            narrative: evts => `Mass data extraction via SELECT: user ${evts[0]?.dbUser||'?'} ` +
+              `queried ${evts[0]?.dbTable||evts[0]?.dbName||'unknown table'}. Query: ` +
+              `"${evts[0]?.dbQuery?.slice(0,150)||'N/A'}"`,
+          },
+          {
+            id: 'BD-DB-002', name: 'Database Privilege Escalation',
+            technique: 'T1098', tactic: 'persistence', severity: 'critical',
+            match(norms) {
+              return norms.filter(n => {
+                const q = (n.dbQuery || '').toLowerCase();
+                return n.source_type === 'database' && (
+                  n.dbOperation === 'privilege_change' ||
+                  q.match(/(grant|revoke|create user|alter user|create role|drop user)/)
+                );
+              });
+            },
+            narrative: evts => `Database privilege escalation: "${evts[0]?.dbQuery?.slice(0,150)||'?'}" ` +
+              `by ${evts[0]?.dbUser||'?'} on ${evts[0]?.dbName||'?'}`,
+          },
+          {
+            id: 'BD-DB-003', name: 'Schema Destruction — DDL Attack',
+            technique: 'T1485', tactic: 'impact', severity: 'critical',
+            match(norms) {
+              return norms.filter(n => {
+                const q = (n.dbQuery || '').toLowerCase();
+                return n.source_type === 'database' &&
+                  n.dbOperation === 'schema_modification' &&
+                  q.match(/(drop table|drop database|truncate|alter table.*drop)/);
+              });
+            },
+            narrative: evts => `DDL Destructive query: "${evts[0]?.dbQuery?.slice(0,150)||'?'}" ` +
+              `by ${evts[0]?.dbUser||'?'}`,
+          },
+          {
+            id: 'BD-DB-004', name: 'SQL Injection Pattern Detected',
+            technique: 'T1190', tactic: 'initial-access', severity: 'high',
+            // NOTE: T1190 validated for database/application domain
+            match(norms) {
+              return norms.filter(n => {
+                const q = (n.dbQuery || n.httpUrl || '').toLowerCase();
+                return (n.source_type === 'database' || n.source_type === 'application') && (
+                  q.includes("' or '1'='1") || q.includes('1=1') ||
+                  q.includes('union select') || q.includes('sleep(') ||
+                  q.includes('benchmark(') || q.includes("'; drop table") ||
+                  q.includes('xp_cmdshell') || q.includes("load_file(") ||
+                  /('|--|;)\s*(select|insert|update|delete|drop|exec|union)/i.test(q)
+                );
+              });
+            },
+            narrative: evts => `SQL injection pattern in ${evts[0]?.source_type||'?'}: ` +
+              `"${(evts[0]?.dbQuery||evts[0]?.httpUrl||'?').slice(0,150)}"`,
+          },
+        ],
+
+        // ════════ CLOUD DOMAIN ═══════════════════════════════════
+        cloud: [
+          {
+            id: 'BD-CLD-001', name: 'Cloud IAM Privilege Escalation',
+            technique: 'T1078.004', tactic: 'privilege-escalation', severity: 'critical',
+            match(norms) {
+              return norms.filter(n => {
+                const ev = (n.cloudEventName || '').toLowerCase();
+                return n.source_type === 'cloud' && (
+                  ev.includes('attachuserpolicy') || ev.includes('putuserpolicy') ||
+                  ev.includes('addroletogroup') || ev.includes('createpolicy') ||
+                  ev.includes('putrolepolicy') || ev.includes('assumerole') ||
+                  ev.includes('addpermission') || ev.includes('createaccesskey') ||
+                  ev.includes('attachrolepolicy') || ev.includes('updateassumerolepolicydocument')
+                );
+              });
+            },
+            narrative: evts => `Cloud IAM privilege escalation: "${evts[0]?.cloudEventName||'?'}" ` +
+              `by ${evts[0]?.cloudActor||'?'} in ${evts[0]?.cloudRegion||'?'} ` +
+              `on resource ${evts[0]?.cloudResource?.slice(0,80)||'?'}`,
+          },
+          {
+            id: 'BD-CLD-002', name: 'Cloud Storage Exfiltration — Mass Object Access',
+            technique: 'T1530', tactic: 'exfiltration', severity: 'high',
+            match(norms) {
+              const accessCounts = new Map();
+              norms.filter(n => n.source_type === 'cloud').forEach(n => {
+                const ev = (n.cloudEventName || '').toLowerCase();
+                if (!ev.includes('getobject') && !ev.includes('listbucket') &&
+                    !ev.includes('getbucketobject') && !ev.includes('readobject')) return;
+                const k = n.cloudActor || 'unknown';
+                accessCounts.set(k, (accessCounts.get(k)||0) + 1);
+              });
+              const suspicious = [];
+              accessCounts.forEach((cnt, actor) => {
+                if (cnt >= 10) suspicious.push(actor);
+              });
+              if (!suspicious.length) return [];
+              return norms.filter(n => n.source_type === 'cloud' &&
+                suspicious.includes(n.cloudActor));
+            },
+            narrative: evts => `Mass cloud storage access: ${evts.length} object reads ` +
+              `by ${evts[0]?.cloudActor||'?'} on bucket ${evts[0]?.cloudResource?.slice(0,60)||'?'}`,
+          },
+          {
+            id: 'BD-CLD-003', name: 'Cloud Infrastructure Destruction',
+            technique: 'T1485', tactic: 'impact', severity: 'critical',
+            match(norms) {
+              return norms.filter(n => {
+                const ev = (n.cloudEventName || '').toLowerCase();
+                return n.source_type === 'cloud' && (
+                  ev.includes('terminateinstances') || ev.includes('deletedbinstance') ||
+                  ev.includes('deletebucket') || ev.includes('deletecluster') ||
+                  ev.includes('deletestack') || ev.includes('purgevault') ||
+                  ev.includes('deleteresourcegroup') || ev.includes('deletesecret')
+                );
+              });
+            },
+            narrative: evts => `Cloud infrastructure destruction: "${evts[0]?.cloudEventName||'?'}" ` +
+              `by ${evts[0]?.cloudActor||'?'} — resource: ${evts[0]?.cloudResource?.slice(0,80)||'?'}`,
+          },
+          {
+            id: 'BD-CLD-004', name: 'Impossible Travel / Geographic Anomaly',
+            technique: 'T1078.004', tactic: 'initial-access', severity: 'high',
+            match(norms) {
+              // Detect same actor from multiple distinct regions within short window
+              const actorRegions = new Map();
+              norms.filter(n => n.source_type === 'cloud' && n.cloudActor && n.cloudRegion)
+                .forEach(n => {
+                  const k = n.cloudActor;
+                  if (!actorRegions.has(k)) actorRegions.set(k, new Set());
+                  actorRegions.get(k).add(n.cloudRegion);
+                });
+              const suspicious = [];
+              actorRegions.forEach((regions, actor) => {
+                if (regions.size >= 3) suspicious.push(actor);
+              });
+              return norms.filter(n => n.source_type === 'cloud' &&
+                suspicious.includes(n.cloudActor));
+            },
+            narrative: evts => {
+              const regions = [...new Set(evts.map(e=>e.cloudRegion).filter(Boolean))];
+              return `Impossible travel: ${evts[0]?.cloudActor||'?'} accessed from ` +
+                `${regions.length} regions: ${regions.slice(0,5).join(', ')}`;
+            },
+          },
+        ],
+
+        // ════════ APPLICATION DOMAIN ═════════════════════════════
+        application: [
+          {
+            id: 'BD-APP-001', name: 'Brute Force Authentication — App/API',
+            technique: 'T1110', tactic: 'credential-access', severity: 'high',
+            match(norms) {
+              const bySrc = new Map();
+              norms.filter(n => n.source_type === 'application').forEach(n => {
+                const code = parseInt(n.httpStatus || 0, 10);
+                if (code !== 401 && code !== 403) return;
+                const k = n.actor_ip || n.actor || 'unknown';
+                if (!bySrc.has(k)) bySrc.set(k, []);
+                bySrc.get(k).push(n);
+              });
+              const suspicious = [];
+              bySrc.forEach((evts, src) => { if (evts.length >= 5) suspicious.push(...evts); });
+              return suspicious;
+            },
+            narrative: evts => `API/App brute force: ${evts.length} authentication failures ` +
+              `from ${evts[0]?.actor_ip||'?'} targeting ${evts[0]?.httpUrl?.slice(0,60)||'?'}`,
+          },
+          {
+            id: 'BD-APP-002', name: 'Web Application Attack — Exploit Attempt',
+            technique: 'T1190', tactic: 'initial-access', severity: 'high',
+            match(norms) {
+              return norms.filter(n => {
+                const url = (n.httpUrl || n.context?.url || '').toLowerCase();
+                const ua  = (n.httpUserAgent || '').toLowerCase();
+                return n.source_type === 'application' && (
+                  url.includes('../') || url.includes('etc/passwd') ||
+                  url.includes('<script') || url.includes('onload=') ||
+                  url.includes('javascript:') || url.includes('eval(') ||
+                  ua.includes('sqlmap') || ua.includes('nikto') ||
+                  ua.includes('nmap') || ua.includes('masscan') ||
+                  url.includes('cmd=') || url.includes('exec=') ||
+                  url.includes('/wp-admin') || url.includes('/phpinfo')
+                );
+              });
+            },
+            narrative: evts => `Web attack attempt: "${evts[0]?.httpMethod||'?'} ` +
+              `${evts[0]?.httpUrl?.slice(0,100)||'?'}" — UA: ${evts[0]?.httpUserAgent?.slice(0,60)||'?'}`,
+          },
+          {
+            id: 'BD-APP-003', name: 'Sensitive Endpoint Access — Mass Data Pull',
+            technique: 'T1530', tactic: 'collection', severity: 'medium',
+            match(norms) {
+              return norms.filter(n => {
+                const url = (n.httpUrl || '').toLowerCase();
+                return n.source_type === 'application' &&
+                  n.httpMethod === 'GET' &&
+                  (url.includes('/export') || url.includes('/dump') ||
+                   url.includes('/download') || url.includes('/backup') ||
+                   url.includes('/admin') || url.includes('/api/users') ||
+                   url.includes('/api/all') || url.includes('/reports'));
+              });
+            },
+            narrative: evts => `Sensitive endpoint mass access: ${evts.length} requests to ` +
+              `${evts[0]?.httpUrl?.slice(0,80)||'?'} by ${evts[0]?.actor||evts[0]?.actor_ip||'?'}`,
+          },
+        ],
+      },
+
+      // ── Run all domain-matched behavior rules ──────────────────
+      analyze(normEvents, domain) {
+        const rules  = this.DOMAIN_RULES[domain] || [];
+        const result = [];
+        for (const rule of rules) {
+          try {
+            const matched = rule.match(normEvents);
+            if (!matched || !matched.length) continue;
+
+            // ── Context Validation Gate (Policy §3) ────────────
+            const ctxCheck = CONTEXT_VALIDATOR.validate(matched[0], domain);
+            if (!ctxCheck.valid) continue;
+
+            // ── MITRE Validation Gate (Policy §8) ──────────────
+            const mitreResult = MITRE_VALIDATOR.validate(rule.technique, domain, matched[0], matched);
+
+            // ── Evidence Fusion (Policy §5 — ONE detection) ────
+            const evidenceBlock = EVIDENCE_FUSER.fuse(matched, domain);
+
+            // ── Tool Intelligence Override (Policy §7) ─────────
+            const cmdStr  = (matched[0]?.commandLine || '').toLowerCase();
+            const procStr = (matched[0]?.process || '').toLowerCase();
+            let knownTool = false;
+            let toolOverride = null;
+            for (const [tool, fp] of Object.entries(BEHAVIORAL_FINGERPRINTS)) {
+              if (procStr.includes(tool) || cmdStr.includes(tool)) {
+                knownTool = true;
+                toolOverride = fp;
+                break;
+              }
+            }
+
+            // Tool override: use tool-specific technique if compatible
+            let finalTechnique = mitreResult.technique;
+            let finalTactic    = rule.tactic;
+            if (knownTool && toolOverride) {
+              const toolMitre = MITRE_VALIDATOR.validate(toolOverride.technique, domain, matched[0], matched);
+              if (toolMitre.technique) {
+                finalTechnique = toolMitre.technique;
+                finalTactic    = toolOverride.tactic;
+              }
+            }
+
+            // ── Confidence Scoring (Policy §9) ─────────────────
+            const confScore = CONFIDENCE_SCORER.score(
+              evidenceBlock, knownTool,
+              true,  // domain always matches here
+              !!finalTechnique
+            );
+
+            // ── Fail-Safe Mode (Policy §10) ────────────────────
+            if (confScore.level === 'LOW' && !knownTool && !finalTechnique) {
+              result.push({
+                ruleId     : rule.id,
+                ruleName   : 'Suspicious Activity',
+                source_type: domain,
+                technique  : null,
+                tactic     : null,
+                severity   : 'low',
+                confidence : confScore,
+                evidenceBlock,
+                matchedEvents: matched,
+                narrative  : `Suspicious ${domain} activity — insufficient evidence for definitive classification`,
+                timestamp  : matched[0]?.timestamp || new Date().toISOString(),
+                _failSafe  : true,
+              });
+              continue;
+            }
+
+            // ── Standardized Output (Policy §11) ───────────────
+            result.push({
+              ruleId      : rule.id,
+              ruleName    : rule.name,
+              source_type : domain,
+              event_type  : matched[0]?.event_type || 'generic',
+              technique   : finalTechnique,
+              tactic      : finalTactic,
+              severity    : knownTool && toolOverride?.severity ? toolOverride.severity : rule.severity,
+              confidence  : confScore,
+              mitre       : { technique: finalTechnique, tactic: finalTactic, name: rule.name },
+              evidenceBlock,
+              matchedCount: matched.length,
+              matchedEvents: matched.slice(0, 10), // max 10 evidence events
+              actor       : matched[0]?.actor || '',
+              actor_host  : matched[0]?.actor_host || '',
+              actor_ip    : matched[0]?.actor_ip || matched[0]?.srcIp || '',
+              target      : matched[0]?.target || '',
+              timestamp   : matched[0]?.timestamp || new Date().toISOString(),
+              narrative   : rule.narrative(matched),
+              _knownTool  : knownTool,
+              _toolOverride: toolOverride,
+            });
+          } catch(err) {
+            console.warn('[BEHAVIOR_DETECTOR] Rule error:', rule.id, err.message);
+          }
+        }
+        return result;
+      },
+    };
+
+    // ════════════════════════════════════════════════════════════════
+    //  DEDUP_GATE  (Policy §6 — duplication prohibition)
+    //  ONE behavior = ONE detection. Merges field-level duplicates.
+    //  Policy §12: Single source of truth rule.
+    //  Policy §13: Timeline deduplication.
+    //  Policy §16: Chain formation only for distinct techniques.
+    // ════════════════════════════════════════════════════════════════
+    function _behaviorDedupGate(detections) {
+      const seen = new Map(); // key → best detection
+      for (const det of detections) {
+        // Build dedup key from behavior signature (not field-level)
+        const key = [
+          det.ruleId,
+          det.actor || '',
+          det.actor_host || '',
+          (det.technique || 'none'),
+          (det.evidenceBlock?.correlation_keys?.[0] || ''),
+        ].join('::');
+        if (!seen.has(key)) {
+          seen.set(key, det);
+        } else {
+          // Merge: keep the higher-confidence detection, merge evidence
+          const existing = seen.get(key);
+          if (det.confidence.score > existing.confidence.score) {
+            det.matchedCount = (det.matchedCount||1) + (existing.matchedCount||1);
+            seen.set(key, det);
+          } else {
+            existing.matchedCount = (existing.matchedCount||1) + (det.matchedCount||1);
+          }
+        }
+      }
+      return [...seen.values()];
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  RISK_ENGINE  (Policy §15 — deduplicated risk scoring)
+    //  Uses ONLY deduplicated detections. Avoids inflation.
+    //  Weights: behavior severity + confidence + correlation strength.
+    // ════════════════════════════════════════════════════════════════
+    function _calcBehaviorRisk(dedupedDets) {
+      if (!dedupedDets.length) return 0;
+      const SEV = { critical: 30, high: 20, medium: 10, low: 5 };
+      const CONF = { HIGH: 1.0, MEDIUM: 0.7, LOW: 0.4 };
+      let score = 0;
+      for (const d of dedupedDets) {
+        const sevScore  = SEV[d.severity] || 5;
+        const confMult  = CONF[d.confidence?.level] || 0.5;
+        const corrBoost = Math.min((d.evidenceBlock?.fields_present?.length || 1) * 0.1, 0.5);
+        score += sevScore * confMult * (1 + corrBoost);
+      }
+      return Math.min(Math.round(score), 100);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  BEHAVIOR_CHAIN_BUILDER  (Policy §16 — distinct techniques only)
+    //  Forms attack chains ONLY from distinct techniques + progression.
+    // ════════════════════════════════════════════════════════════════
+    function _buildBehaviorChain(dedupedDets) {
+      // Only chain if multiple DISTINCT techniques exist (Policy §16)
+      const distinctTechniques = [...new Set(
+        dedupedDets.filter(d => d.technique).map(d => d.technique)
+      )];
+      if (distinctTechniques.length < 2) return [];
+
+      // Sort by MITRE phase order for progression detection
+      const phaseMap = {
+        'reconnaissance':0,'initial-access':1,'execution':2,'persistence':3,
+        'privilege-escalation':4,'defense-evasion':5,'credential-access':6,
+        'discovery':7,'lateral-movement':8,'collection':9,
+        'command-and-control':10,'exfiltration':11,'impact':12,
+      };
+      const sorted = [...dedupedDets].sort((a, b) => {
+        const pa = phaseMap[a.tactic] ?? 99;
+        const pb = phaseMap[b.tactic] ?? 99;
+        if (pa !== pb) return pa - pb;
+        return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+      });
+
+      // Check for clear progression (at least 2 distinct phases advancing)
+      const phases = sorted.map(d => phaseMap[d.tactic] ?? 99).filter(p => p !== 99);
+      const isProgression = phases.length >= 2 &&
+        phases.some((p, i) => i > 0 && p > phases[i-1]);
+      if (!isProgression && distinctTechniques.length < 3) return [];
+
+      return [{
+        id          : 'BD-CHAIN-' + Date.now().toString(36).toUpperCase(),
+        stages      : sorted.map((d, i) => ({
+          stageIndex  : i,
+          ruleName    : d.ruleName,
+          technique   : d.technique,
+          tactic      : d.tactic,
+          severity    : d.severity,
+          confidence  : d.confidence?.score || 50,
+          actor       : d.actor,
+          actor_host  : d.actor_host,
+          timestamp   : d.timestamp,
+          narrative   : d.narrative,
+          inferred    : false,
+        })),
+        riskScore   : _calcBehaviorRisk(sorted),
+        severity    : sorted[0]?.severity || 'medium',
+        techniques  : distinctTechniques,
+        source_type : [...new Set(sorted.map(d => d.source_type))].join('+'),
+      }];
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  INVESTIGATION ENGINE  (Policy-compliant, client-side)
+    //  Runs the full behavior-first pipeline on session data.
+    //  Used by the Manual Investigation tab.
+    // ════════════════════════════════════════════════════════════════
+    function investigateEntity(entity, entityType, timeRangeMs, sessionState) {
+      const S      = sessionState || {};
+      const allEvents = [
+        ...(S.rawEvents || []),
+        // Reconstruct events from existing detections' evidence
+        ...(S.detections || []).flatMap(d => d.evidence || d.raw_detections || []),
+      ];
+
+      // ── 1. LOG_NORM: normalize all events ─────────────────────
+      const normed = allEvents.map(_logNorm).filter(Boolean);
+
+      // ── 2. Filter by entity and time range ─────────────────────
+      const now    = Date.now();
+      const cutoff = timeRangeMs ? now - timeRangeMs : 0;
+      const entityLower = (entity || '').toLowerCase();
+      const filtered = normed.filter(n => {
+        // Time filter
+        const ts = new Date(n.timestamp).getTime();
+        if (cutoff > 0 && ts > 0 && ts < cutoff) return false;
+        // Entity match (actor, host, IP, process, URL)
+        return (
+          (n.actor       && n.actor.toLowerCase().includes(entityLower)) ||
+          (n.actor_host  && n.actor_host.toLowerCase().includes(entityLower)) ||
+          (n.actor_ip    && n.actor_ip.toLowerCase().includes(entityLower)) ||
+          (n.dest_ip     && n.dest_ip.toLowerCase().includes(entityLower)) ||
+          (n.process     && n.process.toLowerCase().includes(entityLower)) ||
+          (n.target      && n.target.toLowerCase().includes(entityLower)) ||
+          (n.cloudActor  && n.cloudActor.toLowerCase().includes(entityLower)) ||
+          (n.cloudResource && n.cloudResource.toLowerCase().includes(entityLower)) ||
+          (n.dbUser      && n.dbUser.toLowerCase().includes(entityLower)) ||
+          (n.httpUrl     && n.httpUrl.toLowerCase().includes(entityLower))
+        );
+      });
+
+      // ── 3. DOMAIN_CLASSIFIER: group events by domain ───────────
+      const byDomain = { endpoint:[], network:[], database:[], application:[], cloud:[] };
+      filtered.forEach(n => {
+        const dom = DOMAIN_CLASSIFIER.classify(n);
+        if (byDomain[dom]) byDomain[dom].push(n);
+      });
+
+      // ── 4. BEHAVIOR_DETECTOR: run domain-specific rules ────────
+      const rawFindings = [];
+      for (const [domain, events] of Object.entries(byDomain)) {
+        if (!events.length) continue;
+        const domFindings = BEHAVIOR_DETECTOR.analyze(events, domain);
+        rawFindings.push(...domFindings);
+      }
+
+      // Also include session detections related to entity (already deduped by CSDE)
+      const relatedDets = (S.detections || []).filter(d => {
+        return (
+          (d.user      && d.user.toLowerCase().includes(entityLower)) ||
+          (d.computer  && d.computer.toLowerCase().includes(entityLower)) ||
+          (d.srcIp     && d.srcIp.toLowerCase().includes(entityLower)) ||
+          (d.host      && d.host.toLowerCase().includes(entityLower))
+        );
+      }).map(d => ({
+        ruleId      : d.ruleId || d.id || 'LEGACY',
+        ruleName    : d.ruleName || d.detection_name || d.title || 'Detection',
+        source_type : d._logSource || d.logCategory || 'endpoint',
+        event_type  : d.event_type || 'generic',
+        technique   : d.mitre?.technique || d.technique || null,
+        tactic      : d.mitre?.tactic || d.tactic || null,
+        severity    : d.severity || d.aggregated_severity || 'medium',
+        confidence  : { score: d.confidence || 50, level: d.confidence >= 80 ? 'HIGH' : d.confidence >= 50 ? 'MEDIUM' : 'LOW' },
+        mitre       : d.mitre || { technique: d.technique||null, tactic: d.tactic||null },
+        evidenceBlock: { fields_present: ['legacy'], evidence_count: d.event_count || 1 },
+        matchedEvents: d.evidence || [],
+        actor       : d.user || '',
+        actor_host  : d.computer || d.host || '',
+        actor_ip    : d.srcIp || '',
+        timestamp   : d.timestamp || d.first_seen || new Date().toISOString(),
+        narrative   : d.narrative || '',
+        _fromSession: true,
+      }));
+      rawFindings.push(...relatedDets);
+
+      // ── 5. DEDUP_GATE: enforce one-behavior = one-detection ────
+      const findings = _behaviorDedupGate(rawFindings);
+
+      // ── 6. Risk scoring (deduplication-aware) ──────────────────
+      const riskScore = _calcBehaviorRisk(findings);
+
+      // ── 7. MITRE map (validated only) ──────────────────────────
+      const mitreMap = findings
+        .filter(f => f.technique && f.tactic)
+        .map(f => ({
+          technique: f.technique,
+          tactic   : f.tactic,
+          name     : f.ruleName,
+          confidence: f.confidence?.level || 'LOW',
+          source_type: f.source_type,
+        }));
+
+      // ── 8. Behavior chain (distinct techniques + progression) ──
+      const chains = _buildBehaviorChain(findings);
+
+      // ── 9. Deduplicated timeline (Policy §13) ──────────────────
+      const timelineMap = new Map();
+      filtered.forEach(n => {
+        const key = `${n.event_type}::${n.actor}::${n.actor_host}::${n.timestamp}`;
+        if (!timelineMap.has(key)) {
+          timelineMap.set(key, {
+            timestamp  : n.timestamp,
+            event_type : n.event_type,
+            source_type: n.source_type,
+            actor      : n.actor,
+            actor_host : n.actor_host,
+            actor_ip   : n.actor_ip,
+            action     : n.action || n.commandLine || n.cloudEventName || n.httpMethod || '',
+            target     : n.target || n.dest_ip || n.cloudResource || n.httpUrl || '',
+            description: `[${n.source_type.toUpperCase()}] ${n.event_type.replace(/_/g,' ')}: ` +
+                         `${(n.action||n.commandLine||n.cloudEventName||'').slice(0,80)}`,
+          });
+        }
+      });
+      const timeline = [...timelineMap.values()]
+        .sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+      // ── 10. Domain summary ─────────────────────────────────────
+      const domainSummary = {};
+      for (const [dom, evts] of Object.entries(byDomain)) {
+        if (evts.length) domainSummary[dom] = evts.length;
+      }
+
+      // ── 11. Auto-detect entity type ────────────────────────────
+      let detectedType = entityType || 'auto';
+      if (detectedType === 'auto') {
+        if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(entity)) detectedType = 'ip';
+        else if (/^[0-9a-f]{32,64}$/i.test(entity)) detectedType = 'hash';
+        else if (entity.includes('@') || entity.includes('/')) detectedType = 'user';
+        else if (entity.includes('arn:') || entity.includes('projects/')) detectedType = 'cloud_resource';
+        else if (entity.toLowerCase().match(/\.(exe|dll|bat|ps1|sh|py)$/)) detectedType = 'process';
+        else detectedType = filtered.some(n => n.actor_host?.toLowerCase().includes(entityLower)) ? 'host' : 'user';
+      }
+
+      return {
+        entityId    : entity,
+        type        : detectedType,
+        riskScore,
+        findings,           // behavior-first, deduped (Policy §14)
+        timeline,           // attack-progression, no dups (Policy §13)
+        mitreMap    : { techniques: mitreMap },
+        chain       : chains[0] || null,
+        chains,
+        domainSummary,
+        totalEvents : filtered.length,
+        summary     : findings.length
+          ? `${findings.length} behavior-based finding${findings.length>1?'s':''} across ` +
+            `${Object.keys(domainSummary).join(', ')} domains. Risk: ${riskScore}/100.`
+          : `No behavioral findings for "${entity}" in current session data.`,
+        _meta: {
+          eventsAnalyzed  : filtered.length,
+          normEvents      : normed.length,
+          rawFindingsCount: rawFindings.length,
+          dedupedCount    : findings.length,
+          policyVersion   : 'BEHAVIOR-FIRST-v1',
+          domains         : Object.keys(domainSummary),
+        },
+      };
+    }
+
     return { analyzeEvents, getSampleEvents, mergeDetections, processBackendResult,
              _dedupDetections, _normalizeRuleName, _baseRuleId, _canonicalSlug, _normalizeExternalDet,
              _inferEventsOs, _inferOsFromTitle,
-             // New in CSDE v4
+             // CSDE v4
              _validateEventSchema, _crossLinkEvents, _correlateIncidents,
-             LOG_SCHEMA, _classifyEventSource };
+             LOG_SCHEMA, _classifyEventSource,
+             // BEHAVIOR-FIRST-v1 (Policy §1-§16)
+             _logNorm, DOMAIN_CLASSIFIER, CONTEXT_VALIDATOR, MITRE_VALIDATOR,
+             EVIDENCE_FUSER, CONFIDENCE_SCORER, BEHAVIOR_DETECTOR,
+             _behaviorDedupGate, _calcBehaviorRisk, _buildBehaviorChain,
+             investigateEntity };
 
   })(); // end CSDE
 
@@ -5137,6 +6323,159 @@
     _setTab('overview');
     await _loadStats();
     _connectWS();
+    // ── Post-render visual enhancements ──
+    _startMatrixRain();
+    _startStatCountUp();
+    _startHeaderParticles();
+  }
+
+  // ── Matrix rain canvas background ────────────────────────────
+  function _startMatrixRain() {
+    const root = document.getElementById('rk-root');
+    if (!root) return;
+    // Remove existing canvas if any
+    const existing = document.getElementById('rk-matrix-canvas');
+    if (existing) existing.remove();
+
+    const canvas = document.createElement('canvas');
+    canvas.id = 'rk-matrix-canvas';
+    canvas.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:0;opacity:0.055;';
+    root.insertBefore(canvas, root.firstChild);
+
+    const ctx    = canvas.getContext('2d');
+    const chars  = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@#$%^&*()[]{}|<>/\\;:.,';
+    const hexchars = '0123456789ABCDEF';
+    const fontSize = 11;
+    let   drops   = [];
+    let   raf;
+
+    function resize() {
+      canvas.width  = root.offsetWidth;
+      canvas.height = root.offsetHeight;
+      const cols    = Math.floor(canvas.width / fontSize);
+      drops = Array.from({ length: cols }, () => Math.random() * -100);
+    }
+
+    function draw() {
+      ctx.fillStyle = 'rgba(2,6,10,0.08)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.font = fontSize + 'px "JetBrains Mono",monospace';
+
+      for (let i = 0; i < drops.length; i++) {
+        // Alternate between hex chars and regular chars
+        const char = (i % 3 === 0)
+          ? hexchars[Math.floor(Math.random() * hexchars.length)]
+          : chars[Math.floor(Math.random() * chars.length)];
+
+        // Leading character is brighter (cyan)
+        const y = drops[i] * fontSize;
+        if (y > 0 && y < canvas.height) {
+          // Bright lead character
+          ctx.fillStyle = `rgba(0,212,255,0.9)`;
+          ctx.fillText(char, i * fontSize, y);
+          // Dim trail character behind
+          if (drops[i] > 1) {
+            ctx.fillStyle = `rgba(0,140,180,0.3)`;
+            ctx.fillText(hexchars[Math.floor(Math.random() * hexchars.length)],
+              i * fontSize, (drops[i] - 1) * fontSize);
+          }
+        }
+
+        drops[i]++;
+        // Random reset when column exits bottom
+        if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) {
+          drops[i] = Math.random() * -30;
+        }
+      }
+    }
+
+    resize();
+    const resizeObs = new ResizeObserver(resize);
+    resizeObs.observe(root);
+
+    let lastTime = 0;
+    const FPS = 20; // low fps for subtlety
+    function loop(ts) {
+      if (!document.getElementById('rk-matrix-canvas')) {
+        resizeObs.disconnect();
+        return; // stop if removed
+      }
+      if (ts - lastTime > 1000 / FPS) {
+        draw();
+        lastTime = ts;
+      }
+      raf = requestAnimationFrame(loop);
+    }
+    raf = requestAnimationFrame(loop);
+  }
+
+  // ── Stat card count-up animation ────────────────────────────
+  function _startStatCountUp() {
+    // Triggered after stat values update — adds bounce class
+    const observer = new MutationObserver(mutations => {
+      mutations.forEach(m => {
+        if (m.target.classList.contains('rk-stat-val')) {
+          m.target.classList.remove('updated');
+          void m.target.offsetWidth; // reflow
+          m.target.classList.add('updated');
+        }
+      });
+    });
+    document.querySelectorAll('.rk-stat-val').forEach(el => {
+      observer.observe(el, { childList: true, characterData: true, subtree: true });
+    });
+  }
+
+  // ── Subtle particle effect around header ────────────────────
+  function _startHeaderParticles() {
+    const hdr = document.querySelector('.rk-hdr');
+    if (!hdr) return;
+    // Create floating data-bits in the header area
+    const createParticle = () => {
+      if (!document.querySelector('.rk-hdr')) return;
+      const p = document.createElement('div');
+      const size = Math.random() * 3 + 1;
+      const startX = Math.random() * 100;
+      const dur = Math.random() * 4 + 3;
+      const delay = Math.random() * 2;
+      p.style.cssText = `
+        position:absolute;
+        left:${startX}%;
+        bottom:0;
+        width:${size}px;
+        height:${size}px;
+        background:rgba(0,212,255,${0.3 + Math.random()*0.4});
+        border-radius:50%;
+        pointer-events:none;
+        z-index:0;
+        animation: rk-particle-rise ${dur}s ease-out ${delay}s forwards;
+        box-shadow: 0 0 ${size*3}px rgba(0,212,255,0.6);
+      `;
+      hdr.appendChild(p);
+      setTimeout(() => p.remove(), (dur + delay + 0.5) * 1000);
+    };
+
+    // Inject CSS for particle rise
+    if (!document.getElementById('rk-particle-css')) {
+      const style = document.createElement('style');
+      style.id = 'rk-particle-css';
+      style.textContent = `
+        @keyframes rk-particle-rise {
+          0%   { transform: translateY(0) scale(1); opacity: 0.8; }
+          100% { transform: translateY(-60px) scale(0.3); opacity: 0; }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    // Spawn particles every 600ms
+    const interval = setInterval(() => {
+      if (!document.querySelector('.rk-hdr')) {
+        clearInterval(interval);
+        return;
+      }
+      createParticle();
+    }, 600);
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -5145,128 +6484,916 @@
   function _buildUI() {
     return `
 <style>
+  /* ══════════════════════════════════════════════════════════════
+     RAYKAN CYBER UI v2.0 — Professional Cybersecurity Design System
+     Dark neural-net aesthetic · Neon glow · Animated threat indicators
+  ══════════════════════════════════════════════════════════════ */
+
+  /* ── Base & Reset ── */
   .rk-root { display:flex; flex-direction:column; height:100%; min-height:600px;
-    background:#0d1117; color:#e6edf3; font-family:'Inter',system-ui,sans-serif; }
-  .rk-hdr  { display:flex; align-items:center; gap:12px; padding:12px 20px;
-    background:#161b22; border-bottom:1px solid #21262d; flex-shrink:0; }
-  .rk-stats-row { display:grid; grid-template-columns:repeat(6,1fr); gap:1px;
-    background:#21262d; border-bottom:1px solid #21262d; flex-shrink:0; }
-  .rk-stat { padding:12px 16px; background:#0d1117; }
-  .rk-stat-val { font-size:22px; font-weight:700; }
-  .rk-stat-lbl { font-size:10px; color:#6b7280; margin-top:2px; text-transform:uppercase; letter-spacing:.5px; }
-  .rk-tabs { display:flex; background:#161b22; border-bottom:1px solid #21262d;
-    flex-shrink:0; overflow-x:auto; scrollbar-width:none; }
+    background:#050a0f; color:#c9d1d9; font-family:'Inter',system-ui,sans-serif;
+    position:relative; overflow:hidden; }
+
+  /* ── Animated hex-grid background ── */
+  .rk-root::before {
+    content:''; position:absolute; inset:0; pointer-events:none; z-index:0;
+    background-image:
+      linear-gradient(rgba(0,212,255,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,212,255,0.025) 1px, transparent 1px);
+    background-size: 40px 40px;
+    animation: rk-grid-drift 20s linear infinite;
+  }
+  @keyframes rk-grid-drift {
+    0%   { background-position: 0 0; }
+    100% { background-position: 40px 40px; }
+  }
+
+  /* ── Scan line overlay ── */
+  .rk-root::after {
+    content:''; position:absolute; inset:0; pointer-events:none; z-index:0;
+    background: linear-gradient(transparent 50%, rgba(0,0,0,0.03) 50%);
+    background-size: 100% 4px;
+    animation: rk-scanlines 8s linear infinite;
+    opacity:0.4;
+  }
+  @keyframes rk-scanlines { 0%{background-position:0 0} 100%{background-position:0 40px} }
+
+  /* All children above pseudo overlays */
+  .rk-hdr, .rk-stats-row, .rk-tabs, .rk-body { position:relative; z-index:1; }
+
+  /* ── HEADER ── */
+  .rk-hdr {
+    display:flex; align-items:center; gap:12px; padding:10px 20px;
+    background:rgba(6,12,20,0.95);
+    border-bottom:1px solid rgba(0,212,255,0.15);
+    flex-shrink:0;
+    backdrop-filter: blur(12px);
+    box-shadow: 0 1px 0 rgba(0,212,255,0.08), 0 4px 24px rgba(0,0,0,0.6);
+  }
+
+  /* ── Logo icon with pulse ring ── */
+  .rk-logo-icon {
+    width:38px; height:38px; border-radius:10px; flex-shrink:0; position:relative;
+    background: linear-gradient(135deg, #ff2d2d 0%, #b91c1c 50%, #7f1d1d 100%);
+    display:flex; align-items:center; justify-content:center; font-size:20px;
+    box-shadow: 0 0 20px rgba(239,68,68,0.5), 0 0 40px rgba(239,68,68,0.2), inset 0 1px 0 rgba(255,255,255,0.15);
+    animation: rk-logo-pulse 3s ease-in-out infinite;
+  }
+  @keyframes rk-logo-pulse {
+    0%,100% { box-shadow: 0 0 20px rgba(239,68,68,0.5), 0 0 40px rgba(239,68,68,0.2); }
+    50%     { box-shadow: 0 0 30px rgba(239,68,68,0.8), 0 0 60px rgba(239,68,68,0.35), 0 0 80px rgba(239,68,68,0.1); }
+  }
+  .rk-logo-icon::after {
+    content:''; position:absolute; inset:-4px; border-radius:14px;
+    border:1px solid rgba(239,68,68,0.3);
+    animation: rk-ring-expand 2s ease-out infinite;
+  }
+  @keyframes rk-ring-expand {
+    0%   { transform:scale(1); opacity:0.6; }
+    100% { transform:scale(1.4); opacity:0; }
+  }
+
+  .rk-logo-title {
+    font-size:16px; font-weight:900; letter-spacing:2px;
+    background: linear-gradient(90deg, #ff4444, #ff8800, #00d4ff);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+    text-shadow: none;
+    filter: drop-shadow(0 0 8px rgba(255,68,68,0.4));
+  }
+  .rk-logo-sub {
+    font-size:9px; color:#4b6b8a; letter-spacing:1.5px; margin-top:1px;
+    text-transform:uppercase; font-family:'JetBrains Mono',monospace;
+  }
+
+  /* ── WS connection badge ── */
+  .rk-ws-badge {
+    display:flex; align-items:center; gap:6px; padding:4px 12px;
+    border-radius:20px; font-size:11px; font-family:'JetBrains Mono',monospace;
+    background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.06);
+    color:#4b6b8a; margin-left:8px;
+    transition: all 0.3s;
+  }
+  .rk-ws-badge.connected {
+    border-color:rgba(52,211,153,0.3);
+    color:#34d399;
+    background:rgba(52,211,153,0.05);
+    box-shadow: 0 0 12px rgba(52,211,153,0.15);
+  }
+
+  /* ── Risk badge ── */
+  #rk-risk-badge {
+    padding:5px 14px; border-radius:20px; font-size:11px; font-weight:700;
+    font-family:'JetBrains Mono',monospace; letter-spacing:0.5px;
+    background:rgba(107,114,128,0.1); color:#6b7280;
+    border:1px solid rgba(107,114,128,0.2);
+    transition: all 0.4s ease;
+  }
+  #rk-risk-badge.risk-critical {
+    background:rgba(239,68,68,0.12); color:#ef4444; border-color:rgba(239,68,68,0.4);
+    box-shadow: 0 0 16px rgba(239,68,68,0.2), inset 0 0 16px rgba(239,68,68,0.05);
+    animation: rk-risk-flash 1.5s ease-in-out infinite;
+  }
+  @keyframes rk-risk-flash {
+    0%,100% { box-shadow: 0 0 16px rgba(239,68,68,0.2); }
+    50%     { box-shadow: 0 0 28px rgba(239,68,68,0.5), 0 0 50px rgba(239,68,68,0.15); }
+  }
+  #rk-risk-badge.risk-high   { background:rgba(249,115,22,0.12); color:#f97316; border-color:rgba(249,115,22,0.4); }
+  #rk-risk-badge.risk-medium { background:rgba(234,179,8,0.12); color:#eab308; border-color:rgba(234,179,8,0.4); }
+  #rk-risk-badge.risk-low    { background:rgba(34,197,94,0.12); color:#22c55e; border-color:rgba(34,197,94,0.4); }
+
+  /* ── Header action buttons ── */
+  .rk-hdr-btn {
+    padding:6px 14px; border-radius:7px; font-size:11px; font-weight:700;
+    cursor:pointer; border:none; transition:all 0.2s; letter-spacing:0.3px;
+    position:relative; overflow:hidden;
+  }
+  .rk-hdr-btn::before {
+    content:''; position:absolute; inset:0; background:linear-gradient(135deg,rgba(255,255,255,0.1),transparent);
+    opacity:0; transition:opacity 0.2s;
+  }
+  .rk-hdr-btn:hover::before { opacity:1; }
+  .rk-hdr-btn-ghost {
+    background:rgba(255,255,255,0.04); color:#8b949e;
+    border:1px solid rgba(255,255,255,0.08);
+  }
+  .rk-hdr-btn-ghost:hover { color:#e6edf3; border-color:rgba(0,212,255,0.3); background:rgba(0,212,255,0.05); }
+  .rk-hdr-btn-demo {
+    background: linear-gradient(135deg, #dc2626, #991b1b);
+    color:#fff;
+    box-shadow: 0 0 16px rgba(220,38,38,0.3);
+  }
+  .rk-hdr-btn-demo:hover { box-shadow: 0 0 24px rgba(220,38,38,0.5); transform:translateY(-1px); }
+  .rk-hdr-btn-demo:active { transform:translateY(0); }
+
+  /* ── STATS ROW ── */
+  .rk-stats-row {
+    display:grid; grid-template-columns:repeat(6,1fr); gap:1px;
+    background:rgba(0,212,255,0.06);
+    border-bottom:1px solid rgba(0,212,255,0.12); flex-shrink:0;
+  }
+  .rk-stat {
+    padding:12px 16px; background:rgba(6,12,20,0.96);
+    position:relative; overflow:hidden; cursor:default;
+    transition: background 0.3s;
+  }
+  .rk-stat::before {
+    content:''; position:absolute; bottom:0; left:0; right:0; height:2px;
+    background:linear-gradient(90deg, transparent, var(--rk-stat-color, #60a5fa), transparent);
+    transform:scaleX(0); transform-origin:center;
+    transition:transform 0.4s ease;
+  }
+  .rk-stat:hover { background:rgba(0,212,255,0.03); }
+  .rk-stat:hover::before { transform:scaleX(1); }
+  .rk-stat-val {
+    font-size:24px; font-weight:800; font-family:'JetBrains Mono',monospace;
+    line-height:1; transition:all 0.5s;
+    filter: drop-shadow(0 0 6px currentColor);
+  }
+  .rk-stat-lbl {
+    font-size:9px; color:#3d5a6b; margin-top:3px;
+    text-transform:uppercase; letter-spacing:1px; font-weight:600;
+  }
+  .rk-stat-trend {
+    position:absolute; top:10px; right:12px; font-size:9px;
+    font-family:'JetBrains Mono',monospace;
+  }
+
+  /* Count-up animation */
+  @keyframes rk-countup { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+  .rk-stat-val.updated { animation: rk-countup 0.4s ease-out; }
+
+  /* ── TABS ── */
+  .rk-tabs {
+    display:flex; background:rgba(6,12,20,0.98);
+    border-bottom:1px solid rgba(0,212,255,0.1);
+    flex-shrink:0; overflow-x:auto; scrollbar-width:none;
+  }
   .rk-tabs::-webkit-scrollbar { display:none; }
-  .rk-tab  { padding:10px 16px; font-size:12px; font-weight:500; cursor:pointer;
-    background:none; color:#8b949e; border:none; border-bottom:2px solid transparent;
-    white-space:nowrap; transition:.15s all; }
-  .rk-tab:hover { color:#e6edf3; }
-  .rk-tab.active { color:#60a5fa; border-bottom-color:#60a5fa; }
-  .rk-body { flex:1; overflow:auto; }
-  .rk-panel { padding:20px; }
-  .rk-card  { background:#161b22; border:1px solid #21262d; border-radius:10px; }
-  .rk-card-hdr { padding:14px 18px; border-bottom:1px solid #21262d; display:flex;
-    align-items:center; justify-content:space-between; }
-  .rk-btn  { padding:7px 16px; border-radius:6px; font-size:12px; font-weight:600;
-    cursor:pointer; border:none; transition:.15s; }
-  .rk-btn-primary { background:linear-gradient(135deg,#1d4ed8,#2563eb); color:#fff; }
-  .rk-btn-primary:hover { opacity:.85; }
-  .rk-btn-red   { background:linear-gradient(135deg,#dc2626,#b91c1c); color:#fff; }
-  .rk-btn-red:hover   { opacity:.85; }
-  .rk-btn-purple { background:linear-gradient(135deg,#7c3aed,#6d28d9); color:#fff; }
-  .rk-btn-purple:hover { opacity:.85; }
-  .rk-btn-ghost { background:#21262d; color:#8b949e; border:1px solid #30363d; }
-  .rk-btn-ghost:hover { color:#e6edf3; }
-  .rk-input { background:#0d1117; border:1px solid #30363d; border-radius:7px;
-    padding:9px 14px; color:#e6edf3; font-size:13px; outline:none; width:100%; box-sizing:border-box; }
-  .rk-input:focus { border-color:#388bfd; }
-  .rk-badge { display:inline-flex; align-items:center; padding:2px 8px;
-    border-radius:10px; font-size:10px; font-weight:700; text-transform:uppercase; }
-  .rk-det-row { display:flex; align-items:flex-start; gap:12px; padding:12px 16px;
-    border-bottom:1px solid #21262d; cursor:pointer; transition:.15s; }
-  .rk-det-row:hover { background:#161b22; }
+  .rk-tab {
+    padding:10px 15px; font-size:11px; font-weight:600; cursor:pointer;
+    background:none; color:#3d5a6b; border:none; border-bottom:2px solid transparent;
+    white-space:nowrap; transition:all 0.2s; letter-spacing:0.3px;
+    position:relative;
+  }
+  .rk-tab:hover { color:#8bb5cc; background:rgba(0,212,255,0.03); }
+  .rk-tab.active {
+    color:#00d4ff; border-bottom-color:#00d4ff;
+    text-shadow: 0 0 12px rgba(0,212,255,0.6);
+  }
+  .rk-tab.active::after {
+    content:''; position:absolute; bottom:-1px; left:0; right:0; height:2px;
+    background:linear-gradient(90deg,transparent,#00d4ff,transparent);
+    filter:blur(2px);
+  }
+  /* Alert dot on tab */
+  .rk-tab-alert {
+    display:inline-block; width:5px; height:5px; border-radius:50%;
+    background:#ef4444; margin-left:4px; vertical-align:middle;
+    box-shadow:0 0 6px rgba(239,68,68,0.8);
+    animation:rk-pulse 1.5s ease-in-out infinite;
+  }
+
+  /* ── BODY ── */
+  .rk-body { flex:1; overflow:auto; scrollbar-width:thin; scrollbar-color:#1a2535 transparent; }
+  .rk-body::-webkit-scrollbar { width:5px; }
+  .rk-body::-webkit-scrollbar-track { background:transparent; }
+  .rk-body::-webkit-scrollbar-thumb { background:#1a2535; border-radius:3px; }
+
+  /* ── PANEL ── */
+  .rk-panel { padding:20px; animation:rk-panel-in 0.25s ease-out; }
+  @keyframes rk-panel-in { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+
+  /* ── CARDS ── */
+  .rk-card {
+    background:rgba(10,18,28,0.9);
+    border:1px solid rgba(0,212,255,0.1);
+    border-radius:12px;
+    backdrop-filter:blur(4px);
+    transition: border-color 0.3s, box-shadow 0.3s;
+    position:relative;
+  }
+  .rk-card:hover {
+    border-color:rgba(0,212,255,0.2);
+    box-shadow:0 4px 24px rgba(0,0,0,0.4), 0 0 0 1px rgba(0,212,255,0.05);
+  }
+  /* Corner accent on cards */
+  .rk-card::before {
+    content:''; position:absolute; top:0; left:0; width:40px; height:2px;
+    background:linear-gradient(90deg,#00d4ff,transparent);
+    border-radius:12px 0 0 0; pointer-events:none;
+  }
+  .rk-card-hdr {
+    padding:14px 18px; border-bottom:1px solid rgba(0,212,255,0.08);
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  .rk-card-title {
+    font-size:12px; font-weight:700; color:#7aa5be; text-transform:uppercase;
+    letter-spacing:0.8px;
+  }
+
+  /* ── INCIDENT CARD (critical-level) ── */
+  .rk-inc-card {
+    background:rgba(8,14,24,0.95);
+    border-radius:14px; overflow:hidden;
+    position:relative;
+    transition:transform 0.2s, box-shadow 0.3s;
+    animation: rk-card-appear 0.35s ease-out forwards;
+  }
+  @keyframes rk-card-appear {
+    from { opacity:0; transform:translateY(12px); }
+    to   { opacity:1; transform:translateY(0); }
+  }
+  .rk-inc-card:hover { transform:translateY(-2px); }
+  .rk-inc-card.sev-critical {
+    border:1px solid rgba(239,68,68,0.3);
+    box-shadow: 0 0 30px rgba(239,68,68,0.08), 0 4px 20px rgba(0,0,0,0.5);
+  }
+  .rk-inc-card.sev-critical::before {
+    content:''; position:absolute; top:0; left:0; right:0; height:2px;
+    background:linear-gradient(90deg,#ef4444,#f97316,#ef4444);
+    background-size:200% 100%;
+    animation: rk-border-flow 2s linear infinite;
+  }
+  @keyframes rk-border-flow { 0%{background-position:0 0} 100%{background-position:200% 0} }
+  .rk-inc-card.sev-high {
+    border:1px solid rgba(249,115,22,0.25);
+    box-shadow:0 0 20px rgba(249,115,22,0.07);
+  }
+  .rk-inc-card.sev-medium {
+    border:1px solid rgba(234,179,8,0.2);
+    box-shadow:0 0 16px rgba(234,179,8,0.05);
+  }
+  .rk-inc-card.sev-low, .rk-inc-card.sev-informational {
+    border:1px solid rgba(0,212,255,0.12);
+  }
+
+  /* ── BUTTONS ── */
+  .rk-btn {
+    padding:7px 16px; border-radius:7px; font-size:12px; font-weight:700;
+    cursor:pointer; border:none; transition:all 0.2s; letter-spacing:0.3px;
+    position:relative; overflow:hidden;
+  }
+  .rk-btn::after {
+    content:''; position:absolute; top:50%; left:50%; width:0; height:0;
+    background:rgba(255,255,255,0.2); border-radius:50%;
+    transform:translate(-50%,-50%); transition:width 0.4s, height 0.4s, opacity 0.4s;
+    opacity:0;
+  }
+  .rk-btn:active::after { width:200px; height:200px; opacity:0; }
+  .rk-btn-primary {
+    background:linear-gradient(135deg,#1a3fa0,#1e5ed4);
+    color:#fff; box-shadow:0 0 16px rgba(30,94,212,0.3), inset 0 1px 0 rgba(255,255,255,0.1);
+  }
+  .rk-btn-primary:hover { box-shadow:0 0 24px rgba(30,94,212,0.5); transform:translateY(-1px); }
+  .rk-btn-red {
+    background:linear-gradient(135deg,#dc2626,#991b1b);
+    color:#fff; box-shadow:0 0 16px rgba(220,38,38,0.3), inset 0 1px 0 rgba(255,255,255,0.1);
+  }
+  .rk-btn-red:hover { box-shadow:0 0 28px rgba(220,38,38,0.5); transform:translateY(-1px); }
+  .rk-btn-purple {
+    background:linear-gradient(135deg,#6d28d9,#7c3aed);
+    color:#fff; box-shadow:0 0 16px rgba(124,58,237,0.3), inset 0 1px 0 rgba(255,255,255,0.1);
+  }
+  .rk-btn-purple:hover { box-shadow:0 0 24px rgba(124,58,237,0.5); transform:translateY(-1px); }
+  .rk-btn-ghost {
+    background:rgba(255,255,255,0.04); color:#6b8fa3;
+    border:1px solid rgba(255,255,255,0.08);
+  }
+  .rk-btn-ghost:hover { color:#b0cad8; border-color:rgba(0,212,255,0.3); background:rgba(0,212,255,0.06); }
+  .rk-btn-cyan {
+    background:linear-gradient(135deg,#0891b2,#0e7490);
+    color:#fff; box-shadow:0 0 16px rgba(8,145,178,0.3);
+  }
+  .rk-btn-cyan:hover { box-shadow:0 0 24px rgba(8,145,178,0.5); transform:translateY(-1px); }
+
+  /* ── INPUTS ── */
+  .rk-input {
+    background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.08);
+    border-radius:8px; padding:9px 14px; color:#c9d1d9;
+    font-size:13px; outline:none; width:100%; box-sizing:border-box;
+    transition:all 0.2s; font-family:'Inter',system-ui,sans-serif;
+  }
+  .rk-input:focus {
+    border-color:rgba(0,212,255,0.5);
+    background:rgba(0,212,255,0.03);
+    box-shadow: 0 0 0 3px rgba(0,212,255,0.08), 0 0 20px rgba(0,212,255,0.1);
+  }
+  .rk-input::placeholder { color:#2d4a5a; }
+
+  /* ── BADGES & PILLS ── */
+  .rk-badge {
+    display:inline-flex; align-items:center; padding:2px 8px;
+    border-radius:10px; font-size:10px; font-weight:700; text-transform:uppercase;
+    letter-spacing:0.5px;
+  }
+  .rk-sev-critical { background:rgba(239,68,68,0.15); color:#ef4444; box-shadow:0 0 8px rgba(239,68,68,0.2); }
+  .rk-sev-high     { background:rgba(249,115,22,0.15); color:#f97316; }
+  .rk-sev-medium   { background:rgba(234,179,8,0.12); color:#eab308; }
+  .rk-sev-low      { background:rgba(34,197,94,0.1); color:#22c55e; }
+  .rk-sev-info     { background:rgba(107,114,128,0.15); color:#6b7280; }
+
+  /* ── CHIPS ── */
+  .rk-chip {
+    padding:3px 10px; border-radius:12px; font-size:11px; cursor:pointer;
+    background:rgba(255,255,255,0.04); color:#4b6b8a;
+    border:1px solid rgba(255,255,255,0.07); white-space:nowrap;
+    transition:all 0.2s;
+  }
+  .rk-chip:hover {
+    color:#00d4ff; border-color:rgba(0,212,255,0.4);
+    background:rgba(0,212,255,0.06);
+    box-shadow:0 0 10px rgba(0,212,255,0.15);
+  }
+
+  /* ── SELECT ── */
+  .rk-select {
+    background:rgba(0,0,0,0.4); color:#8bb5cc;
+    border:1px solid rgba(255,255,255,0.08); border-radius:7px;
+    padding:6px 10px; font-size:12px; outline:none; cursor:pointer;
+    transition:border-color 0.2s;
+  }
+  .rk-select:focus { border-color:rgba(0,212,255,0.4); }
+
+  /* ── DETECTION ROWS ── */
+  .rk-det-row {
+    display:flex; align-items:flex-start; gap:12px; padding:11px 16px;
+    border-bottom:1px solid rgba(255,255,255,0.04); cursor:pointer;
+    transition:all 0.15s; position:relative; overflow:hidden;
+  }
+  .rk-det-row::before {
+    content:''; position:absolute; left:0; top:0; bottom:0; width:2px;
+    background:transparent; transition:background 0.2s;
+  }
+  .rk-det-row:hover { background:rgba(0,212,255,0.03); }
+  .rk-det-row:hover::before { background:#00d4ff; }
   .rk-det-row:last-child { border-bottom:none; }
-  .rk-chip { padding:3px 10px; border-radius:12px; font-size:11px; cursor:pointer;
-    background:#21262d; color:#8b949e; border:1px solid #30363d; white-space:nowrap; }
-  .rk-chip:hover { color:#60a5fa; border-color:#60a5fa; }
-  .rk-timeline-item { display:flex; gap:16px; padding:10px 16px; border-left:2px solid #21262d; margin-left:20px; }
-  .rk-tl-dot { width:10px; height:10px; border-radius:50%; margin-top:4px; flex-shrink:0; margin-left:-21px; }
+
+  /* ── TIMELINE ── */
+  .rk-timeline-item {
+    display:flex; gap:16px; padding:10px 16px;
+    border-left:1px solid rgba(0,212,255,0.15); margin-left:20px;
+    position:relative;
+  }
+  .rk-tl-dot {
+    width:10px; height:10px; border-radius:50%; margin-top:4px;
+    flex-shrink:0; margin-left:-21px;
+    box-shadow:0 0 8px currentColor;
+  }
+
+  /* ── GRID LAYOUTS ── */
   .rk-grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
   .rk-grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
-  .rk-spinner { width:32px; height:32px; border-radius:50%;
-    border:3px solid #21262d; border-top-color:#60a5fa;
-    animation:rk-spin 1s linear infinite; margin:0 auto; }
+
+  /* ── SPINNER ── */
+  .rk-spinner {
+    width:32px; height:32px; border-radius:50%;
+    border:2px solid rgba(0,212,255,0.1); border-top-color:#00d4ff;
+    animation:rk-spin 0.8s linear infinite; margin:0 auto;
+    box-shadow:0 0 16px rgba(0,212,255,0.2);
+  }
   @keyframes rk-spin { to { transform:rotate(360deg); } }
-  .rk-code  { font-family:'JetBrains Mono','Fira Code',monospace; font-size:11px; }
-  .rk-tag   { display:inline-block; padding:2px 7px; border-radius:4px;
-    font-size:10px; background:#21262d; color:#8b949e; margin:2px 1px; }
-  .rk-entity-btn { padding:4px 10px; border-radius:6px; font-size:11px; cursor:pointer;
-    background:#21262d; color:#60a5fa; border:1px solid #30363d; }
-  .rk-entity-btn:hover { background:#30363d; }
+
+  /* ── CODE / MONO ── */
+  .rk-code  { font-family:'JetBrains Mono','Fira Code',monospace; font-size:11px; color:#a5c8d8; }
+
+  /* ── TAGS ── */
+  .rk-tag {
+    display:inline-block; padding:2px 7px; border-radius:4px;
+    font-size:10px; background:rgba(255,255,255,0.05);
+    color:#4b6b8a; border:1px solid rgba(255,255,255,0.07);
+    margin:2px 1px;
+  }
+
+  /* ── ENTITY BUTTONS ── */
+  .rk-entity-btn {
+    padding:4px 10px; border-radius:6px; font-size:11px; cursor:pointer;
+    background:rgba(0,212,255,0.06); color:#00d4ff;
+    border:1px solid rgba(0,212,255,0.2); transition:all 0.2s;
+    font-weight:600;
+  }
+  .rk-entity-btn:hover {
+    background:rgba(0,212,255,0.12);
+    box-shadow:0 0 12px rgba(0,212,255,0.2);
+  }
+
+  /* ── CHAIN STAGE ELEMENTS ── */
   .rk-chain-stage { display:flex; align-items:center; gap:0; }
-  .rk-chain-step  { padding:8px 14px; border-radius:6px; font-size:11px; font-weight:600;
-    background:#161b22; border:1px solid #30363d; color:#e6edf3; white-space:nowrap; }
-  .rk-chain-arrow { color:#4b5563; font-size:16px; padding:0 4px; }
-  .rk-mitre-cell  { padding:6px 4px; border-radius:4px; font-size:9px; font-weight:700;
-    text-align:center; cursor:pointer; transition:.15s; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .rk-upload-zone { border:2px dashed #30363d; border-radius:10px; padding:40px;
-    text-align:center; cursor:pointer; transition:.2s; }
-  .rk-upload-zone:hover, .rk-upload-zone.drag-over { border-color:#60a5fa; background:rgba(96,165,250,0.05); }
-  .rk-progress { height:4px; border-radius:2px; background:#21262d; overflow:hidden; }
-  .rk-progress-bar { height:100%; border-radius:2px; background:linear-gradient(90deg,#60a5fa,#a78bfa);
-    transition:width .3s ease; }
-  .rk-select { background:#21262d; color:#e6edf3; border:1px solid #30363d; border-radius:6px;
-    padding:6px 10px; font-size:12px; outline:none; cursor:pointer; }
+  .rk-chain-step {
+    padding:8px 14px; border-radius:7px; font-size:11px; font-weight:700;
+    background:rgba(10,18,28,0.9); border:1px solid rgba(0,212,255,0.2);
+    color:#a5c8d8; white-space:nowrap;
+    transition:all 0.2s;
+  }
+  .rk-chain-step:hover { border-color:rgba(0,212,255,0.5); box-shadow:0 0 12px rgba(0,212,255,0.15); }
+  .rk-chain-arrow { color:#1a3a4a; font-size:16px; padding:0 4px; }
+
+  /* ── MITRE CELL ── */
+  .rk-mitre-cell {
+    padding:6px 4px; border-radius:5px; font-size:9px; font-weight:700;
+    text-align:center; cursor:pointer; transition:all 0.2s;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .rk-mitre-cell:hover { transform:scale(1.05); filter:brightness(1.3); }
+
+  /* ── UPLOAD ZONE ── */
+  .rk-upload-zone {
+    border:2px dashed rgba(0,212,255,0.2); border-radius:12px; padding:40px;
+    text-align:center; cursor:pointer; transition:all 0.3s;
+    background:rgba(0,212,255,0.02);
+    position:relative; overflow:hidden;
+  }
+  .rk-upload-zone::before {
+    content:''; position:absolute; inset:-40px; background:
+      radial-gradient(circle at 50% 50%, rgba(0,212,255,0.05), transparent 70%);
+    animation:rk-upload-glow 3s ease-in-out infinite;
+  }
+  @keyframes rk-upload-glow { 0%,100%{opacity:0.5} 50%{opacity:1} }
+  .rk-upload-zone:hover, .rk-upload-zone.drag-over {
+    border-color:rgba(0,212,255,0.6);
+    background:rgba(0,212,255,0.06);
+    box-shadow:0 0 30px rgba(0,212,255,0.1), inset 0 0 30px rgba(0,212,255,0.05);
+  }
+
+  /* ── PROGRESS BAR ── */
+  .rk-progress { height:4px; border-radius:2px; background:rgba(255,255,255,0.06); overflow:hidden; }
+  .rk-progress-bar {
+    height:100%; border-radius:2px;
+    background:linear-gradient(90deg, #0891b2, #00d4ff, #a78bfa);
+    background-size:200% 100%;
+    transition:width 0.4s ease;
+    animation:rk-bar-shimmer 2s linear infinite;
+    box-shadow:0 0 8px rgba(0,212,255,0.4);
+  }
+  @keyframes rk-bar-shimmer { 0%{background-position:200% 0} 100%{background-position:0 0} }
+
+  /* ── TABLE ── */
   .rk-table  { width:100%; border-collapse:collapse; font-size:12px; }
-  .rk-table th { padding:8px 12px; background:#21262d; color:#8b949e;
-    text-align:left; font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.3px; }
-  .rk-table td { padding:8px 12px; border-bottom:1px solid #21262d; }
+  .rk-table th {
+    padding:9px 14px; background:rgba(0,212,255,0.04); color:#3d6680;
+    text-align:left; font-weight:700; font-size:10px;
+    text-transform:uppercase; letter-spacing:1px;
+    border-bottom:1px solid rgba(0,212,255,0.1);
+  }
+  .rk-table td { padding:9px 14px; border-bottom:1px solid rgba(255,255,255,0.04); color:#8bb5cc; }
   .rk-table tr:last-child td { border-bottom:none; }
-  .rk-table tr:hover td { background:rgba(255,255,255,0.02); }
-  .rk-modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.75); z-index:5000;
-    display:flex; align-items:center; justify-content:center; }
-  .rk-modal { background:#161b22; border:1px solid #30363d; border-radius:12px;
-    max-width:800px; width:90%; max-height:80vh; overflow:hidden; display:flex; flex-direction:column; }
-  .rk-risk-ring { position:relative; display:inline-block; }
-  @keyframes rk-pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-  .rk-live-dot { width:8px; height:8px; border-radius:50%; display:inline-block;
-    background:#34d399; animation:rk-pulse 2s ease-in-out infinite; }
+  .rk-table tr:hover td { background:rgba(0,212,255,0.03); color:#c9d1d9; }
+
+  /* ── MODAL ── */
+  .rk-modal-overlay {
+    position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:5000;
+    display:flex; align-items:center; justify-content:center;
+    backdrop-filter:blur(6px);
+    animation:rk-overlay-in 0.2s ease;
+  }
+  @keyframes rk-overlay-in { from{opacity:0} to{opacity:1} }
+  .rk-modal {
+    background:rgba(8,14,24,0.98); border:1px solid rgba(0,212,255,0.2);
+    border-radius:16px; max-width:820px; width:90%; max-height:82vh;
+    overflow:hidden; display:flex; flex-direction:column;
+    box-shadow:0 0 60px rgba(0,212,255,0.1), 0 24px 80px rgba(0,0,0,0.8);
+    animation:rk-modal-in 0.25s cubic-bezier(0.34,1.56,0.64,1);
+  }
+  @keyframes rk-modal-in { from{transform:scale(0.9) translateY(-20px);opacity:0} to{transform:scale(1) translateY(0);opacity:1} }
+
+  /* ── TOAST NOTIFICATIONS ── */
+  .rk-toast {
+    padding:10px 16px; border-radius:10px; font-size:12px; font-weight:600;
+    max-width:380px; backdrop-filter:blur(12px); border:1px solid;
+    display:flex; align-items:center; gap:10px;
+    animation:rk-toast-in 0.3s cubic-bezier(0.34,1.56,0.64,1);
+    box-shadow:0 8px 32px rgba(0,0,0,0.5);
+  }
+  @keyframes rk-toast-in { from{transform:translateX(100%);opacity:0} to{transform:translateX(0);opacity:1} }
+  .rk-toast.fade-out { animation:rk-toast-out 0.3s ease forwards; }
+  @keyframes rk-toast-out { to{transform:translateX(120%);opacity:0} }
+  .rk-toast-success { background:rgba(5,46,22,0.95); color:#34d399; border-color:rgba(52,211,153,0.3); }
+  .rk-toast-error   { background:rgba(60,5,5,0.95);  color:#ef4444; border-color:rgba(239,68,68,0.3); }
+  .rk-toast-info    { background:rgba(5,20,46,0.95);  color:#60a5fa; border-color:rgba(96,165,250,0.3); }
+  .rk-toast-warning { background:rgba(46,28,5,0.95);  color:#f59e0b; border-color:rgba(245,158,11,0.3); }
+
+  /* ── LIVE DOT ── */
+  @keyframes rk-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(0.8)} }
+  .rk-live-dot {
+    width:8px; height:8px; border-radius:50%; display:inline-block;
+    background:#34d399; animation:rk-pulse 2s ease-in-out infinite;
+    box-shadow:0 0 8px rgba(52,211,153,0.8);
+  }
+
+  /* ── THREAT PULSE RING ── */
+  .rk-threat-ring {
+    position:relative; display:inline-block;
+  }
+  .rk-threat-ring::after {
+    content:''; position:absolute; inset:-6px; border-radius:50%;
+    border:1px solid; opacity:0;
+    animation:rk-threat-pulse 2s ease-out infinite;
+  }
+  @keyframes rk-threat-pulse {
+    0%   { transform:scale(0.8); opacity:0.8; }
+    100% { transform:scale(2); opacity:0; }
+  }
+
+  /* ── RISK GAUGE GLOW ── */
+  #rk-risk-arc { filter:drop-shadow(0 0 8px currentColor); }
+
+  /* ── ENGINE CARD ── */
+  .rk-engine-card {
+    padding:16px; border-radius:10px;
+    background:rgba(8,14,24,0.9); border:1px solid rgba(0,212,255,0.08);
+    position:relative; overflow:hidden; transition:all 0.3s;
+  }
+  .rk-engine-card:hover { border-color:rgba(0,212,255,0.2); transform:translateY(-2px); }
+  .rk-engine-card::after {
+    content:''; position:absolute; bottom:0; left:0; right:0; height:1px;
+    background:linear-gradient(90deg,transparent,rgba(0,212,255,0.3),transparent);
+  }
+  .rk-engine-label {
+    font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:1px;
+    margin-bottom:8px;
+  }
+  .rk-engine-val {
+    font-size:24px; font-weight:800; font-family:'JetBrains Mono',monospace;
+    color:#c9d1d9; line-height:1;
+    filter:drop-shadow(0 0 6px rgba(0,212,255,0.3));
+  }
+  .rk-engine-sub { font-size:9px; color:#2d4a5a; margin-top:4px; text-transform:uppercase; letter-spacing:0.8px; }
+
+  /* ── SCENARIO BUTTONS ── */
+  .rk-scenario-btn {
+    padding:14px 16px; border-radius:10px; font-size:12px; font-weight:600;
+    cursor:pointer; background:rgba(10,18,28,0.9);
+    border:1px solid rgba(0,212,255,0.1); color:#8bb5cc;
+    text-align:left; transition:all 0.25s; min-width:180px; position:relative;
+    overflow:hidden;
+  }
+  .rk-scenario-btn::before {
+    content:''; position:absolute; inset:0;
+    background:linear-gradient(135deg,rgba(0,212,255,0.05),transparent);
+    opacity:0; transition:opacity 0.3s;
+  }
+  .rk-scenario-btn:hover { border-color:rgba(0,212,255,0.4); color:#c9d1d9; transform:translateY(-2px); }
+  .rk-scenario-btn:hover::before { opacity:1; }
+
+  /* ── PHASE TIMELINE ── */
+  .rk-phase-row {
+    display:flex; align-items:flex-start; gap:10px; padding:8px 0;
+    border-bottom:1px solid rgba(255,255,255,0.04);
+    animation:rk-row-in 0.2s ease-out;
+  }
+  @keyframes rk-row-in { from{opacity:0;transform:translateX(-6px)} to{opacity:1;transform:translateX(0)} }
+
+  /* ── MITRE HEATMAP ── */
+  .rk-mitre-col-header {
+    font-size:9px; font-weight:700; color:#2d4a5a; text-transform:uppercase;
+    letter-spacing:0.5px; padding:6px 4px; text-align:center;
+  }
+
+  /* ── OVERVIEW ENGINE STATUS ── */
+  .rk-overview-empty {
+    padding:60px; text-align:center; color:#1a3040;
+    font-size:13px; font-family:'JetBrains Mono',monospace;
+  }
+  .rk-overview-empty-icon { font-size:40px; margin-bottom:12px; filter:grayscale(0.5); }
+
+  /* ── HUNT CHIPS ── */
+  .rk-hunt-chip {
+    padding:4px 12px; border-radius:12px; font-size:11px; cursor:pointer;
+    background:rgba(0,0,0,0.4); color:#4b6b8a;
+    border:1px solid rgba(255,255,255,0.06); white-space:nowrap;
+    transition:all 0.2s; font-family:'JetBrains Mono',monospace;
+  }
+  .rk-hunt-chip:hover {
+    color:#00d4ff; border-color:rgba(0,212,255,0.4);
+    background:rgba(0,212,255,0.08); box-shadow:0 0 12px rgba(0,212,255,0.2);
+  }
+
+  /* ── RISK COLOR HELPER CLASSES ── */
+  .rk-risk-critical { color:#ef4444 !important; filter:drop-shadow(0 0 6px rgba(239,68,68,0.5)); }
+  .rk-risk-high     { color:#f97316 !important; filter:drop-shadow(0 0 5px rgba(249,115,22,0.4)); }
+  .rk-risk-medium   { color:#eab308 !important; }
+  .rk-risk-low      { color:#22c55e !important; }
+  .rk-risk-clean    { color:#4b6b8a !important; }
+
+  /* ── CYBER SECTION HEADERS ── */
+  .rk-section-hdr {
+    display:flex; align-items:center; gap:8px; margin-bottom:14px;
+  }
+  .rk-section-hdr-line {
+    flex:1; height:1px;
+    background:linear-gradient(90deg,rgba(0,212,255,0.3),transparent);
+  }
+  .rk-section-hdr-label {
+    font-size:10px; font-weight:700; color:#2d6080; text-transform:uppercase;
+    letter-spacing:1.5px; white-space:nowrap;
+  }
+
+  /* ── SCROLLBAR (body) ── */
+  .rk-inc-list { scrollbar-width:thin; scrollbar-color:#0d1e2d transparent; }
+  .rk-inc-list::-webkit-scrollbar { width:4px; }
+  .rk-inc-list::-webkit-scrollbar-thumb { background:#0d1e2d; border-radius:4px; }
+
+  /* ── CONNECTING LINE for chain flow ── */
+  .rk-chain-connector { color:#0d2535; font-size:18px; padding:0 2px; }
+
+  /* ── INFERRED STAGE BADGE ── */
+  .rk-inferred-badge {
+    font-size:8px; padding:1px 5px; border-radius:4px; font-style:italic;
+    background:rgba(107,114,128,0.15); color:#4b6b8a; border:1px solid rgba(107,114,128,0.2);
+  }
+
+  /* ── TACTIC PILL ── */
+  .rk-tactic-pill {
+    font-size:9px; padding:2px 8px; border-radius:6px;
+    font-weight:700; letter-spacing:0.3px;
+    transition:all 0.2s;
+  }
+  .rk-tactic-pill:hover { transform:scale(1.05); filter:brightness(1.2); }
+
+  /* ── PHASE SEQUENCE ARROW ── */
+  .rk-phase-arrow { color:#0d2535; font-size:10px; }
+
+  /* ── STAT CARDS (overview) ── */
+  .rk-ov-stat {
+    padding:12px 16px; border-radius:10px; text-align:center;
+    background:rgba(8,14,24,0.9); border:1px solid rgba(0,212,255,0.08);
+    transition:all 0.3s;
+  }
+  .rk-ov-stat:hover { border-color:rgba(0,212,255,0.25); transform:translateY(-2px); }
+
+  /* ── GRID BG for MITRE ── */
+  .rk-mitre-grid { display:grid; gap:2px; }
+
+  /* ── RISK EVOLUTION BAR CONTAINER ── */
+  .rk-risk-evo {
+    padding:10px 16px; background:rgba(5,10,18,0.7);
+    border-top:1px solid rgba(0,212,255,0.06);
+  }
+  .rk-risk-evo-title {
+    font-size:9px; color:#1a3040; text-transform:uppercase;
+    letter-spacing:1px; margin-bottom:6px; font-weight:700;
+  }
+
+  /* ── RULE CARD ── */
+  .rk-rule-row {
+    padding:12px 16px; border-bottom:1px solid rgba(255,255,255,0.04);
+    transition:background 0.15s; cursor:default;
+  }
+  .rk-rule-row:hover { background:rgba(0,212,255,0.02); }
+  .rk-rule-row:last-child { border-bottom:none; }
+
+  /* ── ANOMALY ROW ── */
+  .rk-anom-card {
+    padding:14px 18px; border-radius:10px;
+    background:rgba(8,14,24,0.9); border:1px solid rgba(245,158,11,0.15);
+    transition:all 0.2s; animation:rk-card-appear 0.3s ease-out;
+  }
+  .rk-anom-card:hover { border-color:rgba(245,158,11,0.35); box-shadow:0 0 16px rgba(245,158,11,0.08); }
+
+  /* ── IOC RESULT CARD ── */
+  .rk-ioc-result-card {
+    padding:20px; border-radius:12px;
+    background:rgba(8,14,24,0.9); border:1px solid rgba(0,212,255,0.12);
+    animation:rk-card-appear 0.3s ease-out;
+  }
+
+  /* ── INVESTIGATION CARD ── */
+  .rk-inv-section {
+    padding:14px 18px; border-radius:10px; margin-bottom:12px;
+    background:rgba(8,14,24,0.9); border:1px solid rgba(0,212,255,0.08);
+  }
+
+  /* ── GENERATED RULE ── */
+  .rk-gen-rule {
+    padding:16px; border-radius:10px;
+    background:rgba(5,25,10,0.9); border:1px solid rgba(52,211,153,0.2);
+    font-family:'JetBrains Mono',monospace; font-size:11px; color:#a5d6b0;
+    white-space:pre-wrap; line-height:1.6;
+    box-shadow:0 0 20px rgba(52,211,153,0.05);
+  }
+
+  /* ── INGEST SUMMARY ── */
+  .rk-ingest-summary {
+    padding:18px 20px; border-radius:12px;
+    background:rgba(8,14,24,0.95); border:1px solid rgba(52,211,153,0.15);
+    animation:rk-card-appear 0.4s ease-out;
+  }
+
+  /* ── CHAIN PREVIEW ── */
+  .rk-chain-preview {
+    padding:14px 18px; border-radius:10px;
+    background:rgba(6,12,20,0.9); border:1px solid rgba(167,139,250,0.15);
+    transition:all 0.2s; animation:rk-card-appear 0.3s ease-out;
+  }
+  .rk-chain-preview:hover { border-color:rgba(167,139,250,0.35); box-shadow:0 0 20px rgba(167,139,250,0.08); }
+
+  /* ── ANIMATED SCANNING BORDER on focus ── */
+  @keyframes rk-scan-border {
+    0%   { clip-path: inset(0 100% 0 0); }
+    50%  { clip-path: inset(0 0 0 0); }
+    100% { clip-path: inset(0 0 0 100%); }
+  }
+
+  /* ── HEXAGONAL NODE (for chain nodes) ── */
+  .rk-chain-node { cursor:pointer; transition:filter 0.2s; }
+  .rk-chain-node:hover { filter:brightness(1.3) drop-shadow(0 0 8px rgba(0,212,255,0.4)); }
+
+  /* ── NEON GLOW UTILITIES ── */
+  .rk-glow-red    { filter:drop-shadow(0 0 8px rgba(239,68,68,0.6)); }
+  .rk-glow-cyan   { filter:drop-shadow(0 0 8px rgba(0,212,255,0.5)); }
+  .rk-glow-purple { filter:drop-shadow(0 0 8px rgba(167,139,250,0.5)); }
+  .rk-glow-green  { filter:drop-shadow(0 0 8px rgba(52,211,153,0.5)); }
+
+  /* ── RESPONSIVE ── */
+  @media (max-width:900px) {
+    .rk-stats-row { grid-template-columns:repeat(3,1fr); }
+    .rk-grid-2 { grid-template-columns:1fr; }
+    .rk-grid-3 { grid-template-columns:1fr 1fr; }
+  }
+  @media (max-width:600px) {
+    .rk-stats-row { grid-template-columns:repeat(2,1fr); }
+    .rk-grid-3 { grid-template-columns:1fr; }
+  }
+
+  /* ── Dual-ring spinner keyframes (used by _spinner helper) ── */
+  @keyframes rk3-spin         { to   { transform:rotate(360deg); } }
+  @keyframes rk3-spin-reverse { from { transform:rotate(0deg); } to { transform:rotate(-360deg); } }
+  @keyframes rk3-glow-pulse   { 0%,100%{opacity:0.5;transform:scale(0.8)} 50%{opacity:1;transform:scale(1.2)} }
+  @keyframes rk3-blink        { 0%,100%{opacity:1} 50%{opacity:0} }
+
+  /* ── Hero scanning line that sweeps top-to-bottom on root ── */
+  @keyframes rk-sweep {
+    0%   { top:-2px; opacity:0.7; }
+    95%  { top:100%; opacity:0.3; }
+    100% { top:100%; opacity:0; }
+  }
+  .rk-sweep-line {
+    position:absolute; left:0; right:0; height:2px; pointer-events:none; z-index:2;
+    background:linear-gradient(90deg,transparent,rgba(0,212,255,0.6),transparent);
+    box-shadow:0 0 12px rgba(0,212,255,0.4);
+    animation:rk-sweep 6s linear infinite;
+  }
+
+  /* ── Stat card flash on update ── */
+  @keyframes rk-stat-flash {
+    0%   { background:rgba(0,212,255,0.08); }
+    50%  { background:rgba(0,212,255,0.16); }
+    100% { background:rgba(0,212,255,0.04); }
+  }
+  .rk-stat.flashed { animation:rk-stat-flash 0.6s ease-out; }
+
+  /* ── Chain node hover tooltip ── */
+  .rk-chain-svg-wrap {
+    border-radius:10px;
+    background:rgba(2,8,16,0.7);
+    padding:8px;
+    border:1px solid rgba(0,212,255,0.07);
+    overflow:hidden;
+  }
+  .rk-chain-svg-wrap:hover {
+    border-color:rgba(0,212,255,0.15);
+    box-shadow:0 0 30px rgba(0,212,255,0.06);
+  }
+
+  /* ── Risk evolution bar enhancement ── */
+  .rk-risk-evo-bar-wrap {
+    display:flex; align-items:flex-end; gap:3px; height:56px;
+    padding:4px 0;
+  }
+  .rk-risk-evo-seg {
+    flex:1; border-radius:3px 3px 0 0; transition:all 0.4s ease;
+    position:relative; cursor:pointer;
+  }
+  .rk-risk-evo-seg:hover { filter:brightness(1.4); transform:scaleY(1.08); transform-origin:bottom; }
+
+  /* ── Incident card header cyber-border ── */
+  .rk-inc-card-hdr {
+    position:relative; overflow:hidden;
+  }
+  .rk-inc-card-hdr::after {
+    content:''; position:absolute; bottom:0; left:0; right:0; height:1px;
+    background:linear-gradient(90deg,transparent 0%,rgba(0,212,255,0.3) 30%,rgba(0,212,255,0.6) 50%,rgba(0,212,255,0.3) 70%,transparent 100%);
+    background-size:200% 100%;
+    animation:rk-border-flow 3s linear infinite;
+  }
+
+  /* ── Animated count-up number indicator ── */
+  @keyframes rk-number-pop {
+    0%   { transform:scale(1.3) translateY(-4px); opacity:0.6; }
+    60%  { transform:scale(1.05) translateY(1px); }
+    100% { transform:scale(1) translateY(0); opacity:1; }
+  }
+  .rk-stat-val.updated { animation:rk-number-pop 0.45s cubic-bezier(0.34,1.56,0.64,1); }
+
+  /* ── Engine card active status dot ── */
+  .rk-engine-status-dot {
+    width:6px; height:6px; border-radius:50%; display:inline-block;
+    margin-right:4px; vertical-align:middle;
+  }
+  .rk-engine-status-dot.online  { background:#34d399; box-shadow:0 0 6px rgba(52,211,153,0.8); animation:rk-pulse 2s infinite; }
+  .rk-engine-status-dot.offline { background:#4b5563; }
+
+  /* ── Hunt result row hover highlight ── */
+  .rk-hunt-row:hover { background:rgba(0,212,255,0.04) !important; }
+
+  /* ── Stage detail panel slide-in ── */
+  @keyframes rk-detail-in {
+    from { opacity:0; transform:translateY(-6px) scaleY(0.95); }
+    to   { opacity:1; transform:translateY(0) scaleY(1); }
+  }
+  .rk-stage-detail-open { animation:rk-detail-in 0.2s ease-out; transform-origin:top; }
+
+  /* ── Causal violation glow border ── */
+  .rk-violation-glow {
+    box-shadow:0 0 0 1px rgba(239,68,68,0.4), 0 0 16px rgba(239,68,68,0.15);
+    border-color:rgba(239,68,68,0.5) !important;
+  }
+
+  /* ── Inferred stage opacity + italic styling ── */
+  .rk-stage-inferred {
+    opacity:0.72;
+    border-style:dashed !important;
+  }
 </style>
 
 <div class="rk-root" id="rk-root">
 
+  <!-- Scanning sweep line overlay -->
+  <div class="rk-sweep-line" aria-hidden="true"></div>
+
   <!-- ═══ HEADER ═══ -->
   <div class="rk-hdr">
-    <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
-      <div style="width:36px;height:36px;border-radius:8px;background:linear-gradient(135deg,#ef4444,#b91c1c);
-        display:flex;align-items:center;justify-content:center;font-size:18px;
-        box-shadow:0 0 16px rgba(239,68,68,.35);">🎯</div>
+    <!-- Logo -->
+    <div style="display:flex;align-items:center;gap:12px;flex-shrink:0;">
+      <div class="rk-logo-icon">⚔</div>
       <div>
-        <div style="font-size:15px;font-weight:800;letter-spacing:.6px;">RAYKAN</div>
-        <div style="font-size:9px;color:#6b7280;letter-spacing:.4px;">AI THREAT HUNTING &amp; DFIR ENGINE v${RAYKAN_VERSION} · OFFLINE-CAPABLE</div>
+        <div class="rk-logo-title">RAYKAN</div>
+        <div class="rk-logo-sub">AI Threat Hunting &amp; DFIR Engine v${RAYKAN_VERSION} · OFFLINE-CAPABLE</div>
       </div>
     </div>
 
-    <!-- WS badge -->
-    <div id="rk-ws-badge" style="display:flex;align-items:center;gap:6px;padding:4px 12px;
-      border-radius:20px;font-size:11px;background:#161b22;border:1px solid #21262d;color:#6b7280;margin-left:12px;">
-      <span id="rk-ws-dot" style="width:7px;height:7px;border-radius:50%;background:#374151;"></span>
-      <span id="rk-ws-lbl">Offline</span>
+    <!-- WS connection badge -->
+    <div id="rk-ws-badge" class="rk-ws-badge" style="margin-left:10px;">
+      <span id="rk-ws-dot" style="width:7px;height:7px;border-radius:50%;background:#1a3040;transition:all 0.3s;flex-shrink:0;"></span>
+      <span id="rk-ws-lbl" style="font-size:10px;">Offline</span>
     </div>
 
     <div style="margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
       <!-- Risk badge -->
-      <div id="rk-risk-badge" style="padding:5px 14px;border-radius:20px;font-size:12px;font-weight:700;
-        background:rgba(107,114,128,.15);color:#9ca3af;border:1px solid #374151;">
-        Risk Score: —
+      <div id="rk-risk-badge" style="padding:5px 14px;border-radius:20px;font-size:11px;font-weight:700;
+        font-family:'JetBrains Mono',monospace;background:rgba(107,114,128,0.1);
+        color:#3d5a6b;border:1px solid rgba(107,114,128,0.15);">
+        RISK: <span id="rk-risk-badge-val">—</span>
       </div>
       <!-- Session -->
-      <div style="font-size:10px;color:#4b5563;">Session: <span id="rk-session-id" style="color:#6b7280;">—</span></div>
+      <div style="font-size:10px;color:#1a3040;font-family:'JetBrains Mono',monospace;">
+        SID:<span id="rk-session-id" style="color:#2d4a5a;margin-left:3px;">—</span>
+      </div>
       <!-- Actions -->
-      <button class="rk-btn rk-btn-ghost" onclick="RAYKAN_UI.exportResults()" title="Export results">
-        ↓ Export
+      <button class="rk-hdr-btn rk-hdr-btn-ghost" onclick="RAYKAN_UI.exportResults()" title="Export JSON results">
+        ⬇ Export
       </button>
-      <button class="rk-btn rk-btn-red" onclick="RAYKAN_UI.runSample('ransomware')">
+      <button class="rk-hdr-btn rk-hdr-btn-demo" onclick="RAYKAN_UI.runSample('ransomware')">
         ▶ Run Demo
       </button>
     </div>
@@ -5274,45 +7401,48 @@
 
   <!-- ═══ STATS ROW ═══ -->
   <div class="rk-stats-row">
-    ${_statCard('Events',      '0',  '#60a5fa', 'rk-s-events')}
-    ${_statCard('Detections',  '0',  '#ef4444', 'rk-s-dets')}
-    ${_statCard('Incidents',   '0',  '#ef4444', 'rk-s-incidents')}
-    ${_statCard('Anomalies',   '0',  '#f59e0b', 'rk-s-anom')}
-    ${_statCard('Chains',      '0',  '#a78bfa', 'rk-s-chains')}
-    ${_statCard('Risk Score',  '—',  '#ef4444', 'rk-s-risk')}
+    ${_statCard('Events',      '0',  '#00d4ff', 'rk-s-events',  '—')}
+    ${_statCard('Detections',  '0',  '#ef4444', 'rk-s-dets',    '—')}
+    ${_statCard('Incidents',   '0',  '#f97316', 'rk-s-incidents','—')}
+    ${_statCard('Anomalies',   '0',  '#f59e0b', 'rk-s-anom',    '—')}
+    ${_statCard('Chains',      '0',  '#a78bfa', 'rk-s-chains',  '—')}
+    ${_statCard('Risk Score',  '—',  '#ef4444', 'rk-s-risk',    '—')}
   </div>
 
   <!-- ═══ TABS ═══ -->
   <div class="rk-tabs" id="rk-tab-bar">
-    ${_tabBtn('overview',    '📊',  'Overview')}
-    ${_tabBtn('hunt',        '🔍',  'Threat Hunt')}
-    ${_tabBtn('ingest',      '📥',  'Log Ingest')}
-    ${_tabBtn('timeline',    '⏱',  'Timeline')}
-    ${_tabBtn('detections',  '🚨',  'Detections')}
-    ${_tabBtn('incidents',   '🎯',  'Incidents')}
-    ${_tabBtn('chains',      '🔗',  'Attack Chains')}
-    ${_tabBtn('investigate', '🕵️',  'Investigate')}
-    ${_tabBtn('ioc',         '🔎',  'IOC Lookup')}
-    ${_tabBtn('anomalies',   '📈',  'UEBA / Anomalies')}
-    ${_tabBtn('rules',       '📋',  'Rules')}
-    ${_tabBtn('mitre',       '🗺',  'MITRE')}
-    ${_tabBtn('rulegen',     '✨',  'AI Rule Gen')}
+    ${_tabBtn('overview',    '◈',  'Overview')}
+    ${_tabBtn('hunt',        '◎',  'Threat Hunt')}
+    ${_tabBtn('ingest',      '⬆',  'Log Ingest')}
+    ${_tabBtn('timeline',    '◷',  'Timeline')}
+    ${_tabBtn('detections',  '⚡',  'Detections')}
+    ${_tabBtn('incidents',   '⚔',  'Incidents')}
+    ${_tabBtn('chains',      '⛓',  'Attack Chains')}
+    ${_tabBtn('investigate', '◉',  'Investigate')}
+    ${_tabBtn('ioc',         '⬡',  'IOC Lookup')}
+    ${_tabBtn('anomalies',   '◬',  'UEBA / Anomalies')}
+    ${_tabBtn('rules',       '≡',  'Rules')}
+    ${_tabBtn('mitre',       '⊞',  'MITRE')}
+    ${_tabBtn('rulegen',     '✦',  'AI Rule Gen')}
   </div>
 
   <!-- ═══ BODY ═══ -->
   <div class="rk-body" id="rk-body"></div>
 
   <!-- Toast container -->
-  <div id="rk-toast-root" style="position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px;"></div>
+  <div id="rk-toast-root" style="position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;"></div>
 
 </div>`;
   }
 
   // ── Helpers ────────────────────────────────────────────────────
-  function _statCard(label, val, color, id) {
-    return `<div class="rk-stat">
+  function _statCard(label, val, color, id, _trend) {
+    return `<div class="rk-stat" style="--rk-stat-color:${color};">
   <div class="rk-stat-val" id="${id}" style="color:${color};">${val}</div>
   <div class="rk-stat-lbl">${label}</div>
+  <!-- Ambient inner glow -->
+  <div style="position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(ellipse at 50% 120%,${color}09,transparent 70%);"></div>
 </div>`;
   }
 
@@ -5324,7 +7454,8 @@
 
   function _sevBadge(s) {
     const c = _sev(s);
-    return `<span class="rk-badge" style="background:${c.bg};color:${c.color};">${c.icon} ${c.label}</span>`;
+    const sevClass = { critical:'rk-sev-critical', high:'rk-sev-high', medium:'rk-sev-medium', low:'rk-sev-low', informational:'rk-sev-info' }[s] || 'rk-sev-info';
+    return `<span class="rk-badge ${sevClass}">${c.icon} ${c.label}</span>`;
   }
 
   function _fmt(ts) {
@@ -5478,10 +7609,21 @@
   }
 
   function _engineCard(label, id, color, sub) {
-    return `<div class="rk-card" style="padding:16px;">
-  <div style="font-size:11px;font-weight:700;color:${color};margin-bottom:8px;text-transform:uppercase;letter-spacing:.4px;">${label}</div>
-  <div class="rk-stat-val" id="${id}" style="font-size:22px;color:#e6edf3;">—</div>
-  <div class="rk-stat-lbl">${sub}</div>
+    return `<div class="rk-card" style="padding:16px;position:relative;overflow:hidden;">
+  <!-- Side accent bar -->
+  <div style="position:absolute;top:0;left:0;width:3px;height:100%;
+    background:linear-gradient(180deg,${color},${color}44);opacity:0.7;"></div>
+  <div style="font-size:10px;font-weight:700;color:${color};margin-bottom:10px;
+    text-transform:uppercase;letter-spacing:1px;
+    font-family:'JetBrains Mono',monospace;
+    text-shadow:0 0 8px ${color}66;">${label}</div>
+  <div class="rk-stat-val" id="${id}" style="font-size:24px;color:#e2e8f0;
+    font-family:'JetBrains Mono',monospace;line-height:1;
+    filter:drop-shadow(0 0 6px ${color}44);">—</div>
+  <div class="rk-stat-lbl" style="margin-top:5px;">${sub}</div>
+  <!-- Bottom glow line -->
+  <div style="position:absolute;bottom:0;left:0;right:0;height:1px;
+    background:linear-gradient(90deg,transparent,${color}44,transparent);"></div>
 </div>`;
   }
 
@@ -5801,15 +7943,25 @@
       const confirmed  = incidents.filter(i => i.confidence?.level === 'Confirmed').length;
       const totalAlerts= incidents.reduce((s, i) => s + i.detectionCount, 0);
       statsBar.innerHTML = [
-        { label: 'Critical',     val: critInc,    color: '#ef4444' },
-        { label: 'High',         val: highInc,    color: '#f97316' },
-        { label: 'Cross-Host',   val: crossHost,  color: '#a78bfa' },
-        { label: 'Confirmed',    val: confirmed,  color: '#34d399' },
-        { label: 'Total Alerts', val: totalAlerts,color: '#60a5fa' },
-      ].map(s => `
-<div style="padding:8px 14px;background:rgba(13,17,23,0.7);border:1px solid #21262d;border-radius:8px;text-align:center;min-width:80px;">
-  <div style="font-size:18px;font-weight:800;color:${s.color};">${s.val}</div>
-  <div style="font-size:10px;color:#6b7280;">${s.label}</div>
+        { label: 'Critical',     val: critInc,    color: '#ef4444', icon: '🔴' },
+        { label: 'High',         val: highInc,    color: '#f97316', icon: '🟠' },
+        { label: 'Cross-Host',   val: crossHost,  color: '#a78bfa', icon: '🔀' },
+        { label: 'Confirmed',    val: confirmed,  color: '#34d399', icon: '✓'  },
+        { label: 'Total Alerts', val: totalAlerts,color: '#60a5fa', icon: '⚡' },
+      ].map((s, idx) => `
+<div style="padding:10px 16px;background:rgba(8,14,24,0.9);
+     border:1px solid ${s.color}22;border-radius:10px;text-align:center;min-width:86px;
+     position:relative;overflow:hidden;cursor:default;
+     animation:rk-card-appear 0.3s ease-out ${(idx*0.06).toFixed(2)}s both;
+     transition:border-color 0.3s,box-shadow 0.3s;"
+  onmouseenter="this.style.borderColor='${s.color}55';this.style.boxShadow='0 0 16px ${s.color}18';"
+  onmouseleave="this.style.borderColor='${s.color}22';this.style.boxShadow='none';">
+  <div style="position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(ellipse at 50% 110%,${s.color}0a,transparent 70%);"></div>
+  <div style="font-size:10px;margin-bottom:4px;opacity:0.7;">${s.icon}</div>
+  <div style="font-size:20px;font-weight:900;color:${s.color};line-height:1;
+    filter:drop-shadow(0 0 6px ${s.color}66);">${s.val}</div>
+  <div style="font-size:9px;color:#4b5563;margin-top:3px;text-transform:uppercase;letter-spacing:.5px;">${s.label}</div>
 </div>`).join('');
     }
 
@@ -5908,12 +8060,11 @@
   function _buildChainFlowSVG(stages, incId) {
     if (!stages || !stages.length) return '';
 
-    const NODE_W    = 130;
-    const NODE_H    = 60;
-    const H_GAP     = 30;     // horizontal gap between nodes
-    const V_OFFSET  = 80;     // vertical center of nodes
+    const NODE_W    = 136;
+    const NODE_H    = 68;
+    const H_GAP     = 36;     // horizontal gap between nodes
     const MAX_ROW   = 4;      // max nodes per row before wrapping
-    const ROW_GAP   = 100;    // vertical gap between rows
+    const ROW_GAP   = 110;    // vertical gap between rows
 
     const rows   = [];
     for (let i = 0; i < stages.length; i += MAX_ROW) rows.push(stages.slice(i, i + MAX_ROW));
@@ -5922,122 +8073,286 @@
 
     let svgContent = '';
 
-    // Arrow marker definition
+    // ── Defs: markers + filters + gradients ──────────────────────
     svgContent += `<defs>
-      <marker id="arr-${incId}" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-        <path d="M0,0 L0,6 L8,3 z" fill="#4b5563"/>
+      <!-- Arrow markers -->
+      <marker id="arr-${incId}" markerWidth="10" markerHeight="10" refX="7" refY="3.5" orient="auto">
+        <path d="M0,0 L0,7 L10,3.5 z" fill="#3d6080"/>
       </marker>
-      <marker id="arr-inferred-${incId}" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-        <path d="M0,0 L0,6 L8,3 z" fill="#374151"/>
+      <marker id="arr-inferred-${incId}" markerWidth="10" markerHeight="10" refX="7" refY="3.5" orient="auto">
+        <path d="M0,0 L0,7 L10,3.5 z" fill="#2d4a5a"/>
       </marker>
-      <marker id="arr-violation-${incId}" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-        <path d="M0,0 L0,6 L8,3 z" fill="#ef4444"/>
+      <marker id="arr-violation-${incId}" markerWidth="10" markerHeight="10" refX="7" refY="3.5" orient="auto">
+        <path d="M0,0 L0,7 L10,3.5 z" fill="#ef4444"/>
       </marker>
+      <!-- Glow filter for active nodes -->
+      <filter id="glow-${incId}" x="-30%" y="-30%" width="160%" height="160%">
+        <feGaussianBlur stdDeviation="3" result="blur"/>
+        <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+      </filter>
+      <!-- Soft inner glow for node fill -->
+      <filter id="node-glow-${incId}" x="-20%" y="-20%" width="140%" height="140%">
+        <feGaussianBlur stdDeviation="2" result="blur"/>
+        <feBlend in="SourceGraphic" in2="blur" mode="screen"/>
+      </filter>
+      <!-- Animated gradient for the flowing edge lines -->
+      <linearGradient id="edge-grad-${incId}" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%"   stop-color="#1a3040" stop-opacity="0.2"/>
+        <stop offset="40%"  stop-color="#00d4ff" stop-opacity="0.8"/>
+        <stop offset="100%" stop-color="#1a3040" stop-opacity="0.2"/>
+        <animateTransform attributeName="gradientTransform" type="translate"
+          values="-1 0; 1 0; -1 0" dur="2s" repeatCount="indefinite"/>
+      </linearGradient>
+      <!-- Violation gradient -->
+      <linearGradient id="violation-grad-${incId}" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%"   stop-color="#7f1d1d" stop-opacity="0.3"/>
+        <stop offset="50%"  stop-color="#ef4444" stop-opacity="0.9"/>
+        <stop offset="100%" stop-color="#7f1d1d" stop-opacity="0.3"/>
+        <animateTransform attributeName="gradientTransform" type="translate"
+          values="-1 0; 1 0; -1 0" dur="1.5s" repeatCount="indefinite"/>
+      </linearGradient>
+      <!-- CSS animations embedded in SVG -->
+      <style>
+        .rk-svgnode-${incId} {
+          animation: rk-svgnode-in 0.45s cubic-bezier(0.34,1.56,0.64,1) both;
+          transform-box: fill-box;
+          transform-origin: center;
+        }
+        @keyframes rk-svgnode-in {
+          from { opacity:0; transform: scale(0.6); }
+          to   { opacity:1; transform: scale(1);   }
+        }
+        .rk-svgnode-${incId}:hover .node-rect { filter: brightness(1.3); }
+        .edge-flow-${incId} {
+          stroke-dasharray: 8 5;
+          animation: rk-dash-${incId} 1.2s linear infinite;
+        }
+        @keyframes rk-dash-${incId} {
+          to { stroke-dashoffset: -26; }
+        }
+        .edge-violation-${incId} {
+          stroke-dasharray: 6 4;
+          animation: rk-violation-${incId} 0.7s linear infinite;
+        }
+        @keyframes rk-violation-${incId} {
+          to { stroke-dashoffset: -20; }
+        }
+        .pulse-ring-${incId} {
+          animation: rk-pulse-ring-${incId} 2s ease-out infinite;
+          transform-box: fill-box;
+          transform-origin: center;
+        }
+        @keyframes rk-pulse-ring-${incId} {
+          0%   { opacity: 0.7; transform: scale(0.85); }
+          100% { opacity: 0;   transform: scale(1.5);  }
+        }
+      </style>
     </defs>`;
+
+    // Background grid dots for the SVG canvas
+    svgContent += `<rect width="${svgW}" height="${svgH}" fill="rgba(2,6,10,0.0)" rx="8"/>`;
+    for (let gx = 20; gx < svgW; gx += 24) {
+      for (let gy = 8; gy < svgH; gy += 24) {
+        svgContent += `<circle cx="${gx}" cy="${gy}" r="0.8" fill="rgba(0,212,255,0.06)"/>`;
+      }
+    }
 
     rows.forEach((rowStages, rowIdx) => {
       const rowY = rowIdx * (NODE_H + ROW_GAP) + 10;
 
       rowStages.forEach((stage, colIdx) => {
-        const globalIdx = rowIdx * MAX_ROW + colIdx;
-        const x = colIdx * (NODE_W + H_GAP) + 10;
-        const y = rowY;
+        const globalIdx  = rowIdx * MAX_ROW + colIdx;
+        const delay      = (globalIdx * 0.07).toFixed(2);
+        const x          = colIdx * (NODE_W + H_GAP) + 10;
+        const y          = rowY;
+        const cx         = x + NODE_W / 2;
+        const cy         = y + NODE_H / 2;
 
-        const tactic    = (stage.tactic || stage.tacticRole || 'unknown').toLowerCase().replace(/\s+/g,'-');
-        const nodeColor = TACTIC_NODE_COLOR[tactic] || TACTIC_NODE_COLOR['unknown'];
-        const sevColor  = _sev(stage.severity || 'medium').color;
-        const isInferred= stage.inferred;
-        const conf      = stage.confidence || 0;
+        const tactic     = (stage.tactic || stage.tacticRole || 'unknown').toLowerCase().replace(/\s+/g,'-');
+        const nodeColor  = TACTIC_NODE_COLOR[tactic] || TACTIC_NODE_COLOR['unknown'];
+        const sevColor   = _sev(stage.severity || 'medium').color;
+        const isInferred = stage.inferred;
+        const conf       = stage.confidence || 0;
+        const confW      = Math.round((NODE_W - 16) * conf / 100);
 
-        // Node box: dashed border for inferred, solid for observed
-        const borderStyle = isInferred ? `stroke-dasharray="5,3"` : '';
-        const opacity     = isInferred ? 'opacity="0.7"' : '';
-        const label       = (stage.ruleName || stage.technique || `Stage ${globalIdx+1}`);
-        const shortLabel  = label.length > 18 ? label.slice(0, 16) + '…' : label;
+        const borderStyle = isInferred ? `stroke-dasharray="6,3"` : '';
+        const nodeOpacity = isInferred ? '0.72' : '1';
+        const label       = (stage.ruleName || stage.technique || `Stage ${globalIdx + 1}`);
+        const shortLabel  = label.length > 17 ? label.slice(0, 15) + '…' : label;
         const techLabel   = stage.technique || '';
 
+        // ── Node group (animated entrance with stagger delay) ──
         svgContent += `
-        <g class="rk-chain-node" data-stage="${globalIdx}" data-inc="${incId}"
+        <g class="rk-chain-node rk-svgnode-${incId}" data-stage="${globalIdx}" data-inc="${incId}"
            onclick="RAYKAN_UI._toggleStageDetail('${incId}', ${globalIdx})"
-           style="cursor:pointer;" ${opacity}>
-          <!-- Node background -->
-          <rect x="${x}" y="${y}" width="${NODE_W}" height="${NODE_H}" rx="8"
-            fill="${nodeColor}22" stroke="${nodeColor}" stroke-width="1.5" ${borderStyle}/>
-          <!-- Severity accent bar at top -->
-          <rect x="${x}" y="${y}" width="${NODE_W}" height="4" rx="2" fill="${sevColor}"/>
-          <!-- Stage number circle -->
-          <circle cx="${x+14}" cy="${y+16}" r="9" fill="${nodeColor}"/>
-          <text x="${x+14}" y="${y+20}" text-anchor="middle" font-size="10" fill="white" font-weight="bold">${globalIdx+1}</text>
-          <!-- Inferred badge -->
-          ${isInferred ? `<text x="${x+NODE_W-4}" y="${y+13}" text-anchor="end" font-size="8" fill="#6b7280" font-style="italic">inferred</text>` : ''}
+           style="cursor:pointer;animation-delay:${delay}s;" opacity="${nodeOpacity}">
+
+          <!-- Outer pulse ring (critical/high nodes only) -->
+          ${(!isInferred && (stage.severity === 'critical' || stage.severity === 'high')) ? `
+          <rect class="pulse-ring-${incId}" x="${x-5}" y="${y-5}"
+            width="${NODE_W+10}" height="${NODE_H+10}" rx="12"
+            fill="none" stroke="${sevColor}" stroke-width="1.5" opacity="0.5"/>` : ''}
+
+          <!-- Node body shadow -->
+          <rect x="${x+3}" y="${y+4}" width="${NODE_W}" height="${NODE_H}" rx="10"
+            fill="rgba(0,0,0,0.5)"/>
+
+          <!-- Node background fill -->
+          <rect class="node-rect" x="${x}" y="${y}" width="${NODE_W}" height="${NODE_H}" rx="10"
+            fill="${nodeColor}1a" stroke="${nodeColor}" stroke-width="${isInferred ? '1.2' : '1.8'}"
+            ${borderStyle}/>
+
+          <!-- Inner gradient highlight -->
+          <rect x="${x+1}" y="${y+1}" width="${NODE_W-2}" height="${Math.round(NODE_H*0.45)}" rx="9"
+            fill="rgba(255,255,255,0.04)"/>
+
+          <!-- Severity accent bar (top) -->
+          <rect x="${x+2}" y="${y}" width="${NODE_W-4}" height="3" rx="2"
+            fill="${sevColor}" opacity="0.9"/>
+          <!-- Severity bar glow -->
+          <rect x="${x+2}" y="${y}" width="${NODE_W-4}" height="3" rx="2"
+            fill="${sevColor}" opacity="0.4" filter="url(#glow-${incId})"/>
+
+          <!-- Stage number badge -->
+          <circle cx="${x+15}" cy="${y+18}" r="10" fill="${nodeColor}" opacity="0.95"/>
+          <circle cx="${x+15}" cy="${y+18}" r="10" fill="rgba(255,255,255,0.08)"/>
+          <text x="${x+15}" y="${y+22}" text-anchor="middle" font-size="10"
+            fill="white" font-weight="800" font-family="monospace">${globalIdx + 1}</text>
+
+          <!-- Inferred indicator -->
+          ${isInferred ? `
+          <rect x="${x+NODE_W-42}" y="${y+6}" width="38" height="12" rx="4"
+            fill="rgba(107,114,128,0.25)" stroke="rgba(107,114,128,0.3)" stroke-width="0.8"/>
+          <text x="${x+NODE_W-23}" y="${y+15}" text-anchor="middle" font-size="7.5"
+            fill="#9ca3af" font-style="italic">inferred</text>` : ''}
+
           <!-- Main label -->
-          <text x="${x+NODE_W/2}" y="${y+30}" text-anchor="middle" font-size="10" fill="#e6edf3" font-weight="600">${shortLabel}</text>
-          <!-- Technique sub-label -->
-          ${techLabel ? `<text x="${x+NODE_W/2}" y="${y+43}" text-anchor="middle" font-size="9" fill="${nodeColor}" font-family="monospace">${techLabel}</text>` : ''}
-          <!-- Confidence bar at bottom -->
-          <rect x="${x+6}" y="${y+NODE_H-8}" width="${Math.round((NODE_W-12)*conf/100)}" height="3" rx="1" fill="${nodeColor}" opacity="0.6"/>
-          <text x="${x+NODE_W-6}" y="${y+NODE_H-4}" text-anchor="end" font-size="8" fill="#4b5563">${conf}%</text>
+          <text x="${cx}" y="${y+34}" text-anchor="middle" font-size="10.5"
+            fill="#e2e8f0" font-weight="700" font-family="'Inter',sans-serif">${shortLabel}</text>
+
+          <!-- Technique sub-label (monospace, tactic-colored) -->
+          ${techLabel ? `
+          <text x="${cx}" y="${y+48}" text-anchor="middle" font-size="8.5"
+            fill="${nodeColor}" font-family="'JetBrains Mono',monospace" font-weight="600"
+            opacity="0.9">${techLabel}</text>` : ''}
+
+          <!-- Confidence bar (bottom) -->
+          <rect x="${x+8}" y="${y+NODE_H-9}" width="${NODE_W-16}" height="3" rx="1.5"
+            fill="rgba(255,255,255,0.06)"/>
+          ${confW > 0 ? `
+          <rect x="${x+8}" y="${y+NODE_H-9}" width="${confW}" height="3" rx="1.5"
+            fill="${nodeColor}" opacity="0.75"/>` : ''}
+          <text x="${x+NODE_W-6}" y="${y+NODE_H-4}" text-anchor="end" font-size="7.5"
+            fill="${nodeColor}" opacity="0.7" font-family="monospace">${conf}%</text>
+
         </g>`;
 
-        // Arrow to next node in same row
+        // ── Animated edge to next node in same row ──
         if (colIdx < rowStages.length - 1) {
-          const nextStage    = stages[globalIdx + 1];
-          const isViolation  = stage.hasCausalViolation || nextStage?.hasCausalViolation;
-          const isInfArrow   = isInferred || nextStage?.inferred;
-          const arrowColor   = isViolation ? '#ef4444' : (isInfArrow ? '#374151' : '#4b5563');
-          const markerId     = isViolation ? `arr-violation-${incId}` : (isInfArrow ? `arr-inferred-${incId}` : `arr-${incId}`);
-          const arrowStyle   = (isViolation || isInfArrow) ? 'stroke-dasharray="4,3"' : '';
-          const fromX        = x + NODE_W;
-          const midY         = y + NODE_H / 2;
-          const toX          = x + NODE_W + H_GAP;
-          svgContent += `
-          <line x1="${fromX}" y1="${midY}" x2="${toX-2}" y2="${midY}"
-            stroke="${arrowColor}" stroke-width="1.5" ${arrowStyle}
-            marker-end="url(#${markerId})"/>`;
+          const nextStage   = stages[globalIdx + 1];
+          const isViolation = stage.hasCausalViolation || nextStage?.hasCausalViolation;
+          const isInfArrow  = isInferred || nextStage?.inferred;
+          const edgeDelay   = (globalIdx * 0.07 + 0.3).toFixed(2);
+          const midY        = y + NODE_H / 2;
+          const fromX       = x + NODE_W + 2;
+          const toX         = x + NODE_W + H_GAP - 4;
+          const markerId    = isViolation
+            ? `arr-violation-${incId}`
+            : (isInfArrow ? `arr-inferred-${incId}` : `arr-${incId}`);
+
+          if (isViolation) {
+            // Red violation edge with fast march
+            svgContent += `
+            <line class="edge-violation-${incId}"
+              x1="${fromX}" y1="${midY}" x2="${toX}" y2="${midY}"
+              stroke="url(#violation-grad-${incId})" stroke-width="2"
+              marker-end="url(#${markerId})"
+              style="animation-delay:${edgeDelay}s"/>
+            <!-- Violation exclamation -->
+            <circle cx="${fromX + (toX-fromX)/2}" cy="${midY-8}" r="6"
+              fill="rgba(239,68,68,0.18)" stroke="rgba(239,68,68,0.5)" stroke-width="1"/>
+            <text x="${fromX + (toX-fromX)/2}" y="${midY-4}" text-anchor="middle"
+              font-size="8" fill="#ef4444" font-weight="800">!</text>`;
+          } else if (isInfArrow) {
+            // Dashed inferred edge
+            svgContent += `
+            <line x1="${fromX}" y1="${midY}" x2="${toX}" y2="${midY}"
+              stroke="#2d4a5a" stroke-width="1.5" stroke-dasharray="5,4"
+              marker-end="url(#${markerId})" opacity="0.7"/>`;
+          } else {
+            // Flowing animated edge
+            svgContent += `
+            <line class="edge-flow-${incId}"
+              x1="${fromX}" y1="${midY}" x2="${toX}" y2="${midY}"
+              stroke="url(#edge-grad-${incId})" stroke-width="2"
+              marker-end="url(#${markerId})"
+              style="animation-delay:${edgeDelay}s"/>`;
+          }
         }
 
-        // Vertical connector at end of row to next row start
+        // ── Vertical wrap connector (end of row → next row start) ──
         if (colIdx === rowStages.length - 1 && rowIdx < rows.length - 1) {
           const nextRowY = rowY + NODE_H + ROW_GAP;
+          const bendX    = x + NODE_W / 2;
           svgContent += `
-          <line x1="${x+NODE_W/2}" y1="${y+NODE_H}" x2="${x+NODE_W/2}" y2="${y+NODE_H+20}"
-            stroke="#4b5563" stroke-width="1.5" stroke-dasharray="4,3"/>
-          <line x1="${x+NODE_W/2}" y1="${y+NODE_H+20}" x2="20" y2="${y+NODE_H+20}"
-            stroke="#4b5563" stroke-width="1.5" stroke-dasharray="4,3"/>
-          <line x1="20" y1="${y+NODE_H+20}" x2="20" y2="${nextRowY}"
-            stroke="#4b5563" stroke-width="1.5" stroke-dasharray="4,3"
+          <polyline points="${bendX},${y+NODE_H} ${bendX},${y+NODE_H+24} 18,${y+NODE_H+24} 18,${nextRowY}"
+            fill="none" stroke="#1a3040" stroke-width="1.5" stroke-dasharray="5,4"
             marker-end="url(#arr-${incId})"/>`;
         }
       });
     });
 
-    return `<svg width="100%" viewBox="0 0 ${svgW} ${svgH}" style="max-width:100%;overflow:visible;" xmlns="http://www.w3.org/2000/svg">
-      ${svgContent}
-    </svg>`;
+    return `<div class="rk-chain-svg-wrap">
+      <svg width="100%" viewBox="0 0 ${svgW} ${svgH}"
+        style="max-width:100%;overflow:visible;display:block;"
+        xmlns="http://www.w3.org/2000/svg">
+        ${svgContent}
+      </svg>
+    </div>`;
   }
 
   // ── Build risk evolution bar chart ─────────────────────────────
   function _buildRiskEvolutionBar(stages, incId) {
     if (!stages || stages.length < 2) return '';
 
-    const W = 100 / stages.length;
     const bars = stages.map((s, i) => {
       const risk    = s._riskScore || s.confidence || 30;
       const tactic  = (s.tactic || 'unknown').toLowerCase().replace(/\s+/g,'-');
       const color   = TACTIC_NODE_COLOR[tactic] || '#374151';
-      const height  = Math.max(4, Math.round(risk * 0.4));
+      const height  = Math.max(6, Math.round(risk * 0.44));
       const label   = s.technique || (s.tacticRole||'').slice(0,8);
-      return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;" title="${s.ruleName||label}: risk ${risk}">
-        <div style="font-size:8px;color:${color};font-weight:700;">${risk}</div>
-        <div style="width:100%;height:${height}px;background:${color};border-radius:2px 2px 0 0;opacity:${s.inferred?0.4:0.85};
-          ${i>0 && stages[i-1] && (stages[i-1]._riskScore||0) < risk ? 'box-shadow:0 0 4px '+color+'66;' : ''}"></div>
-        <div style="font-size:7px;color:#4b5563;text-align:center;max-width:40px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">${label}</div>
+      const rising  = i > 0 && (stages[i-1]._riskScore||0) < risk;
+      const delay   = (i * 0.05).toFixed(2);
+      return `<div class="rk-risk-evo-seg" style="height:${height}px;background:${color};opacity:${s.inferred?0.45:0.88};
+          ${rising ? `box-shadow:0 -3px 8px ${color}88;` : ''}
+          animation:rk-card-appear 0.4s ease-out ${delay}s both;"
+        title="${s.ruleName||label}: risk ${risk}">
+        <div style="position:absolute;top:-16px;left:50%;transform:translateX(-50%);font-size:8px;color:${color};font-weight:700;white-space:nowrap;">${risk}</div>
       </div>`;
     }).join('');
 
-    return `<div style="padding:8px 16px;background:rgba(13,17,23,0.6);border-top:1px solid #21262d;">
-      <div style="font-size:9px;color:#4b5563;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;font-weight:600;">Risk Evolution →</div>
-      <div style="display:flex;align-items:flex-end;gap:2px;height:50px;">${bars}</div>
+    // Connector line below bars showing trend
+    const trend = stages.map((s,i) => {
+      const risk = s._riskScore || s.confidence || 30;
+      const pct  = (i / (stages.length - 1) * 100).toFixed(1);
+      const y    = (100 - risk).toFixed(1);
+      return `${pct},${y}`;
+    }).join(' ');
+
+    return `<div style="padding:10px 16px 8px;background:rgba(8,14,24,0.7);border-top:1px solid rgba(0,212,255,0.06);">
+      <div style="font-size:9px;color:#2d4a5a;text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px;font-weight:700;display:flex;align-items:center;gap:6px;">
+        <span>Risk Evolution</span>
+        <svg width="16" height="10" viewBox="0 0 16 10" fill="none" style="opacity:0.5;">
+          <polyline points="0,9 8,3 16,1" stroke="#00d4ff" stroke-width="1.5" fill="none"/>
+        </svg>
+      </div>
+      <div class="rk-risk-evo-bar-wrap" style="position:relative;">
+        ${bars}
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:4px;">
+        <span style="font-size:7px;color:#1a3040;">Stage 1</span>
+        <span style="font-size:7px;color:#1a3040;">Stage ${stages.length}</span>
+      </div>
     </div>`;
   }
 
@@ -6263,12 +8578,18 @@
 </div>`;
     }).join('');
 
+    const sevGlow = { critical:'rgba(239,68,68,0.12)', high:'rgba(249,115,22,0.08)', medium:'rgba(234,179,8,0.06)', low:'rgba(34,197,94,0.05)', informational:'rgba(107,114,128,0.04)' }[sev] || 'rgba(0,212,255,0.05)';
+    const sevBorderColor = _sev(sev).color;
     return `
-<div class="rk-card" style="padding:0;overflow:hidden;border:1px solid ${_sev(sev).color}44;box-shadow:0 2px 12px ${_sev(sev).color}11;">
+<div class="rk-inc-card sev-${sev}" style="padding:0;overflow:hidden;
+  border:1px solid ${sevBorderColor}44;
+  box-shadow:0 4px 24px rgba(0,0,0,0.4), 0 0 32px ${sevBorderColor}08;
+  border-radius:14px;margin-bottom:4px;">
 
   <!-- ── Incident Header ────────────────────────────────────────── -->
-  <div style="padding:16px 20px;background:linear-gradient(135deg,${_sev(sev).color}0a 0%,transparent 100%);
-              display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+  <div class="rk-inc-card-hdr" style="padding:16px 20px;
+    background:linear-gradient(135deg,${sevGlow} 0%,rgba(8,14,24,0.98) 60%);
+    display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
     <div style="flex:1;min-width:0;">
       <!-- ID + Severity + Title row -->
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
@@ -6424,44 +8745,110 @@
   }
 
   // ════════════════════════════════════════════════════════════════
-  //  INVESTIGATE TAB
+  //  INVESTIGATE TAB  —  Behavior-First SOC Investigation
+  //  Architecture: LOG_NORM → DOMAIN_CLASSIFIER → CONTEXT_VALIDATOR
+  //                → BEHAVIOR_DETECTOR → DEDUP_GATE → RISK_ENGINE
+  //  Policy: §1 Normalization | §2 Domain | §3 Context | §4 Behavior
+  //          §5 Evidence Fusion | §6 Dedup | §8 MITRE | §9 Confidence
   // ════════════════════════════════════════════════════════════════
   function _tplInvestigate() {
+    // Build quick-link entity chips from current session detections
+    const entities = new Set();
+    (S.detections||[]).forEach(d => {
+      if (d.user && d.user !== 'N/A') entities.add(d.user);
+      if (d.computer) entities.add(d.computer);
+      if (d.srcIp) entities.add(d.srcIp);
+    });
+    const quickChips = [...entities].slice(0,8).map(e =>
+      `<button class="rk-inv-chip" onclick="document.getElementById('rk-inv-entity').value='${e}';RAYKAN_UI.investigate()">${e}</button>`
+    ).join('');
+
     return `
-<div>
-  <!-- Search bar -->
-  <div class="rk-card" style="padding:16px;margin-bottom:16px;">
-    <div style="font-size:13px;font-weight:600;margin-bottom:12px;">🕵️ Entity Investigation</div>
-    <div style="display:flex;gap:10px;align-items:center;">
-      <input id="rk-inv-entity" type="text" class="rk-input"
-        placeholder="Entity to investigate: hostname, username, IP, hash, process…"
-        style="flex:1;" onkeydown="if(event.key==='Enter')RAYKAN_UI.investigate()"/>
-      <select class="rk-select" id="rk-inv-type">
-        <option value="auto">Auto-detect</option>
-        <option value="host">Host</option>
-        <option value="user">User</option>
-        <option value="ip">IP Address</option>
-        <option value="hash">File Hash</option>
-        <option value="process">Process</option>
+<div class="rk-inv-root">
+
+  <!-- ══ SEARCH BAR ══════════════════════════════════════════════ -->
+  <div class="rk-inv-searchbar">
+    <div class="rk-inv-searchbar-title">
+      <span class="rk-inv-searchbar-icon">⬡</span>
+      <span>Behavior-First Entity Investigation</span>
+      <span class="rk-badge rk-badge-policy">Policy §1–§16</span>
+    </div>
+
+    <div class="rk-inv-controls">
+      <div class="rk-inv-input-wrap">
+        <span class="rk-inv-input-icon">🔍</span>
+        <input id="rk-inv-entity" type="text" class="rk-inv-input"
+          placeholder="hostname · username · IP address · process · cloud resource…"
+          onkeydown="if(event.key==='Enter')RAYKAN_UI.investigate()"/>
+      </div>
+      <select class="rk-select rk-inv-select" id="rk-inv-type">
+        <option value="auto">⚡ Auto-detect</option>
+        <option value="host">🖥 Host</option>
+        <option value="user">👤 User</option>
+        <option value="ip">🌐 IP Address</option>
+        <option value="hash">🔑 File Hash</option>
+        <option value="process">⚙️ Process</option>
+        <option value="cloud_resource">☁️ Cloud Resource</option>
       </select>
-      <select class="rk-select" id="rk-inv-range">
+      <select class="rk-select rk-inv-select" id="rk-inv-range">
         <option value="1h">1 hour</option>
         <option value="6h">6 hours</option>
         <option value="24h" selected>24 hours</option>
         <option value="7d">7 days</option>
       </select>
-      <button class="rk-btn rk-btn-purple" onclick="RAYKAN_UI.investigate()">🔍 Investigate</button>
+      <button class="rk-btn rk-btn-cyan rk-inv-btn" onclick="RAYKAN_UI.investigate()">
+        <span class="rk-btn-icon">⬡</span> Investigate
+      </button>
     </div>
-    <!-- Quick entity links from detections -->
-    <div id="rk-inv-quick" style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;"></div>
+
+    <!-- Architecture pipeline indicator -->
+    <div class="rk-inv-pipeline">
+      <span class="rk-inv-pipe-step rk-pipe-active">LOG_NORM</span>
+      <span class="rk-inv-pipe-arrow">→</span>
+      <span class="rk-inv-pipe-step rk-pipe-active">DOMAIN_CLASSIFIER</span>
+      <span class="rk-inv-pipe-arrow">→</span>
+      <span class="rk-inv-pipe-step rk-pipe-active">CONTEXT_VALIDATOR</span>
+      <span class="rk-inv-pipe-arrow">→</span>
+      <span class="rk-inv-pipe-step rk-pipe-active">BEHAVIOR_DETECTOR</span>
+      <span class="rk-inv-pipe-arrow">→</span>
+      <span class="rk-inv-pipe-step rk-pipe-active">DEDUP_GATE</span>
+      <span class="rk-inv-pipe-arrow">→</span>
+      <span class="rk-inv-pipe-step rk-pipe-active">RISK_ENGINE</span>
+    </div>
+
+    <!-- Domain coverage badges -->
+    <div class="rk-inv-domains">
+      <span class="rk-inv-domain-badge rk-domain-endpoint">⬡ Endpoint</span>
+      <span class="rk-inv-domain-badge rk-domain-network">⬡ Network</span>
+      <span class="rk-inv-domain-badge rk-domain-database">⬡ Database</span>
+      <span class="rk-inv-domain-badge rk-domain-cloud">⬡ Cloud</span>
+      <span class="rk-inv-domain-badge rk-domain-app">⬡ Application</span>
+    </div>
+
+    <!-- Quick entity links -->
+    ${quickChips ? `<div class="rk-inv-quick-wrap">
+      <span class="rk-inv-quick-label">From session:</span>
+      <div class="rk-inv-quick">${quickChips}</div>
+    </div>` : ''}
   </div>
 
-  <!-- Investigation result -->
+  <!-- ══ RESULT PANEL ════════════════════════════════════════════ -->
   <div id="rk-inv-result">
-    <div style="padding:60px;text-align:center;color:#4b5563;font-size:13px;">
-      Enter an entity name above to begin deep forensic investigation.
+    <div class="rk-inv-empty">
+      <div class="rk-inv-empty-icon">⬡</div>
+      <div class="rk-inv-empty-title">Behavior-First Investigation Engine</div>
+      <div class="rk-inv-empty-sub">
+        Enter any entity (host · user · IP · process · cloud resource) to run a full
+        behavior-driven forensic analysis across all available log domains.
+      </div>
+      <div class="rk-inv-empty-policy">
+        <span>§1 Normalized</span><span>§2 Domain-Aware</span>
+        <span>§4 Behavior-First</span><span>§6 De-duplicated</span>
+        <span>§8 MITRE-Validated</span>
+      </div>
     </div>
   </div>
+
 </div>`;
   }
 
@@ -6762,13 +9149,63 @@
     const range = document.getElementById('rk-inv-range')?.value || '24h';
     const res   = document.getElementById('rk-inv-result');
     if (!res) return;
-    res.innerHTML = `<div style="padding:60px;text-align:center;">${_spinner('Investigating entity: ' + entity + '…')}</div>`;
+
+    res.innerHTML = `<div style="padding:60px;text-align:center;">${_spinner('Running behavior-first analysis for: ' + entity + '…')}</div>`;
+
+    // ── Time range → milliseconds ───────────────────────────
+    const rangeMs = { '1h':3_600_000, '6h':21_600_000, '24h':86_400_000, '7d':604_800_000 };
+    const timeRangeMs = rangeMs[range] || 86_400_000;
+
+    // ── 1. Run client-side behavior-first engine (offline) ──
+    let clientResult = null;
     try {
-      const r = await _api('POST', '/investigate', { entityId: entity, type, timeRange: range });
-      _renderInvestigationResult(r, res);
-    } catch(e) {
-      res.innerHTML = `<div style="color:#ef4444;padding:20px;">${e.message}</div>`;
+      clientResult = CSDE.investigateEntity(entity, type, timeRangeMs, S);
+    } catch(err) {
+      console.warn('[Investigation] Client-side engine error:', err.message);
     }
+
+    // ── 2. Try backend for additional enrichment ────────────
+    let backendResult = null;
+    try {
+      backendResult = await _api('POST', '/investigate', { entityId: entity, type, timeRange: range });
+    } catch(e) {
+      // Backend unavailable — continue with client-side only
+    }
+
+    // ── 3. Merge results (client wins for behavior fields) ──
+    let merged;
+    if (clientResult) {
+      merged = {
+        entityId     : entity,
+        type         : clientResult.type,
+        riskScore    : clientResult.riskScore,
+        summary      : clientResult.summary,
+        findings     : clientResult.findings,        // behavior-first, deduped
+        timeline     : clientResult.timeline,         // attack-progression only
+        mitreMap     : clientResult.mitreMap,
+        chain        : clientResult.chain,
+        chains       : clientResult.chains,
+        domainSummary: clientResult.domainSummary,
+        totalEvents  : clientResult.totalEvents,
+        _meta        : clientResult._meta,
+        _source      : backendResult ? 'hybrid' : 'client',
+        // Supplement with backend evidence if available
+        evidence     : backendResult?.evidence || null,
+        backendRisk  : backendResult?.riskScore || null,
+      };
+    } else if (backendResult) {
+      merged = { ...backendResult, _source: 'backend' };
+    } else {
+      merged = {
+        entityId : entity, type, riskScore: 0,
+        findings : [], timeline: [], mitreMap: { techniques: [] },
+        chain    : null, chains: [], domainSummary: {},
+        summary  : `No data available for "${entity}" in current session.`,
+        _source  : 'empty',
+      };
+    }
+
+    _renderInvestigationResult(merged, res);
   }
 
   async function generateRule() {
@@ -7181,45 +9618,90 @@
   }
 
   function _renderChainCard(c, i) {
-    const stages = c.stages || c.steps || c.detections || [];
-    const techniques = c.techniques || stages.map(s => s.technique || s.mitre?.technique).filter(Boolean);
+    const stages    = c.stages || c.steps || c.detections || [];
+    const techniques= c.techniques || stages.map(s => s.technique || s.mitre?.technique).filter(Boolean);
+    const riskColor = c.riskScore >= 80 ? '#ef4444' : c.riskScore >= 60 ? '#f97316' : c.riskScore >= 40 ? '#eab308' : '#60a5fa';
+    const animDelay = (i * 0.06).toFixed(2);
     return `
-<div class="rk-card" style="padding:0;overflow:hidden;">
-  <div class="rk-card-hdr" style="background:rgba(239,68,68,.06);">
-    <div style="display:flex;align-items:center;gap:10px;">
-      <span style="font-size:18px;">🔗</span>
+<div class="rk-card" style="padding:0;overflow:hidden;animation:rk3-fade-up 0.35s ease-out ${animDelay}s both;">
+  <!-- Animated top border for chain severity -->
+  <div style="height:3px;background:linear-gradient(90deg,${riskColor}44,${riskColor},${riskColor}44);
+    background-size:200% 100%;animation:rk3-border-flow 2.5s linear infinite;"></div>
+  <div class="rk-card-hdr" style="background:rgba(${c.riskScore>=80?'239,68,68':c.riskScore>=60?'249,115,22':'0,212,255'},0.04);">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <!-- Animated chain icon -->
+      <div style="width:38px;height:38px;border-radius:10px;background:rgba(${c.riskScore>=80?'239,68,68':'167,139,250'},0.12);
+        border:1px solid rgba(${c.riskScore>=80?'239,68,68':'167,139,250'},0.25);
+        display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;
+        box-shadow:0 0 16px rgba(${c.riskScore>=80?'239,68,68':'167,139,250'},0.15);">🔗</div>
       <div>
-        <div style="font-size:13px;font-weight:700;color:#e6edf3;">
-          Attack Chain #${i+1} — ${c.name || c.type || 'Multi-stage Attack'}
+        <div style="font-size:13px;font-weight:700;color:#e2e8f0;">
+          Attack Chain #${i+1}
+          <span style="font-weight:400;color:#6b7280;margin-left:4px;">— ${c.name || c.type || 'Multi-stage Attack'}</span>
         </div>
-        <div style="font-size:11px;color:#6b7280;margin-top:2px;">
-          ${stages.length} stages · ${c.entities?.join(', ') || ''}
+        <div style="font-size:11px;color:#4b6b8a;margin-top:3px;font-family:'JetBrains Mono',monospace;">
+          <span style="color:#3d6080;">${stages.length} stages</span>
+          ${c.entities?.length ? ` · <span style="color:#2d4a5a;">${c.entities.slice(0,3).join(', ')}</span>` : ''}
         </div>
       </div>
     </div>
-    <div style="display:flex;align-items:center;gap:8px;">
-      <span style="font-size:12px;font-weight:700;color:#ef4444;">Risk: ${c.riskScore||'—'}</span>
+    <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+      <div style="padding:4px 12px;border-radius:16px;font-size:11px;font-weight:700;
+        font-family:'JetBrains Mono',monospace;
+        background:rgba(${c.riskScore>=80?'239,68,68':c.riskScore>=60?'249,115,22':'107,114,128'},0.12);
+        color:${riskColor};border:1px solid ${riskColor}44;">
+        RISK ${c.riskScore||'—'}
+      </div>
       ${_sevBadge(c.severity||'high')}
     </div>
   </div>
-  <div style="padding:16px;">
-    <!-- Chain visualization -->
-    <div class="rk-chain-stage" style="flex-wrap:wrap;gap:4px;margin-bottom:14px;">
-      ${stages.map((s, si) => `
-        <span class="rk-chain-step" style="border-color:${TACTIC_COLOR[s.tactic||''] || '#30363d'};">
-          ${si+1}. ${s.ruleName||s.title||s.technique||'Step'}
-        </span>
-        ${si < stages.length-1 ? '<span class="rk-chain-arrow">→</span>' : ''}
-      `).join('')}
+  <div style="padding:18px;">
+    <!-- Chain node flow strip -->
+    <div style="display:flex;align-items:center;gap:0;flex-wrap:wrap;margin-bottom:16px;
+      padding:12px 14px;background:rgba(0,0,0,0.3);border-radius:10px;
+      border:1px solid rgba(0,212,255,0.07);">
+      ${stages.map((s, si) => {
+        const tactic   = (s.tactic||'').toLowerCase().replace(/\s+/g,'-');
+        const nodeCol  = TACTIC_NODE_COLOR[tactic] || '#3d6080';
+        return `
+        <div style="display:flex;align-items:center;gap:0;">
+          <div style="padding:6px 12px;border-radius:6px;font-size:10.5px;font-weight:600;
+            background:${nodeCol}18;border:1px solid ${nodeCol}55;color:#c9d1d9;
+            white-space:nowrap;font-family:'JetBrains Mono',monospace;
+            transition:all 0.2s;cursor:default;"
+            onmouseenter="this.style.background='${nodeCol}30';this.style.borderColor='${nodeCol}';this.style.boxShadow='0 0 12px ${nodeCol}33';"
+            onmouseleave="this.style.background='${nodeCol}18';this.style.borderColor='${nodeCol}55';this.style.boxShadow='none';">
+            <span style="color:${nodeCol};font-weight:700;margin-right:5px;">${si+1}</span>${s.ruleName||s.title||s.technique||'Step'}
+          </div>
+          ${si < stages.length-1 ? `
+          <svg width="28" height="12" viewBox="0 0 28 12" style="flex-shrink:0;">
+            <defs>
+              <marker id="ah-${i}-${si}" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                <path d="M0,0 L0,6 L6,3 z" fill="${nodeCol}88"/>
+              </marker>
+            </defs>
+            <line x1="2" y1="6" x2="22" y2="6" stroke="${nodeCol}55" stroke-width="1.5"
+              stroke-dasharray="4,3" marker-end="url(#ah-${i}-${si})"/>
+          </svg>` : ''}
+        </div>`;
+      }).join('')}
     </div>
     <!-- MITRE techniques -->
-    ${techniques.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
-      ${techniques.map(t => `<span class="rk-tag" style="color:#a78bfa;">${t}</span>`).join('')}
+    ${techniques.length ? `
+    <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px;">
+      ${techniques.slice(0,10).map(t => `
+        <span style="padding:2px 8px;border-radius:5px;font-size:10px;font-weight:600;
+          background:rgba(167,139,250,0.10);color:#a78bfa;border:1px solid rgba(167,139,250,0.2);
+          font-family:'JetBrains Mono',monospace;">${t}</span>`).join('')}
+      ${techniques.length > 10 ? `<span style="color:#4b6b8a;font-size:10px;align-self:center;">+${techniques.length-10} more</span>` : ''}
     </div>` : ''}
-    <!-- Entities involved -->
-    ${c.entities?.length ? `<div style="font-size:12px;color:#8b949e;">
-      <span style="font-weight:600;">Entities:</span>
-      ${c.entities.map(e => `<button class="rk-entity-btn" onclick="RAYKAN_UI._invEntity('${e}')" style="margin:2px;">${e}</button>`).join('')}
+    <!-- Entities -->
+    ${c.entities?.length ? `
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <span style="font-size:10px;color:#3d5a6b;font-weight:700;text-transform:uppercase;letter-spacing:1px;">Entities</span>
+      ${c.entities.map(e => `
+        <button class="rk-entity-btn" onclick="RAYKAN_UI._invEntity('${e}')"
+          style="font-size:10px;padding:3px 10px;">${e}</button>`).join('')}
     </div>` : ''}
   </div>
 </div>`;
@@ -7227,12 +9709,32 @@
 
   function _chainPreview(c) {
     const stages = c.stages || c.steps || c.detections || [];
-    return `<div style="display:flex;align-items:center;gap:6px;padding:8px;background:#0d1117;border-radius:6px;flex-wrap:wrap;margin-bottom:6px;">
-  ${stages.slice(0,4).map((s,i) => `
-    <span class="rk-chain-step" style="font-size:10px;padding:4px 8px;">${s.ruleName||s.title||'Step '+(i+1)}</span>
-    ${i<stages.length-1 && i<3 ? '<span class="rk-chain-arrow" style="font-size:12px;">→</span>' : ''}
-  `).join('')}
-  ${stages.length > 4 ? `<span style="color:#6b7280;font-size:11px;">+${stages.length-4} more</span>` : ''}
+    const riskColor = c.riskScore >= 80 ? '#ef4444' : c.riskScore >= 60 ? '#f97316' : '#a78bfa';
+    return `
+<div class="rk-chain-preview" style="margin-bottom:8px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+    <div style="font-size:11px;font-weight:700;color:#a78bfa;font-family:'JetBrains Mono',monospace;letter-spacing:0.5px;">
+      ⛓ ${c.name || c.type || 'Attack Chain'} · <span style="color:#4b6b8a;">${stages.length} stages</span>
+    </div>
+    ${c.riskScore ? `<div style="font-size:10px;font-weight:700;color:${riskColor};font-family:'JetBrains Mono',monospace;
+      padding:2px 8px;background:${riskColor}18;border:1px solid ${riskColor}38;border-radius:8px;">RISK ${c.riskScore}</div>` : ''}
+  </div>
+  <div style="display:flex;align-items:center;gap:3px;flex-wrap:wrap;">
+    ${stages.slice(0, 5).map((s, i) => {
+      const tactic = (s.tactic||'').toLowerCase().replace(/\s+/g,'-');
+      const nc = TACTIC_NODE_COLOR[tactic] || '#2d4a5a';
+      return `
+      <span style="display:inline-flex;align-items:center;padding:4px 10px;border-radius:5px;
+        font-size:10px;font-weight:600;font-family:'JetBrains Mono',monospace;
+        background:${nc}18;border:1px solid ${nc}44;color:#c9d1d9;white-space:nowrap;">
+        <span style="color:${nc};font-weight:800;margin-right:4px;">${i+1}</span>${s.ruleName||s.title||'Stage'}
+      </span>
+      ${i < Math.min(stages.length-1, 4) ? `<span style="color:rgba(0,212,255,0.25);font-size:12px;padding:0 1px;">›</span>` : ''}`;
+    }).join('')}
+    ${stages.length > 5 ? `<span style="color:#4b6b8a;font-size:10px;padding:4px 8px;
+      border:1px solid rgba(0,212,255,0.10);border-radius:5px;font-family:'JetBrains Mono',monospace;">
+      +${stages.length-5} more</span>` : ''}
+  </div>
 </div>`;
   }
 
@@ -7380,85 +9882,336 @@
   }
 
   // ── Investigation result ─────────────────────────────────────
+  // ════════════════════════════════════════════════════════════════
+  //  INVESTIGATION RESULT RENDERER  —  Policy-Compliant UI
+  //  Tab layout:  Findings | Timeline | MITRE | Risk | Chain
+  //  Policy §14: Findings = unique behaviors only
+  //  Policy §13: Timeline = attack progression, no duplicates
+  //  Policy §17: MITRE = validated techniques only
+  //  Policy §15: Risk = deduplicated scoring only
+  //  Policy §16: Chain = distinct techniques + progression only
+  // ════════════════════════════════════════════════════════════════
   function _renderInvestigationResult(r, container) {
     if (!container) return;
-    const score = r.riskScore || 0;
-    container.innerHTML = `
-<div style="display:flex;flex-direction:column;gap:16px;">
-  <!-- Header -->
-  <div class="rk-card" style="padding:20px;">
-    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
-      <div style="width:56px;height:56px;border-radius:12px;background:rgba(239,68,68,.12);
-        display:flex;align-items:center;justify-content:center;font-size:26px;flex-shrink:0;">
-        ${r.type==='host' ? '🖥' : r.type==='user' ? '👤' : r.type==='ip' ? '🌐' : r.type==='process' ? '⚙️' : '🕵️'}
-      </div>
-      <div style="flex:1;">
-        <div style="font-size:16px;font-weight:700;color:#e6edf3;">${r.entityId}</div>
-        <div style="font-size:12px;color:#6b7280;margin-top:4px;">Type: ${r.type||'auto'} · Risk Score: <span style="color:${_riskColor(score)};font-weight:700;">${score}</span></div>
-        ${r.summary ? `<div style="font-size:12px;color:#8b949e;margin-top:8px;">${r.summary}</div>` : ''}
-      </div>
-      <div style="text-align:right;">
-        <div style="font-size:32px;font-weight:800;color:${_riskColor(score)};">${score}</div>
-        <div style="font-size:10px;color:#6b7280;">Risk Score</div>
-      </div>
+    const score    = r.riskScore || 0;
+    const findings = r.findings  || [];
+    const timeline = r.timeline  || [];
+    const mitreTechs = r.mitreMap?.techniques || [];
+    const chain    = r.chain;
+    const meta     = r._meta || {};
+
+    // ── Helper: severity → color ─────────────────────────────
+    const sevColor = s => ({critical:'#ef4444',high:'#f97316',medium:'#eab308',low:'#22c55e',informational:'#6b7280'}[s]||'#6b7280');
+    const confColor = c => ({HIGH:'#22c55e',MEDIUM:'#eab308',LOW:'#6b7280'}[c]||'#6b7280');
+    const domainIcon = d => ({endpoint:'🖥',network:'🌐',database:'🗄',cloud:'☁️',application:'⚡'}[d]||'⬡');
+    const typeIcon   = t => ({host:'🖥',user:'👤',ip:'🌐',hash:'🔑',process:'⚙️',cloud_resource:'☁️'}[t]||'🕵️');
+    const srcLabel   = s => ({ hybrid:'Hybrid (Client + Backend)', client:'Client-Side Only', backend:'Backend Only', empty:'No Data' }[s]||s||'Unknown');
+
+    // ── Domain summary pills ─────────────────────────────────
+    const domSummaryPills = Object.entries(r.domainSummary||{})
+      .map(([d,n]) => `<span class="rk-inv-domain-pill rk-domain-${d}">${domainIcon(d)} ${d} <b>${n}</b></span>`)
+      .join('');
+
+    // ── Risk tier label ─────────────────────────────────────
+    const riskTier  = score >= 80 ? {l:'CRITICAL',c:'#ef4444'} :
+                      score >= 60 ? {l:'HIGH',c:'#f97316'}    :
+                      score >= 40 ? {l:'MEDIUM',c:'#eab308'}  :
+                      score >   0 ? {l:'LOW',c:'#22c55e'}     :
+                                    {l:'CLEAN',c:'#6b7280'};
+
+    // ── Findings tab: unique behaviors (Policy §14) ──────────
+    const findingsHTML = findings.length ? findings.map((f, i) => {
+      const ev = f.evidenceBlock || {};
+      const confLvl  = f.confidence?.level || 'LOW';
+      const knownTool = f._knownTool ? `<span class="rk-inv-tag rk-inv-tag-tool">⚡ Known Tool</span>` : '';
+      const failSafe  = f._failSafe  ? `<span class="rk-inv-tag rk-inv-tag-failsafe">⚠ Fail-Safe</span>` : '';
+      const evidFields = (ev.fields_present||[]).map(fp =>
+        `<span class="rk-inv-ev-field">${fp}</span>`).join('');
+      return `
+<div class="rk-inv-finding" data-sev="${f.severity||'low'}">
+  <div class="rk-inv-finding-header">
+    <div class="rk-inv-finding-sev" style="background:${sevColor(f.severity)};"></div>
+    <div class="rk-inv-finding-meta">
+      <span class="rk-inv-finding-id">${f.ruleId}</span>
+      <span class="rk-inv-finding-name">${f.ruleName}</span>
+      ${knownTool}${failSafe}
+    </div>
+    <div class="rk-inv-finding-badges">
+      <span class="rk-inv-sev-badge" style="color:${sevColor(f.severity)};border-color:${sevColor(f.severity)}22;">${(f.severity||'low').toUpperCase()}</span>
+      <span class="rk-inv-conf-badge" style="color:${confColor(confLvl)};border-color:${confColor(confLvl)}22;">${confLvl}</span>
+      <span class="rk-inv-domain-badge rk-domain-${f.source_type}">${domainIcon(f.source_type)} ${f.source_type}</span>
     </div>
   </div>
-
-  <div class="rk-grid-2">
-    <!-- Evidence / detections -->
-    <div class="rk-card">
-      <div class="rk-card-hdr">
-        <span style="font-size:12px;font-weight:700;">🚨 Related Detections</span>
-        <span style="font-size:11px;color:#6b7280;">${r.evidence?.detections?.length||0}</span>
-      </div>
-      <div style="max-height:200px;overflow-y:auto;">
-        ${(r.evidence?.detections||[]).slice(0,10).map(d => `
-        <div class="rk-det-row" style="font-size:12px;">
-          ${_sevBadge(d.severity)} ${d.ruleName||'Detection'}
-        </div>`).join('') || '<div style="padding:20px;color:#4b5563;text-align:center;font-size:12px;">No related detections.</div>'}
-      </div>
+  <div class="rk-inv-finding-body">
+    <div class="rk-inv-narrative">${f.narrative||'—'}</div>
+    <div class="rk-inv-finding-detail">
+      ${f.technique ? `<span class="rk-inv-tag rk-inv-tag-mitre">${f.technique}</span>` : `<span class="rk-inv-tag rk-inv-tag-null">Technique: NULL</span>`}
+      ${f.tactic    ? `<span class="rk-inv-tag rk-inv-tag-tactic">${f.tactic}</span>` : ''}
+      ${f.actor     ? `<span class="rk-inv-tag">Actor: ${f.actor}</span>` : ''}
+      ${f.actor_host? `<span class="rk-inv-tag">Host: ${f.actor_host}</span>` : ''}
+      ${f.actor_ip  ? `<span class="rk-inv-tag">IP: ${f.actor_ip}</span>` : ''}
+      ${f.matchedCount > 1 ? `<span class="rk-inv-tag">Events: ${f.matchedCount}</span>` : ''}
     </div>
-
-    <!-- MITRE map -->
-    <div class="rk-card">
-      <div class="rk-card-hdr">
-        <span style="font-size:12px;font-weight:700;">🗺 MITRE Techniques</span>
-        <span style="font-size:11px;color:#6b7280;">${r.mitreMap?.techniques?.length||0}</span>
-      </div>
-      <div style="padding:12px;display:flex;flex-wrap:wrap;gap:4px;">
-        ${(r.mitreMap?.techniques||[]).map(t => `
-          <span class="rk-tag" style="color:#a78bfa;">${t.id||t} — ${t.name||''}</span>`).join('')
-          || '<div style="color:#4b5563;font-size:12px;padding:12px;">No techniques mapped.</div>'}
-      </div>
-    </div>
+    ${evidFields ? `<div class="rk-inv-ev-fields"><span class="rk-inv-ev-label">Evidence fields:</span>${evidFields}</div>` : ''}
   </div>
-
-  <!-- Timeline -->
-  ${r.timeline?.length ? `<div class="rk-card">
-    <div class="rk-card-hdr">
-      <span style="font-size:12px;font-weight:700;">⏱ Entity Timeline</span>
-      <span style="font-size:11px;color:#6b7280;">${r.timeline.length} events</span>
-    </div>
-    <div style="padding:12px;max-height:300px;overflow-y:auto;">
-      ${r.timeline.slice(0, 30).map(e => {
-        const col = e.type === 'detection' ? '#ef4444' : '#60a5fa';
-        return `<div class="rk-timeline-item" style="border-left-color:${col};padding:6px 12px;">
-          <div class="rk-tl-dot" style="background:${col};width:8px;height:8px;margin-left:-17px;"></div>
-          <div>
-            <div style="font-size:11px;color:#6b7280;">${_fmt(e.timestamp)}</div>
-            <div style="font-size:12px;color:#e6edf3;">${e.description||e.summary||'Event'}</div>
-          </div>
-        </div>`;
-      }).join('')}
-    </div>
-  </div>` : ''}
-
-  <!-- Attack chain -->
-  ${r.chain ? `<div class="rk-card" style="padding:16px;">
-    <div style="font-size:12px;font-weight:700;margin-bottom:12px;">🔗 Attack Chain</div>
-    ${_chainPreview(r.chain)}
-  </div>` : ''}
 </div>`;
+    }).join('') : `<div class="rk-inv-no-data">
+      <span class="rk-inv-no-data-icon">✓</span>
+      <div>No behavioral findings for this entity in current session data.</div>
+      <div class="rk-inv-no-data-sub">Ensure log data has been ingested before investigation.</div>
+    </div>`;
+
+    // ── Timeline tab: attack progression (Policy §13) ────────
+    const tlDomainColor = {endpoint:'#00d4ff',network:'#3b82f6',database:'#f97316',cloud:'#a78bfa',application:'#22c55e'};
+    const timelineHTML = timeline.length ? `
+<div class="rk-inv-timeline">
+  ${timeline.slice(0, 50).map((e, i) => {
+    const col = tlDomainColor[e.source_type] || '#6b7280';
+    return `
+<div class="rk-inv-tl-item">
+  <div class="rk-inv-tl-line" style="border-color:${col}33;"></div>
+  <div class="rk-inv-tl-dot" style="background:${col};box-shadow:0 0 6px ${col}66;"></div>
+  <div class="rk-inv-tl-content">
+    <div class="rk-inv-tl-header">
+      <span class="rk-inv-tl-type" style="color:${col};">${domainIcon(e.source_type)} ${(e.source_type||'').toUpperCase()}</span>
+      <span class="rk-inv-tl-evtype">${(e.event_type||'event').replace(/_/g,' ')}</span>
+      <span class="rk-inv-tl-ts">${_fmt(e.timestamp)}</span>
+    </div>
+    <div class="rk-inv-tl-desc">${e.description||'—'}</div>
+    ${e.actor     ? `<span class="rk-inv-tag">👤 ${e.actor}</span>` : ''}
+    ${e.actor_host? `<span class="rk-inv-tag">🖥 ${e.actor_host}</span>` : ''}
+    ${e.actor_ip  ? `<span class="rk-inv-tag">🌐 ${e.actor_ip}</span>` : ''}
+    ${e.action    ? `<span class="rk-inv-tag rk-inv-tag-action">${e.action.slice(0,60)}</span>` : ''}
+  </div>
+</div>`;
+  }).join('')}
+</div>` : `<div class="rk-inv-no-data">
+  <span class="rk-inv-no-data-icon">⏱</span>
+  <div>No timeline events for this entity.</div>
+</div>`;
+
+    // ── MITRE tab: validated techniques only (Policy §17) ────
+    const TACTIC_ORDER = ['reconnaissance','initial-access','execution','persistence',
+      'privilege-escalation','defense-evasion','credential-access','discovery',
+      'lateral-movement','collection','command-and-control','exfiltration','impact'];
+    const byTactic = {};
+    mitreTechs.forEach(t => {
+      const tac = t.tactic || 'unknown';
+      if (!byTactic[tac]) byTactic[tac] = [];
+      byTactic[tac].push(t);
+    });
+    const mitreHTML = mitreTechs.length ? `
+<div class="rk-inv-mitre">
+  ${TACTIC_ORDER.filter(tac => byTactic[tac]).map(tac => `
+  <div class="rk-inv-mitre-group">
+    <div class="rk-inv-mitre-tactic">${tac.replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}</div>
+    <div class="rk-inv-mitre-techs">
+      ${byTactic[tac].map(t => `
+      <div class="rk-inv-mitre-card" style="border-color:${confColor(t.confidence)}33;">
+        <div class="rk-inv-mitre-tid">${t.technique}</div>
+        <div class="rk-inv-mitre-tname">${t.name||'—'}</div>
+        <div class="rk-inv-mitre-foot">
+          <span class="rk-inv-tag rk-inv-tag-conf" style="color:${confColor(t.confidence)};">${t.confidence}</span>
+          <span class="rk-inv-domain-badge rk-domain-${t.source_type}">${domainIcon(t.source_type)} ${t.source_type||'?'}</span>
+        </div>
+      </div>`).join('')}
+    </div>
+  </div>`).join('')}
+  ${Object.keys(byTactic).filter(t=>!TACTIC_ORDER.includes(t)).map(tac => `
+  <div class="rk-inv-mitre-group">
+    <div class="rk-inv-mitre-tactic">${tac}</div>
+    <div class="rk-inv-mitre-techs">
+      ${byTactic[tac].map(t => `
+      <div class="rk-inv-mitre-card">
+        <div class="rk-inv-mitre-tid">${t.technique}</div>
+        <div class="rk-inv-mitre-tname">${t.name||'—'}</div>
+      </div>`).join('')}
+    </div>
+  </div>`).join('')}
+</div>` : `<div class="rk-inv-no-data">
+  <span class="rk-inv-no-data-icon">🗺</span>
+  <div>No validated MITRE techniques.</div>
+  <div class="rk-inv-no-data-sub">Techniques are only assigned after full context validation (Policy §8).</div>
+</div>`;
+
+    // ── Risk tab: deduplicated scoring (Policy §15) ──────────
+    const riskHTML = `
+<div class="rk-inv-risk">
+  <div class="rk-inv-risk-gauge">
+    <svg viewBox="0 0 200 110" width="200" height="110">
+      <defs>
+        <linearGradient id="riskGrad-inv" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%"   stop-color="#22c55e"/>
+          <stop offset="40%"  stop-color="#eab308"/>
+          <stop offset="70%"  stop-color="#f97316"/>
+          <stop offset="100%" stop-color="#ef4444"/>
+        </linearGradient>
+      </defs>
+      <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="16" stroke-linecap="round"/>
+      <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="url(#riskGrad-inv)" stroke-width="16" stroke-linecap="round"
+        stroke-dasharray="${score * 2.51} 251" opacity="0.9"/>
+      <text x="100" y="85" text-anchor="middle" font-size="32" font-weight="800" fill="${riskTier.c}" font-family="JetBrains Mono,monospace">${score}</text>
+      <text x="100" y="105" text-anchor="middle" font-size="10" fill="${riskTier.c}" letter-spacing="2">${riskTier.l}</text>
+    </svg>
+  </div>
+  <div class="rk-inv-risk-breakdown">
+    <div class="rk-inv-risk-title">Deduplicated Risk Breakdown <span class="rk-inv-tag">Policy §15</span></div>
+    ${findings.map(f => {
+      const SEV = {critical:30,high:20,medium:10,low:5};
+      const CONF = {HIGH:1.0,MEDIUM:0.7,LOW:0.4};
+      const s = SEV[f.severity]||5;
+      const c = CONF[f.confidence?.level]||0.5;
+      const corr = Math.min(((f.evidenceBlock?.fields_present?.length||1)*0.1),0.5);
+      const contrib = Math.round(s * c * (1 + corr));
+      const pct = score > 0 ? Math.round((contrib / score) * 100) : 0;
+      return `
+<div class="rk-inv-risk-row">
+  <div class="rk-inv-risk-row-name">${f.ruleName}</div>
+  <div class="rk-inv-risk-bar-wrap">
+    <div class="rk-inv-risk-bar" style="width:${Math.min(pct,100)}%;background:${sevColor(f.severity)};"></div>
+  </div>
+  <div class="rk-inv-risk-row-score" style="color:${sevColor(f.severity)};">+${contrib}</div>
+</div>`;
+    }).join('')}
+    <div class="rk-inv-risk-meta">
+      <span>Events analyzed: <b>${meta.eventsAnalyzed||r.totalEvents||0}</b></span>
+      <span>Normalized: <b>${meta.normEvents||0}</b></span>
+      <span>Raw findings: <b>${meta.rawFindingsCount||0}</b></span>
+      <span>Deduped: <b>${meta.dedupedCount||findings.length}</b></span>
+      <span>Source: <b>${srcLabel(r._source)}</b></span>
+    </div>
+  </div>
+</div>`;
+
+    // ── Chain tab: distinct techniques + progression (Policy §16) ─
+    const chainHTML = chain ? `
+<div class="rk-inv-chain-wrap">
+  <div class="rk-inv-chain-meta">
+    <span class="rk-inv-tag">Techniques: ${chain.techniques?.length||0} distinct</span>
+    <span class="rk-inv-tag">Stages: ${chain.stages?.length||0}</span>
+    <span class="rk-inv-tag rk-inv-tag-domain">${chain.source_type||'?'}</span>
+    <span class="rk-inv-sev-badge" style="color:${sevColor(chain.severity)};border-color:${sevColor(chain.severity)}22;">${(chain.severity||'?').toUpperCase()}</span>
+  </div>
+  <div class="rk-inv-chain">
+    ${(chain.stages||[]).map((st, i) => `
+    <div class="rk-inv-chain-stage">
+      <div class="rk-inv-chain-node" style="border-color:${sevColor(st.severity)}55;box-shadow:0 0 12px ${sevColor(st.severity)}22;">
+        <div class="rk-inv-chain-idx">${i+1}</div>
+        <div class="rk-inv-chain-tactic">${(st.tactic||'?').replace(/-/g,' ')}</div>
+        <div class="rk-inv-chain-tech">${st.technique||'NULL'}</div>
+        <div class="rk-inv-chain-name">${st.ruleName||'—'}</div>
+        <div class="rk-inv-chain-meta2">
+          <span style="color:${sevColor(st.severity)};">${(st.severity||'?').toUpperCase()}</span>
+          <span style="color:${confColor(st.confidence>=80?'HIGH':st.confidence>=50?'MEDIUM':'LOW')};">${st.confidence||0}%</span>
+        </div>
+        ${st.actor_host ? `<div class="rk-inv-chain-host">🖥 ${st.actor_host}</div>` : ''}
+      </div>
+      ${i < (chain.stages||[]).length-1 ? '<div class="rk-inv-chain-arrow">→</div>' : ''}
+    </div>`).join('')}
+  </div>
+</div>` : `<div class="rk-inv-no-data">
+  <span class="rk-inv-no-data-icon">🔗</span>
+  <div>No attack chain formed.</div>
+  <div class="rk-inv-no-data-sub">Chains form only when ≥2 distinct techniques with clear kill-chain progression exist (Policy §16).</div>
+</div>`;
+
+    // ── Tab counts ───────────────────────────────────────────
+    const tabId = 'rk-inv-tabs-' + Date.now().toString(36);
+
+    container.innerHTML = `
+<div class="rk-inv-result-root">
+
+  <!-- ══ ENTITY HEADER ══════════════════════════════════════════ -->
+  <div class="rk-inv-entity-header">
+    <div class="rk-inv-entity-icon">${typeIcon(r.type)}</div>
+    <div class="rk-inv-entity-info">
+      <div class="rk-inv-entity-id">${r.entityId}</div>
+      <div class="rk-inv-entity-meta">
+        <span class="rk-inv-type-badge">${r.type||'auto'}</span>
+        ${domSummaryPills}
+        <span class="rk-inv-src-badge">⬡ ${srcLabel(r._source)}</span>
+      </div>
+      ${r.summary ? `<div class="rk-inv-entity-summary">${r.summary}</div>` : ''}
+    </div>
+    <div class="rk-inv-entity-risk">
+      <div class="rk-inv-entity-risk-score" style="color:${riskTier.c};">${score}</div>
+      <div class="rk-inv-entity-risk-tier" style="color:${riskTier.c};">${riskTier.l}</div>
+      <div class="rk-inv-entity-risk-label">Risk Score</div>
+    </div>
+  </div>
+
+  <!-- ══ TABS ════════════════════════════════════════════════════ -->
+  <div class="rk-inv-tabs" id="${tabId}">
+    <button class="rk-inv-tab rk-inv-tab-active" onclick="window._rkInvTab('${tabId}','findings',this)">
+      ⬡ Findings <span class="rk-inv-tab-badge">${findings.length}</span>
+    </button>
+    <button class="rk-inv-tab" onclick="window._rkInvTab('${tabId}','timeline',this)">
+      ⏱ Timeline <span class="rk-inv-tab-badge">${timeline.length}</span>
+    </button>
+    <button class="rk-inv-tab" onclick="window._rkInvTab('${tabId}','mitre',this)">
+      🗺 MITRE <span class="rk-inv-tab-badge">${mitreTechs.length}</span>
+    </button>
+    <button class="rk-inv-tab" onclick="window._rkInvTab('${tabId}','risk',this)">
+      📊 Risk Score
+    </button>
+    <button class="rk-inv-tab" onclick="window._rkInvTab('${tabId}','chain',this)">
+      🔗 Attack Chain ${chain ? '<span class="rk-inv-tab-badge rk-tab-badge-chain">'+chain.stages?.length+'</span>' : ''}
+    </button>
+  </div>
+
+  <!-- ══ TAB PANELS ══════════════════════════════════════════════ -->
+  <div class="rk-inv-tab-panels">
+    <div class="rk-inv-panel rk-inv-panel-active" data-panel="${tabId}-findings">
+      <div class="rk-inv-panel-hdr">
+        <span>Unique Behavioral Findings</span>
+        <span class="rk-inv-tag">Policy §14 — One behavior = one detection</span>
+        <span class="rk-inv-tag">§6 Dedup Gate applied</span>
+      </div>
+      <div class="rk-inv-findings-list">${findingsHTML}</div>
+    </div>
+    <div class="rk-inv-panel" data-panel="${tabId}-timeline">
+      <div class="rk-inv-panel-hdr">
+        <span>Attack Progression Timeline</span>
+        <span class="rk-inv-tag">Policy §13 — No duplicate events</span>
+      </div>
+      ${timelineHTML}
+    </div>
+    <div class="rk-inv-panel" data-panel="${tabId}-mitre">
+      <div class="rk-inv-panel-hdr">
+        <span>Validated MITRE ATT&amp;CK Techniques</span>
+        <span class="rk-inv-tag">Policy §8 — Context-before-technique</span>
+        <span class="rk-inv-tag">NULL if context insufficient</span>
+      </div>
+      ${mitreHTML}
+    </div>
+    <div class="rk-inv-panel" data-panel="${tabId}-risk">
+      <div class="rk-inv-panel-hdr">
+        <span>Deduplicated Risk Scoring</span>
+        <span class="rk-inv-tag">Policy §15 — Never inflated by duplicates</span>
+      </div>
+      ${riskHTML}
+    </div>
+    <div class="rk-inv-panel" data-panel="${tabId}-chain">
+      <div class="rk-inv-panel-hdr">
+        <span>Behavior Attack Chain</span>
+        <span class="rk-inv-tag">Policy §16 — Distinct techniques + progression only</span>
+      </div>
+      ${chainHTML}
+    </div>
+  </div>
+
+</div>`;
+
+    // ── Tab switching logic ──────────────────────────────────
+    window._rkInvTab = function(tid, panel, btn) {
+      const root = document.getElementById(tid)?.closest('.rk-inv-result-root');
+      if (!root) return;
+      root.querySelectorAll('.rk-inv-tab').forEach(t => t.classList.remove('rk-inv-tab-active'));
+      root.querySelectorAll('.rk-inv-panel').forEach(p => p.classList.remove('rk-inv-panel-active'));
+      if (btn) btn.classList.add('rk-inv-tab-active');
+      const pEl = root.querySelector(`[data-panel="${tid}-${panel}"]`);
+      if (pEl) pEl.classList.add('rk-inv-panel-active');
+    };
   }
 
   // ── Rules list ───────────────────────────────────────────────
@@ -7771,11 +10524,16 @@
     const container = document.getElementById(`rk-stage-details-${incId}`);
     if (container) {
       container.querySelectorAll('[id^="rk-stage-"]').forEach(p => {
-        if (p !== panel) p.style.display = 'none';
+        if (p !== panel) { p.style.display = 'none'; p.classList.remove('rk-stage-detail-open'); }
       });
     }
     panel.style.display = isOpen ? 'none' : 'block';
-    if (!isOpen) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    if (!isOpen) {
+      panel.classList.remove('rk-stage-detail-open');
+      void panel.offsetWidth;
+      panel.classList.add('rk-stage-detail-open');
+      panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
   }
 
   // ── BCE v10: Open MITRE ATT&CK technique page ─────────────────
@@ -7930,23 +10688,47 @@
   //  STATS & REALTIME
   // ════════════════════════════════════════════════════════════════
   function _updateStats(result) {
+    // Flash stat cards when values change
+    function _flashStat(id) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const stat = el.closest('.rk-stat');
+      if (stat) { stat.classList.remove('flashed'); void stat.offsetWidth; stat.classList.add('flashed'); }
+      el.classList.remove('updated'); void el.offsetWidth; el.classList.add('updated');
+    }
+    const setAnimated = (id, newVal) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const old = el.textContent;
+      el.textContent = newVal;
+      if (old !== String(newVal)) {
+        el.classList.remove('updated');
+        void el.offsetWidth; // reflow
+        el.classList.add('updated');
+      }
+    };
+    setAnimated('rk-s-events',    (result.processed||0).toLocaleString());
+    setAnimated('rk-s-dets',      S.detections.length.toLocaleString());
+    setAnimated('rk-s-anom',      S.anomalies.length.toLocaleString());
+    setAnimated('rk-s-chains',    S.chains.length.toLocaleString());
+    setAnimated('rk-s-incidents', (S.incidents||[]).length.toLocaleString());
+    setAnimated('rk-s-risk',      S.riskScore || '—');
+    // Flash stat card backgrounds on update
+    ['rk-s-events','rk-s-dets','rk-s-anom','rk-s-chains','rk-s-incidents','rk-s-risk'].forEach(_flashStat);
     const set = (id, v) => { const el=document.getElementById(id); if(el) el.textContent=v; };
-    set('rk-s-events',    (result.processed||0).toLocaleString());
-    set('rk-s-dets',      S.detections.length.toLocaleString());
-    set('rk-s-anom',      S.anomalies.length.toLocaleString());
-    set('rk-s-chains',    S.chains.length.toLocaleString());
-    set('rk-s-incidents', (S.incidents||[]).length.toLocaleString());
-    set('rk-s-risk',      S.riskScore || '—');
     set('rk-last-upd',    S.lastUpdated?.toLocaleTimeString() || '—');
     set('rk-session-id',  S.sessionId ? S.sessionId.slice(0,8)+'…' : '—');
 
     const badge = document.getElementById('rk-risk-badge');
     if (badge) {
       const r = S.riskScore;
-      const col = r>=80?'#ef4444': r>=60?'#f97316': r>=40?'#eab308': r>0?'#22c55e':'#6b7280';
-      badge.style.color = col;
-      badge.style.borderColor = col;
-      badge.textContent = `Risk Score: ${r||'—'}`;
+      badge.className = 'rk-risk-badge'; // reset
+      if      (r >= 80) { badge.style.color='#ef4444'; badge.style.borderColor='rgba(239,68,68,0.45)'; badge.style.background='rgba(239,68,68,0.10)'; badge.className += ' risk-critical'; }
+      else if (r >= 60) { badge.style.color='#f97316'; badge.style.borderColor='rgba(249,115,22,0.45)'; badge.style.background='rgba(249,115,22,0.10)'; badge.className += ' risk-high'; }
+      else if (r >= 40) { badge.style.color='#eab308'; badge.style.borderColor='rgba(234,179,8,0.40)';  badge.style.background='rgba(234,179,8,0.08)';  badge.className += ' risk-medium'; }
+      else if (r > 0)   { badge.style.color='#22c55e'; badge.style.borderColor='rgba(34,197,94,0.35)';  badge.style.background='rgba(34,197,94,0.08)';  badge.className += ' risk-low'; }
+      else              { badge.style.color='#6b7280'; badge.style.borderColor='rgba(107,114,128,0.20)'; badge.style.background='rgba(107,114,128,0.06)'; }
+      badge.innerHTML = `RISK: <span id="rk-risk-badge-val" style="font-size:13px;font-weight:900;">${r||'—'}</span>`;
     }
   }
 
@@ -8005,40 +10787,68 @@
   //  HELPERS
   // ════════════════════════════════════════════════════════════════
   function _riskColor(score) {
-    return score >= 80 ? '#ef4444' : score >= 60 ? '#f97316' : score >= 40 ? '#eab308' : '#22c55e';
+    if (score >= 80) return '#ef4444';
+    if (score >= 60) return '#f97316';
+    if (score >= 40) return '#eab308';
+    if (score > 0)   return '#22c55e';
+    return '#2d4a5a';
+  }
+
+  function _riskClass(score) {
+    if (score >= 80) return 'rk-risk-critical';
+    if (score >= 60) return 'rk-risk-high';
+    if (score >= 40) return 'rk-risk-medium';
+    if (score > 0)   return 'rk-risk-low';
+    return 'rk-risk-clean';
   }
 
   function _spinner(msg='Processing…') {
-    return `<div style="text-align:center;padding:30px;color:#8b949e;">
-  <div class="rk-spinner" style="margin-bottom:12px;"></div>
-  <div style="font-size:13px;">${msg}</div>
+    return `<div style="text-align:center;padding:50px;color:#2d4a5a;">
+  <div style="position:relative;width:44px;height:44px;margin:0 auto 16px;">
+    <!-- Outer ring -->
+    <div style="position:absolute;inset:0;border-radius:50%;
+      border:2px solid rgba(0,212,255,0.08);border-top-color:#00d4ff;
+      animation:rk3-spin 0.8s linear infinite;
+      box-shadow:0 0 20px rgba(0,212,255,0.25);"></div>
+    <!-- Inner ring (reverse) -->
+    <div style="position:absolute;inset:8px;border-radius:50%;
+      border:1.5px solid rgba(0,212,255,0.06);border-bottom-color:rgba(0,212,255,0.4);
+      animation:rk3-spin-reverse 1.2s linear infinite;"></div>
+    <!-- Center dot -->
+    <div style="position:absolute;inset:17px;border-radius:50%;
+      background:rgba(0,212,255,0.6);
+      box-shadow:0 0 8px rgba(0,212,255,0.8);
+      animation:rk3-glow-pulse 1s ease-in-out infinite;"></div>
+  </div>
+  <div style="font-size:11px;font-family:'JetBrains Mono',monospace;
+    letter-spacing:1px;color:#1d3d50;animation:rk3-blink 1.2s step-end infinite;">${msg}</div>
 </div>`;
   }
 
   function _updateWSBadge() {
-    const dot = document.getElementById('rk-ws-dot');
-    const lbl = document.getElementById('rk-ws-lbl');
-    if (dot) dot.style.background = S.wsConnected ? '#34d399' : '#374151';
-    if (lbl) lbl.textContent      = S.wsConnected ? 'Live' : 'Offline';
+    const dot   = document.getElementById('rk-ws-dot');
+    const lbl   = document.getElementById('rk-ws-lbl');
+    const badge = document.getElementById('rk-ws-badge');
+    if (dot)   dot.style.background  = S.wsConnected ? '#34d399' : '#1a3040';
+    if (dot && S.wsConnected) { dot.style.boxShadow = '0 0 8px rgba(52,211,153,0.8)'; dot.style.animation = 'rk-pulse 2s ease-in-out infinite'; }
+    if (lbl)   lbl.textContent       = S.wsConnected ? 'Live' : 'Offline';
+    if (badge) badge.className       = 'rk-ws-badge' + (S.wsConnected ? ' connected' : '');
   }
 
   function _showToast(msg, type='info') {
     const root = document.getElementById('rk-toast-root');
     if (!root) return;
-    const colors = { success:'#34d399', error:'#ef4444', warning:'#f59e0b', info:'#60a5fa' };
-    const toast  = document.createElement('div');
-    toast.style.cssText = `
-      padding:10px 16px;border-radius:8px;font-size:12px;font-weight:500;
-      background:#161b22;color:#e6edf3;border-left:3px solid ${colors[type]||colors.info};
-      box-shadow:0 4px 20px rgba(0,0,0,.5);max-width:320px;
-      animation:rk-slidein .25s ease;
-    `;
-    const s = document.createElement('style');
-    s.textContent = '@keyframes rk-slidein{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}';
-    document.head.appendChild(s);
-    toast.textContent = msg;
+    const icons    = { success:'✓', error:'✗', warning:'⚠', info:'ℹ' };
+    const classes  = { success:'rk-toast-success', error:'rk-toast-error', warning:'rk-toast-warning', info:'rk-toast-info' };
+    const toast    = document.createElement('div');
+    toast.className = `rk-toast ${classes[type] || classes.info}`;
+    toast.style.pointerEvents = 'all';
+    toast.innerHTML = `<span style="font-size:14px;flex-shrink:0;">${icons[type]||'ℹ'}</span><span>${msg}</span>`;
     root.appendChild(toast);
-    setTimeout(() => toast.remove(), 4500);
+    setTimeout(() => {
+      toast.classList.add('fade-out');
+      setTimeout(() => toast.remove(), 320);
+    }, 4500);
   }
 
   function _attachEvents() {
