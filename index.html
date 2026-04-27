@@ -935,6 +935,8 @@
 <script src="js/data.js"></script>
 <script src="js/api-client.js"></script>
 <script src="js/auth-persistent.js"></script>
+<!-- StateSync — must load BEFORE auth-interceptor -->
+<script src="js/state-sync.js"></script>
 <!-- v5.2 Centralized Auth Interceptor — must load AFTER api-client + auth-persistent -->
 <script src="js/auth-interceptor.js"></script>
 <!-- v5.3 Auth Validator — centralized authFetch(), API health check, 401 banner -->

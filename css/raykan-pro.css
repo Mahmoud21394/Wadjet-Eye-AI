@@ -647,3 +647,62 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ─── ZDFA — Zero-Failure Detection Architecture ───────────────────────── */
+.rk-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.rk-grid-3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+}
+
+.zdfa-stage-score {
+  font-size: 14px;
+  font-weight: 800;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.zdfa-stage-bar {
+  height: 3px;
+  border-radius: 2px;
+  transition: width 0.4s ease, background 0.4s ease;
+}
+
+.zdfa-stage-bar-track {
+  height: 3px;
+  background: #1f2937;
+  border-radius: 2px;
+  margin-top: 4px;
+  overflow: hidden;
+}
+
+/* Responsive grid collapse on smaller screens */
+@media (max-width: 1024px) {
+  .rk-grid-2 { grid-template-columns: 1fr; }
+  .rk-grid-3 { grid-template-columns: 1fr; }
+  #zdfa-detail-grid { grid-template-columns: 1fr !important; }
+}
+
+/* ─── ZDFA Stage Card ────────────────────────────────────────────────────── */
+.zdfa-stage-card {
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.02);
+  border-radius: 7px;
+  border: 1px solid #21262d;
+  transition: border-color 0.3s ease;
+}
+
+.zdfa-stage-card:hover {
+  border-color: rgba(56, 189, 248, 0.2);
+}
+
+/* Pipeline integrity failure color for score arc animation */
+@keyframes zdfa-pulse-critical {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
