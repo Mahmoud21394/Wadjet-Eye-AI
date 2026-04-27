@@ -706,3 +706,218 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   ZDFA v2.0 — Pipeline Integrity Intelligence UI Styles
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* v2 Card Base */
+.zdfa-v2-card {
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 8px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.zdfa-v2-card:hover {
+  border-color: rgba(139, 148, 158, 0.3);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+}
+
+/* v2 Section Label */
+.zdfa-v2-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #21262d;
+}
+
+/* Integrity Score Ring animation */
+@keyframes zdfa-integrity-spin {
+  from { transform: rotate(-90deg); }
+  to   { transform: rotate(270deg); }
+}
+.zdfa-integrity-ring {
+  animation: none;
+  transition: background 0.8s ease;
+}
+
+/* Schema heatmap bars */
+.zdfa-heatmap-bar {
+  height: 14px;
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+.zdfa-heatmap-bar.critical { background: #ef4444; }
+.zdfa-heatmap-bar.high     { background: #f97316; }
+.zdfa-heatmap-bar.medium   { background: #f59e0b; }
+.zdfa-heatmap-bar.ok       { background: #22c55e; }
+
+/* Detection coverage progress bar */
+.zdfa-coverage-bar {
+  height: 6px;
+  border-radius: 3px;
+  transition: width 0.6s ease;
+}
+.zdfa-coverage-bar.critical { background: #ef4444; }
+.zdfa-coverage-bar.warning  { background: #f59e0b; }
+.zdfa-coverage-bar.good     { background: #22c55e; }
+
+/* Orphan event cards */
+.zdfa-orphan-event {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  background: rgba(239, 68, 68, 0.07);
+  border-radius: 5px;
+  margin-bottom: 4px;
+  border-left: 2px solid #ef4444;
+  transition: background 0.15s;
+}
+.zdfa-orphan-event:hover {
+  background: rgba(239, 68, 68, 0.13);
+}
+
+/* Detection failure explainability cards */
+.zdfa-explain-card {
+  padding: 8px;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  background: rgba(239, 68, 68, 0.04);
+  transition: border-color 0.15s;
+}
+.zdfa-explain-card:hover {
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+/* Event-to-rule trace grid */
+.zdfa-trace-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 5px;
+}
+.zdfa-trace-item.detected {
+  background: rgba(34, 197, 94, 0.07);
+  border: 1px solid rgba(34, 197, 94, 0.2);
+}
+.zdfa-trace-item.missed {
+  background: rgba(239, 68, 68, 0.07);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+/* MITRE blind-spot map */
+.zdfa-blindspot-tactic {
+  padding: 8px;
+  border-radius: 6px;
+  margin-bottom: 5px;
+  transition: opacity 0.2s;
+}
+.zdfa-blindspot-tactic.blind  { border-color: rgba(239, 68, 68, 0.2); }
+.zdfa-blindspot-tactic.partial { border-color: rgba(245, 158, 11, 0.2); }
+.zdfa-blindspot-tactic.full   { border-color: rgba(34, 197, 94, 0.2); }
+
+/* Rule health status chips */
+.zdfa-rule-status-chip {
+  display: inline-block;
+  font-size: 8px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.zdfa-rule-status-chip.healthy  { background: rgba(34, 197, 94, 0.2);  color: #4ade80; }
+.zdfa-rule-status-chip.warning  { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+.zdfa-rule-status-chip.degraded { background: rgba(249, 115, 22, 0.2); color: #fb923c; }
+.zdfa-rule-status-chip.silent   { background: rgba(239, 68, 68, 0.2);  color: #fca5a5; }
+
+/* Remediation audit log items */
+.zdfa-remed-item {
+  padding: 8px;
+  border-radius: 6px;
+  margin-bottom: 5px;
+}
+.zdfa-remed-item.automated {
+  background: rgba(96, 165, 250, 0.06);
+  border: 1px solid rgba(96, 165, 250, 0.15);
+}
+.zdfa-remed-item.manual {
+  background: rgba(245, 158, 11, 0.06);
+  border: 1px solid rgba(245, 158, 11, 0.15);
+}
+.zdfa-remed-item.critical {
+  background: rgba(239, 68, 68, 0.06);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+/* Sigma rule preview */
+.zdfa-sigma-preview {
+  margin-top: 4px;
+  padding: 6px;
+  background: #010409;
+  border-radius: 4px;
+  overflow: auto;
+  font-size: 8px;
+  color: #c9d1d9;
+  white-space: pre-wrap;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  max-height: 160px;
+}
+
+/* Root cause breakdown */
+.zdfa-root-cause {
+  padding: 8px;
+  background: rgba(239, 68, 68, 0.08);
+  border-radius: 6px;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  margin-top: 10px;
+}
+
+/* Integrity factor bar animation */
+.zdfa-factor-bar {
+  height: 5px;
+  border-radius: 3px;
+  transition: width 0.6s ease;
+}
+
+/* Section divider */
+.zdfa-v2-divider {
+  border: none;
+  border-top: 1px solid #21262d;
+  margin: 12px 0;
+}
+
+/* Auto-run indicator */
+.zdfa-auto-run-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  color: #8b949e;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.2);
+}
+
+/* Responsive grid adjustments for v2 panels */
+@media (max-width: 768px) {
+  .zdfa-v2-card {
+    grid-column: 1 / -1;
+  }
+  .zdfa-trace-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Pulse animation for new alerts */
+@keyframes zdfa-v2-alert-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+  50%       { box-shadow: 0 0 0 4px rgba(239, 68, 68, 0); }
+}
+.zdfa-alert-pulse {
+  animation: zdfa-v2-alert-pulse 2s ease-in-out infinite;
+}
