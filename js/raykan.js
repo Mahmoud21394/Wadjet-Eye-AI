@@ -7383,20 +7383,27 @@
     <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
 
       <!-- Session ID — monospace, very subtle -->
-      <span style="font-size:9px;color:var(--soc-text-4,#293A50);font-family:'JetBrains Mono',monospace;letter-spacing:0.3px;">
-        SID·<span id="rk-session-id" style="color:var(--soc-text-3,#4A6080);">—</span>
+      <span style="font-size:9px;color:var(--pro-text-4,#2D3F55);font-family:'JetBrains Mono',monospace;letter-spacing:0.3px;">
+        SID·<span id="rk-session-id" style="color:var(--pro-text-3,#475569);">—</span>
       </span>
 
       <!-- Risk badge -->
-      <div id="rk-risk-badge" style="font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;
-        padding:3px 10px;border-radius:5px;background:rgba(107,114,128,0.10);
-        color:var(--soc-text-3,#4A6080);border:1px solid rgba(107,114,128,0.14);letter-spacing:0.4px;">
+      <div id="rk-risk-badge">
         RISK·<span id="rk-risk-badge-val">—</span>
       </div>
 
+      <!-- Focus Mode toggle -->
+      <button class="rk-focus-btn" id="rk-focus-btn" onclick="RAYKAN_UI.toggleFocusMode()" title="Focus Mode: hide noise panels">
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="8" cy="8" r="5"/><circle cx="8" cy="8" r="1.5" fill="currentColor" stroke="none"/>
+          <line x1="8" y1="1" x2="8" y2="3"/><line x1="8" y1="13" x2="8" y2="15"/>
+          <line x1="1" y1="8" x2="3" y2="8"/><line x1="13" y1="8" x2="15" y2="8"/>
+        </svg>
+        Focus
+      </button>
+
       <!-- Export -->
-      <button class="rk-hdr-btn rk-hdr-btn-ghost" onclick="RAYKAN_UI.exportResults()" title="Export results as JSON"
-        style="display:inline-flex;align-items:center;gap:4px;">
+      <button class="rk-hdr-btn rk-hdr-btn-ghost" onclick="RAYKAN_UI.exportResults()" title="Export results as JSON">
         <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <path d="M8 2v9M4 7l4 4 4-4M2 13h12"/>
         </svg>
@@ -7404,8 +7411,7 @@
       </button>
 
       <!-- Demo -->
-      <button class="rk-hdr-btn rk-hdr-btn-demo" onclick="RAYKAN_UI.runSample('ransomware')"
-        style="display:inline-flex;align-items:center;gap:4px;">
+      <button class="rk-hdr-btn rk-hdr-btn-demo" onclick="RAYKAN_UI.runSample('ransomware')">
         <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polygon points="4,2 14,8 4,14"/>
         </svg>
@@ -7637,7 +7643,7 @@
   </div>
 
   <!-- Sub-engine status grid -->
-  <div class="rk-grid-3" style="margin-bottom:16px;" id="rk-engine-cards">
+  <div class="rk-grid-3 soc-noise-panel rk-engine-cards" style="margin-bottom:16px;" id="rk-engine-cards">
     ${_engineCard('⚙️ Sigma Engine',   'rk-sigma-rules',  '#34d399', 'Rules loaded')}
     ${_engineCard('🤖 AI Detector',    'rk-ai-prov',      '#60a5fa', 'Provider')}
     ${_engineCard('👥 UEBA Engine',    'rk-ueba-prof',    '#f59e0b', 'Profiles')}
@@ -7662,21 +7668,14 @@
   }
 
   function _engineCard(label, id, color, sub) {
-    return `<div class="rk-card" style="padding:16px;position:relative;overflow:hidden;">
-  <!-- Side accent bar -->
-  <div style="position:absolute;top:0;left:0;width:3px;height:100%;
-    background:linear-gradient(180deg,${color},${color}44);opacity:0.7;"></div>
-  <div style="font-size:10px;font-weight:700;color:${color};margin-bottom:10px;
-    text-transform:uppercase;letter-spacing:1px;
-    font-family:'JetBrains Mono',monospace;
-    text-shadow:0 0 8px ${color}66;">${label}</div>
-  <div class="rk-stat-val" id="${id}" style="font-size:24px;color:#e2e8f0;
-    font-family:'JetBrains Mono',monospace;line-height:1;
-    filter:drop-shadow(0 0 6px ${color}44);">—</div>
-  <div class="rk-stat-lbl" style="margin-top:5px;">${sub}</div>
-  <!-- Bottom glow line -->
-  <div style="position:absolute;bottom:0;left:0;right:0;height:1px;
-    background:linear-gradient(90deg,transparent,${color}44,transparent);"></div>
+    return `<div class="rk-engine-card" style="position:relative;overflow:hidden;">
+  <!-- Left accent bar -->
+  <div style="position:absolute;top:0;left:0;width:2px;height:100%;background:${color};opacity:0.5;"></div>
+  <div style="font-size:9px;font-weight:700;color:${color};margin-bottom:8px;
+    text-transform:uppercase;letter-spacing:1px;font-family:'JetBrains Mono',monospace;
+    padding-left:6px;">${label}</div>
+  <div class="rk-engine-card-val" id="${id}" style="color:${color};padding-left:6px;">—</div>
+  <div class="rk-engine-card-lbl" style="padding-left:6px;">${sub}</div>
 </div>`;
   }
 
@@ -8415,14 +8414,16 @@
   function _buildStageDetail(stage, si, incId) {
     const tactic   = (stage.tactic || 'unknown').toLowerCase().replace(/\s+/g,'-');
     const nodeColor= TACTIC_NODE_COLOR[tactic] || '#374151';
+    const isInf = stage.inferred;
     return `<div id="rk-stage-${incId}-${si}"
-      style="display:none;padding:10px 14px;background:rgba(13,17,23,0.9);
-             border-radius:8px;border:1px solid ${nodeColor}44;margin-bottom:6px;">
+      style="display:none;padding:10px 14px;background:rgba(13,18,25,0.92);
+             border-radius:10px;border:1px solid ${nodeColor}${isInf ? '33' : '55'};margin-bottom:6px;
+             ${isInf ? 'border-style:dashed;opacity:0.88;' : ''}">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
         ${_sevBadge(stage.severity||'medium')}
         <span style="font-size:12px;color:#e6edf3;font-weight:600;">${stage.ruleName||stage.technique||`Stage ${si+1}`}</span>
         ${stage.ruleId ? `<span style="font-size:10px;font-family:monospace;color:#4b5563;">${stage.ruleId}</span>` : ''}
-        ${stage.inferred ? `<span style="font-size:9px;padding:1px 6px;background:rgba(107,114,128,0.2);color:#6b7280;border-radius:4px;font-style:italic;">⚙ Inferred (${stage.inferredConfidence||stage.confidence}% confidence)</span>` : ''}
+        ${isInf ? `<span class="rk-badge-inferred">⚙ Inferred · ${stage.inferredConfidence||stage.confidence}% conf</span>` : `<span class="rk-badge-confirmed">✓ Observed</span>`}
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:#8b949e;margin-bottom:6px;">
         ${stage.technique ? `<span style="color:#a78bfa;font-family:monospace;font-weight:600;">${stage.technique}</span>` : ''}
@@ -9759,11 +9760,11 @@
     const riskColor = c.riskScore >= 80 ? '#EF4444' : c.riskScore >= 60 ? '#F97316' : '#A78BFA';
     const riskClass = c.riskScore >= 80 ? 'critical' : c.riskScore >= 60 ? 'high' : c.riskScore >= 40 ? 'medium' : 'low';
     return `
-<div class="rk-chain-preview" style="margin-bottom:8px;">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-    <div style="font-size:11px;font-weight:700;color:#A78BFA;letter-spacing:0.3px;">
-      ⛓ <span style="color:#E8EDF5;">${c.name || c.type || 'Attack Chain'}</span>
-      <span style="color:#4A6080;font-weight:400;"> · ${stages.length} stage${stages.length!==1?'s':''}</span>
+<div class="rk-chain-preview-card" style="margin-bottom:8px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+    <div style="font-size:11px;font-weight:700;color:var(--soc-purple,#A78BFA);letter-spacing:0.3px;">
+      ⛓ <span style="color:var(--soc-text-1,#E8EDF5);">${c.name || c.type || 'Attack Chain'}</span>
+      <span style="color:var(--soc-text-3,#4A6080);font-weight:400;font-size:10px;"> · ${stages.length} stage${stages.length!==1?'s':''}</span>
     </div>
     ${c.riskScore ? `<span class="soc-risk-badge ${riskClass}" style="font-size:10px;">RISK ${c.riskScore}</span>` : ''}
   </div>
@@ -10681,7 +10682,16 @@
   // ════════════════════════════════════════════════════════════════
   //  EXPORT
   // ════════════════════════════════════════════════════════════════
-  function exportResults() {
+  function toggleFocusMode() {
+    const root = document.getElementById('rk-root');
+    const btn  = document.getElementById('rk-focus-btn');
+    if (!root) return;
+    const active = root.classList.toggle('focus-mode');
+    if (btn) btn.classList.toggle('active', active);
+    _showToast(active ? 'Focus Mode: noise panels hidden' : 'Focus Mode: all panels visible', 'info');
+  }
+
+    function exportResults() {
     const data = {
       session    : S.sessionId,
       riskScore  : S.riskScore,
@@ -10922,6 +10932,7 @@
     generateRule,
     ingestPasted,
     exportResults,
+    toggleFocusMode,
     _setTab,
     _setHuntMode,
     _filterDetections,
