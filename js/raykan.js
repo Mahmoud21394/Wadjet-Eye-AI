@@ -195,6 +195,10 @@
     huntMode     : 'rql',    // 'rql' | 'nl'
     investigateEntity: null,
     uploadedEvents: [],
+    // ── GES: Graph Entity Store live reference ─────────────────
+    // After any analysis, GES is populated via _gesIngestResult().
+    // Hunting modules query GES instead of raw S.detections.
+    graphStore   : null,   // set to GES.getStats() after each ingest
   };
 
   // ── WebSocket ─────────────────────────────────────────────────
@@ -9089,6 +9093,915 @@ return {
   })(); // end ZDFA
 
 
+  // ══════════════════════════════════════════════════════════════════════════════
+  //  GRAPH ENTITY STORE (GES) v1.0
+  //  Detection → Entity Normalization → Graph Store Pipeline
+  //  ─────────────────────────────────────────────────────────────────────────
+  //  Architecture:
+  //    Detection fired
+  //      └─► normalizeDetection()        — extract canonical entities from any log source
+  //            └─► GraphEntityStore.ingest()  — persist entity nodes + relationships
+  //                  └─► relationship stitching — same user/IP/process across hosts
+  //                        └─► entity correlation — deduplicate detection explosion
+  //
+  //  All hunting modules (Timeline, Incidents, Attack Chain, Investigation graph,
+  //  UEBA, Alert linker) query GES instead of raw S.detections.
+  //
+  //  Source-agnostic: Windows, Sysmon, Linux, Firewall, EDR, future log types.
+  //  Non-breaking: detection rules and ingest pipeline unchanged.
+  //  Extensible: add new entity types / relationships without schema migration.
+  // ══════════════════════════════════════════════════════════════════════════════
+  const GES = (() => {
+
+    // ── Version ────────────────────────────────────────────────────
+    const VERSION = 'GES-1.0';
+
+    // ── In-memory Graph Store ──────────────────────────────────────
+    // Collections mirror a proper graph DB (nodes + edges + index)
+    const _store = {
+      // Primary collection: one record per normalized detection
+      records     : [],   // Array<GraphRecord>
+      // Entity node index: entity_key → EntityNode
+      nodes       : new Map(),
+      // Relationship edges: Set of "fromKey|relType|toKey" (deduplicated)
+      edges       : new Set(),
+      // Structured edge list for graph rendering
+      edgeList    : [],
+      // Lookup indexes
+      byDetId     : new Map(),   // detection_id → GraphRecord
+      byUser      : new Map(),   // user → GraphRecord[]
+      byHost      : new Map(),   // host → GraphRecord[]
+      byIp        : new Map(),   // ip   → GraphRecord[]
+      byProcess   : new Map(),   // process → GraphRecord[]
+      byRuleId    : new Map(),   // rule_id → GraphRecord[]
+      byMitreTactic: new Map(),  // tactic → GraphRecord[]
+      byMitreTech  : new Map(),  // technique → GraphRecord[]
+      // Session state
+      lastMigrated: null,
+      totalIngested: 0,
+    };
+
+    // ── Entity Correlation Map ─────────────────────────────────────
+    // Tracks which entity keys have been seen across which detection IDs
+    // Used to cluster detections into correlated groups (deduplicate explosion)
+    const _entityCorrelation = new Map(); // entityKey → Set<detectionId>
+
+    // ── Relationship types ─────────────────────────────────────────
+    const REL = {
+      USER_ON_HOST        : 'user_on_host',
+      USER_FROM_IP        : 'user_from_ip',
+      HOST_COMMUNICATED   : 'host_communicated',
+      PROCESS_ON_HOST     : 'process_on_host',
+      PROCESS_SPAWNED_BY  : 'process_spawned_by',
+      USER_RAN_PROCESS    : 'user_ran_process',
+      IP_CONNECTED_TO     : 'ip_connected_to',
+      LOGON_SESSION       : 'logon_session',
+      MITRE_STAGE_FOLLOWS : 'mitre_stage_follows',
+      DETECTION_LINKED    : 'detection_linked',
+    };
+
+    // ── Log source field mappings ──────────────────────────────────
+    // Source-agnostic: maps any log format → canonical entity fields
+    const LOG_SOURCE_MAPS = {
+      windows: {
+        user        : ['user','SubjectUserName','TargetUserName','User','username'],
+        host        : ['computer','Computer','ComputerName','hostname','host'],
+        source_ip   : ['srcIp','SourceIP','SourceIPAddress','src_ip','IpAddress'],
+        dest_ip     : ['destIp','DestinationIp','DestinationAddress','dest_ip'],
+        process     : ['process','NewProcessName','ProcessName','Image'],
+        parent_proc : ['parentProcess','ParentProcessName','ParentImage','ParentProcess'],
+        logon_type  : ['LogonType','logonType','logon_type'],
+        event_id    : ['EventID','eventId','event_id'],
+        timestamp   : ['timestamp','TimeGenerated','TimeCreated','EventTime'],
+        cmd_line    : ['commandLine','CommandLine','cmdLine','ProcessCmdLine'],
+      },
+      sysmon: {
+        user        : ['user','User'],
+        host        : ['computer','Computer','hostname'],
+        source_ip   : ['srcIp','SourceIp','src_ip'],
+        dest_ip     : ['destIp','DestinationIp','dest_ip'],
+        process     : ['process','Image','ProcessName'],
+        parent_proc : ['parentProcess','ParentImage','ParentProcessName'],
+        event_id    : ['EventID','eventId'],
+        timestamp   : ['timestamp','UtcTime','EventTime'],
+        cmd_line    : ['commandLine','CommandLine'],
+      },
+      linux: {
+        user        : ['user','username','sudo_user','USER'],
+        host        : ['computer','hostname','host','HOSTNAME'],
+        source_ip   : ['srcIp','src_ip','remote_ip','ADDR'],
+        dest_ip     : ['destIp','dest_ip','remote_addr'],
+        process     : ['process','exe','comm','COMMAND'],
+        parent_proc : ['parentProcess','parent_comm'],
+        event_id    : ['EventID','eventId','syscall'],
+        timestamp   : ['timestamp','time','date','ts'],
+        cmd_line    : ['commandLine','cmdLine','argv','COMMAND'],
+      },
+      firewall: {
+        user        : ['user','username'],
+        host        : ['computer','hostname','host','device'],
+        source_ip   : ['srcIp','src_ip','source_ip','SourceIP','src'],
+        dest_ip     : ['destIp','dest_ip','destination_ip','dst','DestinationIp'],
+        process     : ['process','application','app'],
+        parent_proc : ['parentProcess'],
+        event_id    : ['EventID','event_id','action'],
+        timestamp   : ['timestamp','time','date','ts'],
+        cmd_line    : ['commandLine'],
+      },
+      edr: {
+        user        : ['user','username','User'],
+        host        : ['computer','hostname','endpoint','device_name'],
+        source_ip   : ['srcIp','src_ip','source_ip'],
+        dest_ip     : ['destIp','dest_ip','destination_ip'],
+        process     : ['process','process_name','Process','Image'],
+        parent_proc : ['parentProcess','parent_process','ParentProcess'],
+        event_id    : ['EventID','event_id','event_type'],
+        timestamp   : ['timestamp','time','event_time'],
+        cmd_line    : ['commandLine','command_line','cmdline'],
+      },
+    };
+
+    // ── Detect log source type ─────────────────────────────────────
+    function _detectLogSource(det) {
+      const raw = det.evidence?.[0] || det.raw_detections?.[0] || det;
+      const eid = parseInt(raw.EventID || raw.eventId || raw.event_id, 10);
+      const logCat = det.logCategory || raw._logSource || raw.logCategory || '';
+      const title  = (det.title || det.ruleName || det.detection_name || '').toLowerCase();
+
+      if (logCat === 'windows' || (eid >= 4600 && eid <= 5000) || title.includes('windows')) return 'windows';
+      if (logCat === 'sysmon'  || (eid >= 1 && eid <= 30) || title.includes('sysmon'))  return 'sysmon';
+      if (logCat === 'linux'   || raw.syscall || title.includes('linux') || title.includes('unix') || title.includes('sudo')) return 'linux';
+      if (logCat === 'firewall'|| title.includes('firewall') || title.includes('network')) return 'firewall';
+      if (logCat === 'edr'     || title.includes('edr') || title.includes('endpoint')) return 'edr';
+      return 'windows'; // default — Windows is most common source
+    }
+
+    // ── Safe field extractor (source-agnostic) ─────────────────────
+    function _extract(obj, candidates) {
+      if (!obj) return '';
+      for (const key of candidates) {
+        const val = obj[key];
+        if (val !== undefined && val !== null && val !== '') return String(val).trim();
+      }
+      return '';
+    }
+
+    // ── Core: normalizeDetection() ─────────────────────────────────
+    // Extracts canonical entity set from any detection regardless of log source.
+    // Returns a GraphRecord — the atomic unit stored in GES.
+    function normalizeDetection(det) {
+      if (!det) return null;
+
+      const src = _detectLogSource(det);
+      const map = LOG_SOURCE_MAPS[src] || LOG_SOURCE_MAPS.windows;
+
+      // Combine all evidence sources for field extraction
+      const primary = det.evidence?.[0] || det.raw_detections?.[0] || det;
+      const allEvidence = [
+        det,
+        ...(det.evidence     || []),
+        ...(det.raw_detections || []),
+      ];
+
+      // Helper: extract from any of the evidence objects
+      const get = (field) => {
+        for (const obj of allEvidence) {
+          const val = _extract(obj, map[field] || [field]);
+          if (val) return val;
+        }
+        return '';
+      };
+
+      // ── Extract canonical entities ───────────────────────────────
+      const user          = get('user')       || det.user        || '';
+      const host          = get('host')       || det.computer    || det.host || '';
+      const source_ip     = get('source_ip')  || det.srcIp       || '';
+      const dest_ip       = get('dest_ip')    || det.destIp      || '';
+      const process_name  = get('process')    || det.process     || '';
+      const parent_process= get('parent_proc')|| det.parentProcess || '';
+      const logon_type    = get('logon_type') || '';
+      const event_id      = get('event_id')   || (det.evidence?.[0]?.EventID) || '';
+      const cmd_line      = get('cmd_line')   || det.commandLine || '';
+      const timestamp     = det.timestamp || det.first_seen || det.ts || new Date().toISOString();
+
+      // ── Extract MITRE stages ─────────────────────────────────────
+      const mitre_stages = [];
+      // From top-level mitre field
+      if (det.mitre?.tactic)     mitre_stages.push(det.mitre.tactic);
+      if (det.mitre?.technique)  mitre_stages.push(det.mitre.technique);
+      // From kill chain stages (incidentSummary format)
+      (det.killChainStages || []).forEach(s => {
+        if (s.tactic    && !mitre_stages.includes(s.tactic))     mitre_stages.push(s.tactic);
+        if (s.technique && !mitre_stages.includes(s.technique))  mitre_stages.push(s.technique);
+      });
+      // From techniques array
+      (det.techniques || []).forEach(t => {
+        if (t && !mitre_stages.includes(t)) mitre_stages.push(t);
+      });
+
+      // ── Build GraphRecord ────────────────────────────────────────
+      const record = {
+        // Identity
+        detection_id  : det.id || det.incidentId || det.attackChainId || `ges-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+        rule_id       : det.ruleId || det.rule_id || '',
+        rule_name     : det.detection_name || det.ruleName || det.title || '',
+        // Timestamp
+        timestamp,
+        first_seen    : det.first_seen || timestamp,
+        last_seen     : det.last_seen  || timestamp,
+        // Canonical entities (the core of GES)
+        entities: {
+          user,
+          host,
+          source_ip,
+          destination_ip: dest_ip,
+          logon_type,
+          process       : process_name,
+          parent_process,
+          event_id,
+          cmd_line,
+        },
+        // MITRE context
+        mitre: {
+          tactic    : det.mitre?.tactic    || det.mitreTactics?.[0] || '',
+          technique : det.mitre?.technique || det.techniques?.[0]   || '',
+          stages    : mitre_stages,
+          mappings  : det.mitreMappings    || [],
+        },
+        // Severity / scoring
+        severity   : det.severity || det.aggregated_severity || 'medium',
+        risk_score : det.riskScore || det.progressiveRisk || 0,
+        confidence : det.confidence || det.mitre_confidence || 'medium',
+        // Log source metadata
+        log_source : src,
+        log_category: det.logCategory || src,
+        // Raw event reference (pointer, not copy)
+        raw_event_ref: det,
+        // Relationship metadata (populated by stitching)
+        _relations: [],
+        // Entity keys (for index lookup)
+        _entityKeys: [],
+        // Correlation group (populated by entity correlation)
+        _correlationGroup: null,
+        // Schema version
+        _schema: 'GES-1.0',
+      };
+
+      // ── Compute entity keys (canonical lookup keys) ───────────────
+      if (user)         record._entityKeys.push(`user:${user.toLowerCase()}`);
+      if (host)         record._entityKeys.push(`host:${host.toLowerCase()}`);
+      if (source_ip)    record._entityKeys.push(`ip:${source_ip}`);
+      if (dest_ip)      record._entityKeys.push(`ip:${dest_ip}`);
+      if (process_name) record._entityKeys.push(`proc:${process_name.toLowerCase()}`);
+
+      return record;
+    }
+
+    // ── Node upsert helper ─────────────────────────────────────────
+    function _upsertNode(key, type, label, detectionId, timestamp, extraProps) {
+      if (!key) return;
+      if (_store.nodes.has(key)) {
+        const node = _store.nodes.get(key);
+        node.detectionIds.add(detectionId);
+        node.lastSeen = timestamp > node.lastSeen ? timestamp : node.lastSeen;
+        node.eventCount++;
+        if (extraProps) Object.assign(node, extraProps);
+      } else {
+        _store.nodes.set(key, {
+          key,
+          type,
+          label,
+          firstSeen   : timestamp,
+          lastSeen    : timestamp,
+          eventCount  : 1,
+          detectionIds: new Set([detectionId]),
+          ...extraProps,
+        });
+      }
+    }
+
+    // ── Edge creation helper ────────────────────────────────────────
+    function _addEdge(fromKey, relType, toKey, detectionId, meta) {
+      if (!fromKey || !toKey) return;
+      const edgeId = `${fromKey}|${relType}|${toKey}`;
+      if (!_store.edges.has(edgeId)) {
+        _store.edges.add(edgeId);
+        _store.edgeList.push({
+          id         : edgeId,
+          from       : fromKey,
+          to         : toKey,
+          type       : relType,
+          detectionId,
+          firstSeen  : meta?.timestamp || '',
+          count      : 1,
+          ...meta,
+        });
+      } else {
+        // Update existing edge
+        const existing = _store.edgeList.find(e => e.id === edgeId);
+        if (existing) {
+          existing.count++;
+          if (detectionId && !existing.detections) existing.detections = new Set();
+          if (detectionId) existing.detections?.add(detectionId);
+        }
+      }
+    }
+
+    // ── Core: ingest() — persist record + stitch relationships ─────
+    function ingest(record) {
+      if (!record) return;
+      const did = record.detection_id;
+      const ts  = record.timestamp;
+      const ents = record.entities;
+
+      // ── Persist record ────────────────────────────────────────────
+      _store.records.push(record);
+      _store.byDetId.set(did, record);
+      _store.totalIngested++;
+
+      // ── Index by entity ───────────────────────────────────────────
+      const idxPush = (map, key, rec) => {
+        if (!key) return;
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push(rec);
+      };
+      const uNorm = (ents.user     || '').toLowerCase();
+      const hNorm = (ents.host     || '').toLowerCase();
+      const pNorm = (ents.process  || '').toLowerCase();
+      idxPush(_store.byUser,    uNorm,            record);
+      idxPush(_store.byHost,    hNorm,            record);
+      idxPush(_store.byIp,      ents.source_ip,   record);
+      idxPush(_store.byIp,      ents.destination_ip, record);
+      idxPush(_store.byProcess, pNorm,            record);
+      idxPush(_store.byRuleId,  record.rule_id,   record);
+      (record.mitre.stages || []).forEach(s => {
+        if (!s) return;
+        const sk = s.startsWith('T') ? 'tech' : 'tactic';
+        if (sk === 'tactic') idxPush(_store.byMitreTactic, s, record);
+        else                 idxPush(_store.byMitreTech,   s, record);
+      });
+      if (record.mitre.tactic)    idxPush(_store.byMitreTactic, record.mitre.tactic,    record);
+      if (record.mitre.technique) idxPush(_store.byMitreTech,   record.mitre.technique, record);
+
+      // ── Upsert entity nodes ───────────────────────────────────────
+      if (ents.user)    _upsertNode(`user:${uNorm}`, 'user',    ents.user,    did, ts);
+      if (ents.host)    _upsertNode(`host:${hNorm}`, 'host',    ents.host,    did, ts);
+      if (ents.source_ip) _upsertNode(`ip:${ents.source_ip}`, 'ip', ents.source_ip, did, ts);
+      if (ents.destination_ip) _upsertNode(`ip:${ents.destination_ip}`, 'ip', ents.destination_ip, did, ts);
+      if (ents.process) _upsertNode(`proc:${pNorm}`, 'process', ents.process, did, ts, { host: ents.host, user: ents.user });
+      if (ents.parent_process) {
+        const ppNorm = ents.parent_process.toLowerCase();
+        _upsertNode(`proc:${ppNorm}`, 'process', ents.parent_process, did, ts, { host: ents.host });
+      }
+
+      // ── Relationship stitching ────────────────────────────────────
+      const uKey  = ents.user    ? `user:${uNorm}` : null;
+      const hKey  = ents.host    ? `host:${hNorm}` : null;
+      const sipKey= ents.source_ip ? `ip:${ents.source_ip}` : null;
+      const dipKey= ents.destination_ip ? `ip:${ents.destination_ip}` : null;
+      const pKey  = ents.process ? `proc:${pNorm}` : null;
+      const ppKey = ents.parent_process ? `proc:${ents.parent_process.toLowerCase()}` : null;
+
+      // user → host (user_on_host)
+      if (uKey && hKey) {
+        _addEdge(uKey, REL.USER_ON_HOST, hKey, did, { timestamp: ts, logon_type: ents.logon_type });
+      }
+      // user → ip (user_from_ip) — attacker IP
+      if (uKey && sipKey) {
+        _addEdge(sipKey, REL.USER_FROM_IP, uKey, did, { timestamp: ts });
+      }
+      // host → dest_ip (host_communicated)
+      if (hKey && dipKey) {
+        _addEdge(hKey, REL.HOST_COMMUNICATED, dipKey, did, { timestamp: ts });
+      }
+      // ip → host (ip_connected_to)
+      if (sipKey && hKey) {
+        _addEdge(sipKey, REL.IP_CONNECTED_TO, hKey, did, { timestamp: ts });
+      }
+      // process → host (process_on_host)
+      if (pKey && hKey) {
+        _addEdge(pKey, REL.PROCESS_ON_HOST, hKey, did, { timestamp: ts });
+      }
+      // parent → child process (process_spawned_by)
+      if (ppKey && pKey) {
+        _addEdge(ppKey, REL.PROCESS_SPAWNED_BY, pKey, did, { timestamp: ts });
+      }
+      // user → process (user_ran_process)
+      if (uKey && pKey) {
+        _addEdge(uKey, REL.USER_RAN_PROCESS, pKey, did, { timestamp: ts });
+      }
+      // MITRE stage progression (same entity, sequential tactics)
+      if (record.mitre.tactic && uKey) {
+        const tacKey = `tactic:${record.mitre.tactic}`;
+        _addEdge(uKey, REL.MITRE_STAGE_FOLLOWS, tacKey, did, { timestamp: ts, technique: record.mitre.technique });
+      }
+
+      // ── Entity Correlation ────────────────────────────────────────
+      // Track which detections share the same entities (for dedup)
+      record._entityKeys.forEach(ek => {
+        if (!_entityCorrelation.has(ek)) _entityCorrelation.set(ek, new Set());
+        _entityCorrelation.get(ek).add(did);
+      });
+
+      // ── Store relationship metadata on record ────────────────────
+      record._relations = _store.edgeList.filter(e =>
+        e.from.includes(uNorm) || e.to.includes(uNorm) ||
+        e.from.includes(hNorm) || e.to.includes(hNorm)
+      ).map(e => e.id);
+
+      return record;
+    }
+
+    // ── ingestBatch() — normalize + ingest an array of detections ──
+    function ingestBatch(detections) {
+      if (!Array.isArray(detections) || !detections.length) return 0;
+      let count = 0;
+      detections.forEach(det => {
+        try {
+          const record = normalizeDetection(det);
+          if (record) { ingest(record); count++; }
+        } catch (e) {
+          console.warn('[GES] normalizeDetection error:', e.message, det);
+        }
+      });
+      return count;
+    }
+
+    // ── Entity-based correlation ───────────────────────────────────
+    // Groups detections by shared entities to create correlation clusters.
+    // This is the key deduplication mechanism: 83 detections → ~20 clusters.
+    function buildCorrelationClusters() {
+      // Union-Find for entity-based clustering
+      const parent = new Map();
+      const allDetIds = _store.records.map(r => r.detection_id);
+      allDetIds.forEach(id => parent.set(id, id));
+
+      function find(id) {
+        if (parent.get(id) !== id) parent.set(id, find(parent.get(id)));
+        return parent.get(id);
+      }
+      function union(a, b) {
+        const ra = find(a), rb = find(b);
+        if (ra !== rb) parent.set(ra, rb);
+      }
+
+      // Union all detections that share at least one entity key
+      _entityCorrelation.forEach((detIds, _entityKey) => {
+        const arr = [...detIds];
+        for (let i = 1; i < arr.length; i++) {
+          // Only union if same user OR same host (not just same IP — IPs can be NAT)
+          const recA = _store.byDetId.get(arr[0]);
+          const recB = _store.byDetId.get(arr[i]);
+          if (!recA || !recB) continue;
+          const ekA = _entityKey;
+          // User-based union: same user across any hosts
+          if (ekA.startsWith('user:')) { union(arr[0], arr[i]); continue; }
+          // Host-based union: same host (same machine events)
+          if (ekA.startsWith('host:')) { union(arr[0], arr[i]); continue; }
+          // IP-based union: only union if the IP also shares a host or user
+          if (ekA.startsWith('ip:')) {
+            const sharedUser = recA.entities.user && recA.entities.user === recB.entities.user;
+            const sharedHost = recA.entities.host && recA.entities.host === recB.entities.host;
+            if (sharedUser || sharedHost) union(arr[0], arr[i]);
+          }
+        }
+      });
+
+      // Build clusters from union-find results
+      const clusters = new Map();
+      _store.records.forEach(rec => {
+        const root = find(rec.detection_id);
+        if (!clusters.has(root)) clusters.set(root, []);
+        clusters.get(root).push(rec);
+      });
+
+      // Tag each record with its correlation group
+      clusters.forEach((recs, root) => {
+        recs.forEach(r => { r._correlationGroup = root; });
+      });
+
+      return clusters;
+    }
+
+    // ── Timeline builder — queries GES ────────────────────────────
+    function buildTimeline(opts) {
+      opts = opts || {};
+      const { entityKey, user, host, ip, process: proc, limit } = opts;
+      let records = _store.records;
+
+      // Filter by entity if requested
+      if (entityKey) records = queryByEntityKey(entityKey);
+      else if (user) records = _store.byUser.get(user.toLowerCase()) || [];
+      else if (host) records = _store.byHost.get(host.toLowerCase()) || [];
+      else if (ip)   records = _store.byIp.get(ip) || [];
+      else if (proc) records = _store.byProcess.get(proc.toLowerCase()) || [];
+
+      // Sort chronologically
+      const sorted = [...records].sort((a, b) => {
+        const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+        const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+        return ta - tb;
+      });
+
+      const result = sorted.slice(0, limit || 1000).map(r => ({
+        ts             : r.timestamp,
+        timestamp      : r.timestamp,
+        detection_id   : r.detection_id,
+        rule_id        : r.rule_id,
+        rule_name      : r.rule_name,
+        type           : r.mitre.tactic || r.log_source || 'event',
+        description    : r.rule_name || `${r.log_source} detection`,
+        entity         : r.entities.user || r.entities.host || '',
+        user           : r.entities.user,
+        host           : r.entities.host,
+        srcIp          : r.entities.source_ip,
+        destIp         : r.entities.destination_ip,
+        process        : r.entities.process,
+        parent_process : r.entities.parent_process,
+        logon_type     : r.entities.logon_type,
+        mitre_tactic   : r.mitre.tactic,
+        mitre_technique: r.mitre.technique,
+        severity       : r.severity,
+        risk_score     : r.risk_score,
+        log_source     : r.log_source,
+        correlation_group: r._correlationGroup,
+        _gesRecord     : r,
+      }));
+
+      return result;
+    }
+
+    // ── Investigation graph builder — queries GES ─────────────────
+    // Returns nodes + edges for the Investigation Graph visualization
+    function buildInvestigationGraph(entityQuery, opts) {
+      opts = opts || {};
+      if (!entityQuery) return { nodes: [], edges: [], clusters: new Map() };
+
+      const query = entityQuery.toLowerCase();
+      // Find matching records
+      const matching = _store.records.filter(r =>
+        (r.entities.user     || '').toLowerCase().includes(query) ||
+        (r.entities.host     || '').toLowerCase().includes(query) ||
+        (r.entities.source_ip|| '').includes(query) ||
+        (r.entities.destination_ip || '').includes(query) ||
+        (r.entities.process  || '').toLowerCase().includes(query)
+      );
+
+      if (!matching.length) return { nodes: [], edges: [], clusters: new Map() };
+
+      // Collect all entity keys touched by matching records
+      const touchedKeys = new Set();
+      matching.forEach(r => r._entityKeys.forEach(k => touchedKeys.add(k)));
+
+      // Expand to all records that share any of those entity keys (1-hop expansion)
+      const expanded = new Set(matching.map(r => r.detection_id));
+      if (opts.expand !== false) {
+        touchedKeys.forEach(ek => {
+          (_entityCorrelation.get(ek) || new Set()).forEach(did => expanded.add(did));
+        });
+      }
+      const expandedRecords = [...expanded]
+        .map(did => _store.byDetId.get(did))
+        .filter(Boolean);
+
+      // Build graph nodes
+      const nodeMap = new Map();
+      expandedRecords.forEach(r => {
+        const addNode = (key, type, label, severity) => {
+          if (!key || !label) return;
+          if (!nodeMap.has(key)) {
+            const node = _store.nodes.get(key);
+            nodeMap.set(key, {
+              id      : key,
+              type,
+              label,
+              severity: severity || r.severity,
+              count   : node?.eventCount || 1,
+              detections: [...(node?.detectionIds || [r.detection_id])],
+              firstSeen : node?.firstSeen || r.timestamp,
+              lastSeen  : node?.lastSeen  || r.timestamp,
+            });
+          }
+        };
+        const { user, host, source_ip, destination_ip, process: proc } = r.entities;
+        if (user) addNode(`user:${user.toLowerCase()}`,  'user',    user,           r.severity);
+        if (host) addNode(`host:${host.toLowerCase()}`,  'host',    host,           r.severity);
+        if (source_ip) addNode(`ip:${source_ip}`,        'ip',      source_ip,      r.severity);
+        if (destination_ip) addNode(`ip:${destination_ip}`, 'ip',  destination_ip, r.severity);
+        if (proc) addNode(`proc:${proc.toLowerCase()}`,  'process', proc,           r.severity);
+      });
+
+      // Filter edges to only include nodes in the graph
+      const graphEdges = _store.edgeList.filter(e =>
+        nodeMap.has(e.from) && nodeMap.has(e.to)
+      );
+
+      // Build correlation clusters for this subgraph
+      const clusters = buildCorrelationClusters();
+
+      return {
+        nodes  : [...nodeMap.values()],
+        edges  : graphEdges,
+        clusters,
+        totalDetections: expandedRecords.length,
+        entityCount: nodeMap.size,
+      };
+    }
+
+    // ── UEBA baseline engine ─────────────────────────────────────
+    // Builds behavioral profiles from GES records (history-aware)
+    function buildUEBAProfiles() {
+      const profiles = { users: {}, hosts: {}, ips: {}, processes: {} };
+
+      // User profiles
+      _store.byUser.forEach((records, user) => {
+        if (!user) return;
+        const tactics    = new Set(records.map(r => r.mitre.tactic).filter(Boolean));
+        const techniques = new Set(records.map(r => r.mitre.technique).filter(Boolean));
+        const hosts      = new Set(records.map(r => r.entities.host).filter(Boolean));
+        const ips        = new Set(records.map(r => r.entities.source_ip).filter(Boolean));
+        const procs      = new Set(records.map(r => r.entities.process).filter(Boolean));
+        const riskScores = records.map(r => r.risk_score).filter(n => n > 0);
+        const avgRisk    = riskScores.length ? Math.round(riskScores.reduce((a, b) => a + b, 0) / riskScores.length) : 0;
+        const maxRisk    = riskScores.length ? Math.max(...riskScores) : 0;
+        profiles.users[user] = {
+          user, detectionCount: records.length,
+          tactics: [...tactics], techniques: [...techniques],
+          hosts: [...hosts], ips: [...ips], processes: [...procs],
+          avgRisk, maxRisk,
+          firstSeen : records[0]?.first_seen,
+          lastSeen  : records[records.length - 1]?.last_seen,
+          crossHost : hosts.size > 1,
+          logonTypes: [...new Set(records.map(r => r.entities.logon_type).filter(Boolean))],
+          riskLevel : maxRisk >= 80 ? 'critical' : maxRisk >= 60 ? 'high' : maxRisk >= 40 ? 'medium' : 'low',
+        };
+      });
+
+      // Host profiles
+      _store.byHost.forEach((records, host) => {
+        if (!host) return;
+        const users  = new Set(records.map(r => r.entities.user).filter(Boolean));
+        const ips    = new Set(records.map(r => r.entities.source_ip).filter(Boolean));
+        const procs  = new Set(records.map(r => r.entities.process).filter(Boolean));
+        const tactics= new Set(records.map(r => r.mitre.tactic).filter(Boolean));
+        const riskScores = records.map(r => r.risk_score).filter(n => n > 0);
+        const maxRisk    = riskScores.length ? Math.max(...riskScores) : 0;
+        profiles.hosts[host] = {
+          host, detectionCount: records.length,
+          users: [...users], ips: [...ips], processes: [...procs], tactics: [...tactics],
+          maxRisk,
+          firstSeen : records[0]?.first_seen,
+          lastSeen  : records[records.length - 1]?.last_seen,
+          multiUser : users.size > 1,
+          riskLevel : maxRisk >= 80 ? 'critical' : maxRisk >= 60 ? 'high' : maxRisk >= 40 ? 'medium' : 'low',
+        };
+      });
+
+      return profiles;
+    }
+
+    // ── Alert linker ──────────────────────────────────────────────
+    // Links alerts to entities and finds related detections
+    function linkAlerts(detectionId) {
+      const record = _store.byDetId.get(detectionId);
+      if (!record) return { linked: [], entityLinks: [] };
+
+      const linked = [];
+      const entityLinks = [];
+
+      // Find all detections sharing any entity with this one
+      record._entityKeys.forEach(ek => {
+        const relatedIds = _entityCorrelation.get(ek) || new Set();
+        relatedIds.forEach(rid => {
+          if (rid === detectionId) return;
+          const rel = _store.byDetId.get(rid);
+          if (!rel) return;
+          linked.push({
+            detection_id: rid,
+            rule_name   : rel.rule_name,
+            severity    : rel.severity,
+            timestamp   : rel.timestamp,
+            shared_entity: ek,
+            entities    : rel.entities,
+            mitre       : rel.mitre,
+          });
+          entityLinks.push({ entityKey: ek, detectionId: rid });
+        });
+      });
+
+      // Deduplicate by detection_id
+      const seen = new Set();
+      const uniqueLinked = linked.filter(l => {
+        if (seen.has(l.detection_id)) return false;
+        seen.add(l.detection_id); return true;
+      });
+
+      return { linked: uniqueLinked, entityLinks, record };
+    }
+
+    // ── Query helpers ─────────────────────────────────────────────
+    function queryByEntityKey(entityKey) {
+      const [type, val] = entityKey.split(':');
+      if (!val) return [];
+      switch (type) {
+        case 'user':   return _store.byUser.get(val)    || [];
+        case 'host':   return _store.byHost.get(val)    || [];
+        case 'ip':     return _store.byIp.get(val)      || [];
+        case 'proc':   return _store.byProcess.get(val) || [];
+        case 'rule':   return _store.byRuleId.get(val)  || [];
+        case 'tactic': return _store.byMitreTactic.get(val) || [];
+        case 'tech':   return _store.byMitreTech.get(val)   || [];
+        default:       return [];
+      }
+    }
+
+    function queryByMitreTactic(tactic) {
+      return _store.byMitreTactic.get(tactic) || [];
+    }
+
+    function queryByMitreTechnique(technique) {
+      return _store.byMitreTech.get(technique) || [];
+    }
+
+    function getAllNodes() {
+      return [..._store.nodes.values()];
+    }
+
+    function getAllEdges() {
+      return _store.edgeList;
+    }
+
+    function getStats() {
+      return {
+        totalRecords    : _store.records.length,
+        totalNodes      : _store.nodes.size,
+        totalEdges      : _store.edges.size,
+        totalIngested   : _store.totalIngested,
+        uniqueUsers     : _store.byUser.size,
+        uniqueHosts     : _store.byHost.size,
+        uniqueIPs       : _store.byIp.size,
+        uniqueProcesses : _store.byProcess.size,
+        uniqueRules     : _store.byRuleId.size,
+        entityCorrelationKeys: _entityCorrelation.size,
+        lastMigrated    : _store.lastMigrated,
+        version         : VERSION,
+      };
+    }
+
+    // ── Migration job: backfillGraphStore() ───────────────────────
+    // Processes existing S.detections + S.incidents → populates GES
+    // → rebuilds timeline/incidents/chains from graph store.
+    // Safe to call multiple times (idempotent for same detection IDs).
+    function backfillGraphStore(state) {
+      const S = state;
+      if (!S) return { migrated: 0, error: 'No state provided' };
+
+      const startTs = Date.now();
+      let count = 0;
+
+      // Prevent re-migrating already-ingested detections
+      const existingIds = new Set(_store.records.map(r => r.detection_id));
+
+      // ── 1. Ingest deduplicated detections ─────────────────────────
+      const dets = (S.detections || []).filter(d => !existingIds.has(d.id));
+      count += ingestBatch(dets);
+
+      // ── 2. Ingest incident summaries (richer entity data) ────────
+      const incs = (S.incidents || []).filter(i => !existingIds.has(i.id || i.incidentId));
+      incs.forEach(inc => {
+        // Ingest the incident as a record (it has full entity context)
+        const rec = normalizeDetection(inc);
+        if (rec && !existingIds.has(rec.detection_id)) {
+          ingest(rec);
+          count++;
+        }
+        // Also ingest each kill-chain stage as a linked detection
+        (inc.killChainStages || []).forEach((stage, si) => {
+          const stageRec = normalizeDetection({
+            id          : `${inc.id || inc.incidentId}-stage-${si}`,
+            ruleId      : stage.ruleId,
+            title       : stage.ruleName || stage.phase,
+            severity    : stage.severity,
+            timestamp   : stage.timestamp,
+            first_seen  : stage.first_seen,
+            last_seen   : stage.last_seen,
+            user        : stage.user || inc.user,
+            computer    : stage.host || inc.host,
+            srcIp       : stage.srcIp || (inc.allSrcIps || [])[0] || '',
+            process     : stage.process,
+            commandLine : stage.commandLine,
+            mitre       : { tactic: stage.tactic, technique: stage.technique, name: stage.techniqueName },
+            riskScore   : stage._riskScore || 0,
+            logCategory : 'windows',
+            evidence    : [],
+          });
+          if (stageRec && !existingIds.has(stageRec.detection_id)) {
+            ingest(stageRec); count++;
+          }
+        });
+      });
+
+      // ── 3. Ingest timeline entries ────────────────────────────────
+      const tlEntries = (S.timeline || []).filter(t => {
+        const tid = `ges-tl-${t.ts || t.timestamp}-${t.user || ''}-${t.host || ''}`;
+        return !existingIds.has(tid);
+      });
+      tlEntries.forEach(tl => {
+        if (!tl.user && !tl.computer && !tl.srcIp) return; // skip empty
+        const rec = normalizeDetection({
+          id         : `ges-tl-${tl.ts || tl.timestamp}-${tl.user || ''}-${tl.computer || ''}`,
+          title      : tl.description || tl.label || tl.type,
+          severity   : tl.severity || 'low',
+          timestamp  : tl.ts || tl.timestamp,
+          first_seen : tl.ts || tl.timestamp,
+          user       : tl.user,
+          computer   : tl.computer,
+          srcIp      : tl.srcIp,
+          destIp     : tl.destIp,
+          process    : tl.process,
+          commandLine: tl.commandLine,
+          ruleId     : tl.ruleId,
+          evidence   : [],
+          mitre      : {},
+        });
+        if (rec && !existingIds.has(rec.detection_id)) {
+          ingest(rec); count++;
+        }
+      });
+
+      // ── 4. Build correlation clusters ────────────────────────────
+      buildCorrelationClusters();
+
+      // ── 5. Update migrated timestamp ─────────────────────────────
+      _store.lastMigrated = new Date().toISOString();
+
+      const elapsed = Date.now() - startTs;
+      console.log(`[GES] backfillGraphStore: ingested ${count} records, ` +
+        `${_store.nodes.size} nodes, ${_store.edges.size} edges, ${elapsed}ms`);
+
+      return {
+        migrated    : count,
+        nodes       : _store.nodes.size,
+        edges       : _store.edges.size,
+        records     : _store.records.length,
+        elapsed_ms  : elapsed,
+        version     : VERSION,
+      };
+    }
+
+    // ── Reset (for testing / new session) ────────────────────────
+    function reset() {
+      _store.records.length = 0;
+      _store.nodes.clear();
+      _store.edges.clear();
+      _store.edgeList.length = 0;
+      _store.byDetId.clear();
+      _store.byUser.clear();
+      _store.byHost.clear();
+      _store.byIp.clear();
+      _store.byProcess.clear();
+      _store.byRuleId.clear();
+      _store.byMitreTactic.clear();
+      _store.byMitreTech.clear();
+      _entityCorrelation.clear();
+      _store.totalIngested = 0;
+      _store.lastMigrated  = null;
+    }
+
+    // ── Public API ────────────────────────────────────────────────
+    return {
+      VERSION,
+      // Core pipeline
+      normalizeDetection,
+      ingest,
+      ingestBatch,
+      backfillGraphStore,
+      reset,
+      // Correlation
+      buildCorrelationClusters,
+      linkAlerts,
+      // Hunting module queries
+      buildTimeline,
+      buildInvestigationGraph,
+      buildUEBAProfiles,
+      // Low-level queries
+      queryByEntityKey,
+      queryByMitreTactic,
+      queryByMitreTechnique,
+      getAllNodes,
+      getAllEdges,
+      getStats,
+      // Store access (read-only reference)
+      getStore      : () => _store,
+      getNodeMap    : () => _store.nodes,
+      getEdgeList   : () => _store.edgeList,
+      getRecords    : () => _store.records,
+      // Constants
+      REL,
+    };
+
+  })(); // end GES
+
 
   // ════════════════════════════════════════════════════════════════
   //  ENTRY POINT
@@ -10326,16 +11239,74 @@ return {
   function _afterTabRender(id) {
     if (id === 'overview')    { _renderOverviewContent(); }
     if (id === 'detections')  { _renderDetectionsList(S.detections); }
-    if (id === 'incidents')   { _renderIncidentsList(S.incidents); }
+    if (id === 'incidents')   { _renderIncidentsList(_gesGetIncidents()); }
     if (id === 'chains')      { _renderChainsList(S.chains); }
-    if (id === 'timeline')    { _renderTimelineList(S.timeline); }
-    if (id === 'anomalies')   { _renderAnomaliesList(S.anomalies); }
+    // ── GES: Timeline now queries GraphEntityStore for entity-enriched entries ──
+    if (id === 'timeline')    { _renderTimelineList(_gesGetTimeline()); }
+    // ── GES: UEBA anomalies enriched with entity profile history ──────────────
+    if (id === 'anomalies')   { _renderAnomaliesList(_gesEnrichedAnomalies()); }
     if (id === 'rules')       { _loadRules(); }
     if (id === 'mitre')       { _loadMITRE(); }
     if (id === 'investigate' && S.investigateEntity) { _runInvestigation(S.investigateEntity); }
     if (id === 'ingest')      { _initUploadZone(); }
     if (id === 'hunt')        { _setHuntMode(S.huntMode); }
     if (id === 'zdfa')        { _renderZDFAPanel(); if (!S._lastZDFA && S.uploadedEvents?.length) { setTimeout(() => _runZDFASelfTest(), 400); } }
+  }
+
+  // ── _gesEnrichedAnomalies() ────────────────────────────────────
+  // Returns UEBA anomalies from S.anomalies enriched with GES entity
+  // profile history (cross-detection behavioral baseline).
+  function _gesEnrichedAnomalies() {
+    const base = S.anomalies || [];
+    if (!GES.getRecords().length) return base;
+    const profiles = _gesGetUEBAProfiles();
+    if (!profiles) return base;
+    // Add GES-derived anomalies for entities with high risk scores
+    const gesAnoms = [];
+    Object.values(profiles.users || {}).forEach(u => {
+      if (u.maxRisk >= 60 && u.detectionCount >= 2) {
+        gesAnoms.push({
+          id         : `GES-UEBA-USER-${u.user}`,
+          type       : 'entity_risk_accumulation',
+          description: `User "${u.user}" accumulated ${u.detectionCount} detection(s) across ` +
+                       `${u.hosts.length} host(s) — max risk ${u.maxRisk}. ` +
+                       (u.crossHost ? 'Cross-host lateral movement pattern.' : ''),
+          entity     : u.user,
+          score      : Math.min(u.maxRisk / 100, 0.99),
+          baseline   : 0,
+          observed   : u.detectionCount,
+          deviation  : u.maxRisk,
+          timestamp  : u.lastSeen,
+          _gesSource : true,
+          riskLevel  : u.riskLevel,
+          hosts      : u.hosts,
+          tactics    : u.tactics,
+        });
+      }
+    });
+    Object.values(profiles.hosts || {}).forEach(h => {
+      if (h.maxRisk >= 70 && h.detectionCount >= 3 && h.multiUser) {
+        gesAnoms.push({
+          id         : `GES-UEBA-HOST-${h.host}`,
+          type       : 'multi_user_host_anomaly',
+          description: `Host "${h.host}" shows activity from ${h.users.length} distinct user(s) ` +
+                       `with ${h.detectionCount} detection(s) — max risk ${h.maxRisk}.`,
+          entity     : h.host,
+          score      : Math.min(h.maxRisk / 100, 0.99),
+          baseline   : 1,
+          observed   : h.users.length,
+          deviation  : (h.users.length - 1) * 200,
+          timestamp  : h.lastSeen,
+          _gesSource : true,
+          riskLevel  : h.riskLevel,
+          users      : h.users,
+        });
+      }
+    });
+    // Deduplicate: skip GES anomaly if same entity already in base
+    const baseEntities = new Set(base.map(a => a.entity));
+    const newGesAnoms  = gesAnoms.filter(a => !baseEntities.has(a.entity));
+    return [...base, ...newGesAnoms];
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -12070,6 +13041,9 @@ return {
       // Store ZDFA result from inline pipeline run (no recursion — inline uses analyzeEventsFn:null)
       if (result.zdfa) S._lastZDFA = result.zdfa;
 
+      // ── GES pipeline: normalize detections → entity graph store ──
+      _gesIngestResult(result);
+
       _updateStats(result);
       const dLen = S.detections.length;
       const iLen = S.incidents.length;
@@ -12198,6 +13172,13 @@ return {
     const rangeMs = { '1h':3_600_000, '6h':21_600_000, '24h':86_400_000, '7d':604_800_000 };
     const timeRangeMs = rangeMs[range] || 86_400_000;
 
+    // ── 0. GES investigation graph (entity-based, graph-store backed) ──
+    // Query GES first — it contains entity-normalized records from all
+    // prior detections, enabling cross-host / cross-log investigation.
+    const gesGraph = _gesGetInvestigationGraph(entity, { expand: true });
+    const gesProfiles = _gesGetUEBAProfiles();
+    const gesTimeline = _gesGetTimeline({ limit: 500 });
+
     // ── 1. Run client-side behavior-first engine (offline) ──
     let clientResult = null;
     try {
@@ -12214,7 +13195,7 @@ return {
       // Backend unavailable — continue with client-side only
     }
 
-    // ── 3. Merge results (client wins for behavior fields) ──
+    // ── 3. Merge results (GES graph + client behavior wins) ──
     let merged;
     if (clientResult) {
       merged = {
@@ -12234,9 +13215,58 @@ return {
         // Supplement with backend evidence if available
         evidence     : backendResult?.evidence || null,
         backendRisk  : backendResult?.riskScore || null,
+        // ── GES enrichment (graph-store data) ────────────────
+        gesGraph     : gesGraph,
+        gesTimeline  : gesTimeline,
+        gesProfiles  : gesProfiles,
+        gesStats     : GES.getStats(),
       };
     } else if (backendResult) {
-      merged = { ...backendResult, _source: 'backend' };
+      merged = {
+        ...backendResult, _source: 'backend',
+        gesGraph: gesGraph, gesTimeline: gesTimeline,
+        gesProfiles: gesProfiles, gesStats: GES.getStats(),
+      };
+    } else if (gesGraph && gesGraph.totalDetections > 0) {
+      // GES has data even if both engines returned nothing
+      // Build a result from GES alone
+      const gesEntityKey = entity.toLowerCase();
+      const gesRecs = GES.getRecords().filter(r =>
+        (r.entities.user || '').toLowerCase().includes(gesEntityKey) ||
+        (r.entities.host || '').toLowerCase().includes(gesEntityKey) ||
+        (r.entities.source_ip || '').includes(gesEntityKey) ||
+        (r.entities.process   || '').toLowerCase().includes(gesEntityKey)
+      );
+      const gesRisk = gesRecs.length ? Math.max(...gesRecs.map(r => r.risk_score || 0)) : 0;
+      const gesTactics = [...new Set(gesRecs.map(r => r.mitre.tactic).filter(Boolean))];
+      merged = {
+        entityId     : entity,
+        type         : type,
+        riskScore    : gesRisk,
+        summary      : `GES Graph Store: ${gesRecs.length} detection(s) linked to "${entity}" ` +
+                       `across ${gesGraph.nodes.length} entity node(s). ` +
+                       (gesTactics.length ? `Tactics: ${gesTactics.join(', ')}.` : ''),
+        findings     : gesRecs.map(r => ({
+          type        : r.mitre.tactic || r.log_source || 'detection',
+          severity    : r.severity,
+          description : r.rule_name,
+          timestamp   : r.timestamp,
+          entities    : r.entities,
+          mitre       : r.mitre,
+          riskScore   : r.risk_score,
+        })),
+        timeline     : gesTimeline,
+        mitreMap     : { techniques: [...new Set(gesRecs.map(r => r.mitre.technique).filter(Boolean))].map(t => ({ id: t })) },
+        chain        : null,
+        chains       : [],
+        domainSummary: gesTactics.reduce((acc, t) => ({ ...acc, [t]: (acc[t] || 0) + 1 }), {}),
+        totalEvents  : gesRecs.length,
+        _source      : 'ges',
+        gesGraph     : gesGraph,
+        gesTimeline  : gesTimeline,
+        gesProfiles  : gesProfiles,
+        gesStats     : GES.getStats(),
+      };
     } else {
       merged = {
         entityId : entity, type, riskScore: 0,
@@ -12244,6 +13274,7 @@ return {
         chain    : null, chains: [], domainSummary: {},
         summary  : `No data available for "${entity}" in current session.`,
         _source  : 'empty',
+        gesGraph : gesGraph, gesTimeline: [], gesProfiles: null, gesStats: GES.getStats(),
       };
     }
 
@@ -12311,6 +13342,8 @@ return {
       S.riskScore   = Math.max(r.riskScore || 0, S.riskScore);
       S.sessionId   = r.sessionId || S.sessionId;
       S.lastUpdated = new Date();
+      // ── GES pipeline: normalize detections → entity graph store ──
+      _gesIngestResult(r);
       _updateStats(r);
       if (dets.length) {
         _showToast(`✓ ${events.length} events → ${S.detections.length} detection(s) [deduped], ${incs.length} incident(s), ${chs.length} chain(s) | Risk: ${r.riskScore}`, 'success');
@@ -12324,7 +13357,7 @@ return {
         setTimeout(() => {
           if (S.activeTab === targetTab) {
             // Already on target tab — just re-render the body
-            if (targetTab === 'incidents')  _renderIncidentsList(S.incidents);
+            if (targetTab === 'incidents')  _renderIncidentsList(_gesGetIncidents());
             else                            _renderDetectionsList(S.detections);
           } else {
             _setTab(targetTab);
@@ -12530,6 +13563,8 @@ return {
       S.riskScore   = Math.max(r.riskScore || 0, S.riskScore);
       S.sessionId   = r.sessionId || S.sessionId;
       S.lastUpdated = new Date();
+      // ── GES pipeline: normalize detections → entity graph store ──
+      _gesIngestResult(r);
       _updateStats(r);
 
       const res = document.getElementById('rk-ingest-result');
@@ -13236,6 +14271,9 @@ return {
     <button class="rk-inv-tab" onclick="window._rkInvTab('${tabId}','chain',this)">
       🔗 Attack Chain ${chain ? '<span class="rk-inv-tab-badge rk-tab-badge-chain">'+chain.stages?.length+'</span>' : ''}
     </button>
+    <button class="rk-inv-tab" onclick="window._rkInvTab('${tabId}','graph',this)">
+      ⬡ Entity Graph <span class="rk-inv-tab-badge" style="background:rgba(96,165,250,0.15);color:#60a5fa;">${r.gesGraph?.nodes?.length||0}</span>
+    </button>
   </div>
 
   <!-- ══ TAB PANELS ══════════════════════════════════════════════ -->
@@ -13276,6 +14314,88 @@ return {
         <span class="rk-inv-tag">Policy §16 — Distinct techniques + progression only</span>
       </div>
       ${chainHTML}
+    </div>
+    <div class="rk-inv-panel" data-panel="${tabId}-graph">
+      <div class="rk-inv-panel-hdr">
+        <span>Entity Investigation Graph</span>
+        <span class="rk-inv-tag">GES v1.0 — Graph Entity Store</span>
+        <span class="rk-inv-tag">user · host · IP · process · relationships</span>
+      </div>
+      ${(function() {
+        const g = r.gesGraph;
+        if (!g || !g.nodes || !g.nodes.length) {
+          return `<div class="rk-inv-no-data">
+            <span class="rk-inv-no-data-icon">⬡</span>
+            <div>No entity graph data yet.</div>
+            <div class="rk-inv-no-data-sub">Ingest logs or run a demo to populate the graph store.</div>
+          </div>`;
+        }
+        const nodeTypeColor = { user:'#60a5fa', host:'#34d399', ip:'#f59e0b', process:'#a78bfa', default:'#6b7280' };
+        const nodeTypeIcon  = { user:'👤', host:'🖥', ip:'🌐', process:'⚙️' };
+        const gs = r.gesStats || {};
+        return `
+<div style="display:flex;flex-direction:column;gap:16px;">
+  <!-- GES stats bar -->
+  <div style="display:flex;gap:10px;flex-wrap:wrap;">
+    ${[
+      ['Records',  gs.totalRecords  || g.totalDetections || 0, '#60a5fa'],
+      ['Nodes',    gs.totalNodes    || g.nodes.length,         '#34d399'],
+      ['Edges',    gs.totalEdges    || g.edges.length,         '#f59e0b'],
+      ['Users',    gs.uniqueUsers   || g.nodes.filter(n=>n.type==='user').length, '#a78bfa'],
+      ['Hosts',    gs.uniqueHosts   || g.nodes.filter(n=>n.type==='host').length, '#34d399'],
+      ['IPs',      gs.uniqueIPs     || g.nodes.filter(n=>n.type==='ip').length,   '#f97316'],
+      ['Processes',gs.uniqueProcesses|| g.nodes.filter(n=>n.type==='process').length,'#60a5fa'],
+    ].map(([label, val, color]) =>
+      `<div style="padding:8px 14px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:8px;text-align:center;">
+        <div style="font-size:18px;font-weight:800;color:${color};">${val}</div>
+        <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;">${label}</div>
+      </div>`
+    ).join('')}
+  </div>
+  <!-- Entity nodes -->
+  <div>
+    <div style="font-size:10px;color:#4b5563;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;font-weight:700;">Entity Nodes</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;">
+      ${g.nodes.map(n => {
+        const c = nodeTypeColor[n.type] || nodeTypeColor.default;
+        const ic = nodeTypeIcon[n.type] || '⬡';
+        return `<button class="rk-entity-btn" style="border-color:${c}44;color:${c};"
+          onclick="document.getElementById('rk-inv-entity').value='${n.label}';RAYKAN_UI.investigate()">
+          ${ic} ${n.label}
+          ${n.count > 1 ? `<span style="font-size:9px;opacity:.7;">(${n.count})</span>` : ''}
+        </button>`;
+      }).join('')}
+    </div>
+  </div>
+  <!-- Relationship edges (sample) -->
+  ${g.edges.length ? `
+  <div>
+    <div style="font-size:10px;color:#4b5563;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;font-weight:700;">Relationships (${g.edges.length})</div>
+    <div style="display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto;">
+      ${g.edges.slice(0,20).map(e => {
+        const fromNode = g.nodes.find(n=>n.id===e.from);
+        const toNode   = g.nodes.find(n=>n.id===e.to);
+        const fc = nodeTypeColor[fromNode?.type] || '#6b7280';
+        const tc = nodeTypeColor[toNode?.type]   || '#6b7280';
+        return `<div style="display:flex;align-items:center;gap:6px;font-size:11px;padding:4px 8px;background:rgba(255,255,255,0.02);border-radius:5px;">
+          <span style="color:${fc};font-weight:600;">${fromNode?.label||e.from}</span>
+          <span style="color:#4b5563;font-size:10px;">—${(e.type||'').replace(/_/g,' ')}→</span>
+          <span style="color:${tc};font-weight:600;">${toNode?.label||e.to}</span>
+          ${e.count > 1 ? `<span style="font-size:9px;color:#4b5563;">(×${e.count})</span>` : ''}
+        </div>`;
+      }).join('')}
+      ${g.edges.length > 20 ? `<div style="font-size:10px;color:#4b5563;padding:4px 8px;">+${g.edges.length-20} more relationships</div>` : ''}
+    </div>
+  </div>` : ''}
+  <!-- Correlation clusters -->
+  ${(function() {
+    if (!r.gesStats || !gs.entityCorrelationKeys) return '';
+    return `<div style="font-size:10px;color:#22c55e;padding:6px 10px;background:rgba(34,197,94,0.06);border-radius:5px;">
+      ✓ ${gs.entityCorrelationKeys} entity correlation keys · ${gs.totalRecords} records in graph store
+    </div>`;
+  })()}
+</div>`;
+      })()}
     </div>
   </div>
 
@@ -13899,6 +15019,108 @@ return {
   }
 
   // ════════════════════════════════════════════════════════════════
+  //  GES PIPELINE INTEGRATION
+  //  Called after every detection result to normalize → ingest → stitch
+  //  Works for all 3 result paths: demo, paste/ingest, file upload.
+  // ════════════════════════════════════════════════════════════════
+
+  // ── _gesIngestResult(r) ───────────────────────────────────────
+  // Normalizes and ingests a detection result object into the GES.
+  // r = result from CSDE.analyzeEvents / processBackendResult / backend
+  // Returns GES stats summary.
+  function _gesIngestResult(r) {
+    if (!r) return;
+    try {
+      // 1. Ingest deduplicated detections
+      const dets  = normalizeDetections(r.detections);
+      const incs  = Array.isArray(r.incidentSummaries) && r.incidentSummaries.length
+                      ? r.incidentSummaries
+                      : (Array.isArray(r.incidents) ? r.incidents : []);
+      const tl    = normalizeDetections(r.timeline);
+
+      const ingested = GES.ingestBatch([...dets, ...incs]);
+
+      // 2. Backfill from current S state (catches any data already in S.*)
+      const migStats = GES.backfillGraphStore(S);
+
+      // 3. Update S.graphStore reference with live stats
+      S.graphStore = GES.getStats();
+
+      console.log(`[GES] Ingested ${ingested} records from result | ` +
+        `Backfill: +${migStats.migrated} | ` +
+        `Store: ${S.graphStore.totalRecords} records, ` +
+        `${S.graphStore.totalNodes} nodes, ${S.graphStore.totalEdges} edges`);
+
+      return S.graphStore;
+    } catch(e) {
+      console.warn('[GES] _gesIngestResult error:', e.message);
+    }
+  }
+
+  // ── _gesGetTimeline() ─────────────────────────────────────────
+  // Returns timeline entries from GES (entity-enriched, chronological).
+  // Falls back to S.timeline if GES has no records.
+  function _gesGetTimeline(opts) {
+    const gesRecords = GES.getRecords();
+    if (!gesRecords.length) return S.timeline || [];
+    const gesTl = GES.buildTimeline(opts);
+    // Merge: GES-built entries first, then any S.timeline entries not in GES
+    const gesDetIds = new Set(gesTl.map(t => t.detection_id).filter(Boolean));
+    const extraTl   = (S.timeline || []).filter(t => !t.detection_id || !gesDetIds.has(t.detection_id));
+    return [...gesTl, ...extraTl];
+  }
+
+  // ── _gesGetIncidents() ────────────────────────────────────────
+  // Returns incidents correlated via GES entity clusters.
+  // Enriches existing S.incidents with entity links.
+  function _gesGetIncidents() {
+    const incidents = S.incidents || [];
+    if (!GES.getRecords().length) return incidents;
+    // Enrich each incident with GES-derived entity links
+    return incidents.map(inc => {
+      const id = inc.id || inc.incidentId;
+      if (!id) return inc;
+      const linked = GES.linkAlerts(id);
+      return {
+        ...inc,
+        _gesLinkedAlerts : linked.linked   || [],
+        _gesEntityLinks  : linked.entityLinks || [],
+        _gesEntityRecord : linked.record   || null,
+      };
+    });
+  }
+
+  // ── _gesGetInvestigationGraph(entity) ────────────────────────
+  // Returns the entity investigation graph from GES.
+  // Used by the Investigate tab instead of raw S.detections.
+  function _gesGetInvestigationGraph(entity, opts) {
+    if (!entity || !GES.getRecords().length) return null;
+    return GES.buildInvestigationGraph(entity, opts);
+  }
+
+  // ── _gesGetUEBAProfiles() ────────────────────────────────────
+  // Returns UEBA behavioral profiles from GES entity history.
+  function _gesGetUEBAProfiles() {
+    if (!GES.getRecords().length) return null;
+    return GES.buildUEBAProfiles();
+  }
+
+  // ── _gesGetRelatedAlerts(detectionId) ────────────────────────
+  // Returns alerts linked to the same entities as the given detection.
+  function _gesGetRelatedAlerts(detectionId) {
+    if (!detectionId || !GES.getRecords().length) return [];
+    return GES.linkAlerts(detectionId).linked || [];
+  }
+
+  // ── _gesGetCorrelationClusters() ──────────────────────────────
+  // Returns entity-correlated clusters (the dedup mechanism).
+  // Key insight: 83 raw detections → ~20 entity clusters.
+  function _gesGetCorrelationClusters() {
+    if (!GES.getRecords().length) return new Map();
+    return GES.buildCorrelationClusters();
+  }
+
+  // ════════════════════════════════════════════════════════════════
   //  STATS & REALTIME
   // ════════════════════════════════════════════════════════════════
   function _updateStats(result) {
@@ -13950,11 +15172,12 @@ return {
     // completes while user is already on that tab.
     const _activeTab = S.activeTab;
     if      (_activeTab === 'overview')    _renderOverviewContent();
-    else if (_activeTab === 'incidents')   _renderIncidentsList(S.incidents);
+    // GES: hunting modules query graph store instead of raw S.* arrays
+    else if (_activeTab === 'incidents')   _renderIncidentsList(_gesGetIncidents());
     else if (_activeTab === 'detections')  _renderDetectionsList(S.detections);
-    else if (_activeTab === 'timeline')    _renderTimelineList(S.timeline);
+    else if (_activeTab === 'timeline')    _renderTimelineList(_gesGetTimeline());
     else if (_activeTab === 'chains')      _renderChainsList(S.chains);
-    else if (_activeTab === 'anomalies')   _renderAnomaliesList(S.anomalies);
+    else if (_activeTab === 'anomalies')   _renderAnomaliesList(_gesEnrichedAnomalies());
   }
 
   async function _loadStats() {
@@ -13999,7 +15222,7 @@ return {
   function _onRealtimeAnomaly(a) {
     S.anomalies.unshift(a);
     _updateStats({});
-    if (S.activeTab === 'anomalies') _renderAnomaliesList(S.anomalies);
+    if (S.activeTab === 'anomalies') _renderAnomaliesList(_gesEnrichedAnomalies());
   }
 
   function _onRealtimeChain(c) {
@@ -14998,12 +16221,24 @@ ${(s3.sessionTimelines||[]).slice(0,5).map(sess => `
     _renderZDFAPanel,
     _updateZDFAUI,
     getState: () => S,
+    // ── GES: Graph Entity Store public API ─────────────────────
+    gesIngest          : _gesIngestResult,
+    gesTimeline        : _gesGetTimeline,
+    gesIncidents       : _gesGetIncidents,
+    gesGraph           : _gesGetInvestigationGraph,
+    gesUEBA            : _gesGetUEBAProfiles,
+    gesRelatedAlerts   : _gesGetRelatedAlerts,
+    gesClusters        : _gesGetCorrelationClusters,
+    gesStats           : () => GES.getStats(),
+    gesBackfill        : () => GES.backfillGraphStore(S),
+    gesReset           : () => { GES.reset(); S.graphStore = null; },
   };
 
   // Expose globally
   window.RAYKAN_UI     = RAYKAN_UI;
   window.CSDE          = CSDE; // Expose CSDE for testing and external access
   window.ZDFA          = ZDFA; // Expose ZDFA for pipeline health monitoring
+  window.GES           = GES;  // Expose GES (Graph Entity Store) for hunting modules
   window.renderRAYKAN  = () => {
     const wrap = document.getElementById('raykanWrap');
     if (wrap) render(wrap);
