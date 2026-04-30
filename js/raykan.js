@@ -1113,9 +1113,14 @@
     function _inferMissingStages(cluster, firstObservedTs) {
       if (!CFG.BCE_INFER_STAGES) return [];
 
+      // ── Evidence gate: only infer when there are REAL detections ──
+      // Require at least 2 observed (non-inferred) detections before inferring
+      const observedCluster = cluster.filter(d => !d.inferred);
+      if (observedCluster.length < 2) return []; // not enough real evidence
+
       // Collect observed tactics in this cluster
       const observedTactics = new Set(
-        cluster.map(d => (d.mitre?.tactic || d.category || '').toLowerCase().replace(/\s+/g,'-'))
+        observedCluster.map(d => (d.mitre?.tactic || d.category || '').toLowerCase().replace(/\s+/g,'-'))
                .filter(Boolean)
       );
 
@@ -1127,10 +1132,11 @@
         if (p > deepestPhase) { deepestPhase = p; deepestTactic = t; }
       });
 
-      // Only infer if the deepest observed tactic is mid/late stage
+      // Only infer if the deepest observed tactic is MID or LATE stage (phase ≥ 6)
+      // This prevents false inferences from early-stage single events
       const MID_LATE = new Set(['credential-access','lateral-movement','impact',
                                 'privilege-escalation','exfiltration','collection']);
-      if (!MID_LATE.has(deepestTactic)) return [];
+      if (!MID_LATE.has(deepestTactic) || deepestPhase < 6) return [];
 
       const templates = INFERRED_PRECURSORS[deepestTactic] || [];
       const inferred  = [];
@@ -1197,19 +1203,15 @@
       const targetDepth = CFG.BCE_MIN_CHAIN_DEPTH;
       if (cluster.length >= targetDepth) return cluster;
 
-      // Sort by timestamp to find first observed event
-      const sorted = [...cluster].sort((a, b) => {
-        return new Date(a.first_seen||a.timestamp||0) - new Date(b.first_seen||b.timestamp||0);
-      });
-      const firstTs = new Date(sorted[0].first_seen || sorted[0].timestamp || 0).getTime();
+      // Sort strictly by original log timestamp; no-ts events go last
+      const sorted = _chronoSort(cluster, 'first_seen');
+      const firstTs = _safeTs(sorted[0]?.first_seen || sorted[0]?.timestamp);
 
-      // Try to infer missing preceding stages
+      // Try to infer missing preceding stages (only when evidence justifies)
       const inferredStages = _inferMissingStages(cluster, firstTs);
 
-      // Combine observed + inferred, sorted by timestamp
-      const combined = [...inferredStages, ...cluster].sort((a, b) => {
-        return new Date(a.first_seen||a.timestamp||0) - new Date(b.first_seen||b.timestamp||0);
-      });
+      // Combine observed + inferred, sorted chronologically
+      const combined = _chronoSort([...inferredStages, ...cluster], 'first_seen');
 
       return combined.length >= targetDepth ? combined : combined;
     }
@@ -1324,8 +1326,8 @@
         const tactic  = (det.mitre?.tactic || det.category || '').toLowerCase().replace(/\s+/g,'-');
         const phase   = _tacticToPhase(tactic);
         const ts      = det.first_seen || det.timestamp;
-        const tsMs    = new Date(ts || 0).getTime();
-        const lastMs  = new Date(det.last_seen || ts || 0).getTime();
+        const tsMs    = _safeTs(ts);
+        const lastMs  = _safeTs(det.last_seen || ts);
 
         // Enriched events from evidence (limit to 5 for output size)
         const enrichedEv = (det.raw_detections || [det]).flatMap(rd =>
@@ -1868,7 +1870,7 @@
         ev._identity   = identity;
         ev._hostKey    = identity.host;
         ev._pid        = identity.pid;
-        ev._tsMs       = new Date(ev.timestamp || 0).getTime();
+        ev._tsMs       = _safeTs(ev.timestamp);
 
         // Index by PID + host
         if (identity.pid && identity.pid !== '0' && identity.host) {
@@ -2207,7 +2209,7 @@
       // Pre-compute OS and timestamps for each detection
       const detMeta = dedupDets.map(det => ({
         os   : _detectionOs(det),
-        tsMs : new Date(det.first_seen || det.timestamp || 0).getTime(),
+        tsMs : _safeTs(det.first_seen || det.timestamp),
         tactic: (det.mitre?.tactic || det.category || '').toLowerCase().replace(/\s+/g, '-'),
         host : (det.computer || det.host || '').toLowerCase(),
         user : (det.user || '').toLowerCase(),
@@ -2320,9 +2322,9 @@
     //   • Per-node stage confidence computed from evidence quality + tactic rarity
     function _buildCausalDAG(bucket) {
       // ── 1. Sort strictly by first_seen ascending (canonical chain order) ──
-      const nodes = [...bucket].sort((a, b) => {
-        const ta = new Date(a.first_seen || a.timestamp || 0).getTime();
-        const tb = new Date(b.first_seen || b.timestamp || 0).getTime();
+      const nodes = _chronoSort(bucket, 'first_seen').sort((a, b) => {
+        const ta = _safeTs(a.first_seen || a.timestamp);
+        const tb = _safeTs(b.first_seen || b.timestamp);
         // Secondary sort: phase order for ties (earlier kill-chain phase wins)
         if (Math.abs(ta - tb) <= CFG.IDENTICAL_TS_JITTER) {
           const pa = PHASE_ORDER[(a.mitre?.tactic || a.category || '').toLowerCase().replace(/\s+/g,'-')] ?? 99;
@@ -2343,8 +2345,8 @@
           const to   = nodes[j];
           const tacticFrom = (from.mitre?.tactic || from.category || '').toLowerCase().replace(/\s+/g,'-');
           const tacticTo   = (to.mitre?.tactic   || to.category   || '').toLowerCase().replace(/\s+/g,'-');
-          const tsFrom = new Date(from.first_seen || from.timestamp || 0).getTime();
-          const tsTo   = new Date(to.first_seen   || to.timestamp   || 0).getTime();
+          const tsFrom = _safeTs(from.first_seen || from.timestamp);
+          const tsTo   = _safeTs(to.first_seen   || to.timestamp);
           const gap    = tsTo - tsFrom; // always >= 0 because nodes are sorted ascending
 
           // ── Enforce strict forward-time: skip if gap exceeds max causal window ──
@@ -2436,13 +2438,11 @@
 
       // Build bucket metadata
       const meta = buckets.map(b => {
-        const sorted = [...b].sort((a,b) => {
-          return new Date(a.first_seen||a.timestamp||0) - new Date(b.first_seen||b.timestamp||0);
-        });
+        const sorted = _chronoSort(b, 'first_seen');
         const lastDet = sorted[sorted.length - 1];
         const firstDet= sorted[0];
-        const lastTs  = new Date(lastDet.last_seen  || lastDet.first_seen  || lastDet.timestamp  || 0).getTime();
-        const firstTs = new Date(firstDet.first_seen || firstDet.timestamp || 0).getTime();
+        const lastTs  = _safeTs(lastDet.last_seen  || lastDet.first_seen  || lastDet.timestamp);
+        const firstTs = _safeTs(firstDet.first_seen || firstDet.timestamp);
         const keys = new Set();
         b.forEach(d => _detectionAdversaryKey(d).keys.forEach(k => keys.add(k)));
         const tactics = new Set(b.map(d => (d.mitre?.tactic||d.category||'').toLowerCase().replace(/\s+/g,'-')));
@@ -2510,11 +2510,8 @@
       if (!dedupDets.length) return { incidents: [], standaloneDetections: [] };
 
       // Sort by first_seen ascending
-      const sorted = [...dedupDets].sort((a, b) => {
-        const ta = new Date(a.first_seen || a.timestamp || 0).getTime();
-        const tb = new Date(b.first_seen || b.timestamp || 0).getTime();
-        return ta - tb;
-      });
+      // Sort strictly by original log timestamp — deterministic ordering
+      const sorted = _chronoSort(dedupDets, 'first_seen');
 
       // ── Step 1: Group into adversary buckets using union-find ─────
       const rawBuckets = _buildAdversaryBuckets(sorted);
@@ -2586,13 +2583,13 @@
         let firstSeenMs = Infinity, lastSeenMs = -Infinity;
         // Use ONLY observed stages for timestamps (not inferred)
         qualifiedCluster.forEach(d => {
-          const fs = new Date(d.first_seen || d.timestamp || 0).getTime();
-          const ls = new Date(d.last_seen  || d.first_seen || d.timestamp || 0).getTime();
+          const fs = _safeTs(d.first_seen || d.timestamp);
+          const ls = _safeTs(d.last_seen  || d.first_seen || d.timestamp);
           if (fs > 0 && fs < firstSeenMs) firstSeenMs = fs;
           if (ls > 0 && ls > lastSeenMs)  lastSeenMs  = ls;
         });
-        if (firstSeenMs === Infinity)  firstSeenMs = new Date(parent.first_seen || parent.timestamp || 0).getTime();
-        if (lastSeenMs  === -Infinity) lastSeenMs  = new Date(parent.last_seen  || parent.timestamp || 0).getTime();
+        if (firstSeenMs === Infinity)  firstSeenMs = _safeTs(parent.first_seen || parent.timestamp);
+        if (lastSeenMs  === -Infinity) lastSeenMs  = _safeTs(parent.last_seen  || parent.timestamp);
         if (lastSeenMs <= firstSeenMs && qualifiedCluster.length > 1) {
           lastSeenMs = firstSeenMs + qualifiedCluster.length * 500;
         }
@@ -2883,9 +2880,114 @@
       e.srcIp       = e.srcIp       || e.SourceIP || e.SourceIPAddress || e.src_ip || e.IpAddress || '';
       e.destIp      = e.destIp      || e.DestinationIp || e.DestinationAddress || e.dest_ip || '';
       e.destPort    = e.destPort    || e.DestinationPort || e.dest_port || '';
-      e.timestamp   = e.timestamp   || e.TimeGenerated || e.TimeCreated || e.time || e.date || new Date().toISOString();
+      // ── Timestamp: enforce original log time as source of truth ──
+      // NEVER fall back to system/processing time — null means unknown
+      e.timestamp   = e.timestamp   || e.TimeGenerated || e.TimeCreated
+                   || e.EventTime   || e.eventTime      || e.time
+                   || e.date        || e.ts              || e.datetime
+                   || e['@timestamp'] || e.occurred || null;
+      // Normalise to ISO string only if a real value exists
+      if (e.timestamp && typeof e.timestamp !== 'string') {
+        try { e.timestamp = new Date(e.timestamp).toISOString(); } catch(_) { e.timestamp = null; }
+      }
       e._os         = _detectOS(e);
       return e;
+    }
+
+    // ── Safe timestamp parser — returns ms epoch (0 if unknown) ──
+    // Source of truth: original log field only, never system time.
+    function _safeTs(v) {
+      if (!v) return 0;
+      if (typeof v === 'number') return isFinite(v) ? v : 0;
+      try {
+        const ms = new Date(v).getTime();
+        return isFinite(ms) ? ms : 0;
+      } catch (_) { return 0; }
+    }
+
+    // ── Safe ISO string — returns ISO string or empty string ──
+    function _safeIsoStr(v) {
+      const ms = _safeTs(v);
+      return ms > 0 ? new Date(ms).toISOString() : '';
+    }
+
+    // ── Deterministic chronological sorter ──
+    // Always sorts by original log timestamp ascending.
+    // Events without timestamps are placed LAST (not first).
+    function _chronoSort(arr, tsField) {
+      const f = tsField || 'timestamp';
+      return [...arr].sort((a, b) => {
+        const ta = _safeTs(a[f] || a.first_seen || a.ts);
+        const tb = _safeTs(b[f] || b.first_seen || b.ts);
+        if (ta === 0 && tb === 0) return 0;
+        if (ta === 0) return 1;   // no-ts events go to the end
+        if (tb === 0) return -1;
+        return ta - tb;
+      });
+    }
+
+    // ── MITRE Confidence & Evidence Threshold Engine ──────────────
+    // Restricts inferred MITRE classifications to evidence-backed ones.
+    // Rules:
+    //   T1110 (Brute Force)         — requires ≥3 failures from same src or batch rule
+    //   T1059.001 (PowerShell)      — requires commandLine with powershell keyword
+    //   T1078 (Valid Accounts)      — requires successful logon evidence (4624)
+    //   T1003 (Credential Dump)     — requires lsass/procdump/mimikatz evidence
+    //   T1021 (Lateral Movement)    — requires multi-host evidence
+    //
+    // Returns { technique, confidence:'high'|'medium'|'low'|'unconfirmed', evidenceBasis }
+    const MITRE_EVIDENCE_RULES = {
+      'T1110':     { minEvents: 3, requiredFields: [], requiredEventIds: [4625] },
+      'T1110.001': { minEvents: 3, requiredFields: [], requiredEventIds: [4625] },
+      'T1110.003': { minEvents: 5, requiredFields: [], requiredEventIds: [4625] },
+      'T1110.004': { minEvents: 5, requiredFields: [], requiredEventIds: [4625] },
+      'T1059.001': { minEvents: 1, requiredFields: ['commandLine'], requiredEventIds: [] },
+      'T1059.005': { minEvents: 1, requiredFields: ['commandLine'], requiredEventIds: [] },
+      'T1003':     { minEvents: 1, requiredFields: ['commandLine'], requiredEventIds: [] },
+      'T1003.001': { minEvents: 1, requiredFields: ['commandLine'], requiredEventIds: [] },
+      'T1078':     { minEvents: 1, requiredFields: [], requiredEventIds: [4624] },
+      'T1021':     { minEvents: 2, requiredFields: [], requiredEventIds: [] },
+      'T1490':     { minEvents: 1, requiredFields: ['commandLine'], requiredEventIds: [] },
+      'T1136.001': { minEvents: 1, requiredFields: ['commandLine'], requiredEventIds: [] },
+    };
+
+    function _assessMitreConfidence(technique, evidenceEvents, ruleConfidence) {
+      if (ruleConfidence) return ruleConfidence; // rule explicitly set confidence
+      const rule = MITRE_EVIDENCE_RULES[technique];
+      if (!rule) return 'medium'; // unknown technique — default medium
+
+      const evts = Array.isArray(evidenceEvents) ? evidenceEvents : [];
+
+      // Check minimum event count
+      if (evts.length < rule.minEvents) return 'low';
+
+      // Check required EventIDs
+      if (rule.requiredEventIds.length > 0) {
+        const hasReqEid = rule.requiredEventIds.some(eid =>
+          evts.some(e => parseInt(e.EventID || e.eventId || e.event_id, 10) === eid)
+        );
+        if (!hasReqEid) return 'low';
+      }
+
+      // Check required fields present in at least one event
+      if (rule.requiredFields.length > 0) {
+        const hasFields = rule.requiredFields.every(field =>
+          evts.some(e => e[field] || e[field.charAt(0).toUpperCase() + field.slice(1)])
+        );
+        if (!hasFields) return 'low';
+      }
+
+      return evts.length >= rule.minEvents * 2 ? 'high' : 'medium';
+    }
+
+    // ── Evidence-based narrative guard ──
+    // Returns a safe string narrative; guards against [object Object] serialization.
+    function _safeNarrative(val) {
+      if (typeof val === 'function') return '';
+      if (typeof val === 'string')   return val;
+      if (val == null)               return '';
+      // Object/array returned from rule.narrative(e) — stringify safely
+      try { return JSON.stringify(val); } catch (_) { return String(val); }
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -2911,9 +3013,12 @@
       {
         id: 'CSDE-WIN-001', title: 'Windows Logon Failure',
         os: 'windows', severity: 'medium', category: 'authentication', logCategory: 'windows_auth',
-        mitre: { technique: 'T1110', name: 'Brute Force', tactic: 'credential-access' },
-        tags: ['attack.credential_access', 'attack.t1110'],
-        riskScore: 45,
+        // Single logon failure → Logon Failure indicator only.
+        // T1110 (Brute Force) requires a PATTERN of failures — use CSDE-WIN-002 batch rule.
+        mitre: { technique: 'T1078', name: 'Valid Accounts – Logon Failure', tactic: 'credential-access' },
+        tags: ['attack.credential_access', 'attack.t1078'],
+        mitre_confidence: 'low',   // single event — no brute-force pattern established
+        riskScore: 20,             // reduced: single failure is low-signal
         match: e => {
           const eid = parseInt(e.EventID, 10);
           return eid === 4625 && (
@@ -2960,7 +3065,7 @@
             if (evts.length >= CFG.MIN_BRUTE_FORCE_COUNT) {
               const [user, srcIp] = key.split('|');
               const isCritical = evts.length >= 10;
-              const times = evts.map(e=>new Date(e.timestamp||0).getTime()).filter(t=>t>0).sort();
+              const times = evts.map(e=>_safeTs(e.timestamp)).filter(t=>t>0).sort((a,b)=>a-b);
               const spanMs = times.length>=2 ? times[times.length-1]-times[0] : 0;
               const ratePerMin = spanMs > 0 ? (evts.length/(spanMs/60000)).toFixed(1) : '?';
               results.push({
@@ -2990,6 +3095,7 @@
         os: 'windows', severity: 'critical', category: 'authentication', logCategory: 'windows_auth',
         mitre: { technique: 'T1110', name: 'Brute Force — Successful Compromise', tactic: 'credential-access' },
         tags: ['attack.credential_access', 'attack.t1110', 'attack.t1078'],
+        mitre_confidence: 'high',  // batch rule: confirmed failure→success pattern
         riskScore: 92,
         match: () => false, // batch only
         matchBatch: (events) => {
@@ -3007,7 +3113,7 @@
           fails.forEach(e => {
             const u  = (e.user||'?').toLowerCase();
             const s  = e.srcIp||e.SourceIP||e.IpAddress||'?';
-            const ts = new Date(e.timestamp || 0).getTime();
+            const ts = _safeTs(e.timestamp);
             if (!failByUser.has(u)) failByUser.set(u, []);
             failByUser.get(u).push({ ...e, _ts: ts });
             if (!failBySrc.has(s)) failBySrc.set(s, []);
@@ -3016,7 +3122,7 @@
 
           const results = [];
           success.forEach(s => {
-            const successTs = new Date(s.timestamp || 0).getTime();
+            const successTs = _safeTs(s.timestamp);
             const uKey      = (s.user||'?').toLowerCase();
             const srcKey    = s.srcIp||s.SourceIP||s.IpAddress||'?';
 
@@ -3235,6 +3341,7 @@
         os: 'windows', severity: 'high', category: 'execution',
         mitre: { technique: 'T1059.001', name: 'PowerShell', tactic: 'execution' },
         tags: ['attack.execution', 'attack.t1059.001', 'attack.defense_evasion', 'attack.t1027'],
+        mitre_confidence: 'high',  // confirmed: encoded command in commandLine
         riskScore: 80,
         match: e => {
           const proc = (e.process||e.Image||e.ProcessName||'').toLowerCase();
@@ -3687,7 +3794,7 @@
             const hosts = [...new Set(allEvts.map(e => e.computer || '?'))];
 
             // Time-span analysis
-            const times = allEvts.map(e => new Date(e.timestamp||0).getTime()).filter(t=>t>0).sort();
+            const times = allEvts.map(e => _safeTs(e.timestamp)).filter(t=>t>0).sort((a,b)=>a-b);
             const spanMs = times.length >= 2 ? times[times.length-1] - times[0] : 0;
             const ratePerMin = spanMs > 0 ? (allEvts.length / (spanMs/60000)).toFixed(1) : '?';
 
@@ -3743,7 +3850,7 @@
           // Credential stuffing = many users, possibly many IPs (botnet)
           if (uniqueUsers < 5 || (uniqueIps === 1 && uniqueUsers < 10)) return null;
 
-          const times = fails.map(e=>new Date(e.timestamp||0).getTime()).filter(t=>t>0).sort();
+          const times = fails.map(e=>_safeTs(e.timestamp)).filter(t=>t>0).sort((a,b)=>a-b);
           const spanMs = times.length>=2 ? times[times.length-1]-times[0] : 0;
           const ratePerMin = spanMs > 0 ? (fails.length/(spanMs/60000)).toFixed(1) : '?';
 
@@ -3837,11 +3944,7 @@
       if (!rawDetections.length) return [];
 
       // ── Step 1: Sort by timestamp ascending (O(n log n)) ──────────
-      const sorted = [...rawDetections].sort((a, b) => {
-        const ta = new Date(a.timestamp || a.first_seen || 0).getTime();
-        const tb = new Date(b.timestamp || b.first_seen || 0).getTime();
-        return ta - tb;
-      });
+      const sorted = _chronoSort(rawDetections, 'timestamp');
 
       // ── Step 2: Build dedup buckets ───────────────────────────────
       // Key = canonical rule slug + host + user
@@ -3857,7 +3960,7 @@
         const slug     = _canonicalSlug(det);
         const host     = (det.computer || det.host || '').toLowerCase().trim();
         const user     = (det.user || '').toLowerCase().trim();
-        const ts       = new Date(det.timestamp || det.first_seen || 0).getTime();
+        const ts       = _safeTs(det.timestamp || det.first_seen);
 
         // Primary bucket key: slug + host + user (groups all variants of same rule per entity)
         const bucketKey = `${slug}|${host}|${user}`;
@@ -3870,7 +3973,7 @@
 
         if (existing !== null && existing !== undefined) {
           // ── Merge into existing aggregated detection ──────────────
-          const prevTs   = new Date(existing.last_seen || existing.first_seen || 0).getTime();
+          const prevTs   = _safeTs(existing.last_seen || existing.first_seen);
           const timeDiff = ts - prevTs;
 
           // Only split into new window if BOTH:
@@ -3885,7 +3988,7 @@
             // Merge
             const addCount = det.event_count || (det.evidence ? det.evidence.length : 1);
             existing.event_count += addCount;
-            if (ts > new Date(existing.last_seen || 0).getTime()) {
+            if (ts > _safeTs(existing.last_seen)) {
               existing.last_seen = det.timestamp || det.last_seen || existing.last_seen;
             }
 
@@ -3910,6 +4013,14 @@
             // Risk score escalation
             const inRisk = det.riskScore || 0;
             if (inRisk > existing.riskScore) existing.riskScore = inRisk;
+
+            // MITRE confidence escalation (keep highest confidence)
+            {
+              const CW = { high: 3, medium: 2, low: 1, unconfirmed: 0 };
+              const inCW  = CW[det.mitre_confidence] ?? -1;
+              const exCW  = CW[existing.mitre_confidence] ?? -1;
+              if (inCW > exCW) existing.mitre_confidence = det.mitre_confidence;
+            }
 
             // Behavioral diversity: distinct EventIDs
             (det.evidence || []).forEach(ev => {
@@ -3943,7 +4054,7 @@
           const subBucket = buckets.get(subKey);
           if (subBucket) {
             subBucket.event_count += det.event_count || 1;
-            if (ts > new Date(subBucket.last_seen || 0).getTime()) subBucket.last_seen = det.timestamp || subBucket.last_seen;
+            if (ts > _safeTs(subBucket.last_seen)) subBucket.last_seen = det.timestamp || subBucket.last_seen;
           }
           return;
         }
@@ -3961,9 +4072,9 @@
         aggregated.push(agg);
       });
 
-      // Sort: risk desc, then first_seen asc
+      // Sort: risk desc, then first_seen asc (using _safeTs to handle null timestamps)
       aggregated.sort((a, b) =>
-        (b.riskScore - a.riskScore) || (new Date(a.first_seen) - new Date(b.first_seen))
+        (b.riskScore - a.riskScore) || (_safeTs(a.first_seen) - _safeTs(b.first_seen))
       );
       return aggregated;
     }
@@ -4003,6 +4114,12 @@
         commandLine    : det.commandLine || '',
         process        : det.process || '',
         mitre          : det.mitre || null,
+        mitre_confidence : det.mitre_confidence ||
+          _assessMitreConfidence(
+            det.mitre?.technique || det.technique || null,
+            det.evidence || [],
+            null
+          ),
         technique      : det.mitre?.technique || det.technique || '',
         tags           : det.tags || [],
         category       : det.category || '',
@@ -4173,12 +4290,12 @@
         // Forensic timestamps
         let firstMs = Infinity, lastMs = -Infinity;
         filtered.forEach(d => {
-          const fs = new Date(d.first_seen || d.timestamp || 0).getTime();
-          const ls = new Date(d.last_seen  || d.first_seen || d.timestamp || 0).getTime();
+          const fs = _safeTs(d.first_seen || d.timestamp);
+          const ls = _safeTs(d.last_seen  || d.first_seen || d.timestamp);
           if (fs > 0 && fs < firstMs) firstMs = fs;
           if (ls > 0 && ls > lastMs)  lastMs  = ls;
         });
-        if (firstMs === Infinity) firstMs = new Date(parent.first_seen || parent.timestamp || 0).getTime();
+        if (firstMs === Infinity) firstMs = _safeTs(parent.first_seen || parent.timestamp);
         if (lastMs === -Infinity) lastMs  = firstMs;
         if (lastMs <= firstMs && filtered.length > 1) lastMs = firstMs + filtered.length * 500;
 
@@ -4243,9 +4360,11 @@
       const type = enriched.category || 'event';
       const description = enriched.detail || `EVENT ${isNaN(eid)?'?':eid}: ${e.computer||''}`;
 
+      // Use original log timestamp only — never fall back to processing time
+      const _evTs = e.timestamp || e.TimeGenerated || e.time || null;
       return {
-        ts          : e.timestamp,
-        timestamp   : e.timestamp,
+        ts          : _evTs,
+        timestamp   : _evTs,
         type,
         description,
         enriched    : enriched.enriched,
@@ -4433,8 +4552,11 @@
               riskScore  : rule.riskScore,
               evidence   : [event],
               eventEnrichment,
-              narrative  : rule.narrative ? rule.narrative(event) : rule.title,
-              timestamp  : event.timestamp,
+              narrative        : rule.narrative ? _safeNarrative(rule.narrative(event)) : (rule.title || ''),
+              mitre_confidence : _assessMitreConfidence(
+                rule.mitre?.technique, [event], rule.mitre_confidence
+              ),
+              timestamp        : event.timestamp,
               first_seen : event.timestamp,
               last_seen  : event.timestamp,
               category   : rule.category,
@@ -4473,7 +4595,15 @@
             results.forEach(d => {
               // Prevent exact duplicate (same ruleId + user already from per-event run)
               if (!rawDets.find(x => x.ruleId === d.ruleId && x.user === d.user)) {
-                rawDets.push({ ...d, variantId: d.id || d.ruleId });
+                // Inject mitre_confidence if batch rule didn't set it
+                const batchMitreConf = d.mitre_confidence ||
+                  rule.mitre_confidence ||
+                  _assessMitreConfidence(
+                    d.mitre?.technique || rule.mitre?.technique,
+                    d.evidence || [],
+                    null
+                  );
+                rawDets.push({ ...d, mitre_confidence: batchMitreConf, variantId: d.id || d.ruleId });
               }
             });
           }
@@ -4652,7 +4782,7 @@
         const intentSignals   = inc.intentSignals || {};
         const dominantIntent  = intentSignals.attackerCount > 0 ? 'attacker' : 'admin';
         const rootCauseSummary= inc.behavior?.description
-          || (killChainStages[0]?.narrative ? `Attack initiated via: ${killChainStages[0].narrative.slice(0,120)}` : null)
+          || (killChainStages[0]?.narrative ? `Attack initiated via: ${_safeNarrative(killChainStages[0]?.narrative).slice(0,120)}` : null)
           || `${killChainStages.length}-stage attack chain by ${inc.user || 'unknown user'} on ${(inc.allHosts||[inc.host]).join(', ')}`;
 
         return {
@@ -4858,7 +4988,7 @@
       }
 
       // Ensure timestamps
-      out.timestamp  = out.timestamp  || out.first_seen  || out.TimeGenerated || out.time || new Date().toISOString();
+      out.timestamp  = out.timestamp  || out.first_seen  || out.TimeGenerated || out.time || out.ts || null;
       out.first_seen = out.first_seen || out.timestamp;
       out.last_seen  = out.last_seen  || out.timestamp;
 
@@ -5080,8 +5210,10 @@
 
     // ── Build sample scenario events ─────────────────────────────
     function getSampleEvents(scenario) {
-      const now = Date.now();
-      const ts  = (offset) => new Date(now - (offset||0)).toISOString();
+      // Use a fixed baseline so demo events have deterministic, reproducible timestamps.
+      // Anchored to 2025-01-15T08:00:00Z to represent a realistic past incident window.
+      const BASE_TS = 1736928000000; // 2025-01-15T08:00:00.000Z (fixed, not system time)
+      const ts = (offset) => new Date(BASE_TS - (offset || 0)).toISOString();
       const scenarios = {
         brute_force_compromise: [
           { EventID:4625, Computer:'DC01', User:'CORP\\admin', SourceIP:'10.10.10.55', LogonType:3, Status:'0xC000006A', TimeGenerated:ts(240000) },
@@ -5148,7 +5280,7 @@
       // ── Universal field aliases ────────────────────────────────
       const ts = r.timestamp || r.TimeGenerated || r.TimeCreated ||
                  r.time || r.date || r['@timestamp'] || r.eventTime ||
-                 r.occurred || r.created_at || new Date().toISOString();
+                 r.occurred || r.created_at || null;
 
       const actor = r.user || r.User || r.SubjectUserName || r.TargetUserName ||
                     r.username || r.actor || r.principal || r.identity ||
@@ -6004,7 +6136,7 @@
                 evidenceBlock,
                 matchedEvents: matched,
                 narrative  : `Suspicious ${domain} activity — insufficient evidence for definitive classification`,
-                timestamp  : matched[0]?.timestamp || new Date().toISOString(),
+                timestamp  : matched[0]?.timestamp || null,
                 _failSafe  : true,
               });
               continue;
@@ -6028,8 +6160,8 @@
               actor_host  : matched[0]?.actor_host || '',
               actor_ip    : matched[0]?.actor_ip || matched[0]?.srcIp || '',
               target      : matched[0]?.target || '',
-              timestamp   : matched[0]?.timestamp || new Date().toISOString(),
-              narrative   : rule.narrative(matched),
+              timestamp   : matched[0]?.timestamp || null,
+              narrative   : _safeNarrative(rule.narrative(matched)),
               _knownTool  : knownTool,
               _toolOverride: toolOverride,
             });
@@ -6116,7 +6248,7 @@
         const pa = phaseMap[a.tactic] ?? 99;
         const pb = phaseMap[b.tactic] ?? 99;
         if (pa !== pb) return pa - pb;
-        return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+        return _safeTs(a.timestamp) - _safeTs(b.timestamp) || _safeTs(a.first_seen) - _safeTs(b.first_seen) || new Date(b.timestamp).getTime();
       });
 
       // Check for clear progression (at least 2 distinct phases advancing)
@@ -6224,7 +6356,7 @@
         actor       : d.user || '',
         actor_host  : d.computer || d.host || '',
         actor_ip    : d.srcIp || '',
-        timestamp   : d.timestamp || d.first_seen || new Date().toISOString(),
+        timestamp   : d.timestamp || d.first_seen || null,
         narrative   : d.narrative || '',
         _fromSession: true,
       }));
@@ -6269,8 +6401,7 @@
           });
         }
       });
-      const timeline = [...timelineMap.values()]
-        .sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      const timeline = _chronoSort([...timelineMap.values()], 'timestamp');
 
       // ── 10. Domain summary ─────────────────────────────────────
       const domainSummary = {};
@@ -6316,6 +6447,7 @@
     }
 
     return { analyzeEvents, getSampleEvents, mergeDetections, processBackendResult,
+             runPipeline: (...args) => ZDFA.runPipeline(...args),  // bridge to ZDFA
              _dedupDetections, _normalizeRuleName, _baseRuleId, _canonicalSlug, _normalizeExternalDet,
              _inferEventsOs, _inferOsFromTitle,
              // CSDE v4
@@ -6356,6 +6488,36 @@
 
   const ZDFA = (function() {
     'use strict';
+
+    // ── Timestamp & ordering utilities (ZDFA-local copies) ─────────
+    // These mirror the CSDE utilities but live in ZDFA scope.
+    function _safeTs(v) {
+      if (!v) return 0;
+      if (typeof v === 'number') return isFinite(v) ? v : 0;
+      try { const ms = new Date(v).getTime(); return isFinite(ms) ? ms : 0; }
+      catch (_) { return 0; }
+    }
+    function _safeIsoStr(v) {
+      const ms = _safeTs(v);
+      return ms > 0 ? new Date(ms).toISOString() : '';
+    }
+    function _chronoSort(arr, tsField) {
+      const f = tsField || 'timestamp';
+      return [...arr].sort((a, b) => {
+        const ta = _safeTs(a[f] || a.first_seen || a.ts);
+        const tb = _safeTs(b[f] || b.first_seen || b.ts);
+        if (ta === 0 && tb === 0) return 0;
+        if (ta === 0) return 1;
+        if (tb === 0) return -1;
+        return ta - tb;
+      });
+    }
+    function _safeNarrative(val) {
+      if (typeof val === 'function') return '';
+      if (typeof val === 'string')   return val;
+      if (val == null)               return '';
+      try { return JSON.stringify(val); } catch (_) { return String(val); }
+    }
 
     // ── ZDFA Configuration ─────────────────────────────────────────
     const ZDFA_CFG = {
@@ -6816,9 +6978,8 @@
       // ── Session Stitching ─────────────────────────────────────
       // Build sessions: group events by user+host within SESSION_STITCH_WINDOW
       const sessionMap = new Map();
-      const sortedEvents = [...normalizedEvents].sort((a, b) =>
-        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-      );
+      // Sort strictly by original log timestamp (ascending); no-ts events go last
+      const sortedEvents = _chronoSort(normalizedEvents, 'timestamp');
 
       sortedEvents.forEach(ev => {
         const user = (ev.user || ev.actor || 'anonymous').toLowerCase();
@@ -6846,7 +7007,7 @@
       });
 
       result.sessionTimelines = [...sessionMap.values()].map(s => {
-        const _safeIso = v => { try { const d = new Date(v); return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString(); } catch(_) { return new Date().toISOString(); } };
+        const _safeIso = v => _safeIsoStr(v); // Use global _safeIsoStr — never falls back to system time
         return {
           key      : s.key,
           user     : s.user,
@@ -7640,6 +7801,9 @@
         analyzeEventsFn = null,
       } = opts;
 
+      // ── Sort events by original log timestamp before any stage ──
+      const sortedRawEvents = _chronoSort(rawEvents, 'timestamp');
+
       _health.lastRunTs = new Date().toISOString();
       _health.totalEventsScanned = rawEvents.length;
       _health.alerts = [];
@@ -7649,12 +7813,12 @@
       _health.incidentGaps = [];
 
       // Run all stages
-      const s1 = _stage1_ingestionHealth(rawEvents);
-      const s2 = _stage2_schemaEnforcement(normalizedEvents.length > 0 ? normalizedEvents : rawEvents);
-      const s3 = _stage3_statefulCorrelation(normalizedEvents.length > 0 ? normalizedEvents : rawEvents, detections);
-      const s4 = _stage4_detectionCoverageGap(rawEvents, detections, rawEvents);
+      const s1 = _stage1_ingestionHealth(sortedRawEvents);
+      const s2 = _stage2_schemaEnforcement(normalizedEvents.length > 0 ? _chronoSort(normalizedEvents,'timestamp') : sortedRawEvents);
+      const s3 = _stage3_statefulCorrelation(normalizedEvents.length > 0 ? _chronoSort(normalizedEvents,'timestamp') : sortedRawEvents, detections);
+      const s4 = _stage4_detectionCoverageGap(sortedRawEvents, detections, sortedRawEvents);
       const s5 = _stage5_incidentEngineValidation(detections, incidents, chains);
-      const s6 = _stage6_behavioralAnalytics(rawEvents, detections);
+      const s6 = _stage6_behavioralAnalytics(sortedRawEvents, detections);
       const s7 = _stage7_autoRemediation([s1, s2, s3, s4, s5, s6]);
       const s8 = _stage8_selfTest(analyzeEventsFn);
 
@@ -8689,7 +8853,10 @@ tags:
     // ════════════════════════════════════════════════════════════════
     function _runV2Engines(opts, stageResults) {
       const { rawEvents = [], normalizedEvents = [], detections = [] } = opts;
-      const events = normalizedEvents.length ? normalizedEvents : rawEvents;
+      // Always work with chronologically sorted events
+      const _sortedNorm = normalizedEvents.length ? _chronoSort(normalizedEvents, 'timestamp') : [];
+      const _sortedRaw  = _chronoSort(rawEvents, 'timestamp');
+      const events = _sortedNorm.length ? _sortedNorm : _sortedRaw;
 
       // Engine 1: Schema normalization
       const schemaResult = _schemaEngine_normalize(events);
@@ -10926,7 +11093,7 @@ return {
         ${stage.srcIp  ? `<span>🌐 ${stage.srcIp}</span>` : ''}
         ${stage.timestamp ? `<span>🕐 ${new Date(stage.timestamp).toLocaleString()}</span>` : ''}
       </div>
-      ${stage.narrative ? `<div style="font-size:11px;color:#c9d1d9;line-height:1.5;margin-bottom:6px;">${stage.narrative.slice(0,200)}${stage.narrative.length>200?'…':''}</div>` : ''}
+      ${stage.narrative ? `<div style="font-size:11px;color:#c9d1d9;line-height:1.5;margin-bottom:6px;">${_safeNarrative(stage.narrative).slice(0,200)}${_safeNarrative(stage.narrative).length>200?'…':''}</div>` : ''}
       ${stage.commandLine ? `<div style="font-size:10px;font-family:monospace;color:#60a5fa;background:#0d1117;padding:4px 8px;border-radius:4px;word-break:break-all;">${stage.commandLine.slice(0,200)}</div>` : ''}
       ${stage.hasCausalViolation ? `<div style="font-size:10px;color:#ef4444;margin-top:6px;">⚠ Causal violation detected at this stage</div>` : ''}
       <!-- One-click actions -->
@@ -11040,11 +11207,11 @@ return {
         tacticRole  : p.phaseTactic || p.tactic || '',
         inferred    : !!(p.inferred || p.inferredFrom),
         confidence  : p.confidence || (p.riskScore ? Math.min(p.riskScore, 100) : 30),
-        _ts         : new Date(p.first_seen || p.timestamp || 0).getTime(),
+        _ts         : _safeTs(p.first_seen || p.timestamp),
       }))
       .sort((a, b) => {
         // Primary: strictly chronological (first_seen / timestamp ascending)
-        // v2 fix: use strict ascending order; only tiebreak by kill-chain phase index
+        // Use _safeTs so null timestamps go to end, not interfere with ordering
         if (a._ts !== b._ts) return a._ts - b._ts;
         // Exact-ts tiebreak: lower kill-chain phase index first (earlier stage in kill chain)
         const PHASE_ORDER = [
@@ -11103,7 +11270,7 @@ return {
       ${pt.srcIp ? ` · 🌐 ${pt.srcIp}` : ''}
       ${ptEdge}
     </div>
-    ${pt.narrative ? `<div style="font-size:11px;color:#8b949e;margin-top:3px;line-height:1.4;">${pt.narrative.slice(0,160)}${pt.narrative.length>160?'…':''}</div>` : ''}
+    ${pt.narrative ? `<div style="font-size:11px;color:#8b949e;margin-top:3px;line-height:1.4;">${_safeNarrative(pt.narrative).slice(0,160)}${_safeNarrative(pt.narrative).length>160?'…':''}</div>` : ''}
   </div>
   <div style="font-size:10px;color:#4b5563;flex-shrink:0;text-align:right;">
     <span style="font-weight:700;color:${_riskColor(pt.riskScore||0)};">${pt.riskScore||'?'}</span>
@@ -11116,9 +11283,9 @@ return {
     // Evidence must reflect the attack sequence, not detection priority.
     // Re-sort children by first_seen ascending so Evidence matches the chain flow.
     // v2: strictly ascending chronological sort for Evidence display
-    const chronoChildren = [...children].sort((a, b) => {
-      const ta = new Date(a.first_seen || a.timestamp || 0).getTime();
-      const tb = new Date(b.first_seen || b.timestamp || 0).getTime();
+    const chronoChildren = _chronoSort(children, 'first_seen').sort((a, b) => {
+      const ta = _safeTs(a.first_seen || a.timestamp);
+      const tb = _safeTs(b.first_seen || b.timestamp);
       if (Math.abs(ta - tb) <= 500) {
         // Tiebreak by riskScore desc (higher risk = earlier in tie-window)
         return (b.riskScore || 0) - (a.riskScore || 0);
@@ -11168,7 +11335,7 @@ return {
           ${cLinked}
           ${c.logCategory ? `<span style="color:#34d399;font-size:9px;">✔ ${c.logCategory}</span>` : ''}
         </div>
-        ${c.narrative ? `<div style="font-size:10.5px;color:#8b949e;line-height:1.45;margin-top:2px;">${c.narrative.slice(0,160)}${c.narrative.length>160?'…':''}</div>` : ''}
+        ${c.narrative ? `<div style="font-size:10.5px;color:#8b949e;line-height:1.45;margin-top:2px;">${_safeNarrative(c.narrative).slice(0,160)}${_safeNarrative(c.narrative).length>160?'…':''}</div>` : ''}
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;">
         <span style="font-size:13px;font-weight:800;color:${_riskColor(c.riskScore||0)};font-family:'JetBrains Mono',monospace;">${c.riskScore||'?'}<span style="font-size:8px;color:#4b5563;">/100</span></span>
@@ -11229,10 +11396,10 @@ return {
   </div>
 
   <!-- ── Root Cause / Intent Summary Banner ─────────────────────── -->
-  ${inc.narrative || behavior.description ? `
+  ${(inc.narrative || behavior.description) ? `
   <div style="padding:10px 20px;background:rgba(96,165,250,0.03);border-top:1px solid #21262d;">
     <div style="font-size:10px;color:#4b5563;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;font-weight:600;">🧠 Root Cause / Intent Summary</div>
-    <div style="font-size:12px;color:#c9d1d9;line-height:1.6;">${inc.narrative || behavior.description || ''}</div>
+    <div style="font-size:12px;color:#c9d1d9;line-height:1.6;">${_safeNarrative(inc.narrative) || behavior.description || ''}</div>
   </div>` : ''}
 
   <!-- ══ BCE v10: Attack Chain Flow — Chronological Sequence ══════ -->
@@ -12156,12 +12323,15 @@ return {
     const mitreTech = (d.mitre && d.mitre.technique) ? d.mitre.technique
                     : (d.technique || d.technique_id || d.mitre_technique || '');
     const mitreName = (d.mitre && d.mitre.name) ? d.mitre.name : '';
-    const mitreTactic = (d.mitre && d.mitre.tactic) ? d.mitre.tactic.replace(/-/g,' ') : '';
+    const mitreTactic  = (d.mitre && d.mitre.tactic) ? d.mitre.tactic.replace(/-/g,' ') : '';
+    const mitreConfidence = d.mitre_confidence || 'medium';
+    const confBadgeColor  = { high:'#22c55e', medium:'#f59e0b', low:'#ef4444', unconfirmed:'#6b7280' }[mitreConfidence] || '#f59e0b';
+    const confBadge = `<span title="MITRE confidence: ${mitreConfidence}" style="font-size:8px;color:${confBadgeColor};margin-left:3px;vertical-align:middle;">[${mitreConfidence.charAt(0).toUpperCase()}]</span>`;
     const mitreDisplay = mitreTech
       ? `<a href="https://attack.mitre.org/techniques/${mitreTech.replace('.','/')}/" target="_blank"
-             title="${mitreName}${mitreTactic ? ' — '+mitreTactic : ''}"
+             title="${mitreName}${mitreTactic ? ' — '+mitreTactic : ''} (confidence: ${mitreConfidence})"
              style="color:#a78bfa;text-decoration:none;font-size:10px;"
-             onclick="event.stopPropagation();">${mitreTech}</a>`
+             onclick="event.stopPropagation();">${mitreTech}</a>${confBadge}`
       : '<span style="color:#374151;font-size:10px;">—</span>';
     const varBadge = vCount > 1
       ? `<span style="font-size:9px;padding:1px 5px;background:rgba(167,139,250,0.15);color:#a78bfa;border-radius:8px;margin-left:4px;">${vCount} variants</span>`
@@ -12206,7 +12376,7 @@ return {
       el.innerHTML = `<div style="padding:60px;text-align:center;color:#4b5563;font-size:13px;">Timeline empty — run analysis.</div>`;
       return;
     }
-    const sorted = [...tl].sort((a,b) => new Date(a.timestamp||a.ts||0) - new Date(b.timestamp||b.ts||0));
+    const sorted = _chronoSort(tl, 'timestamp');
     // Find detections that correspond to timeline entries
     const detMap = new Map(S.detections.map(d => [d.id, d]));
     el.innerHTML = sorted.map((e, idx) => {
@@ -12288,7 +12458,7 @@ return {
           <div style="font-size:10px;font-weight:700;color:${nodeCol};margin-bottom:6px;">${name}</div>
           ${tech ? `<div style="font-size:9px;margin-bottom:4px;"><span style="color:#4A6080;">Technique:</span> <span style="color:#60A5FA;font-family:monospace;">${tech}</span></div>` : ''}
           ${s.confidence ? `<div style="font-size:9px;margin-bottom:4px;"><span style="color:#4A6080;">Confidence:</span> <span style="color:#E8EDF5;">${s.confidence}%</span></div>` : ''}
-          ${s.narrative ? `<div style="font-size:9px;color:#8FA3BF;line-height:1.4;margin-top:4px;">${s.narrative.slice(0,200)}${s.narrative.length>200?'…':''}</div>` : ''}
+          ${s.narrative ? `<div style="font-size:9px;color:#8FA3BF;line-height:1.4;margin-top:4px;">${_safeNarrative(s.narrative).slice(0,200)}${_safeNarrative(s.narrative).length>200?'…':''}</div>` : ''}
           ${isInf ? `<div style="font-size:8px;color:#6B7280;margin-top:4px;font-style:italic;">⚙ Inferred stage — based on behavioral correlation</div>` : ''}
         </div>
       </div>
