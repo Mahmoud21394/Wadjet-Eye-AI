@@ -4097,6 +4097,10 @@
       return {
         id             : `AGG-${baseId}-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
         ruleId         : det.ruleId || baseId,
+        // FIX v11: preserve variantId on the aggregate so downstream supersession
+        // key-building (specificCmdKeys) and detection-card variant badges work
+        // correctly after deduplication collapses multiple raw detections.
+        variantId      : det.variantId || det.ruleId || baseId,
         ruleName,
         title          : ruleName,
         detection_name : ruleName,
@@ -4258,6 +4262,11 @@
         } else if (hasInitial && hasExecution && hasPersistence) {
           chainType = 'initial-compromise';
           chainName = 'Initial Compromise → Execution → Persistence';
+        } else if (phases.includes('credential-access') && hasPersistence) {
+          // FIX v11: brute-force → account creation pattern (credential-access + persistence)
+          // produces this combination; give it a meaningful name instead of the generic fallback.
+          chainType = 'brute-force-persistence';
+          chainName = 'Credential Attack → Persistence Chain';
         } else if (phases.includes('credential-access') && hasExecution) {
           chainType = 'credential-exec';
           chainName = 'Credential Access → Execution Chain';
@@ -4614,13 +4623,39 @@
       });
 
       // ── Supersession: drop lower-confidence per-event detections ─
-      // If a batch rule fired for same user, drop individual per-event matches
+      // If a batch rule fired for same user, drop individual per-event matches.
       // FIX v7: Added spray/stuffing supersession; CSDE-WIN-025/026 supersede
-      // individual CSDE-WIN-001 logon-failure events (no duplicate spam).
+      //         individual CSDE-WIN-001 logon-failure events (no duplicate spam).
+      // FIX v8: CSDE-WIN-007 (generic cmd.exe child) is superseded by the more
+      //         specific CSDE-WIN-004 (net user /add) when both fire on the same
+      //         host+user+commandLine — prevents double-counting persistence events.
       const supersedeMap = {
         'CSDE-WIN-001': 'CSDE-WIN-002', // individual fail → superseded by batch brute force
         'CSDE-WIN-006': 'CSDE-WIN-003', // generic logon  → superseded by brute force success
+        // CSDE-WIN-007 (Suspicious Process via cmd.exe) is a catch-all execution rule.
+        // When a more specific rule (WIN-004 account creation, WIN-008 encoded PS,
+        // WIN-010 PsExec) already fired for the exact same event, suppress WIN-007
+        // to avoid duplicate detections for a single raw log line.
+        'CSDE-WIN-007': null,           // checked individually below
       };
+
+      // Build a set of (host|user|commandLine) keys for events where a specific
+      // rule already fired — used to suppress WIN-007 duplicates.
+      // FIX v10: also match variant IDs (CSDE-WIN-004-NET, CSDE-WIN-004-NET1, etc.)
+      // so that the variant-matched ruleId still triggers suppression.
+      const specificCmdRules = new Set([
+        'CSDE-WIN-004','CSDE-WIN-004-NET','CSDE-WIN-004-NET1',
+        'CSDE-WIN-004B','CSDE-WIN-008','CSDE-WIN-008-ENC','CSDE-WIN-008-ENC2',
+        'CSDE-WIN-010','CSDE-WIN-009','CSDE-WIN-009-7Z','CSDE-WIN-009-RAR','CSDE-WIN-009-XCP',
+      ]);
+      // Key on variantId (the most specific rule ID that actually matched) OR ruleId.
+      const specificCmdKeys  = new Set(
+        rawDets
+          .filter(d => specificCmdRules.has(d.variantId || d.ruleId))
+          .map(d => `${(d.computer||'').toLowerCase()}|${(d.user||'').toLowerCase()}|${(d.commandLine||'').toLowerCase().trim()}`)
+          .filter(k => k !== '||')
+      );
+
       // Additional: if CSDE-WIN-025 (spray) or CSDE-WIN-026 (stuffing) fired,
       // suppress CSDE-WIN-002 (per-user brute-force) for overlapping source IPs
       const sprayDets   = rawDets.filter(d => d.ruleId === 'CSDE-WIN-025');
@@ -4629,7 +4664,24 @@
       const hasStuffing = stuffDets.length > 0;
 
       const filteredDets = rawDets.filter(d => {
+        // ── WIN-007 specific supersession ────────────────────────────
+        // Suppress the generic cmd.exe-child detection when a more precise
+        // rule already captured the same command on the same host+user.
+        if (d.ruleId === 'CSDE-WIN-007') {
+          const key = `${(d.computer||'').toLowerCase()}|${(d.user||'').toLowerCase()}|${(d.commandLine||'').toLowerCase().trim()}`;
+          // Suppress WIN-007 when a more specific rule fired on the exact same
+          // host+user+commandLine combination (prevents double-counting one raw log line).
+          // Also suppress when commandLine alone matches (covers cases where computer/user
+          // differ slightly due to normalization edge-cases).
+          if (key !== '||' && specificCmdKeys.has(key)) return false;
+          // Secondary guard: commandLine-only match (no host/user) as a safety net
+          const cmdOnly = `||${(d.commandLine||'').toLowerCase().trim()}`;
+          if ((d.commandLine||'').trim() && [...specificCmdKeys].some(k => k.endsWith(`|${(d.commandLine||'').toLowerCase().trim()}`))) return false;
+        }
+
         const superseder = supersedeMap[d.ruleId];
+        // null entry means handled above; skip the generic supersede path
+        if (superseder === null) return true;
         if (superseder) {
           // Supersede if a better rule fired for the same user OR same host+srcIp
           const betterExists = rawDets.some(b =>
@@ -10729,7 +10781,14 @@ return {
 
     const confBadge = document.getElementById('rk-inc-confidence-badge');
     if (confBadge && incidents.length) {
-      const avgConf = Math.round(incidents.reduce((s, i) => s + (i.confidence?.score || 0), 0) / incidents.length);
+      // FIX v10: incidentSummaries stores confidence as a plain number (score) at the
+      // top level, and the confidence level as inc.level (not inc.confidence.level).
+      // Support both enriched incidentSummaries shape AND raw incident shape.
+      const avgConf = Math.round(incidents.reduce((s, i) => {
+        const score = typeof i.confidence === 'number' ? i.confidence
+                    : (i.confidence?.score ?? 0);
+        return s + score;
+      }, 0) / incidents.length);
       confBadge.style.display = '';
       confBadge.textContent = `Avg Confidence: ${avgConf}%`;
     }
@@ -10739,8 +10798,15 @@ return {
       const critInc    = incidents.filter(i => i.severity === 'critical').length;
       const highInc    = incidents.filter(i => i.severity === 'high').length;
       const crossHost  = incidents.filter(i => i.crossHost).length;
-      const confirmed  = incidents.filter(i => i.confidence?.level === 'Confirmed').length;
-      const totalAlerts= incidents.reduce((s, i) => s + i.detectionCount, 0);
+      // FIX v10: enriched incidentSummaries expose confidence level as inc.level (top-level)
+      // while raw incidents expose it as inc.confidence.level (nested object).
+      const confirmed  = incidents.filter(i =>
+        (typeof i.confidence === 'object' ? i.confidence?.level : i.level) === 'Confirmed'
+      ).length;
+      // FIX v10: incidentSummaries stores detectionCount; raw incidents store it as
+      // inc.detectionCount too but may also hold children.length+1 — fall back gracefully.
+      const totalAlerts= incidents.reduce((s, i) =>
+        s + (i.detectionCount || ((i.children||[]).length + (i.parent ? 1 : 0)) || 1), 0);
       statsBar.innerHTML = [
         { label: 'Critical',     val: critInc,    color: '#ef4444', icon: '🔴' },
         { label: 'High',         val: highInc,    color: '#f97316', icon: '🟠' },
@@ -11229,7 +11295,17 @@ return {
     const incId     = inc.incidentId || `INC-${i}`;
     const shortId   = incId.split('-').slice(-2).join('-');
     const behavior  = inc.behavior || {};
-    const conf      = inc.confidence || { score: 30, level: 'Possible', reasons: [] };
+    // FIX v10: incidentSummaries (enriched) stores confidence as a plain NUMBER
+    // and the level as inc.level (top-level string), NOT as an object.
+    // Raw _correlateIncidents incidents store confidence as an object { score, level, reasons }.
+    // Normalise both shapes into a single conf object so the rest of the card renders correctly.
+    const conf = (typeof inc.confidence === 'object' && inc.confidence !== null)
+      ? inc.confidence                                         // raw incident: { score, level, reasons }
+      : {
+          score  : typeof inc.confidence === 'number' ? inc.confidence : 30,
+          level  : inc.level || 'Possible',
+          reasons: inc.confidenceReasons || [],
+        };
     const confStyle = _confidenceStyle(conf.level);
     const aceScore  = inc.aceScore || {};
     const dag       = inc.dag || {};
@@ -11305,8 +11381,12 @@ return {
       : '<li>Single-event detection</li>';
 
     // ── BCE v10: Build interactive attack-chain flow ───────────────
-    // Pull kill-chain stages from phaseTimeline (includes inferred stages)
-    const phaseTimeline   = inc.phaseTimeline || [];
+    // FIX v10: incidentSummaries (enriched) exposes stages as inc.killChainStages (an array
+    // of fully-structured stage objects), while raw _correlateIncidents incidents expose
+    // them as inc.phaseTimeline (raw phase entries).  Accept both shapes.
+    // killChainStages already contains all fields needed by vizStages/phaseRows (ruleName,
+    // tactic, technique, severity, confidence, inferred, timestamp, host, user, narrative …)
+    const phaseTimeline   = inc.killChainStages || inc.phaseTimeline || [];
     const hasInferred     = phaseTimeline.some(p => p.inferred || p.inferredFrom);
     const inferredCount   = phaseTimeline.filter(p => p.inferred || p.inferredFrom).length;
     const observedCount   = phaseTimeline.filter(p => !p.inferred && !p.inferredFrom).length;
@@ -11363,6 +11443,9 @@ return {
       const hostTransition = pt.isHostTransition
         ? `<span style="font-size:9px;padding:1px 5px;background:rgba(167,139,250,0.1);color:#a78bfa;border-radius:4px;">🔀 host pivot</span>` : '';
       const isInf = pt.inferred || pt.inferredFrom;
+      // FIX v10: killChainStages uses pt.tactic (not pt.phase) for the phase label.
+      // Accept either field so both raw phaseTimeline and enriched killChainStages render.
+      const ptPhaseLabel = pt.phase || pt.tactic || pt.tacticRole || 'unknown';
       return `
 <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid #1c2128;">
   <div style="display:flex;flex-direction:column;align-items:center;min-width:24px;padding-top:2px;">
@@ -11371,7 +11454,7 @@ return {
   </div>
   <div style="flex:1;min-width:0;">
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px;">
-      <span style="font-size:10px;padding:1px 7px;background:rgba(167,139,250,0.1);color:#a78bfa;border-radius:5px;font-weight:600;">${pt.phase}</span>
+      <span style="font-size:10px;padding:1px 7px;background:rgba(167,139,250,0.1);color:#a78bfa;border-radius:5px;font-weight:600;">${ptPhaseLabel}</span>
       ${_sevBadge(ptSev)}
       <span style="font-size:11px;color:#e6edf3;font-weight:600;">${pt.ruleName || pt.ruleId || 'Detection'}</span>
       ${pt.technique ? `<span style="font-size:10px;font-family:monospace;color:#60a5fa;">${pt.technique}</span>` : ''}
@@ -11968,9 +12051,15 @@ return {
         result.scenario = scenario;
       }
 
-      // Guaranteed iterable arrays regardless of response shape
+      // Guaranteed iterable arrays regardless of response shape.
+      // FIX v9: Use incidentSummaries (fully-enriched analyst objects with
+      // killChainStages, chainGraph, etc.) for S.incidents — not the raw
+      // internal incident objects from _correlateIncidents. The UI renderers
+      // (_renderIncidentsList, Attack Chain, MITRE) all expect the enriched shape.
       S.detections  = normalizeDetections(result.detections);
-      S.incidents   = Array.isArray(result.incidents) ? result.incidents : [];
+      S.incidents   = Array.isArray(result.incidentSummaries) && result.incidentSummaries.length
+                        ? result.incidentSummaries
+                        : (Array.isArray(result.incidents) ? result.incidents : []);
       S.timeline    = normalizeDetections(result.timeline);
       S.chains      = normalizeDetections(result.chains);
       S.anomalies   = normalizeDetections(result.anomalies);
@@ -11983,11 +12072,43 @@ return {
 
       _updateStats(result);
       const dLen = S.detections.length;
+      const iLen = S.incidents.length;
       const cLen = S.chains.length;
-      _showToast(`✓ ${dLen} detection(s), ${cLen} chain(s) | Risk: ${result.riskScore}${result.engine === 'CSDE-offline' ? ' [Offline]' : ''}`, 'success');
+      _showToast(`✓ ${dLen} detection(s), ${iLen} incident(s), ${cLen} chain(s) | Risk: ${result.riskScore}${result.engine === 'CSDE-offline' ? ' [Offline]' : ''}`, 'success');
 
-      // Navigate to detections
-      _setTab('detections');
+      // Navigate to incidents tab when incidents were formed, else detections
+      _setTab(iLen ? 'incidents' : 'detections');
+
+      // FIX v11: After tab switch, also eagerly refresh the Overview chain preview
+      // so the Attack Chain Preview panel shows chains immediately even when the
+      // user later navigates back to the Overview tab.  The overview DOM element
+      // 'rk-ov-chains' is always present in _tplOverview; update it now so it
+      // is never stale when the tab is revisited.
+      // _setTab already called _afterTabRender → _renderOverviewContent for
+      // the overview tab, but since we just switched AWAY from overview the
+      // panel is no longer the active one — patch the element directly instead.
+      (function _patchOverviewChainPreview() {
+        const chainEl = document.getElementById('rk-ov-chains');
+        if (chainEl && S.chains.length) {
+          chainEl.innerHTML = S.chains.slice(0, 2).map(c => _chainPreview(c)).join('');
+        }
+        // Also refresh recent-detections panel
+        const recEl = document.getElementById('rk-ov-recent');
+        if (recEl && S.detections.length) {
+          recEl.innerHTML = S.detections.slice(0, 5).map((d, di) => {
+            const cs = _sev(d.severity || d.aggregated_severity || 'medium');
+            return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;
+              border-bottom:1px solid #1c2128;">
+              <span style="width:8px;height:8px;border-radius:50%;background:${cs.color};
+                flex-shrink:0;"></span>
+              <span style="flex:1;font-size:12px;color:#e6edf3;overflow:hidden;
+                text-overflow:ellipsis;white-space:nowrap;">${d.detection_name||d.ruleName||d.title||'Detection'}</span>
+              <span style="font-size:10px;color:${cs.color};font-weight:700;
+                flex-shrink:0;">${(d.severity||'medium').toUpperCase()}</span>
+            </div>`;
+          }).join('');
+        }
+      })();
 
       if (ingestRes) {
         ingestRes.innerHTML = `<div class="rk-card" style="padding:16px;">
@@ -12171,12 +12292,15 @@ return {
         _showToast(`[Offline Mode] Analyzed ${events.length} events — ${r.detections.length} detections found`, 'info');
       }
 
-      // Guaranteed iterable array regardless of response shape
+      // Guaranteed iterable array regardless of response shape.
+      // FIX v9: Prefer incidentSummaries (enriched analyst objects) for S.incidents.
       const dets  = normalizeDetections(r.detections);
       const tl    = normalizeDetections(r.timeline);
       const chs   = normalizeDetections(r.chains);
       const anoms = normalizeDetections(r.anomalies);
-      const incs  = Array.isArray(r.incidents) ? r.incidents : [];
+      const incs  = Array.isArray(r.incidentSummaries) && r.incidentSummaries.length
+                      ? r.incidentSummaries
+                      : (Array.isArray(r.incidents) ? r.incidents : []);
 
       // Use CSDE.mergeDetections to cross-analysis deduplicate
       S.detections  = CSDE.mergeDetections(S.detections, dets);
@@ -12189,11 +12313,11 @@ return {
       S.lastUpdated = new Date();
       _updateStats(r);
       if (dets.length) {
-        _showToast(`✓ ${events.length} events → ${S.detections.length} detection(s) [deduped], ${chs.length} chain(s) | Risk: ${r.riskScore}`, 'success');
+        _showToast(`✓ ${events.length} events → ${S.detections.length} detection(s) [deduped], ${incs.length} incident(s), ${chs.length} chain(s) | Risk: ${r.riskScore}`, 'success');
       }
       if (res) res.innerHTML = _ingestSummaryCard(r);
       // Auto-navigate: prefer incidents tab when incidents were formed, else detections
-      // FIX 7: Also force-refresh whichever tab we land on (covers the case
+      // FIX v9: Also force-refresh whichever tab we land on (covers the case
       // where the user is ALREADY on that tab when upload completes).
       if (dets.length) {
         const targetTab = incs.length ? 'incidents' : 'detections';
@@ -12390,7 +12514,10 @@ return {
       const tl    = normalizeDetections(r.timeline);
       const chs   = normalizeDetections(r.chains);
       const anoms = normalizeDetections(r.anomalies);
-      const incs  = Array.isArray(r.incidents) ? r.incidents : [];
+      // FIX v9: Prefer enriched incidentSummaries over raw incidents
+      const incs  = Array.isArray(r.incidentSummaries) && r.incidentSummaries.length
+                      ? r.incidentSummaries
+                      : (Array.isArray(r.incidents) ? r.incidents : []);
 
       // Cross-analysis dedup merge (handles repeated uploads)
       S.detections  = CSDE.mergeDetections(S.detections, dets);
@@ -13205,6 +13332,9 @@ return {
   }
 
   // ── MITRE heatmap ────────────────────────────────────────────
+  // FIX v9: When the backend is offline, build MITRE coverage from the
+  // current session's detections (S.detections + S.incidents) so analysts
+  // always see a populated heatmap after running a demo or ingesting logs.
   async function _loadMITRE() {
     const el = document.getElementById('rk-mitre-heatmap');
     if (!el) return;
@@ -13213,8 +13343,131 @@ return {
       const r = await _api('GET', '/mitre');
       _renderMITREHeatmap(r, el);
     } catch(e) {
-      el.innerHTML = `<div style="color:#ef4444;padding:20px;">${e.message}</div>`;
+      // Backend offline — build heatmap from session detections
+      const offlineData = _buildMITREFromSession();
+      if (offlineData.tactics.length) {
+        _renderMITREHeatmap(offlineData, el);
+      } else {
+        el.innerHTML = `<div style="color:#4b5563;font-size:13px;text-align:center;padding:40px;">
+          <div style="font-size:24px;margin-bottom:10px;">🛡️</div>
+          <div style="font-size:14px;color:#6b7280;margin-bottom:6px;">No MITRE data yet.</div>
+          <div style="font-size:11px;">Run a demo or ingest logs to populate the ATT&CK heatmap.</div>
+        </div>`;
+      }
     }
+  }
+
+  // Build MITRE coverage data from current session detections (offline fallback)
+  function _buildMITREFromSession() {
+    // Full ATT&CK tactic/technique catalogue (Enterprise, subset)
+    const TACTIC_CATALOGUE = [
+      { id:'initial-access',       name:'Initial Access',       techniques:[
+        {id:'T1078',name:'Valid Accounts'},{id:'T1190',name:'Exploit Public-Facing App'},
+        {id:'T1566',name:'Phishing'},{id:'T1133',name:'External Remote Services'},
+        {id:'T1195',name:'Supply Chain Compromise'},{id:'T1199',name:'Trusted Relationship'},
+      ]},
+      { id:'execution',            name:'Execution',            techniques:[
+        {id:'T1059',name:'Command & Scripting'},{id:'T1059.001',name:'PowerShell'},
+        {id:'T1059.003',name:'Windows Command Shell'},{id:'T1059.005',name:'VBScript'},
+        {id:'T1204',name:'User Execution'},{id:'T1047',name:'WMI'},
+        {id:'T1569.002',name:'Service Execution'},{id:'T1106',name:'Native API'},
+      ]},
+      { id:'persistence',          name:'Persistence',          techniques:[
+        {id:'T1136',name:'Create Account'},{id:'T1136.001',name:'Local Account'},
+        {id:'T1543',name:'Create/Modify System Process'},{id:'T1053',name:'Scheduled Task'},
+        {id:'T1098',name:'Account Manipulation'},{id:'T1098.001',name:'Add Cloud Creds'},
+        {id:'T1547',name:'Boot/Logon Autostart'},{id:'T1505',name:'Server Software Component'},
+      ]},
+      { id:'privilege-escalation', name:'Privilege Escalation', techniques:[
+        {id:'T1055',name:'Process Injection'},{id:'T1068',name:'Exploit for Priv Esc'},
+        {id:'T1134',name:'Access Token Manipulation'},{id:'T1053.005',name:'Scheduled Task'},
+        {id:'T1548',name:'Abuse Elevation Control'},{id:'T1611',name:'Escape to Host'},
+      ]},
+      { id:'defense-evasion',      name:'Defense Evasion',      techniques:[
+        {id:'T1070',name:'Indicator Removal'},{id:'T1070.001',name:'Clear Event Logs'},
+        {id:'T1027',name:'Obfuscated Files'},{id:'T1036',name:'Masquerading'},
+        {id:'T1562',name:'Impair Defenses'},{id:'T1218',name:'System Binary Proxy Exec'},
+        {id:'T1055',name:'Process Injection'},{id:'T1140',name:'Deobfuscate/Decode'},
+      ]},
+      { id:'credential-access',    name:'Credential Access',    techniques:[
+        {id:'T1110',name:'Brute Force'},{id:'T1110.001',name:'Password Guessing'},
+        {id:'T1110.003',name:'Password Spray'},{id:'T1003',name:'OS Cred Dumping'},
+        {id:'T1003.001',name:'LSASS Memory'},{id:'T1555',name:'Creds from Stores'},
+        {id:'T1078',name:'Valid Accounts'},{id:'T1558',name:'Steal/Forge Kerberos Tickets'},
+      ]},
+      { id:'discovery',            name:'Discovery',            techniques:[
+        {id:'T1087',name:'Account Discovery'},{id:'T1087.001',name:'Local Account'},
+        {id:'T1046',name:'Network Service Scan'},{id:'T1082',name:'System Info Discovery'},
+        {id:'T1083',name:'File & Dir Discovery'},{id:'T1057',name:'Process Discovery'},
+        {id:'T1018',name:'Remote System Discovery'},{id:'T1069',name:'Permission Groups'},
+      ]},
+      { id:'lateral-movement',     name:'Lateral Movement',     techniques:[
+        {id:'T1021',name:'Remote Services'},{id:'T1021.002',name:'SMB/Admin Shares'},
+        {id:'T1021.001',name:'RDP'},{id:'T1021.006',name:'Windows Remote Mgmt'},
+        {id:'T1550',name:'Use Alt Auth Material'},{id:'T1563',name:'Remote Service Session Hijack'},
+        {id:'T1534',name:'Internal Spearphishing'},{id:'T1570',name:'Lateral Tool Transfer'},
+      ]},
+      { id:'collection',           name:'Collection',           techniques:[
+        {id:'T1074',name:'Data Staged'},{id:'T1074.001',name:'Local Data Staging'},
+        {id:'T1560',name:'Archive Collected Data'},{id:'T1213',name:'Data from Info Repos'},
+        {id:'T1056',name:'Input Capture'},{id:'T1005',name:'Data from Local System'},
+      ]},
+      { id:'command-and-control',  name:'Command & Control',    techniques:[
+        {id:'T1071',name:'App Layer Protocol'},{id:'T1071.001',name:'Web Protocols'},
+        {id:'T1105',name:'Ingress Tool Transfer'},{id:'T1573',name:'Encrypted Channel'},
+        {id:'T1095',name:'Non-App Layer Protocol'},{id:'T1572',name:'Protocol Tunneling'},
+      ]},
+      { id:'exfiltration',         name:'Exfiltration',         techniques:[
+        {id:'T1041',name:'Exfil Over C2'},{id:'T1048',name:'Exfil Over Alt Protocol'},
+        {id:'T1567',name:'Exfil Over Web Service'},{id:'T1030',name:'Data Transfer Size Limits'},
+      ]},
+      { id:'impact',               name:'Impact',               techniques:[
+        {id:'T1486',name:'Data Encrypted for Impact'},{id:'T1490',name:'Inhibit System Recovery'},
+        {id:'T1485',name:'Data Destruction'},{id:'T1489',name:'Service Stop'},
+        {id:'T1491',name:'Defacement'},{id:'T1499',name:'Endpoint Denial of Service'},
+      ]},
+    ];
+
+    // Collect all detected techniques from session detections and incidents
+    const detectedTechs = new Map(); // technique_id → { count, ruleIds }
+    const addTech = (techId, ruleId) => {
+      if (!techId) return;
+      if (!detectedTechs.has(techId)) detectedTechs.set(techId, { count: 0, ruleIds: [] });
+      const e = detectedTechs.get(techId);
+      e.count++;
+      if (ruleId && !e.ruleIds.includes(ruleId)) e.ruleIds.push(ruleId);
+    };
+
+    (S.detections || []).forEach(d => {
+      addTech(d.mitre?.technique || d.technique, d.ruleId);
+    });
+    (S.incidents || []).forEach(inc => {
+      (inc.techniques || []).forEach(t => addTech(t, null));
+      (inc.killChainStages || []).forEach(s => addTech(s.technique, s.ruleId));
+    });
+    (S.chains || []).forEach(c => {
+      (c.techniques || []).forEach(t => addTech(t, null));
+      (c.stages || []).forEach(s => addTech(s.technique, null));
+    });
+
+    // Build coveredTechniques map
+    const coveredTechniques = {};
+    let totalTechs = 0, coveredCount = 0;
+    TACTIC_CATALOGUE.forEach(tac => {
+      tac.techniques.forEach(t => {
+        totalTechs++;
+        const det = detectedTechs.get(t.id);
+        coveredTechniques[t.id] = {
+          detected: !!(det && det.count > 0),
+          rules: det ? det.ruleIds.length : 0,
+          count: det ? det.count : 0,
+        };
+        if (coveredTechniques[t.id].detected || coveredTechniques[t.id].rules > 0) coveredCount++;
+      });
+    });
+    const coverage = totalTechs > 0 ? (coveredCount / totalTechs * 100) : 0;
+
+    return { tactics: TACTIC_CATALOGUE, coveredTechniques, coverage, _offline: true };
   }
 
   function _renderMITREHeatmap(r, el) {
@@ -13696,7 +13949,8 @@ return {
     // Prevents blank Incidents/Detections/Timeline/Chains when upload
     // completes while user is already on that tab.
     const _activeTab = S.activeTab;
-    if      (_activeTab === 'incidents')   _renderIncidentsList(S.incidents);
+    if      (_activeTab === 'overview')    _renderOverviewContent();
+    else if (_activeTab === 'incidents')   _renderIncidentsList(S.incidents);
     else if (_activeTab === 'detections')  _renderDetectionsList(S.detections);
     else if (_activeTab === 'timeline')    _renderTimelineList(S.timeline);
     else if (_activeTab === 'chains')      _renderChainsList(S.chains);
