@@ -33,6 +33,8 @@
   <link rel="stylesheet" href="css/soc-dashboard-v2.css" />
   <!-- RAYKAN Pro v3.0 — Professional minimalist-industrial design layer: flat glass, no excess glow, 52px header -->
   <link rel="stylesheet" href="css/raykan-pro.css" />
+  <!-- Malware DNA Engine v5.0 — Production SOC Platform -->
+  <link rel="stylesheet" href="css/malware-dna-v5.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -1344,6 +1346,8 @@
 ──────────────────────────────────────────────────────────────────────────── -->
 <script src="js/threat-graph-brain.js"></script>
 <script src="js/malware-dna-v2.js"></script>
+<!-- Malware DNA Engine v5.0 — Production-grade threat intel platform -->
+<script src="js/malware-dna-v5.js"></script>
 <script src="js/settings-v3.js"></script>
 <!-- Innovation Modules v1.0 — What-If Simulator, Security Memory Brain, Autonomous Agent -->
 <script src="js/innovation-modules.js"></script>
@@ -1397,7 +1401,13 @@
     'cognitive-layer':   () => typeof window.renderCognitiveLayer     === 'function' && window.renderCognitiveLayer(),
     'predictive-engine': () => typeof window.renderPredictiveEngine   === 'function' && window.renderPredictiveEngine(),
     'attack-graph':      () => typeof window.renderAttackGraph        === 'function' && window.renderAttackGraph(),
-    'malware-dna':       () => typeof window.renderMalwareDNA         === 'function' && window.renderMalwareDNA(),
+    'malware-dna':       () => {
+      const el = document.getElementById('page-malware-dna');
+      if (el && typeof window.renderMalwareDNA === 'function') {
+        el.style.cssText = 'padding:0;overflow:hidden;height:calc(100vh - 58px);';
+        window.renderMalwareDNA(el);
+      }
+    },
     'adversary-sim':     () => {
       if (typeof window.renderAdversarySimLab === 'function') window.renderAdversarySimLab();
       else if (typeof window.renderAdversarySim === 'function') window.renderAdversarySim();
