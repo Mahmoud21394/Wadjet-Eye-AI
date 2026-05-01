@@ -118,8 +118,121 @@
   }
 
   /**
+   * _parseWindowsSecurityLine — parses the custom Windows Security log format:
+   *   YYYY-MM-DD HH:MM:SS EventID: NNNN <message body with key:value pairs>
+   *
+   * This format is produced by many SIEM exports, custom log forwarders,
+   * and Windows Event Viewer "Save as Text" exports.
+   * Returns a fully structured event object with all standard fields populated.
+   *
+   * FIX v13: Added this parser to handle the custom Windows Security log
+   * format that was previously falling through to syslog_bare with ALL
+   * structured fields (EventID, user, srcIp, computer) silently lost.
+   */
+  function _parseWindowsSecurityLine(line) {
+    // Must start with a date-time stamp: YYYY-MM-DD HH:MM:SS
+    const tsMatch = line.match(/^(\d{4}-\d{2}-\d{2})[\sT](\d{2}:\d{2}:\d{2})\s+/);
+    if (!tsMatch) return null;
+
+    // Reconstruct ISO timestamp preserving original log time (no UTC coercion —
+    // treat as local time so off-hours UEBA heuristic reads correct hour)
+    const timestamp = `${tsMatch[1]}T${tsMatch[2]}`;
+    const rest      = line.slice(tsMatch[0].length);
+
+    // Must contain "EventID: NNNN"
+    const eidMatch = rest.match(/EventID:\s*(\d+)\s*/i);
+    if (!eidMatch) return null;
+
+    const EventID = parseInt(eidMatch[1], 10);
+    const msg     = rest.slice(eidMatch[0].length);
+
+    // ── Field extraction ──────────────────────────────────────────
+    // "for user: X" (logon events) OR "by user: X" (action events)
+    const userMatch  = msg.match(/\b(?:for|by)\s+user:\s*(\S+)/i);
+    // "from IP: X.X.X.X"
+    const ipMatch    = msg.match(/\bfrom\s+IP:\s*(\S+)/i);
+    // "host: X" or "computer: X" (may appear anywhere in the message)
+    const hostMatch  = msg.match(/\b(?:host|computer):\s*(\S+)/i);
+
+    // "Process Created: <exe> [args] by user: Y"
+    // Capture everything between "Process Created:" and " by user:" (or end)
+    const procMatch  = msg.match(/Process\s+Created:\s*(.+?)(?:\s+by\s+user:|$)/i);
+    // "Scheduled Task Created: <TaskName>"
+    const taskMatch  = msg.match(/Scheduled\s+Task\s+Created:\s*(\S+)/i);
+    // "Service Installed: <ServiceName>"
+    const svcMatch   = msg.match(/Service\s+Installed:\s*(\S+)/i);
+    // "User Account Created: <AccountName>"
+    const acctMatch  = msg.match(/User\s+Account\s+Created:\s*(\S+)/i);
+    // "User Added to Local Group: <user> added to <GroupName>"
+    const groupMatch = msg.match(/User\s+Added\s+to\s+(?:Local\s+)?Group:\s*(\S+)\s+added\s+to\s+(\S+)/i);
+    // "Special privileges assigned to new logon: <user>"
+    const privMatch  = msg.match(/Special\s+privileges\s+assigned[^:]*:\s*(\S+)/i);
+    // "Network Share Accessed: <path>" or "Network Share File Access: <path>"
+    const shareMatch = msg.match(/Network\s+Share(?:\s+File)?\s+(?:Accessed|Access):\s*(\S+)/i);
+
+    // Build commandLine and process from Process Created entry
+    let commandLine = '';
+    let process     = '';
+    if (procMatch) {
+      const full    = procMatch[1].trim();
+      const spIdx   = full.indexOf(' ');
+      process       = spIdx > 0 ? full.slice(0, spIdx) : full;
+      commandLine   = full; // full string including args
+    }
+    // For net user cmd events, the entire message IS the command line
+    if (!commandLine && EventID === 4688) {
+      commandLine = msg.trim();
+    }
+
+    // Priority for user: explicit "for/by user:" > privilege-assignment subject
+    const user = (userMatch ? userMatch[1] : (privMatch ? privMatch[1] : '')).replace(/[,;]$/, '');
+
+    return {
+      _format     : 'windows_security_custom',
+      timestamp,
+      EventID,
+      user,
+      srcIp       : ipMatch    ? ipMatch[1].replace(/[,;]$/, '')    : '',
+      computer    : hostMatch  ? hostMatch[1].replace(/[,;]$/, '')  : '',
+      commandLine,
+      process,
+      // Structured extras for rule matching
+      TaskName    : taskMatch  ? taskMatch[1]  : '',
+      ServiceName : svcMatch   ? svcMatch[1]   : '',
+      NewAccount  : acctMatch  ? acctMatch[1]  : '',
+      GroupName   : groupMatch ? groupMatch[2] : '',
+      // FIX v13: MemberName = the account that was added to the group (groupMatch[1]),
+      // distinct from GroupName (groupMatch[2]).  The CSDE-WIN-004B narrative reads
+      // e.NewAccount || e.MemberName — without MemberName the output showed 'unknown'.
+      MemberName  : groupMatch ? groupMatch[1] : '',
+      ShareName   : shareMatch ? shareMatch[1] : '',
+      // Keep full message for rules that inspect it
+      message     : msg.trim(),
+      raw         : line,
+    };
+  }
+
+  /**
+   * _isWindowsSecurityLog — heuristic detector.
+   * Returns true when the majority of non-empty lines look like the
+   * custom Windows Security format (YYYY-MM-DD HH:MM:SS EventID: NNNN ...).
+   */
+  function _isWindowsSecurityLog(lines) {
+    const sample = lines.filter(Boolean).slice(0, 10);
+    if (!sample.length) return false;
+    const matches = sample.filter(l => /^\d{4}-\d{2}-\d{2}[\sT]\d{2}:\d{2}:\d{2}\s+EventID:/i.test(l));
+    return matches.length / sample.length >= 0.6; // ≥60 % of sample lines match
+  }
+
+  /**
    * _parseLogInput — converts raw pasted text to a JSON events array.
    * Dispatches by format hint: json | syslog | cef | auto
+   *
+   * FIX v13: Added auto-detection for the custom Windows Security log format
+   * (YYYY-MM-DD HH:MM:SS EventID: NNNN ...).  Previously these lines fell
+   * through to _parseSyslogLine → syslog_bare, silently losing every
+   * structured field (EventID, user, srcIp, computer), which caused zero
+   * rule matches and empty Detections/Incidents/Chains tabs.
    */
   function _parseLogInput(raw, fmt) {
     if (!raw) return [];
@@ -135,15 +248,23 @@
     }
 
     // Line-by-line parsing
-    return trimmed.split(/\r?\n/)
-      .map(l => l.trim()).filter(Boolean)
-      .map(line => {
-        if (fmt==='cef'    || line.startsWith('CEF:')) return _parseCEFLine(line) || { raw:line, _format:'cef_malformed' };
-        if (fmt==='syslog' || line.startsWith('<'))    return _parseSyslogLine(line);
-        // Auto: try JSON, then syslog
-        try { const p=JSON.parse(line); return { ...p, _format:'json', raw:line }; } catch {}
-        return _parseSyslogLine(line);
-      });
+    const lines = trimmed.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+    // FIX v13: Detect custom Windows Security log format before falling back to syslog
+    const useWinSec = fmt === 'winsec' || (fmt !== 'syslog' && fmt !== 'cef' && _isWindowsSecurityLog(lines));
+
+    return lines.map(line => {
+      if (fmt==='cef'    || line.startsWith('CEF:')) return _parseCEFLine(line) || { raw:line, _format:'cef_malformed' };
+      if (fmt==='syslog' || line.startsWith('<'))    return _parseSyslogLine(line);
+      // Auto: try JSON first
+      try { const p=JSON.parse(line); return { ...p, _format:'json', raw:line }; } catch {}
+      // FIX v13: Try Windows Security custom format before generic syslog
+      if (useWinSec) {
+        const ws = _parseWindowsSecurityLine(line);
+        if (ws) return ws;
+      }
+      return _parseSyslogLine(line);
+    });
   }
 
   // ── Constants ──────────────────────────────────────────────────
@@ -3210,6 +3331,33 @@
         ],
       },
 
+      // ── ACCOUNT CREDENTIAL MANIPULATION (net user <account> <password>) ───
+      // FIX v13: 'net user backdoor_user Password123!' does NOT contain /add,
+      // so CSDE-WIN-004 never fires.  This rule catches credential-setting on
+      // existing accounts — a common attacker follow-up after account creation.
+      {
+        id: 'CSDE-WIN-004C', title: 'Account Credential Manipulation via net user',
+        os: 'windows', severity: 'high', category: 'persistence',
+        mitre: { technique: 'T1098', name: 'Account Manipulation', tactic: 'persistence' },
+        tags: ['attack.persistence', 'attack.t1098'],
+        riskScore: 82,
+        match: e => {
+          const proc = (e.process || e.ProcessName || e.Image || '').toLowerCase();
+          const cmd  = (e.commandLine || '').toLowerCase();
+          if (parseInt(e.EventID,10) !== 4688) return false;
+          // Must involve net.exe/net1.exe or cmd.exe /c net ...
+          const isNetCmd = proc.includes('net.exe') || proc.includes('net1.exe') ||
+                           (proc.includes('cmd.exe') && cmd.includes('net '));
+          if (!isNetCmd) return false;
+          // Must reference 'user' subcommand without /add (that's CSDE-WIN-004)
+          // Catches: 'net user <account> <password>' — setting credentials
+          return cmd.includes('user') && !cmd.includes('/add') && !/ add\b/.test(cmd) &&
+                 // Must have a username token after 'user' (more than just 'net user')
+                 /\bnet\s+user\s+\S/.test(cmd);
+        },
+        narrative: e => `Account credential manipulation — "${e.commandLine||'net user'}" on ${e.computer||'unknown'} by "${e.user||'unknown'}" — attacker setting password for persistence (T1098).`,
+      },
+
       {
         id: 'CSDE-WIN-004B', title: 'User Added to Privileged Group',
         os: 'windows', severity: 'critical', category: 'persistence',
@@ -3217,12 +3365,104 @@
         tags: ['attack.persistence', 'attack.t1098'],
         riskScore: 90,
         match: e => {
+          const eid = parseInt(e.EventID,10);
           const cmd = (e.commandLine||'').toLowerCase();
-          return parseInt(e.EventID,10) === 4688 &&
-                 (e.EventID === 4728 || e.EventID === 4732 || e.EventID === 4756 ||
-                  (cmd.includes('net ') && cmd.includes('localgroup') && (cmd.includes('administrators') || cmd.includes('/add'))));
+          const msg = (e.message||'').toLowerCase();
+          // FIX v13: EventID 4732 fires DIRECTLY for "User Added to Local Group" —
+          // the original rule incorrectly required eid===4688 as well, so it NEVER fired
+          // for EventID 4732 events.  Also accept message-field matches for the
+          // custom Windows Security log format where CommandLine may be empty.
+          return eid === 4732 || eid === 4728 || eid === 4756 ||
+                 (eid === 4688 && (
+                   (cmd.includes('net ') && cmd.includes('localgroup') && (cmd.includes('administrators') || cmd.includes('/add'))) ||
+                   (msg.includes('localgroup') && (msg.includes('administrators') || msg.includes('/add')))
+                 ));
         },
-        narrative: e => `User added to privileged group via "${e.commandLine||'net localgroup'}" on ${e.computer||'unknown'} — privilege escalation path`,
+        narrative: e => {
+          const eid = parseInt(e.EventID,10);
+          const acct = e.NewAccount || e.MemberName || e.GroupName || '';
+          const grp  = e.GroupName  || 'Administrators';
+          return eid === 4732 || eid === 4728 || eid === 4756
+            ? `Account "${acct||'unknown'}" added to privileged group "${grp}" on ${e.computer||'unknown'} by "${e.user||'unknown'}" — privilege escalation path (T1098)`
+            : `User added to privileged group via "${e.commandLine||'net localgroup'}" on ${e.computer||'unknown'} by "${e.user||'unknown'}" — privilege escalation path`;
+        },
+      },
+
+      // ── NEW ACCOUNT CREATED (EventID 4720) ───────────────────────
+      // FIX v13: Added dedicated rule for EventID 4720 (User Account Created).
+      // The old CSDE-WIN-004 only matched 4688+net.exe commandLine, missing
+      // native Windows Security EventID 4720 which is the authoritative event.
+      {
+        id: 'CSDE-WIN-030', title: 'New User Account Created (EventID 4720)',
+        os: 'windows', severity: 'critical', category: 'persistence',
+        mitre: { technique: 'T1136.001', name: 'Create Account: Local Account', tactic: 'persistence' },
+        tags: ['attack.persistence', 'attack.t1136.001'],
+        riskScore: 90,
+        match: e => {
+          const eid = parseInt(e.EventID,10);
+          const msg = (e.message||'').toLowerCase();
+          // EventID 4720 = A user account was created
+          // Also catch custom format messages containing "User Account Created:"
+          return eid === 4720 ||
+                 (msg.includes('user account created') && e._format === 'windows_security_custom');
+        },
+        narrative: e => {
+          const created = e.NewAccount || e.TargetUserName || e.SubjectUserName || '';
+          return `New user account "${created||'unknown'}" created by "${e.user||'unknown'}" on ${e.computer||'unknown'} — ` +
+                 `attacker establishing persistence backdoor (T1136.001). Immediate investigation required.`;
+        },
+      },
+
+      // ── SPECIAL PRIVILEGES ASSIGNED (EventID 4672) ──────────────
+      // FIX v13: Added dedicated rule for EventID 4672 (Special privileges
+      // assigned to new logon). This fires when a user with admin/SYSTEM
+      // privileges logs on — critical signal in attack chains.
+      {
+        id: 'CSDE-WIN-031', title: 'Special Privileges Assigned to New Logon (EventID 4672)',
+        os: 'windows', severity: 'high', category: 'privilege-escalation',
+        mitre: { technique: 'T1078.002', name: 'Valid Accounts: Domain Accounts', tactic: 'privilege-escalation' },
+        tags: ['attack.privilege_escalation', 'attack.t1078.002'],
+        riskScore: 65,
+        match: e => {
+          const eid = parseInt(e.EventID,10);
+          const msg = (e.message||'').toLowerCase();
+          // EventID 4672 = Special privileges assigned to new logon
+          // Skip if the privileged user is a built-in system account
+          if (eid !== 4672) return false;
+          const u = (e.user||'').toLowerCase();
+          // Filter out pure system accounts that always have this event
+          const isSystem = !u || u === 'system' || u.includes('nt authority') ||
+                           u.endsWith('$') || u === 'local service' || u === 'network service';
+          return !isSystem;
+        },
+        narrative: e => `Special privileges (SeDebugPrivilege / SeBackupPrivilege / SeTcbPrivilege) ` +
+          `assigned to "${e.user||'unknown'}" logon on ${e.computer||'unknown'} — ` +
+          `elevated account with admin rights; verify this is expected (T1078.002).`,
+      },
+
+      // ── ANY NEW SERVICE INSTALLED (EventID 7045) ─────────────────
+      // FIX v13: Added broad EventID 7045 rule so ANY new service install
+      // triggers at minimum a medium-severity detection.  The existing
+      // CSDE-WIN-019 only fired for suspicious paths — missing this log.
+      {
+        id: 'CSDE-WIN-032', title: 'New Service Installed (EventID 7045)',
+        os: 'windows', severity: 'high', category: 'persistence',
+        mitre: { technique: 'T1543.003', name: 'Create or Modify System Process: Windows Service', tactic: 'persistence' },
+        tags: ['attack.persistence', 'attack.t1543.003'],
+        riskScore: 75,
+        match: e => {
+          const eid = parseInt(e.EventID,10);
+          const msg = (e.message||'').toLowerCase();
+          // EventID 7045 = A new service was installed in the system
+          // Also match custom log format messages
+          return eid === 7045 ||
+                 (msg.includes('service installed') && e._format === 'windows_security_custom');
+        },
+        narrative: e => {
+          const svc = e.ServiceName || e.param1 || '';
+          return `New Windows service "${svc||'unknown'}" installed by "${e.user||'unknown'}" on ${e.computer||'unknown'} — ` +
+                 `verify this is an authorized installation (T1543.003). Unrecognized services may be malware persistence.`;
+        },
       },
 
       {
@@ -3444,7 +3684,10 @@
 
       {
         id: 'CSDE-WIN-015', title: 'Scheduled Task Created for Persistence',
-        os: 'windows', severity: 'high', category: 'persistence', logCategory: 'windows_process_creation',
+        // FIX v13: Removed logCategory restriction so EventID 4698 (Scheduled Task Created)
+        // is not blocked by the windows_process_creation schema (which only covers 4688).
+        // EventID 4698 is the native Windows Security audit event for task creation.
+        os: 'windows', severity: 'high', category: 'persistence',
         mitre: { technique: 'T1053.005', name: 'Scheduled Task/Job: Scheduled Task', tactic: 'persistence' },
         tags: ['attack.persistence', 'attack.t1053.005'],
         riskScore: 73,
@@ -4454,10 +4697,20 @@
       }
 
       // Off-hours activity heuristic
+      // FIX v13: Guard against undefined/null timestamps (events parsed as syslog_bare
+      // have no timestamp field; new Date(undefined).getHours() = NaN, and
+      // NaN comparisons always return false — but an explicit guard is safer).
+      // Also use the string timestamp directly to extract hour without timezone shift:
+      // '2025-02-25T08:15:30' → hour=8 regardless of host TZ.
       const offHours = events.filter(e => {
+        if (!e.timestamp) return false;
         try {
-          const h = new Date(e.timestamp).getHours();
-          return h < 6 || h > 22;
+          // Extract hour from ISO timestamp string directly (avoids TZ-shift bugs)
+          const tsStr = String(e.timestamp);
+          const tMatch = tsStr.match(/T?(?:^|\s)(\d{2}):\d{2}:\d{2}/) ||
+                         tsStr.match(/(\d{2}):\d{2}:\d{2}/);
+          const h = tMatch ? parseInt(tMatch[1], 10) : new Date(e.timestamp).getHours();
+          return !isNaN(h) && (h < 6 || h > 22);
         } catch { return false; }
       });
       if (offHours.length >= 2) {
