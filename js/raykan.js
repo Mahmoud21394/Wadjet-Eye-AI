@@ -264,7 +264,7 @@
       // ── Adversary-Centric Engine (ACE) configuration ──────────
       ACE_PROXIMITY_WINDOW_MS  : 3_600_000, // Cross-host stitching window (1 hour)
       ACE_PROCESS_LINEAGE_DEPTH: 5,         // Max parent-process chain depth to follow
-      ACE_MIN_NODES_FOR_GRAPH  : 1,         // Min nodes to form an attack graph
+      ACE_MIN_NODES_FOR_GRAPH  : 2,         // Min nodes to form an attack graph (≥2 prevents single-detection ghost chains)
       ACE_MERGE_GAP_MS         : 1_800_000, // Chain-merge gap (30 min same adversary)
       ACE_CAUSAL_EDGE_MAX_GAP  : 7_200_000, // Max causal edge time gap (2 hours)
       // ── Behavioral-Chain Engine (BCE) — v10 ───────────────────
@@ -2524,7 +2524,13 @@
       const mergedBuckets = _mergeFragmentedChains(rawBuckets);
 
       // Filter out buckets that don't meet minimum size
-      const validBuckets = mergedBuckets.filter(b => b.length >= CFG.ACE_MIN_NODES_FOR_GRAPH);
+      // FIX v12: Require at least 2 observed (non-inferred) detections to form an incident.
+      // A single detection cannot constitute a multi-stage adversary incident;
+      // doing so produces ghost chains with 0 evidence stages.
+      const validBuckets = mergedBuckets.filter(b => {
+        const observed = b.filter(d => !d.inferred);
+        return observed.length >= Math.max(CFG.ACE_MIN_NODES_FOR_GRAPH, 2);
+      });
 
       const incidents    = [];
       const assignedIds  = new Set();
@@ -9273,9 +9279,17 @@ return {
       };
 
       // ── Extract canonical entities ───────────────────────────────
-      const user          = get('user')       || det.user        || '';
-      const host          = get('host')       || det.computer    || det.host || '';
-      const source_ip     = get('source_ip')  || det.srcIp       || '';
+      // FIX v12: incidentSummary objects (the enriched BCE output) store entity
+      // data at top-level fields (host, user, allHosts, allUsers, allSrcIps).
+      // They have NO evidence[] or raw_detections[] arrays.  We must also pull
+      // from those top-level arrays to get meaningful entity data.
+      const firstHost  = (det.allHosts  || [])[0] || '';
+      const firstUser  = (det.allUsers  || [])[0] || '';
+      const firstSrcIp = (det.allSrcIps || [])[0] || '';
+
+      const user          = get('user')       || det.user        || firstUser   || '';
+      const host          = get('host')       || det.computer    || det.host    || firstHost  || '';
+      const source_ip     = get('source_ip')  || det.srcIp       || firstSrcIp || '';
       const dest_ip       = get('dest_ip')    || det.destIp      || '';
       const process_name  = get('process')    || det.process     || '';
       const parent_process= get('parent_proc')|| det.parentProcess || '';
@@ -9866,63 +9880,62 @@ return {
       const dets = (S.detections || []).filter(d => !existingIds.has(d.id));
       count += ingestBatch(dets);
 
-      // ── 2. Ingest incident summaries (richer entity data) ────────
-      const incs = (S.incidents || []).filter(i => !existingIds.has(i.id || i.incidentId));
+      // ── 2. Ingest incident summaries entity data (non-duplicating) ──
+      // FIX v12: Do NOT ingest incidentSummaries as separate GES records —
+      // they are derived aggregates of the detections already ingested in step 1.
+      // Instead, only use them to enrich entity extraction (allHosts / allUsers /
+      // allSrcIps) when those entities are not already in the graph.
+      const incs = (S.incidents || []).filter(i => {
+        const sid = i.id || i.incidentId;
+        return sid && !existingIds.has(sid);
+      });
       incs.forEach(inc => {
-        // Ingest the incident as a record (it has full entity context)
+        // Only ingest the parent detection if it wasn't already ingested via dets
+        // This avoids double-counting incidents that are also in S.detections
+        const parentId = inc.id || inc.incidentId;
+        if (!parentId || existingIds.has(parentId)) return;
+        // Check if any child detection already covers this entity context
+        const childIds = (inc.all || [inc.parent, ...(inc.children || [])].filter(Boolean))
+          .map(d => d.id).filter(Boolean);
+        const alreadyCovered = childIds.some(id => existingIds.has(id));
+        if (alreadyCovered) return; // entity data already in GES via child detections
+        // Only ingest as entity-enrichment record when no raw detections cover it
         const rec = normalizeDetection(inc);
         if (rec && !existingIds.has(rec.detection_id)) {
           ingest(rec);
           count++;
         }
-        // Also ingest each kill-chain stage as a linked detection
-        (inc.killChainStages || []).forEach((stage, si) => {
-          const stageRec = normalizeDetection({
-            id          : `${inc.id || inc.incidentId}-stage-${si}`,
-            ruleId      : stage.ruleId,
-            title       : stage.ruleName || stage.phase,
-            severity    : stage.severity,
-            timestamp   : stage.timestamp,
-            first_seen  : stage.first_seen,
-            last_seen   : stage.last_seen,
-            user        : stage.user || inc.user,
-            computer    : stage.host || inc.host,
-            srcIp       : stage.srcIp || (inc.allSrcIps || [])[0] || '',
-            process     : stage.process,
-            commandLine : stage.commandLine,
-            mitre       : { tactic: stage.tactic, technique: stage.technique, name: stage.techniqueName },
-            riskScore   : stage._riskScore || 0,
-            logCategory : 'windows',
-            evidence    : [],
-          });
-          if (stageRec && !existingIds.has(stageRec.detection_id)) {
-            ingest(stageRec); count++;
-          }
-        });
       });
 
-      // ── 3. Ingest timeline entries ────────────────────────────────
+      // ── 3. Ingest timeline entries (entity-aware, skip blanks) ───
       const tlEntries = (S.timeline || []).filter(t => {
-        const tid = `ges-tl-${t.ts || t.timestamp}-${t.user || ''}-${t.host || ''}`;
+        const tid = `ges-tl-${t.ts || t.timestamp}-${t.user || ''}-${t.host || t.computer || ''}`;
         return !existingIds.has(tid);
       });
       tlEntries.forEach(tl => {
-        if (!tl.user && !tl.computer && !tl.srcIp) return; // skip empty
+        // FIX v12: Accept timeline entries that have at least one entity field
+        // (user, computer, host, srcIp, entity) — previously they were silently skipped
+        // when !tl.user && !tl.computer which caused empty timelines.
+        const hasEntity = tl.user || tl.computer || tl.host || tl.srcIp || tl.entity;
+        if (!hasEntity) return;
+        const tlHost = tl.computer || tl.host || tl.entity || '';
+        const tlUser = tl.user || '';
+        const tlTs   = tl.ts || tl.timestamp || '';
         const rec = normalizeDetection({
-          id         : `ges-tl-${tl.ts || tl.timestamp}-${tl.user || ''}-${tl.computer || ''}`,
-          title      : tl.description || tl.label || tl.type,
+          id         : `ges-tl-${tlTs}-${tlUser}-${tlHost}`,
+          title      : tl.description || tl.label || tl.type || 'Event',
           severity   : tl.severity || 'low',
-          timestamp  : tl.ts || tl.timestamp,
-          first_seen : tl.ts || tl.timestamp,
-          user       : tl.user,
-          computer   : tl.computer,
-          srcIp      : tl.srcIp,
-          destIp     : tl.destIp,
-          process    : tl.process,
-          commandLine: tl.commandLine,
-          ruleId     : tl.ruleId,
+          timestamp  : tlTs,
+          first_seen : tlTs,
+          user       : tlUser,
+          computer   : tlHost,
+          srcIp      : tl.srcIp || '',
+          destIp     : tl.destIp || '',
+          process    : tl.process || '',
+          commandLine: tl.commandLine || '',
+          ruleId     : tl.ruleId || '',
           evidence   : [],
-          mitre      : {},
+          mitre      : tl.mitre || {},
         });
         if (rec && !existingIds.has(rec.detection_id)) {
           ingest(rec); count++;
@@ -11747,21 +11760,32 @@ return {
     const el = document.getElementById('rk-inc-list');
     if (!el) return;
 
+    // FIX v12: Always update badge count, even when incidents is empty
     const badge = document.getElementById('rk-inc-badge');
-    if (badge) badge.textContent = `${incidents.length} Incident${incidents.length !== 1 ? 's' : ''}`;
+    if (badge) {
+      badge.textContent = `${incidents.length} Incident${incidents.length !== 1 ? 's' : ''}`;
+      // Color the badge green (0) vs red (>0)
+      badge.style.background = incidents.length > 0
+        ? 'rgba(239,68,68,0.1)' : 'rgba(107,114,128,0.1)';
+      badge.style.color = incidents.length > 0 ? '#ef4444' : '#6b7280';
+    }
 
     const confBadge = document.getElementById('rk-inc-confidence-badge');
-    if (confBadge && incidents.length) {
-      // FIX v10: incidentSummaries stores confidence as a plain number (score) at the
-      // top level, and the confidence level as inc.level (not inc.confidence.level).
-      // Support both enriched incidentSummaries shape AND raw incident shape.
-      const avgConf = Math.round(incidents.reduce((s, i) => {
-        const score = typeof i.confidence === 'number' ? i.confidence
-                    : (i.confidence?.score ?? 0);
-        return s + score;
-      }, 0) / incidents.length);
-      confBadge.style.display = '';
-      confBadge.textContent = `Avg Confidence: ${avgConf}%`;
+    if (confBadge) {
+      if (incidents.length) {
+        // FIX v10+v12: incidentSummaries stores confidence as a plain number (score) at the
+        // top level, and the confidence level as inc.level (not inc.confidence.level).
+        // Support both enriched incidentSummaries shape AND raw incident shape.
+        const avgConf = Math.round(incidents.reduce((s, i) => {
+          const score = typeof i.confidence === 'number' ? i.confidence
+                      : (i.confidence?.score ?? 0);
+          return s + score;
+        }, 0) / incidents.length);
+        confBadge.style.display = '';
+        confBadge.textContent = `Avg Confidence: ${avgConf}%`;
+      } else {
+        confBadge.style.display = 'none';
+      }
     }
 
     const statsBar = document.getElementById('rk-inc-statsbar');
@@ -11802,11 +11826,24 @@ return {
     }
 
     if (!incidents.length) {
-      el.innerHTML = `
+      // FIX v12: Show contextual empty-state — distinguish "no data yet" from
+      // "data was analyzed but all detections were false-positive suppressed"
+      const hasDetections = (S.detections || []).length > 0;
+      el.innerHTML = hasDetections ? `
+<div style="padding:60px;text-align:center;color:#4b5563;font-size:13px;">
+  <div style="font-size:28px;margin-bottom:10px;">🔍</div>
+  <div style="font-size:14px;color:#6b7280;margin-bottom:6px;">No multi-stage incidents formed from these events.</div>
+  <span style="font-size:11px;">BCE v10 requires ≥2 correlated detections from the same adversary to form an incident.</span><br/>
+  <span style="font-size:11px;color:#374151;">
+    ${(S.detections || []).length} detection(s) found — check the
+    <button class="rk-btn rk-btn-ghost" style="font-size:11px;padding:2px 8px;" onclick="RAYKAN_UI._setTab('detections')">Detections tab</button>
+    for individual alerts.
+  </span>
+</div>` : `
 <div style="padding:60px;text-align:center;color:#4b5563;font-size:13px;">
   <div style="font-size:28px;margin-bottom:10px;">⚔️</div>
   <div style="font-size:14px;color:#6b7280;margin-bottom:6px;">No adversary-centric incidents yet.</div>
-  <span style="font-size:11px;">ACE v6 correlates alerts across hosts using attacker identity (user/IP/session/process lineage).</span><br/>
+  <span style="font-size:11px;">BCE v10 correlates alerts across hosts using attacker identity (user/IP/session/process lineage).</span><br/>
   <span style="font-size:11px;color:#374151;">Run a demo or ingest logs to see the adversary attack graph view.</span>
 </div>`;
       return;
@@ -13050,8 +13087,10 @@ return {
       const cLen = S.chains.length;
       _showToast(`✓ ${dLen} detection(s), ${iLen} incident(s), ${cLen} chain(s) | Risk: ${result.riskScore}${result.engine === 'CSDE-offline' ? ' [Offline]' : ''}`, 'success');
 
-      // Navigate to incidents tab when incidents were formed, else detections
-      _setTab(iLen ? 'incidents' : 'detections');
+      // FIX v12: Navigate to detections when only 1 detection with no incidents
+      // (prevents landing on an empty incidents tab from a single event).
+      // Navigate to incidents tab when ≥1 incident formed, else detections.
+      _setTab(iLen > 0 ? 'incidents' : 'detections');
 
       // FIX v11: After tab switch, also eagerly refresh the Overview chain preview
       // so the Attack Chain Preview panel shows chains immediately even when the
@@ -13709,11 +13748,32 @@ return {
   function _renderChainsList(chains) {
     const el = document.getElementById('rk-chains-list');
     if (!el) return;
-    if (!chains.length) {
-      el.innerHTML = `<div style="padding:60px;text-align:center;color:#4b5563;font-size:13px;">No attack chains detected yet.</div>`;
+    // FIX v12: Filter out degenerate chains that have 0 stages before rendering.
+    // These are ghost records created when the engine builds a chain object but
+    // the bucket had only 1 detection (which passes the old ACE_MIN_NODES=1 gate
+    // but has nothing to visualize).
+    const validChains = (chains || []).filter(c => {
+      const stageCount = (c.stages || c.steps || c.detections || []).length;
+      // Also accept incidentSummary-shaped chains (killChainStages)
+      const killCount  = (c.killChainStages || []).length;
+      return stageCount >= 2 || killCount >= 2;
+    });
+    if (!validChains.length) {
+      const hasDetections = (S.detections || []).length > 0;
+      el.innerHTML = hasDetections ? `
+<div style="padding:60px;text-align:center;color:#4b5563;font-size:13px;">
+  <div style="font-size:28px;margin-bottom:10px;">⛓</div>
+  <div style="font-size:14px;color:#6b7280;margin-bottom:6px;">No multi-stage attack chains formed from these events.</div>
+  <span style="font-size:11px;">BCE v10 requires ≥2 correlated detections to reconstruct an attack chain.</span><br/>
+  <span style="font-size:11px;color:#374151;">
+    ${(S.detections || []).length} detection(s) found — check the
+    <button class="rk-btn rk-btn-ghost" style="font-size:11px;padding:2px 8px;" onclick="RAYKAN_UI._setTab('detections')">Detections tab</button>
+    for individual alerts.
+  </span>
+</div>` : `<div style="padding:60px;text-align:center;color:#4b5563;font-size:13px;">No attack chains detected yet — run a demo or ingest logs.</div>`;
       return;
     }
-    el.innerHTML = chains.map((c, i) => _renderChainCard(c, i)).join('');
+    el.innerHTML = validChains.map((c, i) => _renderChainCard(c, i)).join('');
   }
 
   // ── SOC v2: Horizontal kill-chain timeline renderer ──────────────────
@@ -15031,16 +15091,22 @@ return {
   function _gesIngestResult(r) {
     if (!r) return;
     try {
-      // 1. Ingest deduplicated detections
-      const dets  = normalizeDetections(r.detections);
-      const incs  = Array.isArray(r.incidentSummaries) && r.incidentSummaries.length
-                      ? r.incidentSummaries
-                      : (Array.isArray(r.incidents) ? r.incidents : []);
-      const tl    = normalizeDetections(r.timeline);
+      // FIX v12: Reset GES before every fresh result so we never double-count.
+      // The backfillGraphStore() call below re-ingests S.* state anyway,
+      // so clearing first prevents the triple-ingestion that caused 78 duplicate
+      // attack-chain records from a single event.
+      GES.reset();
 
-      const ingested = GES.ingestBatch([...dets, ...incs]);
+      // 1. Ingest only the *deduplicated* detections from this result.
+      //    Do NOT also push incidentSummaries as separate records — they are
+      //    derived objects, not raw detections, and would inflate the graph.
+      const dets = normalizeDetections(r.detections);
+      const ingested = GES.ingestBatch(dets);
 
-      // 2. Backfill from current S state (catches any data already in S.*)
+      // 2. Backfill from current S state (S.detections is now populated by
+      //    the caller before _gesIngestResult is called).
+      //    backfillGraphStore is idempotent (uses existingIds guard), so the
+      //    dets already ingested above will not be doubled.
       const migStats = GES.backfillGraphStore(S);
 
       // 3. Update S.graphStore reference with live stats
@@ -15060,32 +15126,54 @@ return {
   // ── _gesGetTimeline() ─────────────────────────────────────────
   // Returns timeline entries from GES (entity-enriched, chronological).
   // Falls back to S.timeline if GES has no records.
+  // FIX v12: Always merge S.timeline entries so even zero-entity events appear.
   function _gesGetTimeline(opts) {
+    // Always start from S.timeline as base (it contains all events from the engine)
+    const baseTl = Array.isArray(S.timeline) ? S.timeline : [];
+
+    // If GES has records, enrich with entity-aware entries
     const gesRecords = GES.getRecords();
-    if (!gesRecords.length) return S.timeline || [];
+    if (!gesRecords.length) return baseTl;
+
     const gesTl = GES.buildTimeline(opts);
-    // Merge: GES-built entries first, then any S.timeline entries not in GES
+
+    // Build merged timeline: GES entries first (entity-enriched), then any
+    // S.timeline entries that have no corresponding GES record.
     const gesDetIds = new Set(gesTl.map(t => t.detection_id).filter(Boolean));
-    const extraTl   = (S.timeline || []).filter(t => !t.detection_id || !gesDetIds.has(t.detection_id));
-    return [...gesTl, ...extraTl];
+    const extraTl   = baseTl.filter(t => !t.detection_id || !gesDetIds.has(t.detection_id));
+
+    // Deduplicate by timestamp+description to avoid visual duplicates
+    const seen = new Set();
+    return [...gesTl, ...extraTl].filter(t => {
+      const key = `${t.timestamp||t.ts}|${t.description||t.rule_name||''}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
   // ── _gesGetIncidents() ────────────────────────────────────────
   // Returns incidents correlated via GES entity clusters.
-  // Enriches existing S.incidents with entity links.
+  // FIX v12: Always returns S.incidents (the authoritative list built by
+  // _correlateIncidents inside CSDE.analyzeEvents).  GES enrichment is
+  // additive — if GES has entity data we attach it, otherwise we return
+  // incidents as-is. This ensures the dashboard is NEVER empty when
+  // S.incidents has entries.
   function _gesGetIncidents() {
     const incidents = S.incidents || [];
+    // Always return at least the raw incidents even when GES is empty
     if (!GES.getRecords().length) return incidents;
-    // Enrich each incident with GES-derived entity links
+
+    // Enrich each incident with GES-derived entity links (non-destructive)
     return incidents.map(inc => {
       const id = inc.id || inc.incidentId;
       if (!id) return inc;
       const linked = GES.linkAlerts(id);
       return {
         ...inc,
-        _gesLinkedAlerts : linked.linked   || [],
+        _gesLinkedAlerts : linked.linked      || [],
         _gesEntityLinks  : linked.entityLinks || [],
-        _gesEntityRecord : linked.record   || null,
+        _gesEntityRecord : linked.record      || null,
       };
     });
   }
