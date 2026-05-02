@@ -94,83 +94,164 @@
   }
 
   // ── Build a CaseRecord from a RAYKAN incident ─────────────────────────
+  // FIX v20: Updated linking strategy based on actual CSDE incidentSummary shape.
+  //
+  // CSDE incidentSummary fields for linking:
+  //   inc.id / inc.incidentId  — incident ID
+  //   inc.allHosts[]           — all affected hosts
+  //   inc.allUsers[]           — all affected users
+  //   inc.allSrcIps[]          — all source IPs
+  //   inc.killChainStages[]    — each stage has .ruleId
+  //   inc.attackChainId        — links to chain
+  //   inc.aceScore             — object {score, severityBand, reasons}
+  //
+  // Detection fields for linking:
+  //   d._incidentId            — direct back-link set by CSDE (most reliable)
+  //   d.ruleId                 — matches killChainStages[].ruleId
+  //   d.host / d.computer      — matches inc.allHosts[]
+  //
+  // Timeline fields for linking:
+  //   t.computer / t.host      — matches inc.allHosts[]
+  //   t.batchDetection         — matches d.id of linked detection
+  //   t.aggDetection           — same purpose
   function _buildCaseFromIncident(inc, result) {
     const id        = inc.id || inc.incidentId || _uid();
     const severity  = _normSev(inc.severity || 'MEDIUM');
     const now       = Date.now();
-    const createdAt = inc.firstSeen || inc.timestamp || inc.startTime || new Date().toISOString();
 
-    // Collect linked detections
+    // Build lookup sets for efficient matching
+    const incHosts   = new Set([...(inc.allHosts || []), inc.host].filter(Boolean));
+    const incUsers   = new Set([...(inc.allUsers || []), inc.user].filter(Boolean));
+    const incSrcIps  = new Set([...(inc.allSrcIps || [])].filter(Boolean));
+    // RuleIds from kill-chain stages (the authoritative link from CSDE)
+    const incRuleIds = new Set(
+      (inc.killChainStages || inc.phaseTimeline || [])
+        .map(s => s.ruleId || s.detection?.ruleId)
+        .filter(Boolean)
+    );
+
+    // ── Collect linked detections ──────────────────────────────────────
+    // Priority: direct _incidentId back-link → ruleId match → host+user match
     const linkedDets = (result && result.detections)
-      ? (result.detections).filter(d =>
-          d.incidentId === id ||
-          (inc.detectionIds || []).includes(d.id) ||
-          (inc.children || []).some(ch => ch.id === d.id || ch.ruleId === d.ruleId)
-        )
+      ? (result.detections).filter(d => {
+          // 1. Direct back-link set by CSDE engine
+          if (d._incidentId === id)                              return true;
+          // 2. Explicit detectionIds list (if present in some backend shapes)
+          if ((inc.detectionIds || []).includes(d.id))          return true;
+          // 3. ruleId present in kill-chain stage ruleIds
+          if (incRuleIds.size && d.ruleId && incRuleIds.has(d.ruleId)) return true;
+          // 4. Shared host + user (same entity cluster) — broadest fallback
+          const dHost = d.host || d.computer || d.Computer || '';
+          const dUser = d.user || d.User || '';
+          if (dHost && incHosts.has(dHost) && dUser && incUsers.has(dUser)) return true;
+          // 5. If only one host, match on host alone (single-host scenario)
+          if (incHosts.size === 1 && dHost && incHosts.has(dHost))         return true;
+          return false;
+        })
       : [];
 
-    // Collect linked timeline entries
+    // ── Collect linked timeline entries ───────────────────────────────
+    // Link by: direct host match | batchDetection/aggDetection match with linked det
+    const linkedDetIds = new Set(linkedDets.map(d => d.id).filter(Boolean));
     const linkedTimeline = (result && result.timeline)
-      ? result.timeline.filter(t =>
-          t.incidentId === id ||
-          (inc.timelineIds || []).includes(t.id) ||
-          linkedDets.some(d => d.id === t.detectionId || d.id === t.batchDetection)
-        )
+      ? result.timeline.filter(t => {
+          // 1. batchDetection / aggDetection matches a linked detection id
+          if (t.batchDetection && linkedDetIds.has(t.batchDetection)) return true;
+          if (t.aggDetection   && linkedDetIds.has(t.aggDetection))   return true;
+          if (t.detectionId    && linkedDetIds.has(t.detectionId))    return true;
+          // 2. Same host as incident
+          const tHost = t.computer || t.host || t.entity || '';
+          if (tHost && incHosts.has(tHost))                            return true;
+          return false;
+        })
       : [];
 
-    // Find matching attack chain
+    // ── Find matching attack chain ────────────────────────────────────
     const linkedChain = (result && result.chains)
       ? (result.chains).find(c =>
-          c.incidentId === id ||
-          (c.stages || []).some(st => linkedDets.some(d => d.ruleId === st.ruleId))
+          c.incidentId === id       ||
+          c.id         === id       ||
+          c.id         === (inc.attackChainId || '') ||
+          (c.stages || []).some(st =>
+            linkedDetIds.has(st.detectionId) ||
+            (st.ruleId && incRuleIds.has(st.ruleId))
+          )
         )
       : null;
 
-    // Collect all raw events from linked detections
+    // ── Collect raw events from linked detections ─────────────────────
     const rawEvents = linkedDets.flatMap(d =>
       (d.evidence || d.raw_detections || d.rawEvents || []).slice(0, 10)
     );
 
-    // Build MITRE tags
+    // ── Build MITRE tags ──────────────────────────────────────────────
+    // inc.techniques[] and inc.mitreTactics[] are the canonical arrays in CSDE
     const mitreTags = Array.from(new Set([
-      ...(inc.mitreTactics  || inc.tactics   || []),
-      ...(inc.mitreTechniques || inc.techniques || []),
-      ...linkedDets.flatMap(d => [d.mitreTactic, d.mitreTechnique].filter(Boolean)),
-    ])).filter(Boolean);
+      ...(inc.mitreTactics    || inc.tactics      || []),
+      ...(inc.techniques      || inc.mitreTechniques || []),
+      ...(inc.mitreMappings   || []).map(m => m.technique || m.id).filter(Boolean),
+      ...linkedDets.flatMap(d => [
+        d.mitreTactic, d.mitreTechnique,
+        d.mitre?.tactic, d.mitre?.technique,
+        d.technique,
+      ].filter(Boolean)),
+    ])).filter(Boolean).slice(0, 16);
 
-    // Build affected assets
+    // ── Build affected assets ─────────────────────────────────────────
     const assets = Array.from(new Set([
-      ...(inc.hosts || []),
-      ...(inc.users || []),
-      ...(inc.sourceIps || inc.srcIps || []),
-      ...linkedDets.flatMap(d => [d.host, d.user, d.srcIp].filter(Boolean)),
+      ...incHosts,
+      ...incUsers,
+      ...incSrcIps,
     ])).filter(Boolean).slice(0, 20);
 
-    // Build tags
+    // ── Build tags ────────────────────────────────────────────────────
     const tags = [
-      ...mitreTags.slice(0, 4),
+      ...(inc.mitreTactics || inc.techniques || []).slice(0, 3),
       severity.toLowerCase(),
-      inc.behavior || '',
-      linkedChain ? linkedChain.type || '' : '',
+      inc.behaviorTitle || inc.behavior || '',
+      linkedChain ? (linkedChain.type || 'chain') : '',
     ].filter(Boolean).slice(0, 8);
 
-    // Initial system note
+    // ── Resolve aceScore (CSDE returns it as object {score,…}) ───────
+    const aceScoreRaw = inc.aceScore;
+    const aceScore = (aceScoreRaw && typeof aceScoreRaw === 'object')
+      ? aceScoreRaw.score
+      : (typeof aceScoreRaw === 'number' ? aceScoreRaw : null);
+
+    // ── Initial system note ───────────────────────────────────────────
+    const phaseStr = (inc.killChainStages || inc.phaseTimeline || [])
+      .map(p => p.tactic || p.mitreTactic || p.phase || String(p))
+      .filter(Boolean).join(' → ') || '—';
+
     const notes = [{
       user: 'RAYKAN Engine',
       time: new Date().toISOString(),
       isSystem: true,
-      text: `Auto-created from RAYKAN pipeline. Incident ${id} — ${inc.behavior || 'Unknown Behavior'} · ` +
-            `${linkedDets.length} detection(s) · ACE Score: ${inc.aceScore ?? '—'} · ` +
-            `Forensic Confidence: ${inc.level || inc.forensicConfidence || '—'} · ` +
-            `Phase Chain: ${(inc.phaseTimeline || inc.killChainStages || []).map(p => p.tactic || p.phase || p).join(' → ') || '—'}`,
+      text: `Auto-created from RAYKAN pipeline. Incident ${id} — ` +
+            `${inc.behaviorTitle || inc.behavior || inc.title || 'Unknown Behavior'} · ` +
+            `${linkedDets.length} detection(s) · ACE Score: ${aceScore ?? '—'} · ` +
+            `Confidence: ${inc.level || inc.forensicConfidence || '—'} · ` +
+            `Verdict: ${inc.verdict || '—'} · ` +
+            `Phase Chain: ${phaseStr}`,
     }];
 
-    if (inc.description) {
+    // Add narrative as a system note (CSDE enriched attack narrative)
+    const narrativeText = inc.narrative || inc.description || inc.rootCauseSummary || '';
+    if (narrativeText) {
       notes.push({
         user: 'RAYKAN Engine',
         time: new Date().toISOString(),
         isSystem: true,
-        text: `📋 ${inc.description}`,
+        text: `📋 ${narrativeText}`,
+      });
+    }
+    // Add verdict note if available
+    if (inc.verdict) {
+      notes.push({
+        user: 'RAYKAN Engine',
+        time: new Date().toISOString(),
+        isSystem: true,
+        text: `🔬 Verdict: ${inc.verdict} — ${inc.verdictReason || ''}`,
       });
     }
 
@@ -178,7 +259,7 @@
       // ── Core identity ───────────────────────────────────────────
       id          : _caseId(),
       uuid        : _uid(),
-      title       : inc.name || inc.title || inc.behavior || `Incident: ${id.slice(0, 12)}`,
+      title       : inc.title || inc.behaviorTitle || inc.name || inc.behavior || `Incident: ${id.slice(0, 12)}`,
       severity,
       status      : 'Open',
       assignee    : _currentUser(),
@@ -204,18 +285,23 @@
       _mitreTags   : mitreTags,
 
       // ── Risk / confidence metrics ───────────────────────────────
-      aceScore     : inc.aceScore    ?? null,
-      riskScore    : inc.riskScore   ?? inc.aceScore ?? null,
+      // aceScore is an object {score,severityBand,reasons} from CSDE — unwrap it
+      aceScore     : aceScore,
+      riskScore    : inc.riskScore ?? inc.progressiveRisk ?? aceScore ?? null,
       confidence   : inc.level       || inc.forensicConfidence || '—',
-      behavior     : inc.behavior    || '—',
+      behavior     : inc.behaviorTitle || inc.behavior || inc.title || '—',
       alertCount   : linkedDets.length || inc.detectionCount || 1,
 
       // ── Phase chain for overview tab ────────────────────────────
-      phaseChain   : (inc.phaseTimeline || inc.killChainStages || []).map(p => ({
-        phase      : p.tactic || p.phase || String(p),
-        technique  : p.technique || '',
-        observed   : p.observed !== false,
-        confidence : p.confidence ?? p.confidenceScore ?? null,
+      // inc.killChainStages has: {ruleId, detection_name, tactic, technique,
+      //   mitreTactic, timestamp, observed, riskScore, confidence, inferred}
+      phaseChain   : (inc.killChainStages || inc.phaseTimeline || []).map(p => ({
+        phase      : p.tactic || p.mitreTactic || p.phase || String(p),
+        technique  : p.technique || p.mitreTechnique || '',
+        observed   : p.observed !== false && !p.inferred,
+        confidence : p.confidence ?? p.riskScore ?? null,
+        ruleId     : p.ruleId     || '',
+        label      : p.detection_name || p.label || '',
       })),
 
       // ── Source tracking ─────────────────────────────────────────
@@ -660,51 +746,59 @@ ${cases.length === 0 ? `
     const chainHtml      = _renderDetailChain(c);
     const notesHtml      = _renderDetailNotes(c);
 
+    // FIX v20: openDetailModal() injects this into #detailModalBody, which lives
+    // inside #detailModalContent (.modal-card.large). switchModalTab() uses
+    // btn.closest('.modal-card') to scope tab switching — so we must NOT add
+    // another .modal-card here (that would create a nested match).
+    // Instead, use a plain data-scoped container so switchModalTab's updated
+    // selector (#detailModalBody) can scope correctly.
     const html = `
-<div>
-  <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
-    <div>
+<div id="cmDetailRoot">
+  <div style="margin-bottom:12px;">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
       <span style="font-size:10px;font-family:monospace;color:var(--accent-cyan);">${_esc(c.id)}</span>
-      ${c.incidentId ? `<span style="font-size:10px;font-family:monospace;color:#a78bfa;margin-left:8px;">INC: ${_esc(c.incidentId.slice(0,14))}…</span>` : ''}
-      <div style="font-size:18px;font-weight:800;margin-top:4px;color:#e6edf3;">${_esc(c.title)}</div>
-      ${c.behavior && c.behavior !== '—' ? `<div style="font-size:11px;color:#8b949e;margin-top:2px;">Behavior: ${_esc(c.behavior)}</div>` : ''}
+      ${c.incidentId ? `<span style="font-size:10px;font-family:monospace;color:#a78bfa;">INC: ${_esc(c.incidentId.slice(0,16))}</span>` : ''}
+      <span style="font-size:9px;padding:2px 7px;background:${sc}20;color:${sc};border-radius:4px;border:1px solid ${sc}44;font-weight:700;">${_esc(c.severity)}</span>
+      <span style="font-size:9px;padding:2px 7px;background:${stColor}20;color:${stColor};border-radius:4px;border:1px solid ${stColor}44;font-weight:700;">${_esc(c.status)}</span>
+      ${c.source === 'raykan' ? '<span style="font-size:9px;padding:1px 6px;background:rgba(139,92,246,0.15);color:#a78bfa;border-radius:3px;border:1px solid rgba(139,92,246,0.3);">RAYKAN</span>' : ''}
     </div>
-    <div style="text-align:right;">
-      <span style="font-size:11px;padding:3px 8px;background:${sc}20;color:${sc};border-radius:5px;border:1px solid ${sc}44;font-weight:700;">${_esc(c.severity)}</span>
-      <div style="font-size:12px;color:${stColor};font-weight:700;margin-top:4px;">${_esc(c.status)}</div>
-    </div>
+    <div style="font-size:16px;font-weight:800;color:#e6edf3;">${_esc(c.title)}</div>
+    ${c.behavior && c.behavior !== '—' ? `<div style="font-size:11px;color:#8b949e;margin-top:3px;">Behavior: ${_esc(c.behavior)}</div>` : ''}
   </div>
 
-  <div class="modal-tabs" style="display:flex;gap:4px;margin-bottom:12px;flex-wrap:wrap;">
-    <button class="modal-tab active" onclick="switchModalTab&&switchModalTab(this,'cmtab-overview')">Overview</button>
-    <button class="modal-tab" onclick="switchModalTab&&switchModalTab(this,'cmtab-detections')">Detections (${c.alertCount})</button>
-    <button class="modal-tab" onclick="switchModalTab&&switchModalTab(this,'cmtab-timeline')">Timeline (${c._timeline.length})</button>
-    <button class="modal-tab" onclick="switchModalTab&&switchModalTab(this,'cmtab-chain')">Attack Chain</button>
-    <button class="modal-tab" onclick="switchModalTab&&switchModalTab(this,'cmtab-notes')">Notes (${c.notes.length})</button>
+  <div class="modal-tabs" style="display:flex;gap:3px;flex-wrap:wrap;border-bottom:1px solid #21262d;padding-bottom:10px;margin-bottom:14px;">
+    <button class="modal-tab active" onclick="switchModalTab(this,'cmtab-overview')">📋 Overview</button>
+    <button class="modal-tab" onclick="switchModalTab(this,'cmtab-detections')">🎯 Detections <span style="font-size:9px;background:rgba(239,68,68,0.15);color:#ef4444;padding:1px 5px;border-radius:3px;margin-left:2px;">${c.alertCount}</span></button>
+    <button class="modal-tab" onclick="switchModalTab(this,'cmtab-timeline')">⏱ Timeline <span style="font-size:9px;background:rgba(59,130,246,0.15);color:#60a5fa;padding:1px 5px;border-radius:3px;margin-left:2px;">${c._timeline.length}</span></button>
+    <button class="modal-tab" onclick="switchModalTab(this,'cmtab-chain')">⛓ Attack Chain</button>
+    <button class="modal-tab" onclick="switchModalTab(this,'cmtab-notes')">📝 Notes <span style="font-size:9px;background:rgba(34,197,94,0.15);color:#22c55e;padding:1px 5px;border-radius:3px;margin-left:2px;">${c.notes.length}</span></button>
   </div>
 
-  <div id="cmtab-overview" class="modal-tab-panel active">${overviewHtml}</div>
-  <div id="cmtab-detections" class="modal-tab-panel">${detectionsHtml}</div>
-  <div id="cmtab-timeline"   class="modal-tab-panel">${timelineHtml}</div>
-  <div id="cmtab-chain"      class="modal-tab-panel">${chainHtml}</div>
-  <div id="cmtab-notes"      class="modal-tab-panel">${notesHtml}</div>
+  <div id="cmtab-overview"    class="modal-tab-panel active">${overviewHtml}</div>
+  <div id="cmtab-detections"  class="modal-tab-panel">${detectionsHtml}</div>
+  <div id="cmtab-timeline"    class="modal-tab-panel">${timelineHtml}</div>
+  <div id="cmtab-chain"       class="modal-tab-panel">${chainHtml}</div>
+  <div id="cmtab-notes"       class="modal-tab-panel">${notesHtml}</div>
 </div>`;
 
-    if (typeof openDetailModal === 'function') openDetailModal(html);
-    else {
-      // Fallback modal
+    // Always use the shared #detailModal infrastructure (openDetailModal defined in main.js v20).
+    // If somehow not yet defined (e.g., main.js not loaded), fall back to inline overlay.
+    if (typeof openDetailModal === 'function') {
+      openDetailModal(html);
+    } else {
+      // Emergency fallback — should never fire in production
       let ov = document.getElementById('cm-modal-overlay');
       if (!ov) {
         ov = document.createElement('div');
         ov.id = 'cm-modal-overlay';
-        ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9000;display:flex;align-items:center;justify-content:center;';
+        ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9999;display:flex;align-items:center;justify-content:center;';
         ov.onclick = e => { if (e.target === ov) ov.remove(); };
         document.body.appendChild(ov);
       }
       ov.innerHTML = `
-<div style="background:#0d1117;border:1px solid #30363d;border-radius:12px;padding:24px;width:780px;max-width:95vw;max-height:88vh;overflow-y:auto;position:relative;">
+<div style="background:#0d1117;border:1px solid #30363d;border-radius:12px;width:820px;max-width:96vw;max-height:90vh;overflow:hidden;position:relative;display:flex;flex-direction:column;">
   <button onclick="document.getElementById('cm-modal-overlay').remove()"
-    style="position:absolute;top:12px;right:14px;background:none;border:none;color:#8b949e;font-size:18px;cursor:pointer;">✕</button>
+    style="position:absolute;top:10px;right:14px;background:none;border:none;color:#8b949e;font-size:20px;cursor:pointer;z-index:1;">✕</button>
   ${html}
 </div>`;
     }
@@ -1054,71 +1148,62 @@ ${c.notes.map(n => `
   };
 
   // ══════════════════════════════════════════════════════════════════════
-  //  RAYKAN PIPELINE HOOK
-  //  Intercepts RAYKAN analysis completion and auto-ingests into CaseMgr
+  //  RAYKAN PIPELINE HOOK  (FIX v20)
+  //
+  //  ROOT CAUSE (previous broken strategy):
+  //    _gesIngestResult() is a JavaScript closure inside raykan.js IIFE.
+  //    Wrapping window.RAYKAN_UI.gesIngest from outside has ZERO effect
+  //    because every internal call goes directly to the closure, never
+  //    through the RAYKAN_UI.gesIngest property reference.
+  //
+  //  CORRECT STRATEGY (v20):
+  //    The real hook lives INSIDE raykan.js _gesIngestResult():
+  //      if (typeof window.CaseMgr !== 'undefined')
+  //        window.CaseMgr.ingestFromRAYKAN(r);
+  //    That call fires on EVERY analysis path (demo, upload, batch).
+  //
+  //  This function's only remaining job is to log readiness confirmation
+  //  once RAYKAN_UI is available and to wire openDetailModal for the
+  //  case detail modal.
   // ══════════════════════════════════════════════════════════════════════
 
-  /**
-   * Install a hook on RAYKAN_UI so that after every analysis
-   * (demo run, file upload, backend result) CaseMgr.ingestFromRAYKAN()
-   * is called automatically.
-   *
-   * Strategy: poll until window.RAYKAN_UI is available (it loads async),
-   * then wrap the getState reference with a Proxy to detect state changes.
-   * Simpler and more robust: patch _gesIngestResult which is always called
-   * after every analysis path.
-   */
   function _installRAYKANHook() {
     if (!window.RAYKAN_UI) {
-      setTimeout(_installRAYKANHook, 400);
+      setTimeout(_installRAYKANHook, 200);
       return;
     }
-
-    const origGesIngest = window.RAYKAN_UI.gesIngest;
-    if (!origGesIngest) {
-      console.warn('[CaseWiring] RAYKAN_UI.gesIngest not found — hook not installed');
-      return;
-    }
-
-    window.RAYKAN_UI.gesIngest = function (result) {
-      // Call original first so GES is populated
-      const ret = origGesIngest.call(this, result);
-      // Then auto-ingest into CaseMgr
-      try { CaseMgr.ingestFromRAYKAN(result); } catch (e) {
-        console.warn('[CaseWiring] ingestFromRAYKAN error:', e.message);
-      }
-      return ret;
-    };
-
-    console.info('[CaseWiring] ✅ RAYKAN_UI.gesIngest hook installed — cases auto-created from pipeline results');
+    // Hook is already inside _gesIngestResult in raykan.js (FIX v20).
+    // Nothing more to wrap here.
+    console.info('[CaseWiring v20] ✅ RAYKAN pipeline hook active — ' +
+      'CaseMgr.ingestFromRAYKAN() fires inside _gesIngestResult on every analysis path.');
   }
 
   // ══════════════════════════════════════════════════════════════════════
   //  OVERRIDE renderCaseManagement
-  //  Replaces the mock version in advanced.js
+  //  Replaces the stub in advanced.js and the API version in live-pages.js.
+  //  case-wiring.js loads AFTER both, so this assignment wins permanently.
   // ══════════════════════════════════════════════════════════════════════
   window.renderCaseManagement = renderCaseManagement;
 
-  // Also override openCaseDetail and addCaseNote used by advanced.js
+  // Also override openCaseDetail and addCaseNote used by legacy callers
   window.openCaseDetail = _openCaseDetail;
-  window.addCaseNote    = (id, _unused) => {
-    // Legacy signature from advanced.js — re-route to _cmAddNote
-    window._cmAddNote(id);
-  };
+  window.addCaseNote    = (id, _unused) => window._cmAddNote(id);
 
   // ── Expose CaseMgr publicly ────────────────────────────────────────────
   window.CaseMgr = CaseMgr;
 
-  // ── Expose render alias for live-pages.js delegation guard ────────────
+  // ── Expose render alias (used by live-pages.js delegation guard) ───────
   window._cmRender = renderCaseManagement;
 
   // ── Boot ──────────────────────────────────────────────────────────────
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', _installRAYKANHook);
   } else {
+    // DOM already ready — poll for RAYKAN_UI asynchronously
     _installRAYKANHook();
   }
 
-  console.info('[CaseWiring v1.0] ✅ Loaded — CaseMgr ready, renderCaseManagement overridden, bridges installed');
+  console.info('[CaseWiring v20] ✅ Loaded — CaseMgr ready, renderCaseManagement overridden, ' +
+    'openDetailModal wired, bridges installed.');
 
 })(window);

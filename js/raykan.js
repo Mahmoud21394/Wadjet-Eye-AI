@@ -16024,6 +16024,18 @@ return {
         `Store: ${S.graphStore.totalRecords} records, ` +
         `${S.graphStore.totalNodes} nodes, ${S.graphStore.totalEdges} edges`);
 
+      // 4. ── Case Management auto-ingestion (FIX v20) ──────────────────────
+      //    _gesIngestResult is called as a closure on every analysis path
+      //    (demo run, file upload, batch upload).  RAYKAN_UI.gesIngest wrapping
+      //    from case-wiring.js CANNOT intercept these internal calls.
+      //    This is the ONLY reliable hook point — call CaseMgr directly here.
+      //    Guard with typeof to avoid hard dependency on load order.
+      if (typeof window.CaseMgr !== 'undefined' && typeof window.CaseMgr.ingestFromRAYKAN === 'function') {
+        try { window.CaseMgr.ingestFromRAYKAN(r); } catch (ce) {
+          console.warn('[GES→CaseMgr] ingestFromRAYKAN error:', ce.message);
+        }
+      }
+
       return S.graphStore;
     } catch(e) {
       console.warn('[GES] _gesIngestResult error:', e.message);
@@ -17216,6 +17228,8 @@ ${(s3.sessionTimelines||[]).slice(0,5).map(sess => `
     _renderZDFAPanel,
     _updateZDFAUI,
     getState: () => S,
+    // ── Tab navigation (FIX v20: exported so external callers can switch tabs) ──
+    _setTab,
     // ── GES: Graph Entity Store public API ─────────────────────
     gesIngest          : _gesIngestResult,
     gesTimeline        : _gesGetTimeline,
