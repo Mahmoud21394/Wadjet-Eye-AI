@@ -326,249 +326,34 @@ function exportKillChainJSON() {
 }
 
 /* ═══════════════════════════════════════════
-   CASE MANAGEMENT
-   ═══════════════════════════════════════════ */
-const CASES = [
-  { id:'CASE-001', title:'Critical API Key Exposure — HackerOne', severity:'CRITICAL', status:'Open', assignee:'Mahmoud Osman', findings:['F001','F006'], created:'2024-12-14', updated:'2m ago', tags:['api-key','urgent'], notes:[{user:'Mahmoud Osman',time:'5m ago',text:'Key validated as active. Notified HackerOne security team. Awaiting revocation confirmation.'}], sla:'4h remaining' },
-  { id:'CASE-002', title:'VPN Credential Breach Investigation', severity:'CRITICAL', status:'In Progress', assignee:'James Chen', findings:['F002'], created:'2024-12-14', updated:'8m ago', tags:['credentials','vpn'], notes:[{user:'James Chen',time:'15m ago',text:'Infostealer dump confirmed. Resetting all affected credentials. MFA enforced.'}], sla:'2h remaining' },
-  { id:'CASE-003', title:'CVE-2024-3400 PAN-OS Exploitation', severity:'CRITICAL', status:'Escalated', assignee:'Mahmoud Osman', findings:['F003'], created:'2024-12-13', updated:'1h ago', tags:['cve','critical-patch'], notes:[{user:'Mahmoud Osman',time:'1h ago',text:'CISA KEV confirmed. Emergency patching underway for Bugcrowd environment.'}], sla:'OVERDUE' },
-  { id:'CASE-004', title:'Ransomware IOC Cluster — ALPHV/BlackCat', severity:'HIGH', status:'Open', assignee:'James Chen', findings:['F007'], created:'2024-12-14', updated:'22m ago', tags:['ransomware','alphv'], notes:[], sla:'12h remaining' },
-  { id:'CASE-005', title:'Dark Web Credential Dump — HackerOne', severity:'HIGH', status:'Investigating', assignee:'Alex Thompson', findings:['F012'], created:'2024-12-13', updated:'3h ago', tags:['dark-web','credentials'], notes:[{user:'Alex Thompson',time:'3h ago',text:'200 credentials verified. HIBP cross-reference complete. Mass reset initiated.'}], sla:'8h remaining' },
-  { id:'CASE-006', title:'Exposed Elasticsearch Database — Bugcrowd', severity:'MEDIUM', status:'Resolved', assignee:'Mahmoud Osman', findings:['F009'], created:'2024-12-13', updated:'5h ago', tags:['exposure','database'], notes:[{user:'Mahmoud Osman',time:'5h ago',text:'Instance secured. Auth enabled. GDPR DPA notified as per regulation.'}], sla:'Resolved' },
-  { id:'CASE-007', title:'Suspicious Wildcard Certificate Activity', severity:'MEDIUM', status:'Monitoring', assignee:'Alex Thompson', findings:['F011'], created:'2024-12-12', updated:'6h ago', tags:['certificate','tls'], notes:[], sla:'24h remaining' },
-];
+   CASE MANAGEMENT — STUB (replaced by case-wiring.js)
+   ═══════════════════════════════════════════
+   All Case Management logic has been moved to js/case-wiring.js.
+   That module provides:
+     • CaseMgr — live case store sourced from RAYKAN pipeline
+     • renderCaseManagement() — reads from CaseMgr, not static data
+     • openCaseDetail() — full detail modal with RAYKAN-linked tabs
+     • createCaseFromFinding() — bridge from live-detections-soc.js
+     • createCaseFromIncident() — bridge from RAYKAN incident cards
+     • createCaseFromDetection() — bridge from RAYKAN detection list
+   The stubs below keep any legacy call-sites working until case-wiring.js
+   overrides them at load time. */
 
+// Legacy compatibility stubs — overridden by case-wiring.js at runtime
 function renderCaseManagement() {
-  const container = document.getElementById('caseManagementWrap');
-  if (!container) return;
-  const statusColors = { Open:'#ef4444', 'In Progress':'#f59e0b', Investigating:'#3b82f6', Escalated:'#ec4899', Monitoring:'#22d3ee', Resolved:'#22c55e' };
-
-  container.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
-      <div>
-        <h2 style="font-size:16px;font-weight:800;">📁 Case Management & Incident Tracking</h2>
-        <p style="font-size:11px;color:var(--text-muted);">Assign, track and collaborate on security incidents with full audit trail</p>
-      </div>
-      <div style="display:flex;gap:6px;">
-        <select class="filter-select" onchange="filterCases(this.value)">
-          <option value="">All Status</option>
-          <option value="Open">Open</option>
-          <option value="In Progress">In Progress</option>
-          <option value="Escalated">Escalated</option>
-          <option value="Resolved">Resolved</option>
-        </select>
-        <button class="btn-primary" onclick="openNewCase()"><i class="fas fa-plus"></i> New Case</button>
-        <button class="btn-primary" style="background:var(--bg-elevated);border:1px solid var(--border);color:var(--text-secondary);" onclick="showToast('Cases exported as CSV','success')"><i class="fas fa-download"></i> Export</button>
-      </div>
-    </div>
-
-    <!-- Summary Stats -->
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin-bottom:16px;">
-      ${[
-        {label:'Open',count:CASES.filter(c=>c.status==='Open').length,color:'#ef4444'},
-        {label:'In Progress',count:CASES.filter(c=>['In Progress','Investigating','Escalated'].includes(c.status)).length,color:'#f59e0b'},
-        {label:'Monitoring',count:CASES.filter(c=>c.status==='Monitoring').length,color:'#3b82f6'},
-        {label:'Resolved',count:CASES.filter(c=>c.status==='Resolved').length,color:'#22c55e'},
-      ].map(s => `
-        <div style="background:${s.color}15;border:1px solid ${s.color}33;border-radius:8px;padding:10px;text-align:center;">
-          <div style="font-size:24px;font-weight:900;color:${s.color};">${s.count}</div>
-          <div style="font-size:10px;color:var(--text-muted);">${s.label}</div>
-        </div>`).join('')}
-    </div>
-
-    <div id="casesGrid" style="display:flex;flex-direction:column;gap:10px;">
-      ${CASES.map(c => {
-        const sc = c.severity==='CRITICAL'?'#ef4444':c.severity==='HIGH'?'#f97316':'#f59e0b';
-        const stColor = statusColors[c.status] || '#64748b';
-        return `
-        <div style="background:var(--bg-card);border:1px solid ${c.severity==='CRITICAL'?'rgba(239,68,68,0.4)':c.severity==='HIGH'?'rgba(249,115,22,0.3)':'var(--border)'};border-radius:10px;padding:14px;cursor:pointer;transition:all 0.2s ease;" onclick="openCaseDetail('${c.id}')" onmouseover="this.style.borderColor='${stColor}'" onmouseout="this.style.borderColor='${c.severity==='CRITICAL'?'rgba(239,68,68,0.4)':c.severity==='HIGH'?'rgba(249,115,22,0.3)':'var(--border)'}'">
-          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-            <div style="flex:1;min-width:200px;">
-              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-                <span style="font-size:10px;font-family:monospace;color:var(--accent-cyan);">${c.id}</span>
-                <span class="sev-badge sev-${c.severity.toLowerCase()}" style="font-size:9px;">${c.severity}</span>
-                <span style="font-size:10px;padding:2px 7px;background:${stColor}20;color:${stColor};border-radius:4px;border:1px solid ${stColor}44;font-weight:700;">${c.status}</span>
-              </div>
-              <div style="font-size:13px;font-weight:700;margin-bottom:4px;">${c.title}</div>
-              <div style="display:flex;flex-wrap:wrap;gap:4px;">
-                ${c.tags.map(t=>`<span style="font-size:9px;padding:1px 5px;background:rgba(59,130,246,0.1);color:#60a5fa;border-radius:3px;">#${t}</span>`).join('')}
-              </div>
-            </div>
-            <div style="text-align:right;flex-shrink:0;">
-              <div style="font-size:11px;font-weight:600;">${c.assignee}</div>
-              <div style="font-size:10px;color:var(--text-muted);">Assigned to</div>
-              <div style="font-size:10px;margin-top:4px;color:${c.sla==='OVERDUE'?'#ef4444':c.sla.includes('remaining')?'#f59e0b':'#22c55e'};font-weight:700;">⏰ ${c.sla}</div>
-            </div>
-          </div>
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
-            <div style="display:flex;gap:10px;font-size:10px;color:var(--text-muted);">
-              <span><i class="fas fa-crosshairs"></i> ${c.findings.length} finding${c.findings.length!==1?'s':''}</span>
-              <span><i class="fas fa-comment"></i> ${c.notes.length} note${c.notes.length!==1?'s':''}</span>
-              <span><i class="fas fa-clock"></i> Updated ${c.updated}</span>
-            </div>
-            <div style="display:flex;gap:4px;" onclick="event.stopPropagation()">
-              <button class="tbl-btn" title="Assign" onclick="showToast('Reassigning case ${c.id}...','info')"><i class="fas fa-user-tag"></i></button>
-              <button class="tbl-btn" title="Escalate" onclick="showToast('Case ${c.id} escalated!','warning')"><i class="fas fa-arrow-up"></i></button>
-              <button class="tbl-btn" title="Resolve" onclick="showToast('Case ${c.id} resolved!','success')"><i class="fas fa-check"></i></button>
-            </div>
-          </div>
-        </div>`;
-      }).join('')}
-    </div>`;
-}
-
-function openCaseDetail(id) {
-  const c = CASES.find(x => x.id === id);
-  if (!c) return;
-  const relFindings = c.findings.map(fid => ARGUS_DATA.findings.find(f=>f.id===fid)).filter(Boolean);
-  const statusColors = { Open:'#ef4444', 'In Progress':'#f59e0b', Investigating:'#3b82f6', Escalated:'#ec4899', Monitoring:'#22d3ee', Resolved:'#22c55e' };
-  const stColor = statusColors[c.status] || '#64748b';
-  const html = `
-  <div>
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;">
-      <div>
-        <span style="font-size:10px;font-family:monospace;color:var(--accent-cyan);">${c.id}</span>
-        <div style="font-size:18px;font-weight:800;margin-top:4px;">${c.title}</div>
-      </div>
-      <div style="text-align:right;">
-        <span class="sev-badge sev-${c.severity.toLowerCase()}">${c.severity}</span>
-        <div style="font-size:12px;color:${stColor};font-weight:700;margin-top:4px;">${c.status}</div>
-      </div>
-    </div>
-
-    <div class="modal-tabs">
-      <button class="modal-tab active" onclick="switchModalTab(this,'casetab-overview')">Overview</button>
-      <button class="modal-tab" onclick="switchModalTab(this,'casetab-findings')">Findings (${relFindings.length})</button>
-      <button class="modal-tab" onclick="switchModalTab(this,'casetab-notes')">Notes & Timeline (${c.notes.length})</button>
-    </div>
-
-    <div id="casetab-overview" class="modal-tab-panel active">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:14px;">
-        <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:12px;">
-          <div class="modal-section-title">📋 Case Details</div>
-          <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;font-size:12px;">
-            <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-muted);">Assignee:</span><span style="font-weight:700;">${c.assignee}</span></div>
-            <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-muted);">Created:</span><span>${c.created}</span></div>
-            <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-muted);">Last Updated:</span><span>${c.updated}</span></div>
-            <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-muted);">SLA:</span><span style="color:${c.sla==='OVERDUE'?'#ef4444':'#f59e0b'};font-weight:700;">${c.sla}</span></div>
-          </div>
-        </div>
-        <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:12px;">
-          <div class="modal-section-title">🏷️ Tags</div>
-          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px;">
-            ${c.tags.map(t=>`<span style="font-size:11px;padding:3px 8px;background:rgba(59,130,246,0.15);color:#60a5fa;border-radius:4px;">#${t}</span>`).join('')}
-          </div>
-        </div>
-      </div>
-      <div class="export-btn-row">
-        <button class="btn-primary" onclick="showToast('Reassigning case...','info')"><i class="fas fa-user-tag"></i> Reassign</button>
-        <button class="btn-primary" style="background:var(--accent-orange);" onclick="showToast('Case escalated!','warning')"><i class="fas fa-arrow-up"></i> Escalate</button>
-        <button class="btn-primary" style="background:var(--accent-green);" onclick="showToast('Case resolved!','success');closeDetailModalBtn()"><i class="fas fa-check"></i> Resolve</button>
-        <button class="btn-export-pdf" onclick="showToast('Case report PDF generated','info')"><i class="fas fa-file-pdf"></i> PDF Report</button>
-      </div>
-    </div>
-
-    <div id="casetab-findings" class="modal-tab-panel">
-      ${relFindings.length===0?'<p style="color:var(--text-muted);padding:16px;">No findings linked yet.</p>':
-        relFindings.map(f=>`
-        <div class="finding-row" style="margin-bottom:8px;" onclick="closePeekAndOpen('${f.id}')">
-          <span class="sev-badge sev-${f.severity.toLowerCase()}" style="font-size:9px;">${f.severity}</span>
-          <span style="font-size:12px;flex:1;">${f.type}: ${f.value.slice(0,40)}</span>
-          <span style="font-size:10px;color:var(--text-muted);">${f.time}</span>
-        </div>`).join('')}
-    </div>
-
-    <div id="casetab-notes" class="modal-tab-panel">
-      <div style="margin-bottom:12px;">
-        <textarea id="caseNoteInput" style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-primary);padding:8px 12px;font-size:12px;resize:vertical;min-height:60px;" placeholder="Add a note or update..."></textarea>
-        <button class="btn-primary" style="margin-top:8px;" onclick="addCaseNote('${c.id}')"><i class="fas fa-paper-plane"></i> Add Note</button>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:8px;">
-        ${c.notes.map(n=>`
-          <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:10px;">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-              <div style="width:22px;height:22px;background:linear-gradient(135deg,#3b82f6,#a855f7);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;color:white;">${n.user.split(' ').map(w=>w[0]).join('')}</div>
-              <span style="font-size:11px;font-weight:700;">${n.user}</span>
-              <span style="font-size:10px;color:var(--text-muted);">${n.time}</span>
-            </div>
-            <p style="font-size:12px;color:var(--text-secondary);line-height:1.5;">${n.text}</p>
-          </div>`).join('')}
-      </div>
-    </div>
-  </div>`;
-
-  openDetailModal(html);
-}
-
-function addCaseNote(caseId) {
-  const input = document.getElementById('caseNoteInput');
-  if (!input?.value.trim()) return;
-  const c = CASES.find(x => x.id === caseId);
+  // case-wiring.js overrides this — if called before that module loads,
+  // show a loading indicator.
+  const c = document.getElementById('caseManagementWrap');
   if (c) {
-    c.notes.unshift({ user: CURRENT_USER?.name || 'Mahmoud Osman', time: 'Just now', text: input.value.trim() });
-    input.value = '';
-    showToast('Note added to case', 'success');
-    openCaseDetail(caseId);
+    c.style.display = '';
+    c.innerHTML = '<div style="padding:40px;text-align:center;color:#8b949e;"><i class="fas fa-spinner fa-spin fa-2x"></i><div style="margin-top:12px;font-size:13px;">Loading Case Management…</div></div>';
   }
 }
-
-function openNewCase() {
-  const modal = document.createElement('div');
-  modal.id = 'newCaseOverlay';
-  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;';
-  modal.innerHTML = `
-    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px;width:480px;max-width:90vw;max-height:80vh;overflow-y:auto;">
-      <div style="font-size:16px;font-weight:800;margin-bottom:16px;">📁 Create New Case</div>
-      <div style="display:flex;flex-direction:column;gap:10px;">
-        <div><label style="font-size:11px;color:var(--text-muted);font-weight:600;display:block;margin-bottom:4px;">Title *</label><input id="nc_title" class="settings-input" style="width:100%;" placeholder="Brief case title..." /></div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-          <div><label style="font-size:11px;color:var(--text-muted);font-weight:600;display:block;margin-bottom:4px;">Severity</label>
-            <select id="nc_sev" class="settings-input" style="width:100%;"><option>CRITICAL</option><option>HIGH</option><option selected>MEDIUM</option><option>LOW</option></select></div>
-          <div><label style="font-size:11px;color:var(--text-muted);font-weight:600;display:block;margin-bottom:4px;">Assignee</label>
-            <select id="nc_assign" class="settings-input" style="width:100%;">
-              ${ARGUS_DATA.users.filter(u=>u.status==='active').map(u=>`<option>${u.name}</option>`).join('')}
-            </select></div>
-        </div>
-        <div><label style="font-size:11px;color:var(--text-muted);font-weight:600;display:block;margin-bottom:4px;">Tags (comma separated)</label><input id="nc_tags" class="settings-input" style="width:100%;" placeholder="api-key, urgent, customer-x" /></div>
-        <div><label style="font-size:11px;color:var(--text-muted);font-weight:600;display:block;margin-bottom:4px;">Initial Note</label><textarea id="nc_note" class="settings-input" style="width:100%;min-height:80px;resize:vertical;" placeholder="Initial investigation notes..."></textarea></div>
-      </div>
-      <div style="display:flex;gap:8px;margin-top:16px;">
-        <button class="btn-primary" onclick="createNewCase()"><i class="fas fa-folder-plus"></i> Create Case</button>
-        <button onclick="document.getElementById('newCaseOverlay').remove()" style="padding:7px 14px;background:transparent;border:1px solid var(--border);border-radius:var(--radius);color:var(--text-secondary);cursor:pointer;font-size:12px;">Cancel</button>
-      </div>
-    </div>`;
-  document.body.appendChild(modal);
-  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
-}
-
-function createNewCase() {
-  const title   = document.getElementById('nc_title')?.value.trim();
-  const sev     = document.getElementById('nc_sev')?.value;
-  const assignee= document.getElementById('nc_assign')?.value;
-  const tagsStr = document.getElementById('nc_tags')?.value;
-  const note    = document.getElementById('nc_note')?.value.trim();
-  if (!title) { showToast('Title is required', 'error'); return; }
-  const newCase = {
-    id: `CASE-${String(CASES.length + 1).padStart(3,'0')}`,
-    title, severity: sev, status: 'Open', assignee,
-    findings: [], created: new Date().toISOString().slice(0,10),
-    updated: 'Just now',
-    tags: tagsStr ? tagsStr.split(',').map(t=>t.trim()).filter(Boolean) : [],
-    notes: note ? [{ user: CURRENT_USER?.name || 'Mahmoud Osman', time: 'Just now', text: note }] : [],
-    sla: '24h remaining',
-  };
-  CASES.unshift(newCase);
-  document.getElementById('newCaseOverlay')?.remove();
-  showToast(`✅ Case "${newCase.id}" created!`, 'success');
-  if (typeof renderCaseManagement === 'function') renderCaseManagement();
-}
-
-function filterCases(status) {
-  const container = document.getElementById('casesGrid');
-  if (!container) return;
-  const filtered = status ? CASES.filter(c=>c.status===status) : CASES;
-  showToast(`Showing ${filtered.length} case${filtered.length!==1?'s':''}`, 'info');
-}
+function openCaseDetail(id) { if (window.CaseMgr) window._cmOpenDetail(id); }
+function addCaseNote(id)    { if (window.CaseMgr) window._cmAddNote(id); }
+function openNewCase()      { if (window.CaseMgr) window._cmOpenNewCase(); else if(typeof showToast==='function') showToast('Case Management loading…','info'); }
+function createNewCase()    { if (window.CaseMgr) window._cmSubmitNewCase(); }
+function filterCases(s)     { if (window.CaseMgr) { window._filterStatus=s||''; window.renderCaseManagement(); } }
 
 /* ═══════════════════════════════════════════
    THREAT HUNTING WORKSPACE

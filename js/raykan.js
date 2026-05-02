@@ -13592,6 +13592,28 @@ return {
     </div>
   </div>` : ''}
 
+  <!-- ══ Case Management Action Bar ════════════════════════════════ -->
+  <div style="padding:9px 16px;border-top:1px solid #21262d;background:rgba(8,14,24,0.4);display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+    <button class="rk-entity-btn" style="padding:5px 14px;font-size:11px;font-weight:700;background:rgba(59,130,246,0.12);color:#60a5fa;border-color:rgba(59,130,246,0.3);"
+      onclick="(function(){
+        const incObj=(window.RAYKAN_UI?window.RAYKAN_UI.getState().incidents||[]:S.incidents||[])
+          .find(function(x){return (x.id||x.incidentId)==='${incId}';})
+          ||{id:'${incId}',severity:'${sev}'};
+        if(typeof window.createCaseFromIncident==='function'){
+          window.createCaseFromIncident(incObj,window.RAYKAN_UI?window.RAYKAN_UI.getState():null);
+        } else if(typeof navigateTo==='function'){navigateTo('case-management');}
+      })()" title="Create a linked case in Case Management">
+      📁 Create Case
+    </button>
+    <button class="rk-entity-btn" style="padding:5px 12px;font-size:11px;"
+      onclick="RAYKAN_UI._invEntity('${(inc.allHosts||[])[0]||inc.host||''}')"
+      title="Investigate entity in the RAYKAN Investigation tab">🔍 Investigate</button>
+    <button class="rk-entity-btn" style="padding:5px 12px;font-size:11px;"
+      onclick="RAYKAN_UI._pivotToLogs('${incId}')"
+      title="Pivot to raw log events">📋 Raw Logs</button>
+    <span style="margin-left:auto;font-size:9px;color:#374151;font-family:'JetBrains Mono',monospace;">${incId}</span>
+  </div>
+
 </div>`;
   }
 
@@ -14565,9 +14587,16 @@ return {
     <td><span style="font-weight:700;color:${_riskColor(d.riskScore||0)};">${d.riskScore||'—'}</span></td>
     <td style="color:#6b7280;font-size:11px;white-space:nowrap;">${_fmtTime(d.first_seen||d.timestamp)}</td>
     <td>
-      <button class="rk-entity-btn" onclick="event.stopPropagation();RAYKAN_UI._invEntity('${d.computer||d.host||''}')">
-        Investigate →
-      </button>
+      <div style="display:flex;gap:4px;">
+        <button class="rk-entity-btn" onclick="event.stopPropagation();RAYKAN_UI._invEntity('${d.computer||d.host||''}')">
+          Investigate
+        </button>
+        <button class="rk-entity-btn" style="background:rgba(59,130,246,0.1);color:#60a5fa;border-color:rgba(59,130,246,0.3);"
+          onclick="event.stopPropagation();(function(det){if(typeof window.createCaseFromDetection==='function'){window.createCaseFromDetection(det);}else if(typeof navigateTo==='function'){navigateTo('case-management');}})(${JSON.stringify({id:d.id,ruleId:d.ruleId,severity:d.severity,detection_name:d.detection_name||d.ruleName||d.title,host:d.computer||d.host,user:d.user,srcIp:d.srcIp,mitreTactic:d.mitreTactic||(d.mitre&&d.mitre.tactic)||d.category,mitreTechnique:d.mitreTechnique||(d.mitre&&d.mitre.technique),riskScore:d.riskScore,incidentId:d.incidentId,batchDetection:d.batchDetection,evidence:[]}).replace(/"/g,'&quot;')})"
+          title="Create a case in Case Management">
+          📁 Case
+        </button>
+      </div>
     </td>
   </tr>`;
   }).join('')}
@@ -15995,6 +16024,18 @@ return {
         `Store: ${S.graphStore.totalRecords} records, ` +
         `${S.graphStore.totalNodes} nodes, ${S.graphStore.totalEdges} edges`);
 
+      // 4. ── Case Management auto-ingestion (FIX v20) ──────────────────────
+      //    _gesIngestResult is called as a closure on every analysis path
+      //    (demo run, file upload, batch upload).  RAYKAN_UI.gesIngest wrapping
+      //    from case-wiring.js CANNOT intercept these internal calls.
+      //    This is the ONLY reliable hook point — call CaseMgr directly here.
+      //    Guard with typeof to avoid hard dependency on load order.
+      if (typeof window.CaseMgr !== 'undefined' && typeof window.CaseMgr.ingestFromRAYKAN === 'function') {
+        try { window.CaseMgr.ingestFromRAYKAN(r); } catch (ce) {
+          console.warn('[GES→CaseMgr] ingestFromRAYKAN error:', ce.message);
+        }
+      }
+
       return S.graphStore;
     } catch(e) {
       console.warn('[GES] _gesIngestResult error:', e.message);
@@ -17187,6 +17228,8 @@ ${(s3.sessionTimelines||[]).slice(0,5).map(sess => `
     _renderZDFAPanel,
     _updateZDFAUI,
     getState: () => S,
+    // ── Tab navigation (FIX v20: exported so external callers can switch tabs) ──
+    _setTab,
     // ── GES: Graph Entity Store public API ─────────────────────
     gesIngest          : _gesIngestResult,
     gesTimeline        : _gesGetTimeline,

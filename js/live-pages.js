@@ -2196,7 +2196,26 @@ window.stopDetections           = ()     => stopDetections();
 window.renderThreatActors       = ()     => renderThreatActorsLive().catch(e=>_lpLog.warn(e.message));
 window.renderIOCRegistry        = (opts) => renderIOCRegistryLive(opts||{}).catch(e=>_lpLog.warn(e.message));
 window.renderCollectors         = ()     => renderCollectorsLive().catch(e=>_lpLog.warn(e.message));
-window.renderCaseManagement     = ()     => renderCasesLive().catch(e=>_lpLog.warn(e.message));
+// Case Management is now handled by case-wiring.js (production data binding).
+// The API-based renderCasesLive() is kept for reference but the primary
+// renderer is the CaseMgr-based one in case-wiring.js.
+window.renderCaseManagement     = ()     => {
+  if (window.CaseMgr && typeof window._cmOpenDetail === 'function') {
+    // case-wiring.js is loaded — use production renderer
+    const c = document.getElementById('caseManagementWrap');
+    const liveC = document.getElementById('casesLiveContainer');
+    if (c) c.style.display = '';
+    if (liveC) liveC.style.display = 'none';
+    // Re-invoke the real renderCaseManagement from case-wiring.js
+    // It was assigned to window.renderCaseManagement there, but live-pages.js
+    // loads before case-wiring.js and overwrites it. This guard re-delegates.
+    // After DOMContentLoaded, case-wiring.js will have set window._cmRender.
+    if (typeof window._cmRender === 'function') window._cmRender();
+  } else {
+    // Fallback to API-based renderer until case-wiring.js loads
+    renderCasesLive().catch(e=>_lpLog.warn(e.message));
+  }
+};
 window.renderExecutiveDashboard = ()     => renderExecutiveDashboardLive().catch(e=>_lpLog.warn(e.message));
 window.renderLiveFeeds          = ()     => renderLiveFeedsLive().catch(e=>_lpLog.warn(e.message));
 window.stopLiveFeeds            = ()     => {};

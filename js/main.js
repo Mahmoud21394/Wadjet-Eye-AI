@@ -1278,6 +1278,22 @@ function investigateCampaign(id) {
    ════════════════════════════════════════════════ */
 function closeDetailModal(e)    { if (e.target === e.currentTarget) closeDetailModalBtn(); }
 function closeDetailModalBtn()  { document.getElementById('detailModal')?.classList.remove('open'); }
+
+/**
+ * openDetailModal(html) — FIX v20
+ * Injects arbitrary HTML into the shared #detailModal / #detailModalBody overlay
+ * and opens it.  Used by case-wiring.js _openCaseDetail() so the Case detail
+ * modal gets the same visual treatment (dark overlay, close button, scrollable
+ * card) as every other detail modal in the platform, while also giving
+ * switchModalTab() a .modal-card ancestor to scope tab switching.
+ */
+function openDetailModal(html) {
+  const overlay = document.getElementById('detailModal');
+  const body    = document.getElementById('detailModalBody');
+  if (!overlay || !body) return;
+  body.innerHTML = html;
+  overlay.classList.add('open');
+}
 function closeCollectorModal(e) { if (e.target === e.currentTarget) closeCollectorModalBtn(); }
 function closeCollectorModalBtn(){ document.getElementById('collectorModal')?.classList.remove('open'); }
 function closePlaybookModal(e)  { if (e.target === e.currentTarget) closePlaybookModalBtn(); }
@@ -1286,12 +1302,20 @@ function closeTenantModal(e)    { if (e.target === e.currentTarget) closeTenantM
 function closeTenantModalBtn()  { document.getElementById('tenantModal')?.classList.remove('open'); }
 
 function switchModalTab(btn, tabId) {
-  const modal = btn.closest('.modal-card, .campaign-detail, .actor-detail, .collector-detail, .playbook-detail, .darkweb-detail, .tenant-detail');
-  if (!modal) return;
-  modal.querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'));
-  modal.querySelectorAll('.modal-tab-panel').forEach(p => p.classList.remove('active'));
+  // FIX v20: scope to the nearest recognised container.
+  // #detailModalBody is the injection point for case-wiring _openCaseDetail.
+  // .modal-card etc. cover all other existing detail modals in the platform.
+  const scope =
+    btn.closest('#detailModalBody') ||
+    btn.closest('#cmDetailRoot')    ||
+    btn.closest('.modal-card, .campaign-detail, .actor-detail, .collector-detail, ' +
+                '.playbook-detail, .darkweb-detail, .tenant-detail') ||
+    btn.closest('.rk-modal-body')   ||
+    document;
+  scope.querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'));
+  scope.querySelectorAll('.modal-tab-panel').forEach(p => p.classList.remove('active'));
   btn.classList.add('active');
-  const panel = modal.querySelector('#' + tabId) || document.getElementById(tabId);
+  const panel = scope.querySelector('#' + tabId) || document.getElementById(tabId);
   if (panel) panel.classList.add('active');
 }
 
