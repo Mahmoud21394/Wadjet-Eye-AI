@@ -15033,7 +15033,9 @@ return {
     ].join('');
 
     return `
-<div class="rk-inc-card sev-${sev}" style="margin-bottom:4px;">
+<div class="rk-inc-card sev-${sev}" style="margin-bottom:4px;cursor:pointer;"
+     onclick="RAYKAN_UI._openIncidentDetail('${incId}')"
+     title="Click to view full incident details">
 
   <!-- ══ Intelligent Header Bar (SOC v2 — compact, single row) ════ -->
   <div class="rk-inc-card-hdr">
@@ -15043,15 +15045,15 @@ return {
       ${_sevBadge(sev)}
       <span class="soc-inc-title" title="${incidentTitle}">${incidentTitle}</span>
       <!-- MITRE tactic pills (overflow hidden) -->
-      <div class="soc-inc-pills">
+      <div class="soc-inc-pills" onclick="event.stopPropagation()">
         ${tacticPillsV2}
         ${inc.detectionCount ? `<span class="rk-badge rk-sev-info" style="font-family:'JetBrains Mono',monospace;">${inc.detectionCount}A</span>` : ''}
         ${durStr !== '—' && durStr ? `<span style="font-size:9px;color:var(--soc-text-3);white-space:nowrap;">⏱ ${durStr}</span>` : ''}
       </div>
       <!-- Risk badge -->
-      <span class="soc-risk-badge ${riskBadgeClass}">${inc.riskScore || '—'}<span style="font-size:8px;opacity:0.7;">/100</span></span>
-      <!-- One-click actions -->
-      <div style="display:flex;gap:4px;flex-shrink:0;">
+      <span class="soc-risk-badge ${riskBadgeClass}" onclick="event.stopPropagation()">${inc.riskScore || '—'}<span style="font-size:8px;opacity:0.7;">/100</span></span>
+      <!-- One-click actions — stopPropagation so they don't also fire the card-level onclick -->
+      <div style="display:flex;gap:4px;flex-shrink:0;" onclick="event.stopPropagation()">
         <button class="rk-entity-btn" onclick="RAYKAN_UI._openIncidentDetail('${incId}')" style="padding:3px 10px;font-size:10px;font-weight:700;background:rgba(96,165,250,0.12);color:#60a5fa;border-color:rgba(96,165,250,0.3);" title="View full incident details">🔎 View Details</button>
         <button class="rk-entity-btn" onclick="RAYKAN_UI._invEntity('${inc.host||''}')" style="padding:3px 8px;font-size:10px;" title="Investigate">🔍</button>
         <button class="rk-entity-btn" onclick="RAYKAN_UI._isolateHost('${inc.host||''}')" style="padding:3px 8px;font-size:10px;background:rgba(239,68,68,0.08);color:#ef4444;border-color:rgba(239,68,68,0.25);" title="Isolate">🔒</button>
@@ -16210,43 +16212,86 @@ return {
   function _renderTimelineList(tl) {
     const el = document.getElementById('rk-tl-container');
     if (!el) return;
-    if (!tl.length) {
-      el.innerHTML = `<div style="padding:60px;text-align:center;color:#4b5563;font-size:13px;">Timeline empty — run analysis.</div>`;
+
+    // FIX v31: If the passed array is empty, try S.timeline directly before
+    // showing the empty-state — callers that pass a filtered slice may hand in []
+    // even when raw data is present.
+    const entries = (tl && tl.length) ? tl
+                  : (Array.isArray(S.timeline) && S.timeline.length ? S.timeline : []);
+
+    if (!entries.length) {
+      el.innerHTML = `<div style="padding:60px;text-align:center;color:#4b5563;font-size:13px;">
+        <div style="font-size:28px;margin-bottom:10px;">📅</div>
+        <div style="font-size:14px;color:#6b7280;margin-bottom:6px;">Timeline empty — run analysis first.</div>
+        <span style="font-size:11px;">The timeline populates automatically after running a demo or ingesting log events.</span>
+      </div>`;
       return;
     }
-    const sorted = _chronoSort(tl, 'timestamp');
+
+    const sorted = _chronoSort(entries, 'timestamp');
     // Find detections that correspond to timeline entries
     const detMap = new Map(S.detections.map(d => [d.id, d]));
+
+    // FIX v31: Normalise `type` here too so entries from any source display
+    // with the correct colour — GLC categories, MITRE tactics, and plain labels
+    // all collapse to the seven renderer-known keys.
+    const _normaliseType = (raw) => {
+      const t = (raw || 'event').toLowerCase();
+      if (t === 'detection')                          return 'detection';
+      if (t === 'authentication' || t.includes('auth') || t.includes('logon') || t.includes('login')) return 'authentication';
+      if (t === 'process' || t.includes('execution') || t.includes('process')) return 'process';
+      if (t === 'persistence' || t.includes('persist'))                        return 'persistence';
+      if (t === 'network' || t.includes('network') || t.includes('exfil') ||
+          t.includes('c2') || t.includes('command') || t.includes('firewall'))  return 'network';
+      if (t === 'file' || t.includes('file') || t.includes('collect'))         return 'file';
+      return 'event';
+    };
+
     el.innerHTML = sorted.map((e, idx) => {
-      const type   = e.type || 'event';
-      const col = type === 'detection' ? '#ef4444'
-               : type === 'authentication' ? '#f97316'
-               : type === 'process'        ? '#60a5fa'
-               : type === 'persistence'    ? '#eab308'
-               : type === 'network'        ? '#34d399'
-               : type === 'file'           ? '#a78bfa'
+      const type   = _normaliseType(e.type || e.category || e.log_source || 'event');
+      const col = type === 'detection'      ? '#ef4444'
+               : type === 'authentication'  ? '#f97316'
+               : type === 'process'         ? '#60a5fa'
+               : type === 'persistence'     ? '#eab308'
+               : type === 'network'         ? '#34d399'
+               : type === 'file'            ? '#a78bfa'
                : '#8b949e';
-      const det = e.detection ? (detMap.get(e.detection) || S.detections.find(d => d.id === e.detection)) : null;
+
+      // Support both `detection` (CSDE link ID) and `detection_id` (GES field)
+      const detId  = e.detection || e.detection_id || null;
+      const det = detId ? (detMap.get(detId) || S.detections.find(d => d.id === detId)) : null;
       const detBadge = det
         ? `<span style="font-size:10px;padding:2px 7px;background:rgba(239,68,68,0.12);color:#ef4444;border-radius:8px;font-weight:700;cursor:pointer;"
              onclick="event.stopPropagation();RAYKAN_UI._showDetDetail('${det.id||''}')">
              🚨 ${_truncate(det.detection_name||det.ruleName||det.title||'Detection',40)}</span>`
         : '';
-      // Expandable raw events for aggregated timeline entries
-      const uid = `rk-tl-${idx}`;
+
+      // FIX v31: Also show a severity badge when severity is present
+      const sevBadge = e.severity && e.severity !== 'low'
+        ? `<span style="font-size:9px;padding:1px 6px;background:${_sev(e.severity).color}22;color:${_sev(e.severity).color};border-radius:5px;font-weight:700;">${e.severity.toUpperCase()}</span>`
+        : '';
+
+      const entityLabel = e.entity || e.computer || e.host || '';
+      const userLabel   = e.user && e.user !== entityLabel ? e.user : '';
+      const descLabel   = e.description || e.rule_name || e.summary || 'Event';
+      const cmdLine     = e.commandLine || e.command_line || '';
+      const mitreTech   = e.mitre_technique || e.technique || '';
+
       return `
 <div class="rk-timeline-item" style="border-left-color:${col};">
   <div class="rk-tl-dot" style="background:${col};"></div>
   <div style="flex:1;min-width:0;">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;flex-wrap:wrap;">
       <span class="rk-tag" style="color:${col};background:${col}1a;">${type}</span>
+      ${sevBadge}
       <span style="font-size:11px;color:#4b5563;">${_fmt(e.timestamp||e.ts)}</span>
-      <span style="font-size:11px;color:#6b7280;">${e.entity||e.computer||''}</span>
-      ${e.user&&e.user!==e.entity?`<span style="font-size:11px;color:#60a5fa;">${e.user}</span>`:''}
+      ${entityLabel?`<span style="font-size:11px;color:#6b7280;">🖥 ${entityLabel}</span>`:''}
+      ${userLabel  ?`<span style="font-size:11px;color:#60a5fa;">👤 ${userLabel}</span>`:''}
+      ${mitreTech  ?`<span style="font-size:9.5px;font-family:'JetBrains Mono',monospace;color:#a78bfa;padding:1px 5px;background:rgba(167,139,250,0.08);border-radius:4px;">${mitreTech}</span>`:''}
       ${detBadge}
     </div>
-    <div style="font-size:13px;color:#e6edf3;">${e.description||e.summary||'Event'}</div>
-    ${e.commandLine ? `<div class="rk-code" style="font-size:11px;color:#8b949e;margin-top:4px;white-space:pre-wrap;word-break:break-all;">${_truncate(e.commandLine, 160)}</div>` : ''}
+    <div style="font-size:13px;color:#e6edf3;">${descLabel}</div>
+    ${cmdLine ? `<div class="rk-code" style="font-size:11px;color:#8b949e;margin-top:4px;white-space:pre-wrap;word-break:break-all;">${_truncate(cmdLine, 160)}</div>` : ''}
   </div>
 </div>`;
     }).join('');
@@ -17962,27 +18007,58 @@ return {
 
   // ── _gesGetTimeline() ─────────────────────────────────────────
   // Returns timeline entries from GES (entity-enriched, chronological).
-  // Falls back to S.timeline if GES has no records.
-  // FIX v12: Always merge S.timeline entries so even zero-entity events appear.
+  // FIX v31: Always prefer S.timeline as the canonical source — it is
+  // built directly from raw events by the detection engine and carries
+  // the correct `type`, `description`, `entity`, and `commandLine`
+  // fields that _renderTimelineList expects.  GES entries are merged in
+  // only when they add genuinely NEW detections not covered by S.timeline.
   function _gesGetTimeline(opts) {
-    // Always start from S.timeline as base (it contains all events from the engine)
-    const baseTl = Array.isArray(S.timeline) ? S.timeline : [];
+    // Always start from S.timeline as base (canonical engine output)
+    const baseTl = Array.isArray(S.timeline) ? [...S.timeline] : [];
 
-    // If GES has records, enrich with entity-aware entries
+    // If GES has no records, return S.timeline directly — no merge needed.
     const gesRecords = GES.getRecords();
     if (!gesRecords.length) return baseTl;
 
-    const gesTl = GES.buildTimeline(opts);
+    // GES buildTimeline returns entity-enriched detection records.
+    // Map them to the same shape as S.timeline entries so _renderTimelineList
+    // can display them correctly (type, description, entity…).
+    const gesTl = GES.buildTimeline(opts).map(g => {
+      // Normalise `type` to one of the colour-mapped keys used by the renderer:
+      //   detection | authentication | process | persistence | network | file | event
+      const tactic = (g.mitre_tactic || '').toLowerCase();
+      const logSrc = (g.log_source   || '').toLowerCase();
+      let   type   = g.type || 'event';
+      // Only remap when the raw value is a MITRE tactic or log-source name;
+      // keep already-correct values (detection, process…) untouched.
+      if (!['detection','authentication','process','persistence','network','file'].includes(type)) {
+        if (tactic.includes('credential') || tactic.includes('initial'))  type = 'authentication';
+        else if (tactic.includes('execution') || tactic.includes('lateral')) type = 'process';
+        else if (tactic.includes('persist'))                                  type = 'persistence';
+        else if (tactic.includes('exfil') || tactic.includes('command') ||
+                 logSrc.includes('firewall') || logSrc.includes('network'))  type = 'network';
+        else if (tactic.includes('collect'))                                  type = 'file';
+        else if (logSrc.includes('process') || logSrc.includes('sysmon'))    type = 'process';
+        else                                                                  type = 'detection';
+      }
+      return {
+        ...g,
+        type,
+        timestamp   : g.timestamp || g.ts,
+        description : g.description || g.rule_name || 'Detection',
+        entity      : g.entity      || g.host      || g.user || '',
+      };
+    });
 
-    // Build merged timeline: GES entries first (entity-enriched), then any
-    // S.timeline entries that have no corresponding GES record.
-    const gesDetIds = new Set(gesTl.map(t => t.detection_id).filter(Boolean));
-    const extraTl   = baseTl.filter(t => !t.detection_id || !gesDetIds.has(t.detection_id));
+    // Merge: include GES entries whose detection_id is NOT already represented
+    // in S.timeline so we don't create visual duplicates.
+    const baseTlDetIds = new Set(baseTl.map(t => t.detection_id).filter(Boolean));
+    const newGesEntries = gesTl.filter(g => !g.detection_id || !baseTlDetIds.has(g.detection_id));
 
-    // Deduplicate by timestamp+description to avoid visual duplicates
+    // Deduplicate by (timestamp + description) to guard against any edge cases.
     const seen = new Set();
-    return [...gesTl, ...extraTl].filter(t => {
-      const key = `${t.timestamp||t.ts}|${t.description||t.rule_name||''}`;
+    return [...baseTl, ...newGesEntries].filter(t => {
+      const key = `${t.timestamp||t.ts||''}|${t.description||t.rule_name||''}|${t.entity||''}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
