@@ -2483,6 +2483,39 @@
         });
       });
 
+      // FIX v27: Also index by shared external destIp (C2/exfil server)
+      // Two detections on different hosts beaconing to the same external C2 IP
+      // → same adversary campaign → must be unioned into one bucket.
+      const destIpToIdx = new Map();
+      dedupDets.forEach((det, i) => {
+        const rawDets = det.raw_detections || [det];
+        rawDets.forEach(rd => {
+          const evArr = rd.evidence || [];
+          evArr.forEach(ev => {
+            const dip = (ev.destIp || ev.dest_ip || '').replace('::ffff:','').trim();
+            if (!dip || dip === '-') return;
+            // Only external (non-RFC1918) IPs qualify as C2 correlators
+            if (dip.startsWith('10.') || dip.startsWith('192.168.') ||
+                /^172\.(1[6-9]|2\d|3[01])\./.test(dip)) return;
+            if (!destIpToIdx.has(dip)) destIpToIdx.set(dip, []);
+            destIpToIdx.get(dip).push(i);
+          });
+        });
+      });
+      // Union detections sharing an external C2 destIp (within proximity window)
+      destIpToIdx.forEach((idxList) => {
+        if (idxList.length < 2) return;
+        const sorted = [...new Set(idxList)].sort((a, b) => detMeta[a].tsMs - detMeta[b].tsMs);
+        for (let i = 0; i < sorted.length - 1; i++) {
+          const idxA = sorted[i], idxB = sorted[i + 1];
+          const mA = detMeta[idxA], mB = detMeta[idxB];
+          if (Math.abs(mB.tsMs - mA.tsMs) > CFG.ACE_PROXIMITY_WINDOW_MS) continue;
+          if (mA.os !== 'unknown' && mB.os !== 'unknown' && mA.os !== mB.os) continue;
+          // Different hosts sharing external C2 → valid lateral pivot link
+          union(idxA, idxB);
+        }
+      });
+
       // ── Union detections sharing identity key, within proximity window,
       //    and passing all context guards ─────────────────────────────────
       keyToIdx.forEach((idxList, key) => {
@@ -2505,7 +2538,8 @@
           // ── Guard 3: Cross-user merging ────────────────────────────
           // Real (non-system) users from different accounts are ONLY merged
           // when the key is IP-based (same attacker pivoting accounts) OR
-          // when one of the users is a system/service account.
+          // when one of the users is a system/service account OR
+          // when one side is lateral-movement / credential-access (attacker pivoting account).
           const userANorm = mA.user.includes('\\') ? mA.user.split('\\').pop() : mA.user;
           const userBNorm = mB.user.includes('\\') ? mB.user.split('\\').pop() : mB.user;
           const aIsSystem = !userANorm || userANorm.includes('$') ||
@@ -2516,8 +2550,13 @@
                             userBNorm.includes('network service') || userBNorm.includes('local service');
           const bothRealUsers = !aIsSystem && !bIsSystem;
           if (bothRealUsers && userANorm !== userBNorm) {
-            // Only merge across users for IP-keyed relationships (same attacker, different target accounts)
-            if (!key.startsWith('ip:')) continue;
+            // FIX v27: also allow cross-user merge when one side is lateral-movement or
+            // credential-access — attacker dumps creds (user A) then pivots as admin (user B).
+            const pivotTactics = new Set(['lateral-movement','credential-access']);
+            const aPivot = pivotTactics.has(mA.tactic);
+            const bPivot = pivotTactics.has(mB.tactic);
+            const sameSrcHost = mA.host && mB.host && mA.host === mB.host;
+            if (!key.startsWith('ip:') && !aPivot && !bPivot && !sameSrcHost) continue;
           }
 
           // ── Guard 4: Same-host restriction for process/execution events ──
@@ -2705,10 +2744,11 @@
         b.forEach(d => _detectionAdversaryKey(d).keys.forEach(k => keys.add(k)));
         const tactics = new Set(b.map(d => (d.mitre?.tactic||d.category||'').toLowerCase().replace(/\s+/g,'-')));
 
-        // Extract non-system users and source IPs for cross-bucket identity matching
-        const users = new Set();
-        const srcIps = new Set();
-        const osSet  = new Set();
+        // Extract non-system users, source IPs, and dest IPs for cross-bucket identity matching
+        const users   = new Set();
+        const srcIps  = new Set();
+        const destIps = new Set();  // FIX v27: shared C2/pivot dest IPs link cross-host chains
+        const osSet   = new Set();
         b.forEach(d => {
           const u = (d.user || '').toLowerCase().trim();
           const uNorm = u.includes('\\') ? u.split('\\').pop() : u;
@@ -2718,13 +2758,38 @@
           if (!isSystem && uNorm) users.add(uNorm);
           const ip = (d.srcIp || '').replace('::ffff:','').trim();
           if (ip && ip !== '-') srcIps.add(ip);
+          // FIX v27: collect destIp from each detection's raw evidence AND
+          // from the top-level dedup detection object itself (some rules store
+          // destIp directly on the detection, not only inside evidence arrays).
+          // A shared external C2 IP seen on two different hosts links their chains.
+          const _isExternalIp = ip =>
+            ip && ip !== '-' &&
+            !ip.startsWith('10.') && !ip.startsWith('192.168.') &&
+            !/^172\.(1[6-9]|2\d|3[01])\./.test(ip);
+
+          // Top-level destIp on the dedup detection itself
+          const topDip = (d.destIp || d.dest_ip || '').replace('::ffff:','').trim();
+          if (_isExternalIp(topDip)) destIps.add(topDip);
+
+          // destIp from raw evidence arrays (network_connection events etc.)
+          const rawDets = d.raw_detections || [d];
+          rawDets.forEach(rd => {
+            // Check top-level of each raw_detection too
+            const rdDip = (rd.destIp || rd.dest_ip || '').replace('::ffff:','').trim();
+            if (_isExternalIp(rdDip)) destIps.add(rdDip);
+            const evArr = rd.evidence || [];
+            evArr.forEach(ev => {
+              const dip = (ev.destIp || ev.dest_ip || '').replace('::ffff:','').trim();
+              if (_isExternalIp(dip)) destIps.add(dip);
+            });
+          });
           // OS of bucket
           const rid = d.ruleId || '';
           if (rid.startsWith('CSDE-WIN')) osSet.add('windows');
           else if (rid.startsWith('CSDE-LNX')) osSet.add('linux');
         });
         const os = osSet.size === 1 ? [...osSet][0] : 'unknown';
-        return { sorted, firstTs, lastTs, keys, tactics, users, srcIps, os };
+        return { sorted, firstTs, lastTs, keys, tactics, users, srcIps, destIps, os };
       });
 
       const merged = new Array(buckets.length).fill(false);
@@ -2742,11 +2807,77 @@
           const gap = Math.abs(meta[j].firstTs - meta[i].lastTs);
           if (gap > CFG.ACE_MERGE_GAP_MS) continue;
 
-          // ── Identity overlap: shared adversary key, same user, or same srcIP ──
-          const sharedKey  = [...meta[i].keys].some(k => meta[j].keys.has(k));
-          const sharedUser = [...meta[i].users].some(u => meta[j].users.has(u));
-          const sharedIp   = [...meta[i].srcIps].some(ip => meta[j].srcIps.has(ip));
-          if (!sharedKey && !sharedUser && !sharedIp) continue;
+          // ── Identity overlap: shared adversary key, same user, same srcIP, or shared C2 destIP ──
+          const sharedKey    = [...meta[i].keys].some(k => meta[j].keys.has(k));
+          const sharedUser   = [...meta[i].users].some(u => meta[j].users.has(u));
+          const sharedSrcIp  = [...meta[i].srcIps].some(ip => meta[j].srcIps.has(ip));
+          // FIX v27: shared external C2/exfil destIp links chains from different hosts
+          // (e.g. both WS-HR-07 and SRV-FILE-02 beaconing to 45.9.148.201 → same attacker)
+          const sharedDestIp = [...meta[i].destIps].some(ip => meta[j].destIps.has(ip));
+          // FIX v27: same-host credential-pivot bridging
+          // When two buckets share at least one host AND one bucket contains BOTH
+          // credential-access AND lateral-movement (i.e. the attacker dumped creds and
+          // then re-used them under a different account on the SAME host within the window),
+          // merge the clusters. This handles: a.rahman dumps creds → attacker pivots as
+          // administrator on the same box.
+          // STRICT guard: only merge when the PIVOT bucket has both credential-access AND
+          // lateral-movement (or the companion bucket has lateral-movement pointing to a cred-dump
+          // bucket). This prevents false merges of unrelated users (T34: alice/bob).
+          const hostsI = new Set(meta[i].sorted.map(d =>
+            (d.computer||d.host||'').toLowerCase()).filter(Boolean));
+          const hostsJ = new Set(meta[j].sorted.map(d =>
+            (d.computer||d.host||'').toLowerCase()).filter(Boolean));
+          const sharedHost = [...hostsI].some(h => hostsJ.has(h));
+          // Pivot bucket must contain lateral-movement tactic (evidence of cross-account pivot)
+          const iHasLateral = meta[i].tactics.has('lateral-movement');
+          const jHasLateral = meta[j].tactics.has('lateral-movement');
+          // Other bucket must contain credential-access (prior cred dump that enabled pivot)
+          const iHasCred = meta[i].tactics.has('credential-access');
+          const jHasCred = meta[j].tactics.has('credential-access');
+          // Only valid cross-account bridge: one side dumped creds, the other used them to pivot
+          const credPivotBridge = sharedHost && (
+            (iHasLateral && jHasCred) ||  // i pivoted using j's dumped creds
+            (jHasLateral && iHasCred)     // j pivoted using i's dumped creds
+          );
+
+          // FIX v28: execution→C2-beaconing host bridge
+          // When a credential/execution bucket and a C2/exfil bucket share at least one
+          // common host AND the C2 bucket contains actual external network connections
+          // (destIp set to a routable, non-RFC1918 IP), they are the same adversary campaign.
+          //
+          // Example: a.rahman runs malware (execution) on WS-HR-07, then powershell.exe
+          // beacons to 45.9.148.201 (C2) from the same host — these are the SAME incident.
+          //
+          // STRICT GUARDS to prevent false-positives (T34: alice/bob must stay separate):
+          //   1. The C2 bucket MUST have at least one external destIp (real C2 traffic).
+          //      Pure process/persistence activity without network evidence does NOT qualify.
+          //   2. The exec bucket must NOT itself have external C2 traffic (otherwise
+          //      sharedDestIp would already have caught them).
+          //   3. The C2 bucket must have command-and-control OR exfiltration tactic
+          //      (not just lateral-movement/persistence which could be unrelated users).
+          const hardC2Tactics = new Set(['command-and-control','exfiltration']);
+          const iHasHardC2 = [...meta[i].tactics].some(t => hardC2Tactics.has(t));
+          const jHasHardC2 = [...meta[j].tactics].some(t => hardC2Tactics.has(t));
+          const iHasExecAccess = meta[i].tactics.has('execution') || meta[i].tactics.has('credential-access') ||
+                                 meta[i].tactics.has('initial-access') || meta[i].tactics.has('defense-evasion');
+          const jHasExecAccess = meta[j].tactics.has('execution') || meta[j].tactics.has('credential-access') ||
+                                 meta[j].tactics.has('initial-access') || meta[j].tactics.has('defense-evasion');
+          const iHasExtDest = meta[i].destIps.size > 0;
+          const jHasExtDest = meta[j].destIps.size > 0;
+          // Bridge fires ONLY when:
+          //   - buckets share a host
+          //   - one side has exec/cred-access tactics but NOT hard C2/exfil
+          //   - the other side has hard C2/exfil tactic AND actual external destIp evidence
+          //   This prevents T34 (alice/bob both exec-only, no C2 destIp evidence) from merging,
+          //   while correctly linking the a.rahman credential chain with the C2/exfil chain
+          //   from the same compromised host.
+          const execC2Bridge = sharedHost && (
+            (iHasExecAccess && !iHasHardC2 && jHasHardC2 && jHasExtDest) ||
+            (jHasExecAccess && !jHasHardC2 && iHasHardC2 && iHasExtDest)
+          );
+
+          if (!sharedKey && !sharedUser && !sharedSrcIp && !sharedDestIp &&
+              !credPivotBridge && !execC2Bridge) continue;
 
           // Merge if gap is within limit and identity overlaps
           combined = combined.concat(buckets[j]);
@@ -2757,6 +2888,7 @@
           meta[j].tactics.forEach(t => meta[i].tactics.add(t));
           meta[j].users.forEach(u => meta[i].users.add(u));
           meta[j].srcIps.forEach(ip => meta[i].srcIps.add(ip));
+          meta[j].destIps.forEach(ip => meta[i].destIps.add(ip));
         }
         result.push(combined);
       }
@@ -2777,6 +2909,37 @@
       // ── Step 2: Merge fragmented chains ──────────────────────────
       const mergedBuckets = _mergeFragmentedChains(rawBuckets);
 
+      // ── Step 2b: Remove subset-buckets ───────────────────────────
+      // When union-find produces two overlapping buckets (e.g. one is a complete
+      // subset of a larger cross-host bucket), the smaller bucket must be discarded.
+      // This happens when the destIp-union links all 15 detections into one bucket,
+      // while the identity-key union simultaneously produces a 9-detection sub-bucket
+      // of those same detections.  Both pass the minimum-size filter independently,
+      // creating duplicate incidents where one is entirely subsumed by the other.
+      //
+      // Algorithm: for every pair (A, B) where |A| < |B|, build a fingerprint set
+      // for B and check whether every detection in A is also present in B.  If so,
+      // mark A for removal.  Fingerprint = ruleId + host + user (normalised).
+      const _detFingerprint = d =>
+        (d.ruleId||'?') + '|' + (d.host||d.computer||'').toLowerCase() +
+        '|' + (d.user||'').toLowerCase().replace(/^.*\\/,'');
+
+      const bucketSets = mergedBuckets.map(b => new Set(b.map(_detFingerprint)));
+      const subsetMask = new Array(mergedBuckets.length).fill(false);
+      for (let i = 0; i < mergedBuckets.length; i++) {
+        if (subsetMask[i]) continue;
+        for (let j = 0; j < mergedBuckets.length; j++) {
+          if (i === j || subsetMask[j]) continue;
+          // If every fingerprint in bucket i is present in bucket j, then i ⊆ j
+          if (mergedBuckets[i].length < mergedBuckets[j].length &&
+              [...bucketSets[i]].every(fp => bucketSets[j].has(fp))) {
+            subsetMask[i] = true;  // bucket i is a strict subset — suppress it
+            break;
+          }
+        }
+      }
+      const desubsetBuckets = mergedBuckets.filter((_, i) => !subsetMask[i]);
+
       // Filter out buckets that don't meet minimum size
       // FIX v12: Require at least 2 observed (non-inferred) detections to form an incident.
       // A single detection cannot constitute a multi-stage adversary incident;
@@ -2784,7 +2947,7 @@
       // FIX v25: P1/log-tampering single-detection buckets bypass the 2-minimum —
       // a solitary EventID 1102 (log-cleared) is a definitive attacker action that
       // must always surface as a P1 incident regardless of cluster size.
-      const validBuckets = mergedBuckets.filter(b => {
+      const validBuckets = desubsetBuckets.filter(b => {
         const observed = b.filter(d => !d.inferred);
         // Allow single-detection buckets if ANY detection is a P1 escalation rule
         const hasP1Escalation = b.some(d => {
@@ -3261,6 +3424,43 @@
       e.protocol      = e.protocol      || e.Protocol      || e.proto         || '';
       e.status        = e.status        || e.Status        || e.logon_status  || '';
       e.logonType     = parseInt(e.LogonType || e.logon_type || e.logonType || 0, 10) || '';
+      // ── FIX v27: wmi_execution / lateral-pivot field normalization ──────
+      // wmi_execution events use source_host (attacker) and target_host (victim).
+      // Map: computer = source_host (who performed WMI), destHost = target_host (pivot target).
+      // commandLine = command field for WMI payloads.
+      // Also normalize process_access: source_process = attacker process, target_process = victim.
+      if (e.event_type === 'wmi_execution') {
+        if (!e.commandLine && e.command)      e.commandLine = e.command;
+        if (!e.destHost   && e.target_host)   e.destHost    = e.target_host;
+        if (!e.sourceHost && e.source_host)   e.sourceHost  = e.source_host;
+        // computer = source_host (lateral origin); destHost = target_host (lateral destination)
+        if (!e.computer   && e.source_host)   e.computer    = e.source_host;
+        // Propagate user from 'user' or 'administrator' field
+        if (!e.user && e.administrator)       e.user        = e.administrator;
+      }
+      if (e.event_type === 'process_access') {
+        // process_access: source_process is the attacker, target_process is the victim
+        if (!e.process     && e.source_process) e.process       = e.source_process;
+        if (!e.commandLine && e.source_process) e.commandLine   = e.source_process;
+        // target_process is what's being accessed (e.g. lsass.exe)
+        e._targetProcess = e.target_process || e.TargetProcess || '';
+        e._accessType    = e.access_type    || e.AccessType    || '';
+      }
+      if (e.event_type === 'file_enumeration') {
+        // file_enumeration: commandLine may be in command_line or command
+        if (!e.commandLine && e.command_line) e.commandLine = e.command_line;
+        if (!e.commandLine && e.command)      e.commandLine = e.command;
+      }
+      if (e.event_type === 'web_download' || e.event_type === 'large_data_upload') {
+        // web_download: url field maps to commandLine context, file_name maps to fileName
+        if (!e.commandLine && e.url)          e.commandLine = e.url;
+        if (!e.destIp      && e.src_ip)       e.destIp      = e.src_ip;
+      }
+      if (e.event_type === 'email_attachment_open') {
+        // Alias for email_attachment_opened (different field name used in uploaded files)
+        if (!e.commandLine && e.attachment)   e.commandLine = e.attachment;
+        if (!e.fileName    && e.attachment)   e.fileName    = e.attachment;
+      }
       // ── v22: MITRE passthrough — preserve raw technique/tactic fields ──
       // When events carry explicit MITRE annotations, preserve them so
       // detections and incident builders can use them directly.
@@ -3278,6 +3478,7 @@
           // Original set (60001-60010)
           'process_creation'        : 60001,
           'email_attachment_opened' : 60002,
+          'email_attachment_open'   : 60002,  // alias (alternate field name)
           'registry_modification'   : 60003,
           'network_connection'      : 60004,
           'smb_authentication'      : 60005,
@@ -3317,6 +3518,18 @@
           'persistence'             : 60038,
           'impact'                  : 60039,
           'recon'                   : 60040,
+          // FIX v27: missing event_type aliases — these were falling through to 60099
+          // causing no rule to fire for critical attack telemetry
+          'wmi_execution'           : 60041,  // WMI lateral movement (T1047)
+          'process_access'          : 60042,  // LSASS/process injection (T1003.001)
+          'file_enumeration'        : 60043,  // File discovery (T1083)
+          'web_download'            : 60044,  // Drive-by / ISO download (T1566.002)
+          'large_data_upload'       : 60045,  // Exfiltration (T1041)
+          'email_attachment_open'   : 60046,  // Phishing attachment (T1566.001)
+          'smb_lateral'             : 60047,  // SMB lateral movement (T1021.002)
+          'process_injection'       : 60048,  // Process injection (T1055)
+          'credential_theft'        : 60049,  // Credential theft (T1003)
+          'archive_creation'        : 60050,  // Data staged/archived (T1560)
         };
         const sid = syntheticMap[e.event_type];
         if (sid) e.EventID = sid;
@@ -5137,6 +5350,163 @@
         },
         narrative: e => `Insider threat / anomalous access on ${e.computer||e.host||'unknown'} by "${e.user||e.username||'unknown'}": ` +
           `"${e.file||e.resource||'?'}" accessed — possible data theft by trusted user (T1078).`,
+      },
+
+      // ── CJ-021: LSASS / Process Memory Access (Credential Dumping) — FIX v27 ────
+      {
+        id: 'CSDE-CJ-021', title: 'LSASS Memory Access / Credential Dumping',
+        os: 'any', severity: 'critical', category: 'credential-access',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1003.001', name: 'OS Credential Dumping: LSASS Memory', tactic: 'credential-access' },
+        tags: ['attack.credential_access', 'attack.t1003.001', 'lsass', 'credential_dump'],
+        mitre_confidence: 'high',
+        riskScore: 95,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const eid   = parseInt(e.EventID, 10);
+          // process_access event targeting lsass → CRITICAL
+          if (eType === 'process_access' || eid === 60042) {
+            const target = (e._targetProcess || e.target_process || e.TargetProcess || '').toLowerCase();
+            const src    = (e.source_process || e.process || '').toLowerCase();
+            if (target.includes('lsass')) return true;
+            // procdump/mimikatz targeting any process counts as credential dump
+            if (src.includes('procdump') || src.includes('mimikatz') || src.includes('gsecdump')) return true;
+            return true; // any process_access is suspicious in this context
+          }
+          const proc = (e.process || '').toLowerCase();
+          const cmd  = (e.commandLine || e.command_line || '').toLowerCase();
+          // LSASS dump via known tools
+          if (proc.includes('procdump') || proc.includes('mimikatz') || proc.includes('gsecdump')) return true;
+          if (cmd.includes('sekurlsa') || cmd.includes('logonpasswords') || cmd.includes('lsass')) return true;
+          if (cmd.includes('procdump') && cmd.includes('lsass')) return true;
+          return false;
+        },
+        narrative: e => {
+          const src    = e.source_process || e.process || '?';
+          const target = e._targetProcess || e.target_process || 'lsass.exe';
+          const access = e._accessType || e.access_type || 'memory_read';
+          return `LSASS credential dump on ${e.computer||e.host||'unknown'} by "${e.user||'unknown'}": ` +
+            `"${src}" accessed "${target}" (${access}) — T1003.001 CRITICAL.`;
+        },
+      },
+
+      // ── CJ-022: WMI Lateral Movement — FIX v27 ──────────────────────
+      {
+        id: 'CSDE-CJ-022', title: 'WMI Remote Execution / Lateral Movement',
+        os: 'any', severity: 'high', category: 'lateral-movement',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1047', name: 'Windows Management Instrumentation', tactic: 'lateral-movement' },
+        tags: ['attack.lateral_movement', 'attack.t1047', 'wmi', 'remote_exec'],
+        mitre_confidence: 'high',
+        riskScore: 88,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const eid   = parseInt(e.EventID, 10);
+          if (eType === 'wmi_execution' || eid === 60041) return true;
+          const proc = (e.process || '').toLowerCase();
+          const cmd  = (e.commandLine || e.command_line || '').toLowerCase();
+          if (proc.includes('wmic') || proc.includes('wmiexec')) return true;
+          if (cmd.includes('wmic') && (cmd.includes('process') || cmd.includes('call') || cmd.includes('create'))) return true;
+          if (cmd.includes('invoke-wmimethod') || cmd.includes('invoke-cimmethod')) return true;
+          return false;
+        },
+        narrative: e => {
+          const src  = e.sourceHost || e.source_host || e.computer || e.host || '?';
+          const dest = e.destHost   || e.dest_host   || e.target_host || '?';
+          const cmd  = (e.commandLine || e.command || '?').slice(0, 100);
+          return `WMI lateral movement from ${src} → ${dest} by "${e.user||'unknown'}": ` +
+            `"${cmd}" — remote WMI execution (T1047).`;
+        },
+      },
+
+      // ── CJ-023: File Enumeration / Discovery — FIX v27 ──────────────
+      {
+        id: 'CSDE-CJ-023', title: 'File & Directory Enumeration',
+        os: 'any', severity: 'medium', category: 'discovery',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1083', name: 'File and Directory Discovery', tactic: 'discovery' },
+        tags: ['attack.discovery', 'attack.t1083', 'file_enumeration', 'recon'],
+        mitre_confidence: 'high',
+        riskScore: 55,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const eid   = parseInt(e.EventID, 10);
+          if (eType === 'file_enumeration' || eid === 60043) return true;
+          const cmd  = (e.commandLine || e.command_line || '').toLowerCase();
+          const proc = (e.process || '').toLowerCase();
+          // dir /s or find on sensitive paths
+          if ((cmd.includes('dir ') || cmd.includes('find ') || cmd.includes('ls ')) &&
+              (cmd.includes('/s') || cmd.includes('-r') || cmd.includes('\\\\') ||
+               cmd.includes('finance') || cmd.includes('hr') || cmd.includes('confidential'))) return true;
+          // tree command
+          if (proc.includes('tree') && cmd.includes('\\')) return true;
+          // PowerShell Get-ChildItem recursive
+          if (cmd.includes('get-childitem') || cmd.includes('gci ') || cmd.includes('dir -recurse')) return true;
+          return false;
+        },
+        narrative: e => `File enumeration on ${e.computer||e.host||'unknown'} by "${e.user||'unknown'}": ` +
+          `"${(e.commandLine||e.command_line||'?').slice(0,120)}" — directory/file discovery (T1083).`,
+      },
+
+      // ── CJ-024: Web Download / Drive-by / ISO Delivery — FIX v27 ────
+      {
+        id: 'CSDE-CJ-024', title: 'Suspicious Web Download / Drive-By Delivery',
+        os: 'any', severity: 'high', category: 'initial-access',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1566.002', name: 'Phishing: Spearphishing Link', tactic: 'initial-access' },
+        tags: ['attack.initial_access', 'attack.t1566.002', 'web_download', 'iso', 'delivery'],
+        mitre_confidence: 'high',
+        riskScore: 78,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const eid   = parseInt(e.EventID, 10);
+          if (eType === 'web_download' || eid === 60044) return true;
+          if (eType === 'large_data_upload' || eid === 60045) {
+            // re-classified for outbound
+            return false; // handled by CJ-006/CJ-011
+          }
+          const cmd  = (e.commandLine || e.command_line || e.url || '').toLowerCase();
+          const proc = (e.process || '').toLowerCase();
+          const file = (e.fileName || e.file_name || e.file || '').toLowerCase();
+          // ISO / IMG / VHD download (T1553.005)
+          if (file.endsWith('.iso') || file.endsWith('.img') || file.endsWith('.vhd')) return true;
+          // Suspicious download via browser/curl/wget to temp
+          if ((proc.includes('chrome') || proc.includes('firefox') || proc.includes('curl') ||
+               proc.includes('wget') || proc.includes('bitsadmin')) &&
+              (cmd.includes('http') || cmd.includes('ftp'))) return true;
+          return false;
+        },
+        narrative: e => `Suspicious download on ${e.computer||e.host||'unknown'} by "${e.user||'unknown'}": ` +
+          `File "${e.file_name||e.fileName||e.url||'?'}" from "${e.src_ip||e.url||'?'}" ` +
+          `via ${e.process||'browser'} — possible spearphishing link / ISO delivery (T1566.002).`,
+      },
+
+      // ── CJ-025: Archive/Stage for Exfiltration — FIX v27 ─────────────
+      {
+        id: 'CSDE-CJ-025', title: 'Data Staged / Archived for Exfiltration',
+        os: 'any', severity: 'high', category: 'collection',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1560.001', name: 'Archive Collected Data: Archive via Utility', tactic: 'collection' },
+        tags: ['attack.collection', 'attack.t1560.001', 'archive', 'staging'],
+        mitre_confidence: 'high',
+        riskScore: 82,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const eid   = parseInt(e.EventID, 10);
+          if (eType === 'archive_creation' || eid === 60050) return true;
+          const proc = (e.process || '').toLowerCase();
+          const cmd  = (e.commandLine || e.command_line || '').toLowerCase();
+          const archiveTools = ['7z', '7zip', 'rar', 'winrar', 'zip', 'tar', 'gzip', 'compress-archive'];
+          // Archive tool creating a file (staging data)
+          if (archiveTools.some(a => proc.includes(a) || cmd.includes(a + ' a ') || cmd.includes(a + ' '))) {
+            // Only flag if writing to a new archive (not extracting)
+            if (cmd.includes(' a ') || cmd.includes('-tzip') || cmd.includes('-t7z') ||
+                cmd.includes('compress') || !cmd.includes(' e ')) return true;
+          }
+          return false;
+        },
+        narrative: e => `Data staged/archived on ${e.computer||e.host||'unknown'} by "${e.user||'unknown'}": ` +
+          `"${(e.commandLine||e.command_line||'?').slice(0,120)}" — data compressed for exfiltration (T1560.001).`,
       },
 
       // ── CJ-020: Impact / Service Disruption ──────────────────────
