@@ -29,7 +29,21 @@ const Z_SCORE_THRESHOLD    = 3.0;   // >3 std deviations = anomaly
 const RARE_THRESHOLD       = 0.02;  // < 2% frequency = rare
 const VELOCITY_THRESHOLD   = 100;   // events per 5 min
 
+// FIX #9 — Known-bad tools for forensic scoring
+const KNOWN_BAD_TOOLS = [
+  'mimikatz', 'procdump', 'wce', 'fgdump', 'gsecdump', 'pwdump',
+  'lazagne', 'meterpreter', 'cobalt', 'nc.exe', 'ncat', 'netcat',
+  'psexec', 'psexesvc', 'wmiexec', 'crackmapexec', 'impacket',
+  'rubeus', 'kerberoast', 'bloodhound', 'sharphound', 'covenant',
+  'powersploit', 'invoke-mimikatz', 'empire', 'metasploit',
+];
+
 class UEBAEngine extends EventEmitter {
+  // FIX #9 — constructor accepts mode: 'baseline' (default) or 'forensic'.
+  // In forensic mode the baseline-event threshold is lowered (5 vs 10) so
+  // the engine fires on small incident datasets where no baseline exists,
+  // and _forensicScore() supplements the normal anomaly detector with
+  // known-bad tool pattern matching.
   constructor(config = {}) {
     super();
     this._config    = config;
@@ -37,11 +51,13 @@ class UEBAEngine extends EventEmitter {
     this._profiles  = new Map();
     this._ready     = false;
     this._stats     = { profiles: 0, anomalies: 0, evaluated: 0 };
+    // FIX #9 — operation mode
+    this._mode      = (config.mode === 'forensic') ? 'forensic' : 'baseline';
   }
 
   async initialize() {
     this._ready = true;
-    console.log('[RAYKAN/UEBA] Engine initialized — behavioral baselining active');
+    console.log(`[RAYKAN/UEBA] Engine initialized — ${this._mode} mode active`);
   }
 
   // ── Analyze a batch of events ─────────────────────────────────────
@@ -108,7 +124,15 @@ class UEBAEngine extends EventEmitter {
   // ── Anomaly Detection ─────────────────────────────────────────────
   _detectAnomalies(entity, evt) {
     const profile = this._profiles.get(entity);
-    if (!profile || profile.totalEvents < 10) return null; // Need baseline
+    // FIX #9 — forensic mode: lower baseline threshold (5 vs 10)
+    const baselineMin = this._mode === 'forensic' ? 5 : 10;
+    if (!profile || profile.totalEvents < baselineMin) {
+      // FIX #9 — in forensic mode still check known-bad tools even without baseline
+      if (this._mode === 'forensic' && evt.process) {
+        return this._forensicScore(entity, evt);
+      }
+      return null;
+    }
 
     const ts   = evt.timestamp instanceof Date ? evt.timestamp : new Date(evt.timestamp);
     const hour = ts.getHours();
@@ -162,11 +186,29 @@ class UEBAEngine extends EventEmitter {
   }
 
   _isHighRiskProcess(proc) {
-    const HIGH_RISK = [
-      'mimikatz', 'wce', 'pwdump', 'procdump', 'psexec', 'lazagne',
-      'meterpreter', 'cobalt', 'nc.exe', 'ncat', 'netcat',
-    ];
-    return HIGH_RISK.some(h => proc.includes(h));
+    return KNOWN_BAD_TOOLS.some(h => proc.includes(h));
+  }
+
+  // FIX #9 — Forensic scorer: fires without a full baseline by matching
+  // process names and command-line strings against KNOWN_BAD_TOOLS.
+  // Returns an anomaly object when a match is found, or null.
+  _forensicScore(entity, evt) {
+    if (!evt.process && !evt.commandLine) return null;
+
+    const proc = (evt.process || '').split('\\').pop().toLowerCase();
+    const cmd  = (evt.commandLine || '').toLowerCase();
+
+    // Match known-bad tool in process name or command line
+    const matchedTool = KNOWN_BAD_TOOLS.find(
+      tool => proc.includes(tool) || cmd.includes(tool)
+    );
+
+    if (!matchedTool) return null;
+
+    return this._buildAnomaly(
+      entity, evt, 'known_bad_tool_forensic', 95,
+      `[FORENSIC] Known offensive tool detected: "${matchedTool}" in process="${proc}" — no baseline required`
+    );
   }
 
   _buildAnomaly(entity, evt, type, score, description) {
@@ -216,7 +258,21 @@ class UEBAEngine extends EventEmitter {
     };
   }
 
-  getStatus() { return { ready: this._ready, stats: this._stats, profiles: this._profiles.size }; }
+  // FIX #8 — Session state reset: clears all entity profiles so baseline
+  // data from one ingest session cannot contaminate the next.
+  reset() {
+    this._profiles.clear();
+    this._stats = { profiles: 0, anomalies: 0, evaluated: 0 };
+  }
+
+  getStatus() {
+    return {
+      ready   : this._ready,
+      mode    : this._mode,
+      stats   : this._stats,
+      profiles: this._profiles.size,
+    };
+  }
 }
 
 module.exports = UEBAEngine;

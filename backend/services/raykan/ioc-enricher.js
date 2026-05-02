@@ -307,6 +307,13 @@ class IOCEnricher extends EventEmitter {
     return scores.length ? Math.max(...scores) : 0;
   }
 
+  // FIX #8 — Session state reset: clears the IOC cache so enrichment
+  // results from one ingest session cannot bleed into the next session.
+  resetCache() {
+    this._cache.clear();
+    this._stats = { lookups: 0, hits: 0, errors: 0, cached: 0 };
+  }
+
   getStats()  { return this._stats; }
 }
 

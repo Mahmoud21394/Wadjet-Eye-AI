@@ -44,29 +44,39 @@ const TECHNIQUE_DESCRIPTIONS = {
 };
 
 // ── Prompt templates ──────────────────────────────────────────────
+// FIX #7 — enrichDetection now accepts chainContext as third argument.
+// Prompt redesigned to weight prior chain context heavily so the LLM does
+// not return ambiguous isMalicious=null/false for events that are clearly
+// malicious when viewed in the context of a confirmed prior chain stage.
 const PROMPTS = {
-  enrichDetection: (det, evt) => `
-You are a senior threat analyst. Analyze this security detection and provide enrichment.
+  enrichDetection: (det, evt, chainContext = {}) => {
+    const priorStagesText = chainContext.priorStages && chainContext.priorStages.length > 0
+      ? chainContext.priorStages.map((s, i) => `  Stage ${i + 1}: ${s.technique} -- ${s.description}`).join('\n')
+      : '  No prior chain context.';
+    return `You are a senior threat analyst. Assess this detection IN THE CONTEXT of the broader attack chain observed in this session.
 
-Detection: ${det.ruleName}
-Severity: ${det.severity}
-Event Details:
-  - Process: ${evt.process || 'N/A'}
-  - Command: ${evt.commandLine || 'N/A'}
-  - User: ${evt.user || 'N/A'}
-  - Computer: ${evt.computer || 'N/A'}
-  - Source IP: ${evt.srcIp || 'N/A'}
-  - Destination IP: ${evt.dstIp || 'N/A'}
+DETECTION: ${det.ruleName} [${det.severity}]
+MITRE TECHNIQUE: ${(det.mitre && det.mitre.techniques && det.mitre.techniques[0] && det.mitre.techniques[0].id) || 'Unknown'}
 
-Respond in JSON with:
-{
-  "summary": "2-3 sentence threat analysis",
-  "attackStage": "initial_access|execution|persistence|privilege_escalation|defense_evasion|credential_access|discovery|lateral_movement|collection|command_and_control|exfiltration|impact",
-  "isMalicious": true/false/null,
-  "falsePositiveProbability": 0-100,
-  "recommendedAction": "string",
-  "additionalContext": "string"
-}`,
+EVENT DETAILS:
+  Host: ${evt.computer || 'N/A'}
+  User: ${evt.user || 'N/A'}
+  Process: ${evt.process || 'N/A'}
+  Command: ${(evt.commandLine || '').slice(0, 300) || 'N/A'}
+  Source IP: ${evt.srcIp || 'N/A'}
+  Dest IP: ${evt.dstIp || 'N/A'}
+  Bytes sent: ${evt.bytesSent || 'N/A'}
+
+CHAIN CONTEXT (${(chainContext.priorStages && chainContext.priorStages.length) || 0} preceding stages confirmed):
+${priorStagesText}
+
+PRECEDING BEHAVIORS: ${chainContext.behaviorSummary || 'None'}
+
+INSTRUCTION: If ANY prior chain stage is confirmed malicious, set isMalicious=true unless you have strong specific evidence of benign administrative activity. A standalone encoded PowerShell command is ambiguous. The same command following a suspicious ISO download is highly suspicious. Weight chain context heavily.
+
+Respond ONLY in valid JSON with these exact keys:
+{"summary":"2-3 sentence threat analysis","attackStage":"tactic name","isMalicious":true,"chainConfidence":0,"falsePositiveProbability":0,"recommendedAction":"string"}`;
+  },
 
   translateToRQL: (nlQuery) => `
 You are RAYKAN, an AI-powered threat hunting engine. Convert the following natural language threat hunting query into RAYKAN Query Language (RQL) format.
@@ -165,39 +175,64 @@ class AIDetector extends EventEmitter {
   // ── Enrich Detections with AI Context ────────────────────────────
   // AI enrichment adds contextual analysis but MUST NOT override CEA decisions.
   // Any technique tags introduced or modified by AI are re-validated by CEA.
+  //
+  // FIX #7: builds chainContext from confirmed prior stages so the LLM
+  // receives attack-chain context rather than evaluating each event in isolation.
   async enrichDetections(detections, events) {
     if (!this._ready) return detections;
 
     const enriched = [];
-    for (const det of detections) {
+    for (let idx = 0; idx < detections.length; idx++) {
+      const det = detections[idx];
       try {
-        // Cache key based on rule + key event fields
-        const evt     = events.find(e => e.id === det.event?.id) || det.event || {};
-        const cacheKey = this._cacheKey('enrich', det.ruleId, evt.commandLine || '', evt.process || '');
+        const evt = events.find(e => e.id === (det.event && det.event.id)) || det.event || {};
+
+        // FIX #7 — Build chain context from confirmed malicious prior stages
+        const priorConfirmed = enriched
+          .filter(d => d.ai && d.ai.isMalicious === true)
+          .map(d => ({
+            technique  : (d.mitre && d.mitre.techniques && d.mitre.techniques[0] && d.mitre.techniques[0].id) || d.ruleId || '',
+            description: (d.ai && d.ai.attackStage) || d.ruleName || '',
+          }));
+        const chainContext = {
+          priorStages    : priorConfirmed,
+          behaviorSummary: priorConfirmed.length > 0
+            ? priorConfirmed.length + ' prior malicious stage(s): ' + priorConfirmed.map(s => s.technique).join(', ')
+            : 'None',
+        };
+
+        const cacheKey = this._cacheKey(
+          'enrich', det.ruleId,
+          evt.commandLine || '', evt.process || '',
+          String(priorConfirmed.length)
+        );
 
         let analysis;
         if (this._cache.has(cacheKey)) {
           analysis = this._cache.get(cacheKey);
           this._stats.cached++;
         } else {
-          const prompt = PROMPTS.enrichDetection(det, evt);
+          // FIX #7 — pass chainContext as third argument
+          const prompt = PROMPTS.enrichDetection(det, evt, chainContext);
           analysis     = await this._callLLM(prompt);
           this._cache.set(cacheKey, analysis);
         }
 
         // Build enriched detection — AI context only; do NOT modify tags here
+        // FIX #7 — cap downward delta at -10 (was -20); only apply upward delta
+        // when at least one prior chain stage is confirmed malicious.
+        const hasChainCtx = priorConfirmed.length > 0;
         const enrichedDet = {
           ...det,
           ai               : analysis,
-          summary          : analysis?.summary || null,
-          attackStage      : analysis?.attackStage || null,
-          falsePositiveProb: analysis?.falsePositiveProbability || null,
-          recommendedAction: analysis?.recommendedAction || null,
-          // Adjust confidence based on AI assessment, but respect CEA suppressions
-          confidence       : analysis?.isMalicious === true
+          summary          : (analysis && analysis.summary)           || null,
+          attackStage      : (analysis && analysis.attackStage)       || null,
+          falsePositiveProb: (analysis && analysis.falsePositiveProbability) || null,
+          recommendedAction: (analysis && analysis.recommendedAction) || null,
+          confidence       : analysis && analysis.isMalicious === true && hasChainCtx
             ? Math.min(100, det.confidence + 15)
-            : analysis?.isMalicious === false
-              ? Math.max(10, det.confidence - 20)
+            : analysis && (analysis.isMalicious === false || analysis.isMalicious === null)
+              ? Math.max(10, det.confidence - 10)  // FIX #7: capped at -10 (was -20)
               : det.confidence,
         };
 
@@ -335,16 +370,22 @@ class AIDetector extends EventEmitter {
 
     try {
       let response;
-      switch (provider.type) {
-        case 'openai':
-        case 'compatible':
-          response = await this._callOpenAICompatible(prompt, format, provider);
-          break;
-        case 'ollama':
-          response = await this._callOllama(prompt, format, provider);
-          break;
-        default:
-          return null;
+      // FIX #11 — dedicated Anthropic branch (was incorrectly using OpenAI
+      // /chat/completions path with the Anthropic API key)
+      if (provider.type === 'anthropic' || provider.name === 'Claude') {
+        response = await this._callAnthropic(prompt, format, provider);
+      } else {
+        switch (provider.type) {
+          case 'openai':
+          case 'compatible':
+            response = await this._callOpenAICompatible(prompt, format, provider);
+            break;
+          case 'ollama':
+            response = await this._callOllama(prompt, format, provider);
+            break;
+          default:
+            return null;
+        }
       }
       this._stats.hits++;
       return response;
@@ -355,23 +396,60 @@ class AIDetector extends EventEmitter {
     }
   }
 
+  // FIX #11 — Anthropic Messages API (correct endpoint + auth headers)
+  async _callAnthropic(prompt, format, provider) {
+    const nodeFetch = (typeof fetch !== 'undefined') ? fetch : null;
+    let fetchFn = nodeFetch;
+    if (!fetchFn) {
+      try { fetchFn = require('node-fetch'); } catch (e) {
+        // node-fetch not available — fall through with null
+        return null;
+      }
+    }
+    const res = await fetchFn('https://api.anthropic.com/v1/messages', {
+      method : 'POST',
+      headers: {
+        'Content-Type'     : 'application/json',
+        'x-api-key'        : provider.apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model     : provider.model || 'claude-opus-4-5',
+        max_tokens: 1024,
+        messages  : [{ role: 'user', content: prompt }],
+      }),
+    });
+    const data    = await res.json();
+    const content = (data.content && data.content[0] && data.content[0].text) || '';
+    if (!content) return null;
+    if (format !== 'json') return content;
+    try {
+      return JSON.parse(content);
+    } catch (_) {
+      // Extract first JSON object from the text
+      const m = content.match(/\{[\s\S]*\}/);
+      return m ? JSON.parse(m[0]) : null;
+    }
+  }
+
   async _callOpenAICompatible(prompt, format, provider) {
     const axios = require('axios');
     const resp  = await axios.post(
       `${provider.baseUrl}/chat/completions`,
       {
-        model    : provider.model || 'gpt-3.5-turbo',
-        messages : [{ role: 'user', content: prompt }],
+        model      : provider.model || 'gpt-3.5-turbo',
+        messages   : [{ role: 'user', content: prompt }],
         ...(format === 'json' ? { response_format: { type: 'json_object' } } : {}),
-        max_tokens: 800,
-        temperature: 0.1,
+        max_tokens : 800,
+        temperature: 0.0,  // FIX #7 — changed from 0.1 to 0.0 for determinism
       },
       {
         headers : { Authorization: `Bearer ${provider.apiKey}`, 'Content-Type': 'application/json' },
         timeout : 20000,
       }
     );
-    const content = resp.data?.choices?.[0]?.message?.content || '';
+    const content = (resp.data && resp.data.choices && resp.data.choices[0] &&
+                     resp.data.choices[0].message && resp.data.choices[0].message.content) || '';
     return format === 'json' ? JSON.parse(content) : content;
   }
 
@@ -454,6 +532,13 @@ class AIDetector extends EventEmitter {
 
   _cacheKey(...parts) {
     return crypto.createHash('md5').update(parts.join('|')).digest('hex');
+  }
+
+  // FIX #8 — Session state reset: clears LLM response cache so cached
+  // responses from one ingest session cannot bleed into the next.
+  reset() {
+    this._cache.clear();
+    this._stats = { queries: 0, hits: 0, errors: 0, cached: 0 };
   }
 
   getStatus() {

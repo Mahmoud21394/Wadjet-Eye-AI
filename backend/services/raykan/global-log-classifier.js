@@ -36,6 +36,18 @@
 
 'use strict';
 
+// ── ARCH #2 — Schema Registry (field-alias profiles per source type) ──────────
+// GLC uses the registry's detectSource() to identify the schema profile of each
+// incoming event and stamps _schemaSource onto the _meta block so downstream
+// modules (engine._normalizeEvents, MITRE mapper, etc.) can look up aliases
+// without per-module copy-paste tables.
+let _schemaRegistry = null;
+try {
+  _schemaRegistry = require('./schema-registry');
+} catch (e) {
+  // Schema registry is optional — GLC falls back to its own alias tables
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  DOMAIN DEFINITIONS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -53,6 +65,33 @@ const DOMAINS = {
   CLOUD            : 'cloud',
   UNKNOWN          : 'unknown',
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  FIX #2 — Custom EDR event_type → domain mapping
+//  EDR-style telemetry (web_download, process_creation, etc.) has no EventID
+//  and no Channel, so all existing classifiers return null and the event is
+//  silently dropped into the 'unknown' domain, blocking the Sigma logsource
+//  gate entirely.  _isCustomEventType() is called FIRST in classify() so
+//  these events receive a proper domain before any EventID check.
+// ─────────────────────────────────────────────────────────────────────────────
+const EVENT_TYPE_DOMAIN_MAP = {
+  'web_download'      : { domain: DOMAINS.WINDOWS_PROCESS, subDomain: 'initial_access'    },
+  'process_creation'  : { domain: DOMAINS.WINDOWS_PROCESS, subDomain: 'process_creation'  },
+  'process_access'    : { domain: DOMAINS.WINDOWS_PROCESS, subDomain: 'credential_access' },
+  'network_connection': { domain: DOMAINS.NETWORK,         subDomain: 'c2'                },
+  'wmi_execution'     : { domain: DOMAINS.WINDOWS_PROCESS, subDomain: 'lateral_movement'  },
+  'file_enumeration'  : { domain: DOMAINS.WINDOWS_PROCESS, subDomain: 'discovery'         },
+  'file_creation'     : { domain: DOMAINS.WINDOWS_PROCESS, subDomain: 'collection'        },
+  'dns_query'         : { domain: DOMAINS.DNS,             subDomain: 'c2'                },
+  'data_exfiltration' : { domain: DOMAINS.NETWORK,         subDomain: 'exfiltration'      },
+};
+
+function _isCustomEventType(evt) {
+  const et = (evt.event_type || evt.eventCategory || '').toLowerCase();
+  const mapped = EVENT_TYPE_DOMAIN_MAP[et];
+  if (mapped) return { ...mapped, confidence: 0.92 };
+  return null;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  DOMAIN CLASSIFIERS
@@ -344,8 +383,12 @@ function _isCloud(evt) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  CLASSIFIER PIPELINE (ordered — most specific first)
+//  FIX #2: _isCustomEventType is prepended so EDR-style events (web_download,
+//  process_creation, wmi_execution, …) are classified before the EventID
+//  checks which would all return null for these event shapes.
 // ─────────────────────────────────────────────────────────────────────────────
 const CLASSIFIER_PIPELINE = [
+  _isCustomEventType,  // FIX #2 — EDR event_type check (MUST be first)
   _isDns,              // before WindowsProcess — Sysmon EID 22 is DNS, not process
   _isWindowsProcess,   // before security — Sysmon EventID 1 check is more specific
   _isWindowsSecurity,
@@ -519,8 +562,11 @@ function classify(event) {
 
   _trackDomain(domain);
 
+  // ARCH #2 — Detect schema source via registry (if available)
+  const schemaSource = _schemaRegistry ? _schemaRegistry.detectSource(event) : 'unknown';
+
   // Build canonical _meta (frozen to prevent downstream mutation)
-  const meta = _buildMeta(domain, subDomain, confidence, null);
+  const meta = _buildMeta(domain, subDomain, confidence, null, schemaSource);
 
   // Normalize field aliases to canonical names
   const normalized = _normalizeFields(event);
@@ -536,13 +582,14 @@ function classify(event) {
   return normalized;
 }
 
-function _buildMeta(domain, subDomain, confidence, note) {
+function _buildMeta(domain, subDomain, confidence, note, schemaSource = 'unknown') {
   return {
     domain,
     subDomain,
     confidence,
-    classified: true,
+    classified  : true,
     classifiedAt: new Date().toISOString(),
+    schemaSource,   // ARCH #2 — registry-detected schema profile ID
     note,
   };
 }
@@ -690,4 +737,7 @@ module.exports = {
   DOMAINS,
   LOGSOURCE_DOMAIN_MAP,
   FIELD_ALIASES,
+
+  // FIX #2 exports (for testing)
+  EVENT_TYPE_DOMAIN_MAP,
 };
