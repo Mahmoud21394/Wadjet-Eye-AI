@@ -1281,7 +1281,20 @@
 
       const templates = INFERRED_PRECURSORS[deepestTactic] || [];
       const inferred  = [];
-      let   inferTs   = firstObservedTs - 180_000; // place inferred stages 3min before first real
+      // FIX v17 BUG-C: Inferred stages MUST NOT be placed before the earliest
+      // real event in the log.  The previous logic subtracted 3-4 minutes from
+      // firstObservedTs, which could produce fabricated timestamps that predate
+      // any real evidence — misleading analysts and contradicting the timeline.
+      //
+      // Root cause: inferTs = firstObservedTs - 180_000 (3 min) per template.
+      // With 2 templates the oldest inferred stage ended up at T-4 min.
+      //
+      // Fix: inferred stages are placed AT firstObservedTs (same millisecond as
+      // the first real event).  They are visually identified as inferred via the
+      // inferred:true flag — they do NOT need an earlier timestamp to be
+      // understood as precursors.  Analysts see the flag; the timeline stays
+      // anchored to real evidence.
+      let   inferTs   = firstObservedTs; // AT the first real event (was -3 min)
 
       for (const tmpl of templates) {
         // Skip if this tactic is already observed
@@ -1327,7 +1340,11 @@
         };
 
         inferred.push(inferredStage);
-        inferTs -= 60_000; // space each inferred stage 1 min apart
+        // Inferred stages share the same anchor timestamp — no spacing offset.
+        // (Each inferred stage has inferred:true which the UI uses to label them
+        //  distinctly from observed stages.  A timestamp offset is unnecessary
+        //  and can only produce fabricated history if it goes negative.)
+        // inferTs unchanged — all inferred stages share firstObservedTs.
       }
 
       return inferred;
@@ -4911,8 +4928,26 @@
       if (opts.dedupWindowMs) CFG.DEDUP_WINDOW_MS = opts.dedupWindowMs;
       if (opts.minBruteForce) CFG.MIN_BRUTE_FORCE_COUNT = opts.minBruteForce;
 
-      const events   = rawEvents.map(_normalizeEvent);
+      // FIX v17 BUG-INPUT-ORDER: Normalize raw events THEN sort strictly by
+      // original log timestamp BEFORE any processing.  Events ingested in
+      // reverse-chronological order (common with log forwarders that buffer
+      // events) previously caused:
+      //   • timeline[] built in the wrong order (entry i > entry i+1)
+      //   • attack-chain stages ordered persistence → credential-access instead
+      //     of the correct credential-access → persistence
+      //   • cross-link window (10 s) misses adjacency due to index mismatch
+      // Sorting here is the single authoritative fix — all downstream code
+      // already assumes ascending order.  Events with no timestamp go last.
+      const rawNormalized = rawEvents.map(_normalizeEvent);
+      const events = _chronoSort(rawNormalized, 'timestamp');
+
       const rawDets  = [];
+      // FIX v17 BUG-A: Keep a stable index map from sorted-event position to
+      // timeline entry so that per-event rule matching can update the correct
+      // timeline entry regardless of the sort permutation.
+      // timeline[] is populated below (one entry per event) in sorted order;
+      // after deduplication we back-link batch detections to the earliest
+      // timeline entry that covers their evidence events.
       const timeline = [];
       const sessionId = 'CSDE-' + Math.random().toString(36).slice(2,10).toUpperCase();
       const startTs  = Date.now();
@@ -4923,6 +4958,7 @@
       let schemaSkipped = 0; // counter for schema gate misses
 
       // ── Per-event rule matching (O(n × rules)) ─────────────────
+      // Events are already in ascending timestamp order (sorted above).
       events.forEach((event, idx) => {
         timeline.push(_buildTimelineEntry(event, null));
 
@@ -5155,6 +5191,116 @@
       // ── DEDUPLICATION ─────────────────────────────────────────────
       const dedupedDets = _dedupDetections(filteredDets);
 
+      // ── FIX v18 BUG-TIMELINE-BACKLINK: Back-link ALL aggregated detections ─
+      // Every deduped (AGG-*) detection must be bidirectionally linked to its
+      // timeline entries so that the investigation view is fully consistent.
+      //
+      // Two cases handled:
+      //
+      // Case A — Batch-only rules (WIN-002, WIN-025, WIN-026):
+      //   These rules have no per-event match phase, so no timeline entry was
+      //   stamped during the per-event loop.  We find the closest timeline slot
+      //   by timestamp and host/user match, then write both detection and
+      //   batchDetection fields.
+      //
+      // Case B — Per-event rules that were subsequently deduplicated (WIN-004, etc.):
+      //   The per-event loop stamped the RAW detection ID (e.g., CSDE-WIN-004-NET-3)
+      //   on a timeline entry.  After _dedupDetections the canonical ID is now
+      //   AGG-CSDE-WIN-004-…  The raw ID link is valid for forward lookup
+      //   (detection→timeline) but breaks reverse lookup (timeline→detection) when
+      //   the UI queries by aggregated ID.
+      //   Fix: for every raw-detection ID stamped on a timeline entry, also stamp
+      //   the parent aggregated ID as aggDetection so callers can find either way.
+      //
+      // Build a reverse map: rawDetId → aggDet for O(1) lookup
+      const rawIdToAgg = new Map();
+      dedupedDets.forEach(aggDet => {
+        (aggDet.raw_detections || []).forEach(rd => {
+          if (rd.id) rawIdToAgg.set(rd.id, aggDet);
+        });
+        // Also map from aggDet.id itself for direct lookups
+        rawIdToAgg.set(aggDet.id, aggDet);
+      });
+
+      // Pass 1 — upgrade existing raw-ID timeline stamps to also carry aggDetection
+      timeline.forEach(entry => {
+        if (entry.detection) {
+          const agg = rawIdToAgg.get(entry.detection);
+          if (agg && !entry.aggDetection) {
+            entry.aggDetection = agg.id;
+            entry.aggRuleId    = agg.ruleId;
+            // Also set batchDetection for UI badge differentiation
+            if (!entry.batchDetection) {
+              entry.batchDetection = agg.id;
+              entry.batchRuleId    = agg.ruleId;
+            }
+          }
+        }
+      });
+
+      // Pass 2 — link batch-only detections that have NO timeline entry yet
+      dedupedDets.forEach(aggDet => {
+        const rawIds = new Set((aggDet.raw_detections || []).map(rd => rd.id).filter(Boolean));
+        // Check if ANY timeline entry already references this AGG detection
+        const alreadyLinked = timeline.some(t =>
+          t.aggDetection === aggDet.id ||
+          t.batchDetection === aggDet.id ||
+          (t.detection && rawIds.has(t.detection)) ||
+          t.detection === aggDet.id
+        );
+        if (alreadyLinked) return; // already linked via Pass 1 or per-event loop
+
+        // Batch-only detection: find best timeline slot by timestamp + host/user
+        const evidenceTimes = (aggDet.raw_detections || [aggDet])
+          .flatMap(rd => (rd.evidence || [rd]))
+          .map(ev => _safeTs(ev.timestamp || ev.TimeGenerated || ev.ts))
+          .filter(t => t > 0);
+        const targetTs = evidenceTimes.length
+          ? Math.min(...evidenceTimes)
+          : _safeTs(aggDet.first_seen);
+
+        if (!targetTs) return;
+
+        const aggHost = (aggDet.computer || aggDet.host || '').toLowerCase();
+        const aggUser = (aggDet.user || '').toLowerCase();
+        let bestIdx = -1, bestGap = Infinity;
+        timeline.forEach((t, ti) => {
+          const tMs   = _safeTs(t.timestamp);
+          const tHost = (t.computer || t.host || '').toLowerCase();
+          const tUser = (t.user || '').toLowerCase();
+          const gap   = Math.abs(tMs - targetTs);
+          const hostOk = !aggHost || !tHost || aggHost === tHost;
+          const userOk = !aggUser || !tUser || aggUser === tUser;
+          if (hostOk && userOk && gap < bestGap) { bestGap = gap; bestIdx = ti; }
+        });
+
+        if (bestIdx >= 0) {
+          if (!timeline[bestIdx].detection) {
+            timeline[bestIdx].detection  = aggDet.id;
+            timeline[bestIdx].ruleId     = aggDet.ruleId;
+            timeline[bestIdx].severity   = aggDet.aggregated_severity || aggDet.severity;
+          }
+          timeline[bestIdx].aggDetection  = aggDet.id;
+          timeline[bestIdx].aggRuleId     = aggDet.ruleId;
+          timeline[bestIdx].batchDetection = aggDet.id;
+          timeline[bestIdx].batchRuleId    = aggDet.ruleId;
+        }
+      });
+
+      // ── FIX v17 BUG-A: Sort timeline chronologically ────────────────
+      // Events were normalized and sorted ascending before processing, so
+      // timeline[] entries are already in ascending order.  However apply an
+      // explicit sort here as a defensive guarantee — ensures the output is
+      // correct regardless of any future reordering inside the per-event loop.
+      timeline.sort((a, b) => {
+        const ta = _safeTs(a.timestamp);
+        const tb = _safeTs(b.timestamp);
+        if (ta === 0 && tb === 0) return 0;
+        if (ta === 0) return 1;
+        if (tb === 0) return -1;
+        return ta - tb;
+      });
+
       // ── Temporal-Identity Correlation (60-second window) ──────────
       // Groups deduplicated alerts by host+user within 60 s into Incidents
       const correlationResult = _correlateIncidents(dedupedDets);
@@ -5175,7 +5321,7 @@
       console.log(
         `[CSDE v8] ${events.length} events → ${rawDets.length} raw → ${dedupedDets.length} deduped, ` +
         `${incidents.length} incidents, ${chains.length} chains, risk=${riskScore} ` +
-        `(schema_skipped=${schemaSkipped}, ${duration}ms, engine=v15-BCE-Hardened)`
+        `(schema_skipped=${schemaSkipped}, ${duration}ms, engine=v17-forensic-hardened)`
       );
 
       // ════════════════════════════════════════════════════════════
@@ -7067,8 +7213,296 @@
       };
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  PRODUCTION VALIDATION SUITE — v18
+    //  Embedded 1-to-1 traceability tests covering every pipeline stage:
+    //    • Log Ingest → Normalization → Detection Engine
+    //    • Deduplication → Correlation Engine → MITRE Mapping
+    //    • Timeline Builder → Attack Chain Generator
+    //    • Incident Generator → Investigation View
+    //
+    //  Design principles:
+    //    • Zero tolerance: ALL checks must pass for production-ready status
+    //    • Deterministic: identical input always produces identical output
+    //    • Traceable: every detection provably derived from a specific log
+    //    • Non-fabricating: inferred stages always flagged, never pre-dated
+    //    • Consistent: incidents ↔ chains ↔ timeline ↔ summaries all agree
+    //
+    //  Returns { passed: bool, passCount, failCount, failures: string[] }
+    // ════════════════════════════════════════════════════════════════
+    function runProductionValidation() {
+      const failures = [];
+      let passCount = 0;
+
+      function check(name, cond, detail) {
+        if (cond) { passCount++; }
+        else { failures.push(detail ? `[${name}] ${detail}` : `[${name}]`); }
+      }
+
+      // ── Scenario A: 4 events → exactly 2 deduped detections ────────
+      const evA = [
+        { EventID:4625, User:'admin', Computer:'DC01', SourceIP:'10.0.0.5', timestamp:'2024-01-01T10:00:00.000Z' },
+        { EventID:4625, User:'admin', Computer:'DC01', SourceIP:'10.0.0.5', timestamp:'2024-01-01T10:00:05.000Z' },
+        { EventID:4625, User:'admin', Computer:'DC01', SourceIP:'10.0.0.5', timestamp:'2024-01-01T10:00:10.000Z' },
+        { EventID:4688, User:'admin', Computer:'DC01', CommandLine:'net user hacker Password123! /add', NewProcessName:'net.exe', timestamp:'2024-01-01T10:01:00.000Z' },
+      ];
+      const rA = analyzeEvents(evA);
+
+      // V1 — Detection count (no inflation)
+      check('V1-processed-count', rA.processed === 4, `got ${rA.processed}`);
+      check('V1-dedup-count', rA.detections.length === 2,
+        `expected 2 got ${rA.detections.length}: ${rA.detections.map(d=>d.ruleId+'(cnt='+d.event_count+')').join(',')}`);
+      check('V1-WIN-002-present', rA.detections.some(d=>d.ruleId==='CSDE-WIN-002'),
+        `detections: ${rA.detections.map(d=>d.ruleId).join(',')}`);
+      check('V1-WIN-004-present', rA.detections.some(d=>(d.ruleId||'').startsWith('CSDE-WIN-004')),
+        `detections: ${rA.detections.map(d=>d.ruleId).join(',')}`);
+      check('V1-no-WIN-001-spam', !rA.detections.some(d=>d.ruleId==='CSDE-WIN-001'),
+        `WIN-001 found in deduped`);
+      check('V1-no-WIN-007-double', !rA.detections.some(d=>d.ruleId==='CSDE-WIN-007'),
+        `WIN-007 double-count present`);
+
+      // V2 — Timeline reconstruction (1 entry per event, sorted ascending)
+      const tlA = rA.timeline;
+      check('V2-timeline-count', tlA.length === 4, `expected 4 got ${tlA.length}`);
+      check('V2-timeline-asc-01', new Date(tlA[0].timestamp) <= new Date(tlA[1].timestamp),
+        `tl[0]=${tlA[0].timestamp} > tl[1]=${tlA[1].timestamp}`);
+      check('V2-timeline-asc-12', new Date(tlA[1].timestamp) <= new Date(tlA[2].timestamp),
+        `tl[1]=${tlA[1].timestamp} > tl[2]=${tlA[2].timestamp}`);
+      check('V2-timeline-asc-23', new Date(tlA[2].timestamp) <= new Date(tlA[3].timestamp),
+        `tl[2]=${tlA[2].timestamp} > tl[3]=${tlA[3].timestamp}`);
+      check('V2-timeline-first-ts', (tlA[0].timestamp||'').includes('10:00:00'),
+        `first entry=${tlA[0].timestamp}`);
+      check('V2-timeline-last-ts', (tlA[3].timestamp||'').includes('10:01:00'),
+        `last entry=${tlA[3].timestamp}`);
+      check('V2-timeline-has-link', tlA.some(t=>t.detection||t.batchDetection||t.aggDetection),
+        `no timeline entry has detection link`);
+
+      // V3 — Detection ↔ Timeline bidirectional link (BUG-E / BUG-TIMELINE-BACKLINK)
+      rA.detections.forEach((det, i) => {
+        const byDet   = tlA.filter(t=>t.detection===det.id);
+        const byBatch = tlA.filter(t=>t.batchDetection===det.id);
+        const byAgg   = tlA.filter(t=>t.aggDetection===det.id);
+        const rawLinked = det.raw_detections
+          ? tlA.some(t => det.raw_detections.some(rd => t.detection === rd.id))
+          : false;
+        check(`V3-timeline-link-det${i}`,
+          byDet.length>0 || byBatch.length>0 || byAgg.length>0 || rawLinked,
+          `det ${det.ruleId} (${det.id}) not linked. byDet=${byDet.length} byBatch=${byBatch.length} byAgg=${byAgg.length} rawLinked=${rawLinked}`);
+      });
+
+      // V4 — Attack chain stage ordering: credential-access before persistence
+      check('V4-chain-exists', rA.chains.length >= 1, `no chains`);
+      if (rA.chains.length >= 1) {
+        const c = rA.chains[0];
+        check('V4-chain-stages', Array.isArray(c.stages) && c.stages.length >= 2,
+          `stages length=${c.stages?.length}`);
+        check('V4-chain-title', !!(c.title||c.name), `missing title`);
+        check('V4-chain-riskscore', (c.riskScore||0)>0, `riskScore=${c.riskScore}`);
+        if (c.stages && c.stages.length >= 2) {
+          // Timestamps must be non-decreasing
+          let stagesAsc = true;
+          for (let i=0;i<c.stages.length-1;i++) {
+            const t1 = _safeTs(c.stages[i].timestamp||c.stages[i].first_seen);
+            const t2 = _safeTs(c.stages[i+1].timestamp||c.stages[i+1].first_seen);
+            if (t1 > t2) { stagesAsc=false; break; }
+          }
+          check('V4-chain-ts-asc', stagesAsc,
+            `stages: ${c.stages.map(s=>`${s.tactic}@${s.timestamp||s.first_seen}`).join(' → ')}`);
+          // Credential-access before persistence
+          const credIdx = c.stages.findIndex(s=>(s.tactic||'').includes('credential'));
+          const persIdx = c.stages.findIndex(s=>(s.tactic||'').includes('persist'));
+          if (credIdx>=0 && persIdx>=0) {
+            check('V4-chain-cred-before-persist', credIdx < persIdx,
+              `credIdx=${credIdx} persIdx=${persIdx}`);
+          }
+        }
+      }
+
+      // V5 — Out-of-order input: correct ordering still produced
+      const evOOO = [
+        { EventID:4688, User:'admin', Computer:'DC01', CommandLine:'net user hacker Pass! /add', NewProcessName:'net.exe', timestamp:'2024-01-01T10:05:00.000Z' },
+        { EventID:4625, User:'admin', Computer:'DC01', SourceIP:'10.0.0.5', timestamp:'2024-01-01T10:00:00.000Z' },
+        { EventID:4625, User:'admin', Computer:'DC01', SourceIP:'10.0.0.5', timestamp:'2024-01-01T10:00:05.000Z' },
+        { EventID:4625, User:'admin', Computer:'DC01', SourceIP:'10.0.0.5', timestamp:'2024-01-01T10:03:00.000Z' },
+      ];
+      const rOOO = analyzeEvents(evOOO);
+      const tlOOO = rOOO.timeline;
+      check('V5-ooo-timeline-asc',
+        tlOOO.every((t,i)=>i===0||new Date(tlOOO[i-1].timestamp)<=new Date(t.timestamp)),
+        `OOO timeline: ${tlOOO.map(t=>t.timestamp).join(' → ')}`);
+      if (rOOO.chains.length>=1 && rOOO.chains[0].stages && rOOO.chains[0].stages.length>=2) {
+        const c5 = rOOO.chains[0];
+        let stagesAsc5 = true;
+        for (let i=0;i<c5.stages.length-1;i++) {
+          const t1=_safeTs(c5.stages[i].timestamp||c5.stages[i].first_seen);
+          const t2=_safeTs(c5.stages[i+1].timestamp||c5.stages[i+1].first_seen);
+          if (t1>t2){stagesAsc5=false;break;}
+        }
+        check('V5-ooo-chain-ts-asc', stagesAsc5,
+          `OOO chain: ${c5.stages.map(s=>`${s.tactic}@${s.timestamp||s.first_seen}`).join(' → ')}`);
+      }
+
+      // V6 — 1-to-1 traceability: detection → raw events
+      const logTimesA = evA.map(e=>_safeTs(e.timestamp));
+      rA.detections.forEach((det,i) => {
+        check(`V6-det${i}-ruleId`, !!det.ruleId, `det[${i}] missing ruleId`);
+        check(`V6-det${i}-first-seen`, !!det.first_seen, `det[${i}] missing first_seen`);
+        const evCount = det.raw_detections
+          ? det.raw_detections.reduce((s,rd)=>s+((rd.evidence||[]).length||1),0)
+          : (det.evidence||[]).length;
+        check(`V6-det${i}-evidence`, evCount>=1, `det[${i}] (${det.ruleId}) has no evidence`);
+        const detTs = _safeTs(det.first_seen);
+        check(`V6-det${i}-ts-matches-log`,
+          logTimesA.some(t=>Math.abs(t-detTs)<=60000),
+          `det[${i}] first_seen=${det.first_seen} not within 60s of any log`);
+      });
+
+      // V7 — Incident accuracy
+      check('V7-incident-exists', rA.incidents.length>=1, `no incidents`);
+      if (rA.incidents.length>=1) {
+        const inc = rA.incidents[0];
+        check('V7-inc-title', !!inc.title && inc.title!=='Correlated Incident', `title="${inc.title}"`);
+        check('V7-inc-severity', !!inc.severity, `severity=${inc.severity}`);
+        check('V7-inc-riskscore', (inc.riskScore||0)>0, `riskScore=${inc.riskScore}`);
+        check('V7-inc-mitre-tactics', (inc.mitreTactics||[]).length>=1, `tactics=${JSON.stringify(inc.mitreTactics)}`);
+        check('V7-inc-first-seen', !!inc.first_seen, `first_seen=${inc.first_seen}`);
+        check('V7-inc-last-seen', !!inc.last_seen, `last_seen=${inc.last_seen}`);
+        check('V7-inc-ts-order', new Date(inc.last_seen)>=new Date(inc.first_seen),
+          `first=${inc.first_seen} last=${inc.last_seen}`);
+        check('V7-inc-phase-timeline', (inc.phaseTimeline||[]).length>=1,
+          `phaseTimeline empty`);
+      }
+
+      // V8 — MITRE technique mapping
+      rA.detections.forEach(det => {
+        if (det.ruleId==='CSDE-WIN-002') {
+          check('V8-WIN-002-technique', det.mitre&&(det.mitre.technique||'').startsWith('T1110'),
+            `WIN-002 technique=${det.mitre?.technique}`);
+          check('V8-WIN-002-tactic', det.mitre&&(det.mitre.tactic||'').includes('credential'),
+            `WIN-002 tactic=${det.mitre?.tactic}`);
+        }
+        if (det.ruleId&&det.ruleId.startsWith('CSDE-WIN-004')) {
+          check('V8-WIN-004-technique', det.mitre&&(det.mitre.technique||'').startsWith('T1'),
+            `WIN-004 technique=${det.mitre?.technique}`);
+          check('V8-WIN-004-tactic', det.mitre&&(det.mitre.tactic||'').length>0,
+            `WIN-004 tactic=${det.mitre?.tactic}`);
+        }
+      });
+
+      // V9 — Inferred stage timestamps never predate real events
+      (rA.incidentSummaries||[]).forEach((inc,ii) => {
+        const stages = inc.killChainStages||[];
+        const real = stages.filter(s=>!s.inferred);
+        const inferred = stages.filter(s=>s.inferred);
+        if (real.length>0 && inferred.length>0) {
+          const firstRealTs = Math.min(...real.map(s=>_safeTs(s.first_seen||s.timestamp)).filter(t=>t>0));
+          inferred.forEach((s,si) => {
+            const iTs = _safeTs(s.first_seen||s.timestamp);
+            check(`V9-inferred-ts-${ii}-${si}`, iTs>=firstRealTs-1000,
+              `inferred ts=${s.first_seen} before first real ts=${new Date(firstRealTs).toISOString()}`);
+            check(`V9-inferred-flag-${ii}-${si}`, s.inferred===true, `inferred flag missing`);
+          });
+        }
+      });
+
+      // V10 — Single-event: no ghost detections, no ghost incidents/chains
+      const rS = analyzeEvents([{ EventID:4688, User:'admin', Computer:'DC01', CommandLine:'net user hacker Pass! /add', NewProcessName:'net.exe', timestamp:'2024-01-01T10:00:00.000Z' }]);
+      check('V10-single-det-count', rS.detections.length===1,
+        `expected 1 got ${rS.detections.length}: ${rS.detections.map(d=>d.ruleId).join(',')}`);
+      check('V10-single-tl-count', rS.timeline.length===1, `expected 1 got ${rS.timeline.length}`);
+      check('V10-single-no-incidents', rS.incidents.length===0, `got ${rS.incidents.length} incidents`);
+      check('V10-single-no-chains', rS.chains.length===0, `got ${rS.chains.length} chains`);
+
+      // V11 — Investigation view consistency: incident.all ⊆ deduped detections
+      const detIdSetA = new Set(rA.detections.map(d=>d.id));
+      if (rA.incidents.length>0 && rA.incidents[0].all) {
+        rA.incidents[0].all.forEach((det,i) => {
+          check(`V11-inc-det${i}-in-dedup`, detIdSetA.has(det.id), `${det.id} not in deduped`);
+        });
+      }
+
+      // V12 — Chain stages have required fields
+      if (rA.chains.length>0 && rA.chains[0].stages) {
+        rA.chains[0].stages.forEach((stage,i) => {
+          check(`V12-stage${i}-tactic`, !!stage.tactic, `stage[${i}] missing tactic`);
+          check(`V12-stage${i}-timestamp`, !!(stage.timestamp||stage.first_seen),
+            `stage[${i}] tactic=${stage.tactic} missing timestamp`);
+        });
+      }
+
+      // V13 — No fabricated (non-inferred) detections
+      rA.detections.forEach((det,i) => {
+        if (!det.inferred) {
+          const hasEvidence = (det.raw_detections&&det.raw_detections.some(rd=>rd.evidence&&rd.evidence.length>0))
+                           || (det.evidence&&det.evidence.length>0);
+          check(`V13-det${i}-evidence`, hasEvidence, `det ${det.ruleId} (${det.id}) has no traceable evidence`);
+        }
+      });
+
+      // V14 — Spray isolation: WIN-025 does NOT suppress WIN-002
+      const evSpray = [];
+      for (let i=0;i<5;i++) evSpray.push({EventID:4625,User:`user${i}`,Computer:'DC01',SourceIP:'10.0.0.99',timestamp:`2024-01-01T10:0${i}:00.000Z`});
+      for (let j=0;j<3;j++) evSpray.push({EventID:4625,User:'admin',Computer:'DC01',SourceIP:'10.0.0.99',timestamp:`2024-01-01T10:00:0${j*2}.000Z`});
+      const rSpray = analyzeEvents(evSpray);
+      const sp025 = rSpray.detections.filter(d=>d.ruleId==='CSDE-WIN-025');
+      const bf002 = rSpray.detections.filter(d=>d.ruleId==='CSDE-WIN-002');
+      if (sp025.length>0) {
+        check('V14-spray-present', sp025.length>=1, `WIN-025 count=${sp025.length}`);
+        check('V14-brute-not-suppressed', bf002.length>=1,
+          `WIN-002 suppressed by WIN-025 (count=${bf002.length})`);
+      } else {
+        check('V14-any-detection', rSpray.detections.length>0,
+          `no detections: ${rSpray.detections.map(d=>d.ruleId).join(',')}`);
+      }
+
+      // V15 — incidentSummaries ↔ incidents consistency
+      check('V15-summary-count',
+        rA.incidents.length===(rA.incidentSummaries||[]).length,
+        `incidents=${rA.incidents.length} summaries=${(rA.incidentSummaries||[]).length}`);
+      const sumIdSet = new Set((rA.incidentSummaries||[]).map(s=>s.id||s.incidentId));
+      (rA.incidents||[]).forEach(inc => {
+        check(`V15-summary-for-${inc.id||inc.incidentId}`, sumIdSet.has(inc.id||inc.incidentId),
+          `${inc.id||inc.incidentId} not in summaries`);
+      });
+
+      // V16 — Phase timeline timestamps are ascending
+      if (rA.incidents.length>0 && rA.incidents[0].phaseTimeline) {
+        const pt = rA.incidents[0].phaseTimeline;
+        const tsPt = pt.map(s=>_safeTs(s.timestamp||s.first_seen)).filter(t=>t>0);
+        const sorted = [...tsPt].sort((a,b)=>a-b);
+        check('V16-phase-tl-asc', tsPt.every((t,i)=>t===sorted[i]),
+          `phase tl: ${tsPt.map(t=>new Date(t).toISOString()).join(' → ')}`);
+      }
+
+      // V17 — Chain timestamps match real log events (not fabricated)
+      if (rA.chains.length>0) {
+        const chainTs = _safeTs(rA.chains[0].timestamp);
+        const chainLast = _safeTs(rA.chains[0].last_seen);
+        const logTsRange = { min: Math.min(...logTimesA), max: Math.max(...logTimesA) };
+        check('V17-chain-ts-within-log-range',
+          chainTs >= logTsRange.min - 60000 && chainTs <= logTsRange.max + 60000,
+          `chainTs=${rA.chains[0].timestamp} logRange=${new Date(logTsRange.min).toISOString()}–${new Date(logTsRange.max).toISOString()}`);
+      }
+
+      // V18 — Risk score is non-zero and bounded
+      check('V18-riskscore-positive', (rA.riskScore||0)>0, `riskScore=${rA.riskScore}`);
+      check('V18-riskscore-bounded', (rA.riskScore||0)<=100, `riskScore=${rA.riskScore}`);
+
+      const passed = failures.length === 0;
+      return {
+        passed,
+        passCount,
+        failCount : failures.length,
+        failures,
+        summary   : passed
+          ? `✅ ALL ${passCount} PRODUCTION VALIDATION CHECKS PASSED`
+          : `❌ ${failures.length} CHECKS FAILED (${passCount} passed)\n  ${failures.join('\n  ')}`,
+      };
+    }
+
     return { analyzeEvents, getSampleEvents, mergeDetections, processBackendResult,
              runPipeline: (...args) => ZDFA.runPipeline(...args),  // bridge to ZDFA
+             runProductionValidation,
              _dedupDetections, _normalizeRuleName, _baseRuleId, _canonicalSlug, _normalizeExternalDet,
              _inferEventsOs, _inferOsFromTitle,
              // CSDE v4
