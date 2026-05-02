@@ -2876,6 +2876,22 @@
         const allMitreMappings = qualifiedCluster.reduce((acc, d, idx) => {
           const t = d.mitre?.technique || d.technique || '';
           if (t && !acc.find(m => m.technique === t)) {
+            // RIVE-R2: every mitreMappings entry MUST carry an explicit evidence
+            // field describing the raw indicator that triggered the mapping.
+            // This prevents hallucinated MITRE assignments — if no concrete
+            // evidence field exists the mapping is marked UNKNOWN.
+            const evidenceEv   = (d.raw_detections || [d])[0] || {};
+            const evidenceStr  = evidenceEv.commandLine
+              ? `CommandLine: ${String(evidenceEv.commandLine).slice(0,120)}`
+              : evidenceEv.process
+                ? `Process: ${evidenceEv.process}`
+                : evidenceEv.NewProcessName
+                  ? `Process: ${evidenceEv.NewProcessName}`
+                  : evidenceEv.ShareName
+                    ? `ShareName: ${evidenceEv.ShareName}`
+                    : evidenceEv.EventID
+                      ? `EventID: ${evidenceEv.EventID} on ${evidenceEv.Computer || d.computer || 'unknown'}`
+                      : 'UNKNOWN — no direct evidence field present';
             acc.push({
               technique  : t,
               name       : d.mitre?.name || '',
@@ -2885,6 +2901,9 @@
               ruleId     : d.ruleId || '',
               ruleName   : d.detection_name || d.ruleName || '',
               host       : d.computer || d.host || '',
+              // RIVE-R2: explicit evidence field — mandatory for MITRE validity
+              evidence   : evidenceStr,
+              eventCount : (d.event_count || (d.raw_detections || []).length || 1),
             });
           }
           return acc;
@@ -2912,6 +2931,56 @@
         const confidence = _computeForensicConfidence(qualifiedCluster, parent);
         confidence.score   = Math.max(confidence.score, aceScore.score);
         confidence.reasons = [...new Set([...confidence.reasons, ...aceScore.reasons])];
+
+        // ── RIVE — RAYKAN INCIDENT VALIDATION ENGINE ─────────────────
+        // RIVE-R1 / RIVE-R4 / RIVE-R5: Evidence-based confidence ceiling.
+        //
+        // RIVE mandates that confidence is derived from the NUMBER OF
+        // CORRELATED SOURCE EVENTS, not detection objects (multiple rules
+        // can fire from a single raw event and must not inflate the count).
+        //
+        // Ceiling table (applied AFTER ACE blend so rarity is credited):
+        //   srcEventCount=1  → ceiling 35  (PARTIAL verdict forced)
+        //   srcEventCount=2  → ceiling 60  ("Likely" at most)
+        //   srcEventCount=3  → ceiling 80  ("Strongly Indicative" at most)
+        //   srcEventCount 4+ → no ceiling  (full ACE score retained)
+        //
+        // P1 rules (log-tampering, CSDE-WIN-023/024/027) are exempt:
+        // a lone EventID 1102 is a definitive attacker action — RIVE
+        // Section 7 "P1 escalation" overrides the minimum-2-event rule.
+
+        // Count unique source events across non-inferred detections.
+        // Key = timestamp + host to deduplicate events that fired multiple rules.
+        const isP1Bucket = depthEnforcedCluster.some(d => {
+          const rule = RULES.find(r => r.id === d.ruleId);
+          return rule && rule.p1Escalate;
+        });
+        const srcEvSet = new Set();
+        depthEnforcedCluster.filter(d => !d.inferred).forEach(d => {
+          (d.raw_detections || [d]).forEach(rd => {
+            (rd.evidence || [rd]).forEach(ev => {
+              const key = (ev.timestamp || rd.timestamp || d.timestamp || '')
+                        + '|' + (ev.Computer || ev.computer || rd.computer || d.computer || '');
+              if (key !== '|') srcEvSet.add(key);
+            });
+          });
+        });
+        // Fall back to detection count if evidence traversal yields nothing
+        const observedCount = depthEnforcedCluster.filter(d => !d.inferred).length;
+        const srcEventCount = srcEvSet.size > 0 ? srcEvSet.size : observedCount;
+
+        if (!isP1Bucket) {
+          let confCeiling = 100;
+          if      (srcEventCount === 1) confCeiling = 35;
+          else if (srcEventCount === 2) confCeiling = 60;
+          else if (srcEventCount === 3) confCeiling = 80;
+          if (confidence.score > confCeiling) {
+            confidence.score = confCeiling;
+            confidence.reasons.push(
+              `RIVE ceiling: ${srcEventCount} correlated source event${srcEventCount === 1 ? '' : 's'} → max confidence ${confCeiling}`);
+          }
+        }
+
         if      (confidence.score >= 90) confidence.level = 'Confirmed';
         else if (confidence.score >= 70) confidence.level = 'Strongly Indicative';
         else if (confidence.score >= 40) confidence.level = 'Likely';
@@ -2987,11 +3056,21 @@
             d.ruleId === 'CSDE-WIN-023' || d.ruleId === 'CSDE-WIN-024' || d.ruleId === 'CSDE-WIN-027'
           ),
           // ── SOC-Ready Verdict ────────────────────────────────────────────
-          // Deterministic TRUE_POSITIVE / FALSE_POSITIVE / PARTIAL verdict
-          // based on confidence score, behavior classification, and intent signals.
+          // ── RIVE-R1: Evidence-gated verdict ──────────────────────────
+          // Verdict tier is determined by srcEventCount (unique raw events)
+          // AND confidence (already RIVE-ceiling-bounded above).
+          // A single source event cannot be TRUE_POSITIVE regardless of rule
+          // rarity — it may be a misconfigured binary, a single log entry, or
+          // an aliased process. At least 2 DISTINCT source events are required
+          // before the engine can confirm a TRUE_POSITIVE outcome.
+          // P1 rules (log-tampering) bypass this gate — they are definitively
+          // attacker-controlled by definition and always TRUE_POSITIVE.
           verdict: (() => {
             if (qualifiedCluster.some(d => d.ruleId === 'CSDE-WIN-023' || d.ruleId === 'CSDE-WIN-024' ||
                 d.ruleId === 'CSDE-WIN-027')) return 'TRUE_POSITIVE'; // log tampering = always TP
+            if (isP1Bucket) return 'TRUE_POSITIVE';                   // other P1-escalate rules
+            // RIVE-R1 hard gate: fewer than 2 distinct source events → PARTIAL
+            if (srcEventCount < 2) return 'PARTIAL';
             if (confidence.score >= 70) return 'TRUE_POSITIVE';
             if (confidence.score >= 40 && attackerCount > 0) return 'TRUE_POSITIVE';
             if (adminCount > 0 && attackerCount === 0 && confidence.score < 50) return 'FALSE_POSITIVE';
@@ -3000,6 +3079,8 @@
           verdictReason: (() => {
             if (qualifiedCluster.some(d => d.ruleId === 'CSDE-WIN-023' || d.ruleId === 'CSDE-WIN-024' ||
                 d.ruleId === 'CSDE-WIN-027')) return 'Log tampering detected — definitive attacker action';
+            if (isP1Bucket) return 'P1-escalation rule: definitive attacker action';
+            if (srcEventCount < 2) return `RIVE-R1: only ${srcEventCount} source event — minimum 2 correlated events required for TRUE_POSITIVE (confidence ${confidence.score}/100)`;
             if (confidence.score >= 90) return `High confidence (${confidence.score}/100): ${confidence.reasons[0]||''}`;
             if (confidence.score >= 70) return `Strongly indicative (${confidence.score}/100): ${confidence.reasons[0]||''}`;
             if (adminCount > 0 && attackerCount === 0) return `Admin-intent signals dominant (admin:${adminCount}, attacker:${attackerCount})`;
@@ -6198,6 +6279,70 @@
           };
         });
 
+        // ── RIVE-R3: Full Kill-Chain Lifecycle Reconstruction ────────
+        // RIVE mandates that every incident output MUST include the full
+        // attack lifecycle with absent stages explicitly marked as
+        // "not observed". This gives analysts an immediate gap view
+        // rather than silently omitting stages.
+        //
+        // The STANDARD_LIFECYCLE covers the 9 canonical MITRE phases.
+        // Stages already present in killChainStages (observed or inferred)
+        // are excluded from the "not observed" list.
+        const STANDARD_LIFECYCLE = [
+          { tactic: 'initial-access',       label: 'Initial Access',       technique: '' },
+          { tactic: 'execution',            label: 'Execution',            technique: '' },
+          { tactic: 'persistence',          label: 'Persistence',          technique: '' },
+          { tactic: 'privilege-escalation', label: 'Privilege Escalation', technique: '' },
+          { tactic: 'credential-access',    label: 'Credential Access',    technique: '' },
+          { tactic: 'discovery',            label: 'Discovery',            technique: '' },
+          { tactic: 'lateral-movement',     label: 'Lateral Movement',     technique: '' },
+          { tactic: 'collection',           label: 'Collection',           technique: '' },
+          { tactic: 'exfiltration',         label: 'Exfiltration',         technique: '' },
+          { tactic: 'command-and-control',  label: 'Command and Control',  technique: '' },
+          { tactic: 'impact',               label: 'Impact',               technique: '' },
+          { tactic: 'defense-evasion',      label: 'Defense Evasion',      technique: '' },
+        ];
+        const observedTactics = new Set(killChainStages.map(s => s.tactic).filter(Boolean));
+        const notObservedStages = STANDARD_LIFECYCLE
+          .filter(lc => !observedTactics.has(lc.tactic))
+          .map(lc => ({
+            stageIndex        : killChainStages.length,  // appended after observed
+            phase             : lc.label,
+            tacticRole        : lc.tactic,
+            tactic            : lc.tactic,
+            technique         : 'UNKNOWN',
+            techniqueName     : '',
+            ruleId            : '',
+            ruleName          : lc.label,
+            host              : '',
+            user              : '',
+            timestamp         : '',
+            first_seen        : '',
+            last_seen         : '',
+            duration_ms       : 0,
+            severity          : 'informational',
+            confidence        : 0,
+            inferred          : false,
+            inferredFrom      : null,
+            inferredConfidence: null,
+            causalEdges       : [],
+            hasCausalViolation: false,
+            isHostTransition  : false,
+            rawEvidenceLogs   : [],
+            narrative         : `Stage not observed in this incident — no telemetry for ${lc.label}`,
+            commandLine       : '',
+            process           : '',
+            srcIp             : '',
+            // RIVE-R3 marker — absent lifecycle stage
+            notObserved       : true,
+            _nodeType         : 'not_observed',
+            _riskScore        : 0,
+          }));
+        // killChainStagesFull = observed/inferred stages + not-observed placeholders
+        // killChainStages (existing) keeps only the ACTIVE stages for chain logic
+        // killChainStagesFull is the RIVE-complete view for analyst output
+        const killChainStagesFull = [...killChainStages, ...notObservedStages];
+
         // ── Compute aggregated progressive risk (BCE chain-aware) ───
         const observed       = allDetections.filter(d => !d.inferred);
         const crossHostDetect= (inc.allHosts || []).length > 1;
@@ -6293,10 +6438,14 @@
           last_seen        : inc.last_seen,
           // ── Ordered kill-chain stages (multi-stage, observed+inferred) ─
           killChainStages,
+          // RIVE-R3: full lifecycle view — observed/inferred stages + notObserved placeholders
+          // for every standard kill-chain phase that had no telemetry.
+          killChainStagesFull,
           stageCount       : killChainStages.length,
           observedStages   : killChainStages.filter(s => !s.inferred).length,
           inferredStages   : killChainStages.filter(s =>  s.inferred).length,
           hasInferredStages: killChainStages.some(s => s.inferred),
+          notObservedCount : notObservedStages.length,
           // ── Chain visualization graph ──────────────────────────────
           chainGraph,
           // ── Chain validity ─────────────────────────────────────────
