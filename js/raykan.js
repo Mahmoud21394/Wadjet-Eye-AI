@@ -5970,13 +5970,16 @@
 
     // ── Build sample scenario events ─────────────────────────────
     function getSampleEvents(scenario) {
-      // Use a fixed baseline so demo events have deterministic, reproducible timestamps.
-      // Anchored to 2025-01-15T08:00:00Z to represent a realistic past incident window.
-      const BASE_TS = 1736928000000; // 2025-01-15T08:00:00.000Z (fixed, not system time)
+      // FIX v21: Use LIVE timestamps anchored to Date.now() so that every sample run
+      // produces a distinct time window.  This prevents the dedup engine (which keys on
+      // slug|host|user within a 5-min window) from merging events from separate runs
+      // into a single aggregated detection — the root cause of "only first event triggers".
+      // Each run gets its own BASE_TS so timestamps are unique across repeated calls.
+      const BASE_TS = Date.now();
       const ts = (offset) => new Date(BASE_TS - (offset || 0)).toISOString();
-      // ── FIX T01: every sample event carries BOTH TimeGenerated and TimeCreated so
+      // every sample event carries BOTH TimeGenerated and TimeCreated so
       // that any consumer — whether it reads the Windows-native field or the CSDE-
-      // canonical field — gets a deterministic 2025-01-15 timestamp.
+      // canonical field — gets a live timestamp.
       const mkEv = (fields, offset) => {
         const t = ts(offset || 0);
         return { ...fields, TimeGenerated: t, TimeCreated: t };
@@ -13464,6 +13467,7 @@ return {
       <span class="soc-risk-badge ${riskBadgeClass}">${inc.riskScore || '—'}<span style="font-size:8px;opacity:0.7;">/100</span></span>
       <!-- One-click actions -->
       <div style="display:flex;gap:4px;flex-shrink:0;">
+        <button class="rk-entity-btn" onclick="RAYKAN_UI._openIncidentDetail('${incId}')" style="padding:3px 10px;font-size:10px;font-weight:700;background:rgba(96,165,250,0.12);color:#60a5fa;border-color:rgba(96,165,250,0.3);" title="View full incident details">🔎 View Details</button>
         <button class="rk-entity-btn" onclick="RAYKAN_UI._invEntity('${inc.host||''}')" style="padding:3px 8px;font-size:10px;" title="Investigate">🔍</button>
         <button class="rk-entity-btn" onclick="RAYKAN_UI._isolateHost('${inc.host||''}')" style="padding:3px 8px;font-size:10px;background:rgba(239,68,68,0.08);color:#ef4444;border-color:rgba(239,68,68,0.25);" title="Isolate">🔒</button>
         <button class="rk-entity-btn" onclick="RAYKAN_UI._pivotToLogs('${inc.incidentId||incId}')" style="padding:3px 8px;font-size:10px;" title="Pivot to Logs">📋</button>
@@ -13958,20 +13962,33 @@ return {
         result.scenario = scenario;
       }
 
-      // Guaranteed iterable arrays regardless of response shape.
-      // FIX v9: Use incidentSummaries (fully-enriched analyst objects with
-      // killChainStages, chainGraph, etc.) for S.incidents — not the raw
-      // internal incident objects from _correlateIncidents. The UI renderers
-      // (_renderIncidentsList, Attack Chain, MITRE) all expect the enriched shape.
-      S.detections  = normalizeDetections(result.detections);
-      S.incidents   = Array.isArray(result.incidentSummaries) && result.incidentSummaries.length
-                        ? result.incidentSummaries
-                        : (Array.isArray(result.incidents) ? result.incidents : []);
-      S.timeline    = normalizeDetections(result.timeline);
-      S.chains      = normalizeDetections(result.chains);
-      S.anomalies   = normalizeDetections(result.anomalies);
-      S.riskScore   = result.riskScore   || 0;
-      S.sessionId   = result.sessionId   || null;
+      // FIX v21: ACCUMULATE results across multiple sample runs rather than replacing.
+      // Previously S.* was hard-replaced each run, so running three different scenarios
+      // only showed the LAST one's incidents — all prior work was lost.  Now each demo
+      // run merges into S exactly like ingestPasted() does, giving independent detections
+      // and incidents for every scenario submitted without a page reload.
+      //
+      // Use enriched incidentSummaries (fully-enriched analyst objects with killChainStages,
+      // chainGraph, mitreTactics, etc.) — UI renderers all expect this enriched shape.
+      const newDets  = normalizeDetections(result.detections);
+      const newIncs  = Array.isArray(result.incidentSummaries) && result.incidentSummaries.length
+                         ? result.incidentSummaries
+                         : (Array.isArray(result.incidents) ? result.incidents : []);
+      const newTl    = normalizeDetections(result.timeline);
+      const newChns  = normalizeDetections(result.chains);
+      const newAnoms = normalizeDetections(result.anomalies);
+
+      // Cross-analysis dedup merge: existing + new, then dedup by ruleId+host+user
+      S.detections  = CSDE.mergeDetections(S.detections, newDets);
+      // Prepend new incidents; avoid exact-ID duplicates
+      const existingIncIds = new Set((S.incidents||[]).map(x => x.incidentId||x.id));
+      const freshIncs = newIncs.filter(x => !existingIncIds.has(x.incidentId||x.id));
+      S.incidents   = [...freshIncs, ...(S.incidents || [])];
+      S.timeline    = [...newTl,   ...S.timeline];
+      S.chains      = [...newChns, ...S.chains];
+      S.anomalies   = [...newAnoms, ...S.anomalies];
+      S.riskScore   = Math.max(result.riskScore || 0, S.riskScore);
+      S.sessionId   = result.sessionId || S.sessionId;
       S.lastUpdated = new Date();
 
       // Store ZDFA result from inline pipeline run (no recursion — inline uses analyzeEventsFn:null)
@@ -13984,7 +14001,7 @@ return {
       const dLen = S.detections.length;
       const iLen = S.incidents.length;
       const cLen = S.chains.length;
-      _showToast(`✓ ${dLen} detection(s), ${iLen} incident(s), ${cLen} chain(s) | Risk: ${result.riskScore}${result.engine === 'CSDE-offline' ? ' [Offline]' : ''}`, 'success');
+      _showToast(`✓ ${scenario}: ${newDets.length} new detection(s), ${freshIncs.length} new incident(s), ${newChns.length} chain(s) | Total: ${dLen}D/${iLen}I | Risk: ${Math.round(S.riskScore)}${result.engine === 'CSDE-offline' ? ' [Offline]' : ''}`, 'success');
 
       // FIX v12: Navigate to detections when only 1 detection with no incidents
       // (prevents landing on an empty incidents tab from a single event).
@@ -15828,6 +15845,210 @@ return {
     }
   }
 
+  // ── FIX v21: Open full incident detail modal ───────────────────
+  // Called by the "View Details" button on every incident card.
+  // Looks up the incident by ID from S.incidents, then renders a
+  // comprehensive detail overlay using the shared openDetailModal()
+  // infrastructure (implemented in main.js).
+  function _openIncidentDetail(incidentId) {
+    if (!incidentId) return;
+    const inc = (S.incidents || []).find(x =>
+      (x.incidentId || x.id) === incidentId
+    );
+    if (!inc) {
+      if (typeof _showToast === 'function') _showToast('Incident not found: ' + incidentId, 'warning');
+      return;
+    }
+
+    const sev    = inc.severity || 'medium';
+    const cs     = _sev(sev);
+    const conf   = (typeof inc.confidence === 'object' && inc.confidence !== null)
+                   ? inc.confidence
+                   : { score: typeof inc.confidence === 'number' ? inc.confidence : 30,
+                       level: inc.level || 'Possible', reasons: [] };
+    const title  = inc.title || inc.behavior?.behaviorTitle || 'Correlated Attack Chain';
+    const mitreTactics   = (inc.mitreTactics   || []).slice(0, 8);
+    const mitreMappings  = (inc.mitreMappings  || (inc.techniques||[]).map(t=>({technique:t,tactic:'',role:'secondary'}))).slice(0, 12);
+    const killChain      = inc.killChainStages || inc.phaseChain || [];
+    const allHosts       = inc.allHosts || (inc.host ? [inc.host] : []);
+    const allUsers       = inc.allUsers || (inc.user ? [inc.user] : []);
+    const linkedDets     = (inc._detections || []).slice(0, 20);
+    const timelineItems  = (inc._timeline || []).slice(0, 30);
+    const narrative      = inc.narrative || inc.behavior?.description || '';
+
+    const tacticPills = mitreTactics.map(t =>
+      `<span style="display:inline-block;padding:2px 9px;background:rgba(96,165,250,0.1);color:#60a5fa;
+        border:1px solid rgba(96,165,250,0.2);border-radius:10px;font-size:10px;margin:2px;">
+        ${t.replace(/-/g,' ')}</span>`
+    ).join('');
+
+    const techniqueRows = mitreMappings.map(m =>
+      `<tr style="border-bottom:1px solid #21262d;">
+        <td style="padding:5px 8px;font-size:11px;font-family:'JetBrains Mono',monospace;color:#60a5fa;
+          cursor:pointer;" onclick="RAYKAN_UI._openMITRE('${m.technique||''}')" title="Open ATT&CK">
+          ${m.technique||'—'}</td>
+        <td style="padding:5px 8px;font-size:11px;color:#8b949e;">${m.tactic||m.category||'—'}</td>
+        <td style="padding:5px 8px;font-size:11px;color:#c9d1d9;">${m.name||m.title||'—'}</td>
+        <td style="padding:5px 8px;font-size:10px;color:${m.role==='primary'?'#f97316':'#6b7280'};">` +
+          `${m.role||'secondary'}${m.role==='primary'?' ★':''}</td>
+      </tr>`
+    ).join('');
+
+    const chainSteps = killChain.map((st, si) => {
+      const stColor = cs.color;
+      return `<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;
+        border-bottom:1px solid #21262d;">
+        <div style="min-width:20px;height:20px;border-radius:50%;background:${stColor}22;
+          border:1px solid ${stColor};display:flex;align-items:center;justify-content:center;
+          font-size:9px;font-weight:700;color:${stColor};flex-shrink:0;">${si+1}</div>
+        <div style="flex:1;">
+          <div style="font-size:11px;font-weight:600;color:#e6edf3;">${st.phase||st.tactic||'Stage '+(si+1)}</div>
+          <div style="font-size:10px;color:#60a5fa;font-family:'JetBrains Mono',monospace;">${st.technique||st.ruleId||''}</div>
+          <div style="font-size:10px;color:#8b949e;margin-top:2px;">${st.description||st.evidence||''}</div>
+        </div>
+        <div style="font-size:9px;color:#6b7280;white-space:nowrap;">${st.timestamp?new Date(st.timestamp).toLocaleTimeString():''}</div>
+      </div>`;
+    }).join('');
+
+    const detRows = linkedDets.map(d =>
+      `<div style="padding:6px 10px;border-bottom:1px solid #1c2128;display:flex;gap:8px;align-items:center;">
+        <span style="width:7px;height:7px;border-radius:50%;background:${_sev(d.severity||'medium').color};flex-shrink:0;"></span>
+        <span style="flex:1;font-size:11px;color:#c9d1d9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${d.detection_name||d.ruleName||d.title||'Detection'}</span>
+        <span style="font-size:9px;color:#6b7280;white-space:nowrap;">${d.host||d.computer||''}</span>
+        <span style="font-size:9px;padding:1px 6px;background:${_sev(d.severity||'medium').color}22;color:${_sev(d.severity||'medium').color};border-radius:4px;">${(d.severity||'medium').toUpperCase()}</span>
+      </div>`
+    ).join('');
+
+    const tlRows = timelineItems.map(t =>
+      `<div style="padding:5px 10px;border-bottom:1px solid #1c2128;display:flex;gap:8px;align-items:center;">
+        <span style="font-size:9px;color:#6b7280;white-space:nowrap;font-family:'JetBrains Mono',monospace;">${t.timestamp?new Date(t.timestamp).toLocaleTimeString():''}</span>
+        <span style="font-size:10px;color:#c9d1d9;flex:1;">${t.description||t.detection_name||'Event'}</span>
+        <span style="font-size:9px;color:#8b949e;">${t.host||t.computer||''}</span>
+      </div>`
+    ).join('');
+
+    const html = `
+<div style="font-family:'Inter',sans-serif;color:#c9d1d9;">
+  <!-- Header -->
+  <div style="padding:20px 24px 16px;border-bottom:1px solid #21262d;background:rgba(8,14,24,0.9);">
+    <div style="display:flex;align-items:flex-start;gap:14px;">
+      <div style="width:42px;height:42px;border-radius:10px;background:${cs.color}22;border:1px solid ${cs.color};
+        display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;">
+        ${cs.icon||'⚔️'}
+      </div>
+      <div style="flex:1;min-width:0;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;flex-wrap:wrap;">
+          <span style="font-size:10px;font-family:'JetBrains Mono',monospace;color:#4b5563;">${incidentId}</span>
+          <span style="font-size:10px;padding:1px 8px;background:${cs.color}22;color:${cs.color};border-radius:5px;font-weight:700;">${sev.toUpperCase()}</span>
+          <span style="font-size:10px;padding:1px 8px;background:rgba(96,165,250,0.1);color:#60a5fa;border-radius:5px;">${conf.level}</span>
+          <span style="font-size:10px;padding:1px 8px;background:rgba(52,211,153,0.1);color:#34d399;border-radius:5px;">Risk: ${inc.riskScore||'—'}</span>
+        </div>
+        <div style="font-size:15px;font-weight:700;color:#e6edf3;margin-bottom:6px;">${title}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:10px;color:#6b7280;">
+          ${allHosts.map(h=>`<span>🖥 ${h}</span>`).join('')}
+          ${allUsers.map(u=>`<span>👤 ${u}</span>`).join('')}
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0;">
+        <button class="rk-entity-btn" style="padding:5px 14px;font-size:11px;font-weight:700;
+          background:rgba(59,130,246,0.12);color:#60a5fa;border-color:rgba(59,130,246,0.3);"
+          onclick="(function(){
+            var incObj=(window.RAYKAN_UI?window.RAYKAN_UI.getState().incidents||[]:[])
+              .find(function(x){return (x.id||x.incidentId)==='${incidentId}';});
+            if(!incObj) incObj={id:'${incidentId}',severity:'${sev}'};
+            if(typeof window.createCaseFromIncident==='function'){
+              window.createCaseFromIncident(incObj,window.RAYKAN_UI?window.RAYKAN_UI.getState():null);
+            } else if(typeof navigateTo==='function'){navigateTo('case-management');}
+          })()" title="Create case in Case Management">📁 Create Case</button>
+        <button class="rk-entity-btn" style="padding:5px 10px;font-size:11px;"
+          onclick="document.getElementById('detailModal').classList.remove('open')">✕ Close</button>
+      </div>
+    </div>
+    ${tacticPills ? `<div style="margin-top:10px;">${tacticPills}</div>` : ''}
+    ${narrative ? `<div style="margin-top:10px;padding:10px 14px;background:rgba(96,165,250,0.04);border:1px solid rgba(96,165,250,0.1);border-radius:8px;font-size:12px;line-height:1.6;">${narrative}</div>` : ''}
+  </div>
+
+  <!-- Tab bar -->
+  <div style="display:flex;border-bottom:1px solid #21262d;background:rgba(8,14,24,0.6);">
+    ${['overview','attack-chain','detections','timeline','mitre'].map((tab,ti)=>`
+    <button class="modal-tab-btn${ti===0?' active':''}" data-modal-tab="${tab}"
+      onclick="switchModalTab(this,'${tab}')"
+      style="padding:10px 18px;font-size:11px;font-weight:600;border:none;background:none;
+        color:${ti===0?'#60a5fa':'#6b7280'};cursor:pointer;border-bottom:2px solid ${ti===0?'#60a5fa':'transparent'};
+        transition:all 0.2s;">
+      ${{overview:'📊 Overview','attack-chain':'⛓ Attack Chain',detections:'🔍 Detections',timeline:'📅 Timeline',mitre:'🛡 MITRE'}[tab]}
+    </button>`).join('')}
+  </div>
+
+  <!-- Tab panels -->
+  <div style="max-height:480px;overflow-y:auto;">
+
+    <!-- Overview panel -->
+    <div class="modal-tab-panel" data-modal-panel="overview" style="padding:20px 24px;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px;">
+        ${[
+          {label:'Risk Score',   val: inc.riskScore||'—',    color:'#34d399'},
+          {label:'Confidence',   val: conf.score+'%',         color:'#60a5fa'},
+          {label:'Detections',   val: inc.detectionCount||(linkedDets.length||'—'), color:'#f97316'},
+          {label:'MITRE Tactics',val: mitreTactics.length||'—', color:'#a78bfa'},
+          {label:'Hosts',        val: allHosts.length||'—',   color:'#34d399'},
+          {label:'Chain Stages', val: killChain.length||'—',  color:'#00d4ff'},
+        ].map(s=>`
+        <div style="padding:12px;background:rgba(8,14,24,0.6);border:1px solid #21262d;border-radius:8px;text-align:center;">
+          <div style="font-size:22px;font-weight:900;color:${s.color};">${s.val}</div>
+          <div style="font-size:9px;color:#4b5563;text-transform:uppercase;letter-spacing:.5px;margin-top:3px;">${s.label}</div>
+        </div>`).join('')}
+      </div>
+      ${inc.narrative||inc.behavior?.description ? `
+      <div style="padding:14px;background:rgba(96,165,250,0.04);border:1px solid rgba(96,165,250,0.1);border-radius:8px;">
+        <div style="font-size:10px;font-weight:700;color:#4b5563;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">🧠 Analyst Narrative</div>
+        <div style="font-size:12px;line-height:1.7;color:#c9d1d9;">${narrative}</div>
+      </div>` : ''}
+    </div>
+
+    <!-- Attack Chain panel -->
+    <div class="modal-tab-panel" data-modal-panel="attack-chain" style="display:none;padding:16px 20px;">
+      ${chainSteps || `<div style="color:#6b7280;font-size:12px;padding:20px;text-align:center;">No attack chain stages available for this incident.</div>`}
+    </div>
+
+    <!-- Detections panel -->
+    <div class="modal-tab-panel" data-modal-panel="detections" style="display:none;">
+      ${detRows || `<div style="color:#6b7280;font-size:12px;padding:20px;text-align:center;">No linked detections stored (case created from summary only).</div>`}
+    </div>
+
+    <!-- Timeline panel -->
+    <div class="modal-tab-panel" data-modal-panel="timeline" style="display:none;">
+      ${tlRows || `<div style="color:#6b7280;font-size:12px;padding:20px;text-align:center;">No timeline events available for this incident.</div>`}
+    </div>
+
+    <!-- MITRE panel -->
+    <div class="modal-tab-panel" data-modal-panel="mitre" style="display:none;padding:16px 20px;">
+      ${mitreMappings.length ? `
+      <table style="width:100%;border-collapse:collapse;font-size:11px;">
+        <thead><tr style="border-bottom:2px solid #30363d;">
+          <th style="padding:6px 8px;text-align:left;color:#6b7280;font-weight:600;">Technique</th>
+          <th style="padding:6px 8px;text-align:left;color:#6b7280;font-weight:600;">Tactic</th>
+          <th style="padding:6px 8px;text-align:left;color:#6b7280;font-weight:600;">Name</th>
+          <th style="padding:6px 8px;text-align:left;color:#6b7280;font-weight:600;">Role</th>
+        </tr></thead>
+        <tbody style="color:#c9d1d9;">${techniqueRows}</tbody>
+      </table>` : `<div style="color:#6b7280;font-size:12px;padding:20px;text-align:center;">No MITRE ATT&CK mappings in this incident.</div>`}
+    </div>
+
+  </div>
+</div>`;
+
+    if (typeof openDetailModal === 'function') {
+      openDetailModal(html);
+    } else {
+      // Fallback: inject directly into #detailModalBody and open overlay
+      const body = document.getElementById('detailModalBody');
+      if (body) body.innerHTML = html;
+      const overlay = document.getElementById('detailModal');
+      if (overlay) overlay.classList.add('open');
+    }
+  }
+
   // ── BCE v10: Open MITRE ATT&CK technique page ─────────────────
   function _openMITRE(technique) {
     if (!technique) return;
@@ -15998,11 +16219,12 @@ return {
   function _gesIngestResult(r) {
     if (!r) return;
     try {
-      // FIX v12: Reset GES before every fresh result so we never double-count.
-      // The backfillGraphStore() call below re-ingests S.* state anyway,
-      // so clearing first prevents the triple-ingestion that caused 78 duplicate
-      // attack-chain records from a single event.
-      GES.reset();
+      // FIX v21: Do NOT reset GES here when in accumulation mode (multiple sample runs).
+      // GES.reset() wiped the graph of all prior runs, destroying cross-run entity links.
+      // Instead: only reset if the caller explicitly passes r._resetGES = true (used for
+      // manual "clear all" resets).  backfillGraphStore() below is idempotent via existingIds
+      // guard, so duplicate records are still prevented without the destructive reset.
+      if (r._resetGES === true) GES.reset();
 
       // 1. Ingest only the *deduplicated* detections from this result.
       //    Do NOT also push incidentSummaries as separate records — they are
@@ -17217,6 +17439,7 @@ ${(s3.sessionTimelines||[]).slice(0,5).map(sess => `
     _showDetDetail,
     _invEntity,
     _toggleStageDetail,
+    _openIncidentDetail,
     _openMITRE,
     _isolateHost,
     _pivotToLogs,

