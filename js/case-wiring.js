@@ -131,40 +131,79 @@
     );
 
     // ── Collect linked detections ──────────────────────────────────────
-    // Priority: direct _incidentId back-link → ruleId match → host+user match
-    const linkedDets = (result && result.detections)
-      ? (result.detections).filter(d => {
-          // 1. Direct back-link set by CSDE engine
-          if (d._incidentId === id)                              return true;
-          // 2. Explicit detectionIds list (if present in some backend shapes)
-          if ((inc.detectionIds || []).includes(d.id))          return true;
-          // 3. ruleId present in kill-chain stage ruleIds
-          if (incRuleIds.size && d.ruleId && incRuleIds.has(d.ruleId)) return true;
-          // 4. Shared host + user (same entity cluster) — broadest fallback
-          const dHost = d.host || d.computer || d.Computer || '';
-          const dUser = d.user || d.User || '';
-          if (dHost && incHosts.has(dHost) && dUser && incUsers.has(dUser)) return true;
-          // 5. If only one host, match on host alone (single-host scenario)
-          if (incHosts.size === 1 && dHost && incHosts.has(dHost))         return true;
-          return false;
-        })
-      : [];
+    // v24 ACE REBUILD: incidentSummaries now carry pre-enriched _detections
+    // (populated in analyzeEvents confidenceSummary builder).  Use them as
+    // the primary source so Case Management always has full evidence even
+    // when result.detections is unavailable (e.g. opening via "Create Case"
+    // button from incident detail modal without passing full state).
+    //
+    // Priority order:
+    //   0. inc._detections  — pre-linked by engine (authoritative, v24+)
+    //   1. direct _incidentId back-link on result.detections
+    //   2. detectionIds list
+    //   3. ruleId match against kill-chain stage ruleIds
+    //   4. host+user entity match within time window
+    //   5. host-only fallback (single-host scenario)
+    let linkedDets;
+    if (inc._detections && inc._detections.length > 0) {
+      // v24 path: engine pre-linked detections — use them directly.
+      // Also merge any extra detections from result that are back-linked
+      // but not yet in the pre-enriched array (cross-analysis accumulation).
+      const preLinked = inc._detections;
+      const preLinkedIds = new Set(preLinked.map(d => d.id || d.ruleId).filter(Boolean));
+      const extra = (result && result.detections || []).filter(d => {
+        if (d._incidentId === id && !preLinkedIds.has(d.id || d.ruleId)) return true;
+        return false;
+      });
+      linkedDets = [...preLinked, ...extra];
+    } else {
+      // Legacy path: match from result.detections using all available signals
+      const firstMs = inc.first_seen ? new Date(inc.first_seen).getTime() : 0;
+      const lastMs  = inc.last_seen  ? new Date(inc.last_seen).getTime()  : 0;
+      const windowMs = Math.max(lastMs - firstMs, 60_000);
+      linkedDets = (result && result.detections || []).filter(d => {
+        // 1. Direct back-link set by CSDE engine
+        if (d._incidentId === id)                                return true;
+        // 2. Explicit detectionIds list
+        if ((inc.detectionIds || []).includes(d.id))            return true;
+        // 3. ruleId present in kill-chain stage ruleIds
+        if (incRuleIds.size && d.ruleId && incRuleIds.has(d.ruleId)) return true;
+        const dHost = (d.host || d.computer || d.Computer || '').toLowerCase();
+        const dUser = (d.user || d.User || '').toLowerCase();
+        const dTs   = d.first_seen ? new Date(d.first_seen).getTime() : 0;
+        const hostMatch = dHost && [...incHosts].some(h => h.toLowerCase() === dHost);
+        const userMatch = dUser && [...incUsers].some(u => u.toLowerCase() === dUser);
+        // 4. Entity match (host OR user) within incident time window
+        if ((hostMatch || userMatch) && firstMs > 0 && dTs > 0 &&
+            dTs >= firstMs - windowMs && dTs <= lastMs + windowMs) return true;
+        // 5. host+user exact match (broad fallback)
+        if (dHost && hostMatch && dUser && userMatch)            return true;
+        // 6. Single-host scenario — host alone is sufficient
+        if (incHosts.size === 1 && hostMatch)                   return true;
+        return false;
+      });
+    }
 
     // ── Collect linked timeline entries ───────────────────────────────
-    // Link by: direct host match | batchDetection/aggDetection match with linked det
+    // v24: prefer inc._timeline (pre-enriched by engine) then fall back to
+    // matching from result.timeline via host/detection linkage.
     const linkedDetIds = new Set(linkedDets.map(d => d.id).filter(Boolean));
-    const linkedTimeline = (result && result.timeline)
-      ? result.timeline.filter(t => {
-          // 1. batchDetection / aggDetection matches a linked detection id
-          if (t.batchDetection && linkedDetIds.has(t.batchDetection)) return true;
-          if (t.aggDetection   && linkedDetIds.has(t.aggDetection))   return true;
-          if (t.detectionId    && linkedDetIds.has(t.detectionId))    return true;
-          // 2. Same host as incident
-          const tHost = t.computer || t.host || t.entity || '';
-          if (tHost && incHosts.has(tHost))                            return true;
-          return false;
-        })
-      : [];
+    let linkedTimeline;
+    if (inc._timeline && inc._timeline.length > 0) {
+      // v24 path: engine pre-linked timeline — use directly.
+      linkedTimeline = inc._timeline;
+    } else {
+      linkedTimeline = (result && result.timeline || []).filter(t => {
+        // 1. batchDetection / aggDetection matches a linked detection id
+        if (t.batchDetection && linkedDetIds.has(t.batchDetection)) return true;
+        if (t.aggDetection   && linkedDetIds.has(t.aggDetection))   return true;
+        if (t.detectionId    && linkedDetIds.has(t.detectionId))    return true;
+        // 2. Same host as incident (case-insensitive)
+        const tHost = (t.computer || t.host || t.entity || '').toLowerCase();
+        if (tHost && [...incHosts].some(h => h.toLowerCase() === tHost)) return true;
+        return false;
+      });
+    }
 
     // ── Find matching attack chain ────────────────────────────────────
     const linkedChain = (result && result.chains)

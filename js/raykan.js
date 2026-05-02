@@ -596,7 +596,7 @@
       'defense-evasion':      new Set(['execution','persistence','privilege-escalation','credential-access','discovery','lateral-movement','collection','command-and-control','impact']),
       // credential-access CAN lead to persistence (attacker creds → create account / schedule task)
       'credential-access':    new Set(['discovery','lateral-movement','privilege-escalation','defense-evasion','collection','command-and-control','impact','execution','persistence','exfiltration']),
-      'discovery':            new Set(['lateral-movement','collection','execution','credential-access','command-and-control','impact','privilege-escalation','persistence']),
+      'discovery':            new Set(['lateral-movement','collection','execution','credential-access','command-and-control','impact','privilege-escalation','persistence','defense-evasion','exfiltration']),
       'lateral-movement':     new Set(['execution','persistence','privilege-escalation','defense-evasion','credential-access','discovery','collection','command-and-control','impact']),
       'collection':           new Set(['exfiltration','command-and-control','impact','defense-evasion']),
       'command-and-control':  new Set(['collection','exfiltration','impact','execution','lateral-movement','defense-evasion']),
@@ -2781,8 +2781,17 @@
       // FIX v12: Require at least 2 observed (non-inferred) detections to form an incident.
       // A single detection cannot constitute a multi-stage adversary incident;
       // doing so produces ghost chains with 0 evidence stages.
+      // FIX v25: P1/log-tampering single-detection buckets bypass the 2-minimum —
+      // a solitary EventID 1102 (log-cleared) is a definitive attacker action that
+      // must always surface as a P1 incident regardless of cluster size.
       const validBuckets = mergedBuckets.filter(b => {
         const observed = b.filter(d => !d.inferred);
+        // Allow single-detection buckets if ANY detection is a P1 escalation rule
+        const hasP1Escalation = b.some(d => {
+          const rule = RULES.find(r => r.id === d.ruleId);
+          return rule && rule.p1Escalate;
+        });
+        if (hasP1Escalation && observed.length >= 1) return true;
         return observed.length >= Math.max(CFG.ACE_MIN_NODES_FOR_GRAPH, 2);
       });
 
@@ -3181,21 +3190,59 @@
       // a synthetic ID so existing schema validators do NOT gate them out.
       // Synthetic IDs start at 60000 (well outside all real Windows/Sysmon ranges).
       if (isNaN(e.EventID) && e.event_type) {
+        // ── v24 ACE REBUILD: Extended synthetic EventID map ─────────
+        // Covers all 8 attack-scenario families so every custom JSON
+        // event gets a unique synthetic ID and fires the correct rule.
         const syntheticMap = {
-          'process_creation'      : 60001,
-          'email_attachment_opened': 60002,
-          'registry_modification' : 60003,
-          'network_connection'    : 60004,
-          'smb_authentication'    : 60005,
-          'data_exfiltration'     : 60006,
-          'authentication'        : 60007,
-          'file_created'          : 60008,
-          'dns_query'             : 60009,
-          'scheduled_task'        : 60010,
+          // Original set (60001-60010)
+          'process_creation'        : 60001,
+          'email_attachment_opened' : 60002,
+          'registry_modification'   : 60003,
+          'network_connection'      : 60004,
+          'smb_authentication'      : 60005,
+          'data_exfiltration'       : 60006,
+          'authentication'          : 60007,
+          'file_created'            : 60008,
+          'dns_query'               : 60009,
+          'scheduled_task'          : 60010,
+          // v24 additions — attack-scenario coverage
+          'auth_failure'            : 60011,
+          'auth_success'            : 60012,
+          'lateral_movement'        : 60013,
+          'credential_access'       : 60014,
+          'exfiltration'            : 60015,
+          'file_access'             : 60016,
+          'file_modification'       : 60017,
+          'file_creation'           : 60018,
+          'registry_access'         : 60019,
+          'service_installation'    : 60020,
+          'driver_load'             : 60021,
+          'pipe_created'            : 60022,
+          'wmi_activity'            : 60023,
+          'powershell_block'        : 60024,
+          'logon_event'             : 60025,
+          'logoff_event'            : 60026,
+          'account_creation'        : 60027,
+          'privilege_escalation'    : 60028,
+          'defense_evasion'         : 60029,
+          'discovery'               : 60030,
+          'collection'              : 60031,
+          'ransomware_activity'     : 60032,
+          'supply_chain_event'      : 60033,
+          'insider_activity'        : 60034,
+          'anomalous_access'        : 60035,
+          'token_manipulation'      : 60036,
+          'memory_injection'        : 60037,
+          'persistence'             : 60038,
+          'impact'                  : 60039,
+          'recon'                   : 60040,
         };
         const sid = syntheticMap[e.event_type];
         if (sid) e.EventID = sid;
+        else e.EventID = 60099; // catch-all for any unrecognised custom type
       }
+      // ── v24: Mark all events with recognised event_type as custom JSON ─
+      if (e.event_type) e._isCustomJson = true;
       // ── Timestamp: enforce original log time as source of truth ──
       // NEVER fall back to system/processing time — null means unknown
       e.timestamp   = e.timestamp   || e.TimeGenerated || e.TimeCreated
@@ -4601,6 +4648,445 @@
         },
       },
 
+      // ══════════════════════════════════════════════════════════════
+      //  v24 ACE REBUILD — EXTENDED CUSTOM JSON RULES
+      //  Covers all 8 attack-scenario families so that ANY custom-JSON
+      //  telemetry stream produces detections, incidents, and chains.
+      //  Each rule fires on its synthetic EventID (60011-60099) AND
+      //  on the matching event_type string, making them dual-path.
+      // ══════════════════════════════════════════════════════════════
+
+      // ── CJ-007: Authentication Failure (Brute-Force signal) ─────
+      {
+        id: 'CSDE-CJ-007', title: 'Authentication Failure — Brute-Force Signal',
+        os: 'any', severity: 'medium', category: 'credential-access',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1110.001', name: 'Brute Force: Password Guessing', tactic: 'credential-access' },
+        tags: ['attack.credential_access', 'attack.t1110.001'],
+        mitre_confidence: 'medium',
+        riskScore: 55,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const eid   = parseInt(e.EventID, 10);
+          if (eType === 'auth_failure' || eid === 60011) return true;
+          const status = (e.status || e.Status || '').toLowerCase();
+          const result = (e.result || e.Result || '').toLowerCase();
+          if (status.includes('fail') || status.includes('denied') ||
+              result.includes('fail') || result.includes('denied')) return true;
+          return false;
+        },
+        matchBatch: (events) => {
+          const fails = events.filter(e => {
+            const et = (e.event_type||'').toLowerCase();
+            const st = (e.status||e.Status||'').toLowerCase();
+            return et === 'auth_failure' || parseInt(e.EventID,10) === 60011 ||
+                   st.includes('fail') || st.includes('denied');
+          });
+          if (fails.length < 2) return null;
+          const grouped = new Map();
+          fails.forEach(e => {
+            const u  = (e.user||e.username||'?').toLowerCase();
+            const ip = e.srcIp||e.src_ip||e.clientIP||'?';
+            const key = `${u}|${ip}`;
+            if (!grouped.has(key)) grouped.set(key, []);
+            grouped.get(key).push(e);
+          });
+          const results = [];
+          grouped.forEach((evts, key) => {
+            if (evts.length >= 2) {
+              const [user, srcIp] = key.split('|');
+              results.push({
+                ruleId: 'CSDE-CJ-007-BATCH', ruleVersion: 1,
+                detection_name: 'Repeated Authentication Failures',
+                severity: evts.length >= 5 ? 'high' : 'medium',
+                riskScore: Math.min(50 + evts.length * 5, 85),
+                user, srcIp,
+                computer: evts[0].computer || evts[0].host || '',
+                mitre: { technique: 'T1110.001', tactic: 'credential-access' },
+                first_seen: evts[0].timestamp, last_seen: evts[evts.length-1].timestamp,
+                evidence: evts,
+                narrative: `${evts.length} authentication failures for "${user}" from ${srcIp} — brute-force pattern (T1110.001).`,
+              });
+            }
+          });
+          return results.length ? results : null;
+        },
+        narrative: e => `Authentication failure for "${e.user||e.username||'unknown'}" from ${e.srcIp||e.src_ip||'unknown IP'} on ${e.computer||e.host||'unknown'} — possible brute-force (T1110.001).`,
+      },
+
+      // ── CJ-008: Successful Authentication After Failures ────────
+      {
+        id: 'CSDE-CJ-008', title: 'Successful Logon — Possible Compromised Account',
+        os: 'any', severity: 'medium', category: 'initial-access',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1078', name: 'Valid Accounts', tactic: 'initial-access' },
+        tags: ['attack.initial_access', 'attack.t1078'],
+        mitre_confidence: 'medium',
+        riskScore: 50,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const eid   = parseInt(e.EventID, 10);
+          if (eType === 'auth_success' || eid === 60012) return true;
+          const status = (e.status || e.Status || '').toLowerCase();
+          const result = (e.result || e.Result || '').toLowerCase();
+          if (status === 'success' || status === 'successful' ||
+              result === 'success' || result === 'successful') return true;
+          return false;
+        },
+        narrative: e => `Successful authentication for "${e.user||e.username||'unknown'}" from ${e.srcIp||e.src_ip||'unknown IP'} on ${e.computer||e.host||'unknown'} — validate if expected (T1078).`,
+      },
+
+      // ── CJ-009: Lateral Movement / Pivoting ─────────────────────
+      {
+        id: 'CSDE-CJ-009', title: 'Lateral Movement / Host Pivoting',
+        os: 'any', severity: 'high', category: 'lateral-movement',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1021.002', name: 'Remote Services: SMB/Windows Admin Shares', tactic: 'lateral-movement' },
+        tags: ['attack.lateral_movement', 'attack.t1021', 'attack.t1021.002', 'pivoting'],
+        mitre_confidence: 'high',
+        riskScore: 80,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const eid   = parseInt(e.EventID, 10);
+          if (eType === 'lateral_movement' || eid === 60013) return true;
+          const proc = (e.process || '').toLowerCase();
+          const cmd  = (e.commandLine || e.command_line || '').toLowerCase();
+          const lateralProcs = ['psexec', 'wmic', 'wmiexec', 'smbexec', 'dcomexec',
+                                'at.exe', 'sc.exe', 'schtasks', 'mstsc', 'xfreerdp'];
+          if (lateralProcs.some(p => proc.includes(p) || cmd.includes(p))) return true;
+          const port = parseInt(e.destPort||e.dest_port||0,10);
+          if ((port === 445||port === 139||port === 5985||port === 5986||port === 3389) &&
+              e.srcIp && e.computer && e.destIp) return true;
+          return false;
+        },
+        narrative: e => `Lateral movement detected from ${e.computer||e.host||'unknown'}: ` +
+          `${e.srcIp||e.computer||'?'} → ${e.destIp||e.destHost||e.dest_host||'?'} ` +
+          `by "${e.user||'unknown'}" via ${e.process||'unknown process'} (T1021.002).`,
+      },
+
+      // ── CJ-010: Credential Access / Dumping ─────────────────────
+      {
+        id: 'CSDE-CJ-010', title: 'Credential Access / LSASS Memory Dump',
+        os: 'any', severity: 'critical', category: 'credential-access',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1003.001', name: 'OS Credential Dumping: LSASS Memory', tactic: 'credential-access' },
+        tags: ['attack.credential_access', 'attack.t1003', 'attack.t1003.001', 'lsass'],
+        mitre_confidence: 'high',
+        riskScore: 92,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const eid   = parseInt(e.EventID, 10);
+          if (eType === 'credential_access' || eid === 60014) return true;
+          const proc = (e.process || '').toLowerCase();
+          const cmd  = (e.commandLine || e.command_line || '').toLowerCase();
+          const credTools = ['mimikatz', 'procdump', 'comsvcs', 'ntdsutil',
+                             'secretsdump', 'wce.exe', 'pwdump', 'gsecdump',
+                             'cme', 'crackmapexec', 'lsassy'];
+          if (credTools.some(t => proc.includes(t) || cmd.includes(t))) return true;
+          if (proc.includes('lsass') || cmd.includes('lsass.exe')) return true;
+          const file = (e.file||e.fileName||e.file_name||'').toLowerCase();
+          if (file.includes('lsass') || file.includes('.dmp') || file.includes('ntds.dit')) return true;
+          return false;
+        },
+        narrative: e => `Credential dumping on ${e.computer||e.host||'unknown'} by "${e.user||'unknown'}": ` +
+          `Tool "${e.process||'?'}" accessed credentials — possible LSASS dump (T1003.001).`,
+      },
+
+      // ── CJ-011: Exfiltration / Data Theft ───────────────────────
+      {
+        id: 'CSDE-CJ-011', title: 'Data Exfiltration — Outbound Transfer',
+        os: 'any', severity: 'high', category: 'exfiltration',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1041', name: 'Exfiltration Over C2 Channel', tactic: 'exfiltration' },
+        tags: ['attack.exfiltration', 'attack.t1041', 'data_theft'],
+        mitre_confidence: 'high',
+        riskScore: 88,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const eid   = parseInt(e.EventID, 10);
+          if (eType === 'exfiltration' || eid === 60015) return true;
+          // Suspicious outbound with data
+          const dest = e.destIp || e.dest_ip || e.destHost || '';
+          const bytes = parseInt(e.bytesSent||e.bytes_sent||e.bytes_out||0, 10);
+          const proc  = (e.process || '').toLowerCase();
+          const port  = parseInt(e.destPort||e.dest_port||0, 10);
+          // Any process sending data to external IP on non-standard port
+          if (dest && bytes > 1024 && proc) return true;
+          // Archive tool + outbound connection
+          const archiveTools = ['rar', 'winrar', '7z', 'zip', 'tar', 'gzip'];
+          if (archiveTools.some(a => proc.includes(a)) && dest) return true;
+          // Cloud storage uploads
+          const cloudPorts = [21, 22, 2049, 8443, 9443];
+          if (cloudPorts.includes(port) && dest) return true;
+          return false;
+        },
+        narrative: e => `Data exfiltration from ${e.computer||e.host||'unknown'} by "${e.user||'unknown'}": ` +
+          `Process "${e.process||'?'}" → ${e.destIp||e.dest_ip||e.destHost||'?'} (T1041).`,
+      },
+
+      // ── CJ-012: File/Data Access (Collection) ────────────────────
+      {
+        id: 'CSDE-CJ-012', title: 'Sensitive File Access / Data Collection',
+        os: 'any', severity: 'medium', category: 'collection',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1005', name: 'Data from Local System', tactic: 'collection' },
+        tags: ['attack.collection', 'attack.t1005', 'file_access'],
+        mitre_confidence: 'medium',
+        riskScore: 60,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const eid   = parseInt(e.EventID, 10);
+          if (eType === 'file_access' || eType === 'file_modification' ||
+              eType === 'file_creation' || eid === 60016 || eid === 60017 || eid === 60018) return true;
+          const file  = (e.file||e.fileName||e.file_name||e.filePath||'').toLowerCase();
+          const sensitiveExts = ['.docx','.xlsx','.pdf','.pptx','.kdbx','.pfx','.key',
+                                 '.pem','.p12','.doc','.xls','.csv','.zip','.7z'];
+          if (sensitiveExts.some(x => file.endsWith(x))) return true;
+          const sensitivePaths = ['\\documents\\','\\desktop\\','\\secrets\\','\\passwords\\',
+                                  '\\financial\\','\\hr\\','\\confidential\\'];
+          if (sensitivePaths.some(p => file.includes(p))) return true;
+          return false;
+        },
+        narrative: e => `Sensitive file access on ${e.computer||e.host||'unknown'} by "${e.user||'unknown'}": ` +
+          `"${e.file||e.fileName||e.file_name||'?'}" accessed — possible data collection (T1005).`,
+      },
+
+      // ── CJ-013: Ransomware Encryption Activity ───────────────────
+      {
+        id: 'CSDE-CJ-013', title: 'Ransomware File Encryption Activity',
+        os: 'any', severity: 'critical', category: 'impact',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1486', name: 'Data Encrypted for Impact', tactic: 'impact' },
+        tags: ['attack.impact', 'attack.t1486', 'ransomware', 'encryption'],
+        mitre_confidence: 'high',
+        riskScore: 95,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const eid   = parseInt(e.EventID, 10);
+          if (eType === 'ransomware_activity' || eid === 60032) return true;
+          const file  = (e.file||e.fileName||e.file_name||e.filePath||'').toLowerCase();
+          const proc  = (e.process||'').toLowerCase();
+          const cmd   = (e.commandLine||e.command_line||'').toLowerCase();
+          // Ransomware extension patterns
+          const ransomExts = ['.locked','.encrypted','.enc','.crypt','.rnsmw','.zepto',
+                              '.locky','.wncry','.wannacry','.ryuk','.maze','.conti',
+                              '.darkside','.revil','.sodinokibi'];
+          if (ransomExts.some(x => file.endsWith(x))) return true;
+          // Ransomware-like processes
+          const ransomProcs = ['vssadmin','bcdedit','wbadmin','shadowcopy'];
+          if (ransomProcs.some(p => proc.includes(p)||cmd.includes(p))) return true;
+          // Shadow copy deletion
+          if (cmd.includes('delete shadows') || cmd.includes('delete catalog') ||
+              cmd.includes('recoveryenabled no')) return true;
+          return false;
+        },
+        narrative: e => `Ransomware encryption activity on ${e.computer||e.host||'unknown'} by "${e.user||'unknown'}": ` +
+          `File "${e.file||e.fileName||'?'}" encrypted — data held for ransom (T1486).`,
+      },
+
+      // ── CJ-014: Privilege Escalation ─────────────────────────────
+      {
+        id: 'CSDE-CJ-014', title: 'Privilege Escalation Attempt',
+        os: 'any', severity: 'high', category: 'privilege-escalation',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1068', name: 'Exploitation for Privilege Escalation', tactic: 'privilege-escalation' },
+        tags: ['attack.privilege_escalation', 'attack.t1068', 'privesc'],
+        mitre_confidence: 'high',
+        riskScore: 85,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const eid   = parseInt(e.EventID, 10);
+          if (eType === 'privilege_escalation' || eid === 60028) return true;
+          const proc = (e.process || '').toLowerCase();
+          const cmd  = (e.commandLine || e.command_line || '').toLowerCase();
+          const privEscTools = ['whoami /all','net localgroup administrators',
+                                'getsystem','bypassuac','eventvwr','fodhelper',
+                                'computerdefaults','sdclt','cmstp'];
+          if (privEscTools.some(t => cmd.includes(t))) return true;
+          if (proc.includes('token') || cmd.includes('token')) return true;
+          const user = (e.user||'').toLowerCase();
+          if (user === 'nt authority\\system' || user === 'system') return true;
+          return false;
+        },
+        narrative: e => `Privilege escalation on ${e.computer||e.host||'unknown'} by "${e.user||'unknown'}": ` +
+          `Process "${e.process||'?'}" — attempted SYSTEM/admin escalation (T1068).`,
+      },
+
+      // ── CJ-015: Discovery / Reconnaissance ──────────────────────
+      {
+        id: 'CSDE-CJ-015', title: 'Internal Reconnaissance / Discovery',
+        os: 'any', severity: 'medium', category: 'discovery',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1082', name: 'System Information Discovery', tactic: 'discovery' },
+        tags: ['attack.discovery', 'attack.t1082', 'attack.t1087', 'recon'],
+        mitre_confidence: 'medium',
+        riskScore: 45,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const eid   = parseInt(e.EventID, 10);
+          if (eType === 'discovery' || eType === 'recon' || eid === 60030 || eid === 60040) return true;
+          const cmd = (e.commandLine||e.command_line||'').toLowerCase();
+          const reconCmds = ['whoami','ipconfig','systeminfo','net user','net group',
+                             'nltest','arp -a','route print','netstat','tasklist',
+                             'wmic process','wmic computersystem','dsquery','net localgroup'];
+          if (reconCmds.some(c => cmd.includes(c))) return true;
+          return false;
+        },
+        narrative: e => `Discovery/recon activity on ${e.computer||e.host||'unknown'} by "${e.user||'unknown'}": ` +
+          `"${(e.commandLine||e.process||'?').slice(0,100)}" — internal enumeration (T1082).`,
+      },
+
+      // ── CJ-016: Persistence Mechanism ───────────────────────────
+      {
+        id: 'CSDE-CJ-016', title: 'Persistence Mechanism Established',
+        os: 'any', severity: 'high', category: 'persistence',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1547.001', name: 'Boot or Logon Autostart: Registry Run Keys', tactic: 'persistence' },
+        tags: ['attack.persistence', 'attack.t1547.001', 'attack.t1543', 'persistence'],
+        mitre_confidence: 'high',
+        riskScore: 78,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const eid   = parseInt(e.EventID, 10);
+          if (eType === 'persistence' || eid === 60038) return true;
+          const cmd  = (e.commandLine||e.command_line||'').toLowerCase();
+          const proc = (e.process||'').toLowerCase();
+          const key  = (e.key||e.registryPath||e.registry_path||e.key||'').toLowerCase();
+          // Scheduled task / service creation
+          if (proc.includes('schtasks') || cmd.includes('schtasks /create')) return true;
+          if (proc.includes('sc.exe') && cmd.includes('create')) return true;
+          // Startup folder
+          if (cmd.includes('startup') || key.includes('\\run\\') || key.includes('\\runonce\\')) return true;
+          // Account creation for persistence
+          if (cmd.includes('net user') && cmd.includes('/add')) return true;
+          if (eType === 'account_creation' || eid === 60027) return true;
+          return false;
+        },
+        narrative: e => `Persistence established on ${e.computer||e.host||'unknown'} by "${e.user||'unknown'}": ` +
+          `"${(e.commandLine||e.process||e.key||'?').slice(0,100)}" — attacker maintaining access (T1547.001).`,
+      },
+
+      // ── CJ-017: Defense Evasion ──────────────────────────────────
+      {
+        id: 'CSDE-CJ-017', title: 'Defense Evasion Activity',
+        os: 'any', severity: 'high', category: 'defense-evasion',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1562.001', name: 'Impair Defenses: Disable or Modify Tools', tactic: 'defense-evasion' },
+        tags: ['attack.defense_evasion', 'attack.t1562', 'attack.t1070', 'evasion'],
+        mitre_confidence: 'high',
+        riskScore: 82,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const eid   = parseInt(e.EventID, 10);
+          if (eType === 'defense_evasion' || eid === 60029) return true;
+          const cmd = (e.commandLine||e.command_line||'').toLowerCase();
+          // AV/EDR tampering
+          if (cmd.includes('disable') && (cmd.includes('defender')||cmd.includes('antivirus')||cmd.includes('firewall'))) return true;
+          // Log clearing
+          if (cmd.includes('wevtutil cl') || cmd.includes('clear-eventlog') || cmd.includes('del /f') && cmd.includes('.log')) return true;
+          // AMSI bypass
+          if (cmd.includes('amsi') || cmd.includes('bypass') && cmd.includes('powershell')) return true;
+          // Process injection indicators
+          if (cmd.includes('inject') || cmd.includes('hollowing') || cmd.includes('reflective')) return true;
+          return false;
+        },
+        narrative: e => `Defense evasion on ${e.computer||e.host||'unknown'} by "${e.user||'unknown'}": ` +
+          `"${(e.commandLine||e.process||'?').slice(0,100)}" — security controls bypassed (T1562.001).`,
+      },
+
+      // ── CJ-018: Supply Chain / Trusted Binary Abuse ──────────────
+      {
+        id: 'CSDE-CJ-018', title: 'Supply Chain / Trusted Binary Abuse (LOLBAS)',
+        os: 'any', severity: 'high', category: 'initial-access',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1195.002', name: 'Supply Chain Compromise: Compromise Software Supply Chain', tactic: 'initial-access' },
+        tags: ['attack.initial_access', 'attack.t1195.002', 'supply_chain', 'lolbas'],
+        mitre_confidence: 'high',
+        riskScore: 85,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const eid   = parseInt(e.EventID, 10);
+          if (eType === 'supply_chain_event' || eid === 60033) return true;
+          const proc = (e.process||'').toLowerCase();
+          const cmd  = (e.commandLine||e.command_line||'').toLowerCase();
+          const parent = (e.parentProcess||e.parent_process||'').toLowerCase();
+          // LOLBAS binaries with suspicious args
+          const lolbas = ['mshta','regsvr32','rundll32','certutil','bitsadmin',
+                          'wscript','cscript','msiexec','installutil','regasm'];
+          if (lolbas.some(l => proc.includes(l) || parent.includes(l))) return true;
+          // DLL side-loading patterns
+          if (cmd.includes('.dll') && (cmd.includes('regsvr32')||cmd.includes('rundll32'))) return true;
+          // Trusted installer abuse
+          if (proc.includes('trustedinstaller') || parent.includes('trustedinstaller')) return true;
+          return false;
+        },
+        narrative: e => `Supply chain / LOLBAS abuse on ${e.computer||e.host||'unknown'} by "${e.user||'unknown'}": ` +
+          `Trusted binary "${e.process||e.parentProcess||'?'}" executing payload (T1195.002).`,
+      },
+
+      // ── CJ-019: Insider Threat / Anomalous Access ────────────────
+      {
+        id: 'CSDE-CJ-019', title: 'Insider Threat — Anomalous Data Access',
+        os: 'any', severity: 'high', category: 'collection',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1078', name: 'Valid Accounts — Insider Misuse', tactic: 'collection' },
+        tags: ['attack.collection', 'attack.t1078', 'insider_threat', 'anomalous'],
+        mitre_confidence: 'medium',
+        riskScore: 75,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const eid   = parseInt(e.EventID, 10);
+          if (eType === 'insider_activity' || eType === 'anomalous_access' ||
+              eid === 60034 || eid === 60035) return true;
+          const file  = (e.file||e.fileName||e.file_name||'').toLowerCase();
+          const user  = (e.user||e.username||'').toLowerCase();
+          // Bulk file access / unusual after-hours
+          const ts    = new Date(_safeTs(e.timestamp||e.ts)||Date.now());
+          const hour  = ts.getHours();
+          const isAfterHours = hour < 6 || hour > 20;
+          // Sensitive resources accessed after hours
+          const sensitiveDirs = ['\\finance\\','\\hr\\','\\legal\\','\\confidential\\',
+                                 '/finance/','/hr/','/legal/','/confidential/'];
+          if (sensitiveDirs.some(d => file.includes(d))) return true;
+          if (isAfterHours && file) return true;
+          // Bulk download indicators
+          const bytes = parseInt(e.bytesSent||e.bytes_sent||e.bytes_downloaded||e.bytes_read||0, 10);
+          if (bytes > 50 * 1024 * 1024) return true;
+          return false;
+        },
+        narrative: e => `Insider threat / anomalous access on ${e.computer||e.host||'unknown'} by "${e.user||e.username||'unknown'}": ` +
+          `"${e.file||e.resource||'?'}" accessed — possible data theft by trusted user (T1078).`,
+      },
+
+      // ── CJ-020: Impact / Service Disruption ──────────────────────
+      {
+        id: 'CSDE-CJ-020', title: 'Service / System Disruption (Impact)',
+        os: 'any', severity: 'critical', category: 'impact',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1489', name: 'Service Stop', tactic: 'impact' },
+        tags: ['attack.impact', 'attack.t1489', 'attack.t1490', 'disruption'],
+        mitre_confidence: 'high',
+        riskScore: 90,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const eid   = parseInt(e.EventID, 10);
+          if (eType === 'impact' || eid === 60039) return true;
+          const cmd  = (e.commandLine||e.command_line||'').toLowerCase();
+          const proc = (e.process||'').toLowerCase();
+          // Service stop / crash
+          if (proc.includes('net.exe') && cmd.includes('stop')) return true;
+          // Volume shadow delete (ransomware / sabotage)
+          if (cmd.includes('vssadmin') && (cmd.includes('delete')||cmd.includes('resize'))) return true;
+          if (cmd.includes('wmic') && cmd.includes('shadowcopy')) return true;
+          // Boot config destruction
+          if (cmd.includes('bcdedit') && cmd.includes('set')) return true;
+          if (cmd.includes('wbadmin') && cmd.includes('delete')) return true;
+          return false;
+        },
+        narrative: e => `Impact/disruption activity on ${e.computer||e.host||'unknown'} by "${e.user||'unknown'}": ` +
+          `"${(e.commandLine||e.process||'?').slice(0,100)}" — service/system destruction (T1489).`,
+      },
+
     ];
 
     // ════════════════════════════════════════════════════════════════
@@ -5057,6 +5543,10 @@
             attackerCount: intentSignals.filter(s => s.intent === 'attacker').length,
             adminCount   : intentSignals.filter(s => s.intent === 'admin').length,
           },
+          // FIX v23: killChainStages alias — UI components read both
+          // chain.stages (internal) and chain.killChainStages (enriched shape).
+          // Provide both so all rendering paths work without extra lookups.
+          killChainStages : stages,
         });
       });
 
@@ -5822,6 +6312,47 @@
           // ── Narrative ─────────────────────────────────────────────
           narrative        : inc.narrative || '',
           aceScore         : inc.aceScore  || {},
+          // ── FIX v23: Linked detections and timeline ────────────────
+          // Attach the full set of detections and timeline entries that
+          // belong to this incident so _openIncidentDetail, the Detections
+          // tab, and Case Management always have real evidence — never empty.
+          _detections      : (function() {
+            const incId   = inc.id || inc.incidentId;
+            const incHosts = new Set([...(inc.allHosts || []), inc.host].filter(Boolean));
+            const incUsers = new Set([...(inc.allUsers || []), inc.user].filter(Boolean));
+            const firstMs  = _safeTs(inc.first_seen  || inc.timestamp);
+            const lastMs   = _safeTs(inc.last_seen   || inc.first_seen || inc.timestamp);
+            const windowMs = Math.max(lastMs - firstMs, 60_000);  // ≥ 1 min window
+            const stageRuleIds = new Set(
+              (inc.phaseTimeline || []).map(s => s.ruleId).filter(Boolean)
+            );
+            return dedupedDets.filter(d => {
+              // 1. Direct back-link (preferred — set by _correlateIncidents)
+              if (d._incidentId === incId) return true;
+              // 2. ruleId appears in any kill-chain stage
+              if (stageRuleIds.size && d.ruleId && stageRuleIds.has(d.ruleId)) return true;
+              // 3. Entity match (host OR user) within incident time window
+              const dHost = (d.computer || d.host || '').toLowerCase();
+              const dUser = (d.user || '').toLowerCase();
+              const dTs   = _safeTs(d.first_seen || d.timestamp);
+              const hostMatch = dHost && [...incHosts].some(h => h.toLowerCase() === dHost);
+              const userMatch = dUser && [...incUsers].some(u => u.toLowerCase() === dUser);
+              if ((hostMatch || userMatch) && dTs >= firstMs - windowMs && dTs <= lastMs + windowMs) return true;
+              return false;
+            });
+          })(),
+          _timeline        : (function() {
+            const incHosts = new Set([...(inc.allHosts || []), inc.host].filter(Boolean));
+            const firstMs  = _safeTs(inc.first_seen  || inc.timestamp);
+            const lastMs   = _safeTs(inc.last_seen   || inc.first_seen || inc.timestamp);
+            const windowMs = Math.max(lastMs - firstMs, 60_000);
+            return timeline.filter(t => {
+              const tHost = (t.computer || t.host || t.entity || '').toLowerCase();
+              const tTs   = _safeTs(t.timestamp || t.ts);
+              const hostMatch = tHost && [...incHosts].some(h => h.toLowerCase() === tHost);
+              return hostMatch && tTs >= firstMs - windowMs && tTs <= lastMs + windowMs;
+            });
+          })(),
         };
       });
 
@@ -5880,7 +6411,7 @@
           eventsAnalyzed    : events.length,
           dedupWindowMs     : CFG.DEDUP_WINDOW_MS,
           correlWindowMs    : CORR_WINDOW_MS,
-          engineVersion     : 'CSDE-v15-BCE-Hardened',
+          engineVersion     : 'CSDE-v10-BCE-Hardened',
           fpSuppressed      : rawDets.filter(d => d._fpSuppressed).length,
           p1Count           : p1Incidents.length,
           logTamperCount,
@@ -16218,11 +16749,10 @@ return {
     }
   }
 
-  // ── FIX v21: Open full incident detail modal ───────────────────
+  // ── FIX v23: Open full incident detail modal ───────────────────
   // Called by the "View Details" button on every incident card.
-  // Looks up the incident by ID from S.incidents, then renders a
-  // comprehensive detail overlay using the shared openDetailModal()
-  // infrastructure (implemented in main.js).
+  // Renders a complete investigation view: SVG attack chain, detections,
+  // timeline, MITRE mapping, cross-host correlation, raw log evidence.
   function _openIncidentDetail(incidentId) {
     if (!incidentId) return;
     const inc = (S.incidents || []).find(x =>
@@ -16239,22 +16769,26 @@ return {
                    ? inc.confidence
                    : { score: typeof inc.confidence === 'number' ? inc.confidence : 30,
                        level: inc.level || 'Possible', reasons: [] };
-    const title  = inc.title || inc.behavior?.behaviorTitle || 'Correlated Attack Chain';
-    const mitreTactics   = (inc.mitreTactics   || []).slice(0, 8);
-    const mitreMappings  = (inc.mitreMappings  || (inc.techniques||[]).map(t=>({technique:t,tactic:'',role:'secondary'}))).slice(0, 12);
-    const killChain      = inc.killChainStages || inc.phaseChain || [];
-    const allHosts       = inc.allHosts || (inc.host ? [inc.host] : []);
-    const allUsers       = inc.allUsers || (inc.user ? [inc.user] : []);
-    const linkedDets     = (inc._detections || []).slice(0, 20);
-    const timelineItems  = (inc._timeline || []).slice(0, 30);
-    const narrative      = inc.narrative || inc.behavior?.description || '';
+    const title        = inc.title || inc.behavior?.behaviorTitle || 'Correlated Attack Chain';
+    const mitreTactics = (inc.mitreTactics   || []).slice(0, 8);
+    const mitreMappings= (inc.mitreMappings  || (inc.techniques||[]).map(t=>({technique:t,tactic:'',role:'secondary'}))).slice(0, 12);
+    // FIX v23: killChainStages is now always present in incidentSummaries
+    const killChain    = inc.killChainStages || inc.phaseChain || inc.phaseTimeline || [];
+    const allHosts     = inc.allHosts || (inc.host ? [inc.host] : []);
+    const allUsers     = inc.allUsers || (inc.user ? [inc.user] : []);
+    // FIX v23: _detections and _timeline are now enriched into incidentSummaries
+    const linkedDets   = (inc._detections || []).slice(0, 30);
+    const timelineItems= (inc._timeline   || []).slice(0, 50);
+    const narrative    = inc.narrative || inc.behavior?.description || '';
 
+    // ── MITRE tactic pills ──────────────────────────────────────────
     const tacticPills = mitreTactics.map(t =>
       `<span style="display:inline-block;padding:2px 9px;background:rgba(96,165,250,0.1);color:#60a5fa;
         border:1px solid rgba(96,165,250,0.2);border-radius:10px;font-size:10px;margin:2px;">
         ${t.replace(/-/g,' ')}</span>`
     ).join('');
 
+    // ── MITRE technique matrix ──────────────────────────────────────
     const techniqueRows = mitreMappings.map(m =>
       `<tr style="border-bottom:1px solid #21262d;">
         <td style="padding:5px 8px;font-size:11px;font-family:'JetBrains Mono',monospace;color:#60a5fa;
@@ -16267,42 +16801,108 @@ return {
       </tr>`
     ).join('');
 
-    const chainSteps = killChain.map((st, si) => {
-      const stColor = cs.color;
-      return `<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;
-        border-bottom:1px solid #21262d;">
-        <div style="min-width:20px;height:20px;border-radius:50%;background:${stColor}22;
-          border:1px solid ${stColor};display:flex;align-items:center;justify-content:center;
-          font-size:9px;font-weight:700;color:${stColor};flex-shrink:0;">${si+1}</div>
-        <div style="flex:1;">
-          <div style="font-size:11px;font-weight:600;color:#e6edf3;">${st.phase||st.tactic||'Stage '+(si+1)}</div>
-          <div style="font-size:10px;color:#60a5fa;font-family:'JetBrains Mono',monospace;">${st.technique||st.ruleId||''}</div>
-          <div style="font-size:10px;color:#8b949e;margin-top:2px;">${st.description||st.evidence||''}</div>
+    // ── FIX v23: Full SVG attack chain flow (same quality as incident card) ──
+    // Build vizStages in strict chronological order
+    const vizStages = killChain
+      .map((p, si) => ({
+        ...p,
+        _riskScore : p.riskScore || p._riskScore || 0,
+        tactic     : p.phaseTactic || p.tacticRole || p.tactic || '',
+        tacticRole : p.phaseTactic || p.tacticRole || p.tactic || '',
+        inferred   : !!(p.inferred || p.inferredFrom),
+        confidence : p.confidence || (p.riskScore ? Math.min(p.riskScore, 100) : 30),
+        _ts        : _safeTs(p.first_seen || p.timestamp),
+      }))
+      .sort((a, b) => {
+        if (a._ts !== b._ts) return a._ts - b._ts;
+        const PHASE_ORDER = [
+          'reconnaissance','resource-development','initial access','execution',
+          'persistence','privilege escalation','defense evasion','credential access',
+          'discovery','lateral movement','collection','command and control',
+          'exfiltration','impact'
+        ];
+        const ai = PHASE_ORDER.findIndex(p => (a.tactic||'').toLowerCase().includes(p));
+        const bi = PHASE_ORDER.findIndex(p => (b.tactic||'').toLowerCase().includes(p));
+        if (ai !== -1 && bi !== -1) return ai - bi;
+        return (b._riskScore || 0) - (a._riskScore || 0);
+      });
+
+    const modalIncId       = 'MODAL-' + (inc.incidentId || incidentId).replace(/[^a-zA-Z0-9]/g, '-');
+    const chainFlowSVG     = vizStages.length > 0 ? _buildChainFlowSVG(vizStages, modalIncId) : '';
+    const riskEvolutionBar = vizStages.length >= 2 ? _buildRiskEvolutionBar(vizStages, modalIncId) : '';
+    const stageDetails     = vizStages.map((s, si) => _buildStageDetail(s, si, modalIncId)).join('');
+    const observedCount    = vizStages.filter(s => !s.inferred).length;
+    const inferredCount    = vizStages.filter(s =>  s.inferred).length;
+
+    // ── Detections panel rows ───────────────────────────────────────
+    const detRows = linkedDets.length ? linkedDets.map((d, di) => {
+      const ds = d.severity || d.aggregated_severity || 'medium';
+      const dc = _sev(ds);
+      const dHost = d.host || d.computer || '';
+      const dUser = d.user || '';
+      const dTs   = d.first_seen ? new Date(d.first_seen).toLocaleTimeString() : '';
+      const dm    = d.mitre?.technique || d.technique || '';
+      const dmt   = d.mitre?.tactic   || d.category  || '';
+      return `<div style="padding:10px 14px;border-bottom:1px solid #1c2128;display:flex;gap:10px;align-items:flex-start;
+        border-left:3px solid ${dc.color}44;background:${di%2?'rgba(8,14,24,0.4)':'transparent'};">
+        <div style="width:8px;height:8px;border-radius:50%;background:${dc.color};flex-shrink:0;margin-top:4px;"></div>
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px;">
+            ${_sevBadge(ds)}
+            <span style="font-size:11.5px;font-weight:700;color:#e6edf3;">${d.detection_name||d.ruleName||d.title||'Detection'}</span>
+            ${d.ruleId?`<span style="font-size:9px;color:#4b5563;font-family:monospace;">${d.ruleId}</span>`:''}
+          </div>
+          <div style="font-size:10px;color:#6b7280;display:flex;gap:8px;flex-wrap:wrap;">
+            ${dm?`<span style="color:#a78bfa;font-family:monospace;font-weight:700;">${dm}</span>`:''}
+            ${dmt?`<span style="color:#6d28d9;">${dmt.replace(/-/g,' ')}</span>`:''}
+            ${dTs?`<span>⏱ ${dTs}</span>`:''}
+            ${dHost?`<span>🖥 ${dHost}</span>`:''}
+            ${dUser?`<span>👤 ${dUser}</span>`:''}
+          </div>
+          ${d.narrative?`<div style="font-size:10.5px;color:#8b949e;margin-top:3px;line-height:1.4;">${_safeNarrative(d.narrative).slice(0,140)}${_safeNarrative(d.narrative).length>140?'…':''}</div>`:''}
         </div>
-        <div style="font-size:9px;color:#6b7280;white-space:nowrap;">${st.timestamp?new Date(st.timestamp).toLocaleTimeString():''}</div>
+        <span style="font-size:13px;font-weight:800;color:${_riskColor(d.riskScore||0)};font-family:monospace;flex-shrink:0;">${d.riskScore||'?'}</span>
       </div>`;
-    }).join('');
+    }).join('') : '';
 
-    const detRows = linkedDets.map(d =>
-      `<div style="padding:6px 10px;border-bottom:1px solid #1c2128;display:flex;gap:8px;align-items:center;">
-        <span style="width:7px;height:7px;border-radius:50%;background:${_sev(d.severity||'medium').color};flex-shrink:0;"></span>
-        <span style="flex:1;font-size:11px;color:#c9d1d9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${d.detection_name||d.ruleName||d.title||'Detection'}</span>
-        <span style="font-size:9px;color:#6b7280;white-space:nowrap;">${d.host||d.computer||''}</span>
-        <span style="font-size:9px;padding:1px 6px;background:${_sev(d.severity||'medium').color}22;color:${_sev(d.severity||'medium').color};border-radius:4px;">${(d.severity||'medium').toUpperCase()}</span>
-      </div>`
-    ).join('');
+    // ── Timeline panel rows ─────────────────────────────────────────
+    const tlRows = timelineItems.length ? timelineItems
+      .sort((a,b) => _safeTs(a.timestamp||a.ts) - _safeTs(b.timestamp||b.ts))
+      .map((t, ti) => {
+        const tHost = t.computer || t.host || t.entity || '';
+        const tTs   = t.timestamp ? new Date(t.timestamp).toLocaleTimeString() : '';
+        const tType = t.type || '';
+        const tIcon = t.icon || (tType==='detection'?'🚨':tType==='process'?'⚡':tType==='network'?'🌐':'📋');
+        return `<div style="display:flex;gap:10px;align-items:flex-start;padding:7px 14px;
+          border-bottom:1px solid #1c2128;${ti%2?'background:rgba(8,14,24,0.3)':''}">
+          <span style="font-size:9px;color:#4b5563;white-space:nowrap;font-family:monospace;min-width:60px;">${tTs}</span>
+          <span style="font-size:12px;flex-shrink:0;">${tIcon}</span>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:11px;color:#c9d1d9;">${t.description||t.detection_name||t.label||'Event'}</div>
+            ${t.commandLine?`<div style="font-size:9.5px;font-family:monospace;color:#60a5fa;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${t.commandLine.slice(0,120)}</div>`:''}
+          </div>
+          ${tHost?`<span style="font-size:9px;color:#6b7280;white-space:nowrap;flex-shrink:0;">🖥 ${tHost}</span>`:''}
+        </div>`;
+      }).join('') : '';
 
-    const tlRows = timelineItems.map(t =>
-      `<div style="padding:5px 10px;border-bottom:1px solid #1c2128;display:flex;gap:8px;align-items:center;">
-        <span style="font-size:9px;color:#6b7280;white-space:nowrap;font-family:'JetBrains Mono',monospace;">${t.timestamp?new Date(t.timestamp).toLocaleTimeString():''}</span>
-        <span style="font-size:10px;color:#c9d1d9;flex:1;">${t.description||t.detection_name||'Event'}</span>
-        <span style="font-size:9px;color:#8b949e;">${t.host||t.computer||''}</span>
-      </div>`
-    ).join('');
+    // ── Cross-host correlation graph (entity matrix) ────────────────
+    const crossHostHtml = inc.crossHost && allHosts.length > 1 ? `
+<div style="padding:14px;background:rgba(167,139,250,0.04);border:1px solid rgba(167,139,250,0.15);border-radius:8px;margin-bottom:12px;">
+  <div style="font-size:10px;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">🔀 Cross-Host Correlation</div>
+  <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+    ${allHosts.map((h,hi) => `
+      <div style="padding:6px 12px;background:rgba(167,139,250,0.1);border:1px solid rgba(167,139,250,0.25);border-radius:8px;font-size:11px;color:#e6edf3;">
+        🖥 <strong>${h}</strong>
+      </div>
+      ${hi < allHosts.length-1 ? '<span style="color:#a78bfa;font-size:16px;font-weight:700;">→</span>' : ''}
+    `).join('')}
+  </div>
+  ${(inc.allSrcIps||[]).length ? `<div style="margin-top:6px;font-size:10px;color:#6b7280;">Attacker IPs: ${(inc.allSrcIps||[]).join(', ')}</div>` : ''}
+</div>` : '';
 
     const html = `
 <div style="font-family:'Inter',sans-serif;color:#c9d1d9;">
-  <!-- Header -->
+  <!-- ── Header ──────────────────────────────────────────────────── -->
   <div style="padding:20px 24px 16px;border-bottom:1px solid #21262d;background:rgba(8,14,24,0.9);">
     <div style="display:flex;align-items:flex-start;gap:14px;">
       <div style="width:42px;height:42px;border-radius:10px;background:${cs.color}22;border:1px solid ${cs.color};
@@ -16315,14 +16915,17 @@ return {
           <span style="font-size:10px;padding:1px 8px;background:${cs.color}22;color:${cs.color};border-radius:5px;font-weight:700;">${sev.toUpperCase()}</span>
           <span style="font-size:10px;padding:1px 8px;background:rgba(96,165,250,0.1);color:#60a5fa;border-radius:5px;">${conf.level}</span>
           <span style="font-size:10px;padding:1px 8px;background:rgba(52,211,153,0.1);color:#34d399;border-radius:5px;">Risk: ${inc.riskScore||'—'}</span>
+          ${inc.crossHost ? `<span style="font-size:10px;padding:1px 8px;background:rgba(167,139,250,0.12);color:#a78bfa;border-radius:5px;">🔀 Cross-Host (${allHosts.length})</span>` : ''}
+          ${inc.verdict==='TRUE_POSITIVE' ? `<span style="font-size:10px;padding:1px 8px;background:rgba(239,68,68,0.12);color:#ef4444;border-radius:5px;">✓ TRUE POSITIVE</span>` : ''}
         </div>
         <div style="font-size:15px;font-weight:700;color:#e6edf3;margin-bottom:6px;">${title}</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:10px;color:#6b7280;">
           ${allHosts.map(h=>`<span>🖥 ${h}</span>`).join('')}
           ${allUsers.map(u=>`<span>👤 ${u}</span>`).join('')}
+          ${(inc.allSrcIps||[]).slice(0,3).map(ip=>`<span>🌐 ${ip}</span>`).join('')}
         </div>
       </div>
-      <div style="display:flex;gap:6px;flex-shrink:0;">
+      <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;">
         <button class="rk-entity-btn" style="padding:5px 14px;font-size:11px;font-weight:700;
           background:rgba(59,130,246,0.12);color:#60a5fa;border-color:rgba(59,130,246,0.3);"
           onclick="(function(){
@@ -16341,57 +16944,96 @@ return {
     ${narrative ? `<div style="margin-top:10px;padding:10px 14px;background:rgba(96,165,250,0.04);border:1px solid rgba(96,165,250,0.1);border-radius:8px;font-size:12px;line-height:1.6;">${narrative}</div>` : ''}
   </div>
 
-  <!-- Tab bar -->
-  <div style="display:flex;border-bottom:1px solid #21262d;background:rgba(8,14,24,0.6);">
+  <!-- ── Tab bar ─────────────────────────────────────────────────── -->
+  <div style="display:flex;border-bottom:1px solid #21262d;background:rgba(8,14,24,0.6);overflow-x:auto;">
     ${['overview','attack-chain','detections','timeline','mitre'].map((tab,ti)=>`
     <button class="modal-tab-btn${ti===0?' active':''}" data-modal-tab="${tab}"
       onclick="switchModalTab(this,'${tab}')"
       style="padding:10px 18px;font-size:11px;font-weight:600;border:none;background:none;
         color:${ti===0?'#60a5fa':'#6b7280'};cursor:pointer;border-bottom:2px solid ${ti===0?'#60a5fa':'transparent'};
-        transition:all 0.2s;">
-      ${{overview:'📊 Overview','attack-chain':'⛓ Attack Chain',detections:'🔍 Detections',timeline:'📅 Timeline',mitre:'🛡 MITRE'}[tab]}
+        transition:all 0.2s;white-space:nowrap;">
+      ${{overview:'📊 Overview','attack-chain':'⛓ Attack Chain',
+         detections:`🔍 Detections${linkedDets.length?' ('+linkedDets.length+')':''}`,
+         timeline:`📅 Timeline${timelineItems.length?' ('+timelineItems.length+')':''}`,
+         mitre:'🛡 MITRE'}[tab]}
     </button>`).join('')}
   </div>
 
-  <!-- Tab panels -->
-  <div style="max-height:480px;overflow-y:auto;">
+  <!-- ── Tab panels ──────────────────────────────────────────────── -->
+  <div style="max-height:520px;overflow-y:auto;">
 
     <!-- Overview panel -->
     <div class="modal-tab-panel" data-modal-panel="overview" style="padding:20px 24px;">
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px;">
+      ${crossHostHtml}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:16px;">
         ${[
-          {label:'Risk Score',   val: inc.riskScore||'—',    color:'#34d399'},
-          {label:'Confidence',   val: conf.score+'%',         color:'#60a5fa'},
-          {label:'Detections',   val: inc.detectionCount||(linkedDets.length||'—'), color:'#f97316'},
-          {label:'MITRE Tactics',val: mitreTactics.length||'—', color:'#a78bfa'},
-          {label:'Hosts',        val: allHosts.length||'—',   color:'#34d399'},
-          {label:'Chain Stages', val: killChain.length||'—',  color:'#00d4ff'},
+          {label:'Risk Score',    val: inc.riskScore||'—',                        color:'#34d399'},
+          {label:'Confidence',    val: conf.score+'%',                              color:'#60a5fa'},
+          {label:'Detections',    val: linkedDets.length || inc.detectionCount||0, color:'#f97316'},
+          {label:'MITRE Tactics', val: mitreTactics.length||'—',                  color:'#a78bfa'},
+          {label:'Chain Stages',  val: vizStages.length||'—',                     color:'#00d4ff'},
+          {label:'Hosts',         val: allHosts.length||'—',                      color:'#34d399'},
         ].map(s=>`
         <div style="padding:12px;background:rgba(8,14,24,0.6);border:1px solid #21262d;border-radius:8px;text-align:center;">
           <div style="font-size:22px;font-weight:900;color:${s.color};">${s.val}</div>
           <div style="font-size:9px;color:#4b5563;text-transform:uppercase;letter-spacing:.5px;margin-top:3px;">${s.label}</div>
         </div>`).join('')}
       </div>
-      ${inc.narrative||inc.behavior?.description ? `
-      <div style="padding:14px;background:rgba(96,165,250,0.04);border:1px solid rgba(96,165,250,0.1);border-radius:8px;">
+      ${narrative ? `
+      <div style="padding:14px;background:rgba(96,165,250,0.04);border:1px solid rgba(96,165,250,0.1);border-radius:8px;margin-bottom:12px;">
         <div style="font-size:10px;font-weight:700;color:#4b5563;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">🧠 Analyst Narrative</div>
         <div style="font-size:12px;line-height:1.7;color:#c9d1d9;">${narrative}</div>
       </div>` : ''}
+      ${inc.rootCauseSummary && inc.rootCauseSummary !== narrative ? `
+      <div style="padding:12px 14px;background:rgba(52,211,153,0.04);border:1px solid rgba(52,211,153,0.12);border-radius:8px;">
+        <div style="font-size:10px;font-weight:700;color:#34d399;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">🎯 Root Cause Summary</div>
+        <div style="font-size:11.5px;color:#c9d1d9;line-height:1.6;">${inc.rootCauseSummary}</div>
+      </div>` : ''}
     </div>
 
-    <!-- Attack Chain panel -->
-    <div class="modal-tab-panel" data-modal-panel="attack-chain" style="display:none;padding:16px 20px;">
-      ${chainSteps || `<div style="color:#6b7280;font-size:12px;padding:20px;text-align:center;">No attack chain stages available for this incident.</div>`}
+    <!-- Attack Chain panel — full SVG flow, same as incident card -->
+    <div class="modal-tab-panel" data-modal-panel="attack-chain" style="display:none;">
+      ${vizStages.length > 0 ? `
+      <!-- Chain header -->
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px 8px;
+           background:rgba(8,14,24,0.55);border-bottom:1px solid rgba(0,212,255,0.08);">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="font-size:12px;font-weight:700;color:#e6edf3;">⛓ Full Attack Chain — ${title}</span>
+          <span style="font-size:9px;padding:2px 8px;background:rgba(0,212,255,0.07);color:#00d4ff;
+            border-radius:10px;border:1px solid rgba(0,212,255,0.15);font-family:monospace;">
+            CHRONOLOGICAL ➔
+          </span>
+          <span style="font-size:9.5px;color:#4b5563;">
+            ${observedCount} observed${inferredCount>0?' · '+inferredCount+' inferred':''} · ${vizStages.length} stage${vizStages.length!==1?'s':''}
+          </span>
+        </div>
+      </div>
+      <!-- SVG chain flow (scrollable) -->
+      <div style="overflow-x:auto;padding:16px 16px 8px;">${chainFlowSVG}</div>
+      ${riskEvolutionBar}
+      <!-- Stage detail panels (click node to expand) -->
+      <div id="rk-stage-details-${modalIncId}" style="padding:8px 16px 12px;">${stageDetails}</div>
+      ` : `<div style="color:#6b7280;font-size:12px;padding:40px;text-align:center;">
+        <div style="font-size:28px;margin-bottom:10px;">⛓</div>
+        No attack chain stages available for this incident.
+      </div>`}
     </div>
 
-    <!-- Detections panel -->
+    <!-- Detections panel — full enriched detection cards -->
     <div class="modal-tab-panel" data-modal-panel="detections" style="display:none;">
-      ${detRows || `<div style="color:#6b7280;font-size:12px;padding:20px;text-align:center;">No linked detections stored (case created from summary only).</div>`}
+      ${detRows || `<div style="color:#6b7280;font-size:12px;padding:40px;text-align:center;">
+        <div style="font-size:28px;margin-bottom:10px;">🔍</div>
+        <div>No detections linked to this incident.</div>
+        <div style="font-size:11px;margin-top:6px;color:#4b5563;">Re-run analysis or check the Detections tab for individual alerts.</div>
+      </div>`}
     </div>
 
-    <!-- Timeline panel -->
+    <!-- Timeline panel — full chronological event log -->
     <div class="modal-tab-panel" data-modal-panel="timeline" style="display:none;">
-      ${tlRows || `<div style="color:#6b7280;font-size:12px;padding:20px;text-align:center;">No timeline events available for this incident.</div>`}
+      ${tlRows || `<div style="color:#6b7280;font-size:12px;padding:40px;text-align:center;">
+        <div style="font-size:28px;margin-bottom:10px;">📅</div>
+        No timeline events linked to this incident.
+      </div>`}
     </div>
 
     <!-- MITRE panel -->
