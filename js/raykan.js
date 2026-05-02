@@ -13682,6 +13682,50 @@ return {
     return s.length > n ? s.slice(0, n) + '…' : s;
   }
 
+  // ── UI-scope copies of helpers defined inside CSDE/ZDFA closures ─
+  // These four are called by _renderIncidentCard, _openIncidentDetail,
+  // _renderTimelineList, _buildChainFlowSVG, etc. which all live in the
+  // outer RAYKAN_UI IIFE and cannot reach the inner closure definitions.
+  function _safeTs(v) {
+    if (!v) return 0;
+    if (typeof v === 'number') return isFinite(v) ? v : 0;
+    try { const ms = new Date(v).getTime(); return isFinite(ms) ? ms : 0; }
+    catch (_) { return 0; }
+  }
+
+  function _chronoSort(arr, tsField) {
+    const f = tsField || 'timestamp';
+    return [...arr].sort((a, b) => {
+      const ta = _safeTs(a[f] || a.first_seen || a.ts);
+      const tb = _safeTs(b[f] || b.first_seen || b.ts);
+      if (ta === 0 && tb === 0) return 0;
+      if (ta === 0) return 1;   // no-ts entries go to the end
+      if (tb === 0) return -1;
+      return ta - tb;
+    });
+  }
+
+  function _safeNarrative(val) {
+    if (typeof val === 'function') return '';
+    if (typeof val === 'string')   return val;
+    if (val == null)               return '';
+    try { return JSON.stringify(val); } catch (_) { return String(val); }
+  }
+
+  // _formatDurationUI — human-readable duration string (called by
+  // _renderIncidentCard for inc.duration_ms / phase pt.duration_ms).
+  function _formatDurationUI(ms) {
+    if (!ms || ms <= 0) return '—';
+    if (ms < 1000)      return `${ms}ms`;
+    if (ms < 60000)     return `${Math.round(ms / 1000)}s`;
+    const m = Math.floor(ms / 60000);
+    const s = Math.round((ms % 60000) / 1000);
+    if (m < 60) return s > 0 ? `${m}m ${s}s` : `${m}m`;
+    const h  = Math.floor(m / 60);
+    const rm = m % 60;
+    return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
+  }
+
   // ════════════════════════════════════════════════════════════════
   //  TAB ROUTING
   // ════════════════════════════════════════════════════════════════
