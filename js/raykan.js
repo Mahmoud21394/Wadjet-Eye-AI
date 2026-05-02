@@ -1742,6 +1742,21 @@
         keywords: ['mssql','mysql','oracle','postgresql','dbaudit','sql server'],
         description: 'Database audit / query log',
       },
+
+      // ── Generic JSON / Custom Schema (v22) ───────────────────────
+      // Catch-all schema for custom JSON telemetry that carries an
+      // explicit event_type but no Windows EventID.
+      // Synthetic EventIDs 60001-60010 are assigned in _normalizeEvent.
+      // All such events PASS schema validation unconditionally.
+      generic_json: {
+        os: 'any',
+        eventIdRanges: [[60001, 60099]],
+        requiredFields: [],
+        forbiddenFields: [],
+        keywords: ['json','custom','generic'],
+        description: 'Custom JSON telemetry with explicit event_type field (no Windows EventID)',
+      },
+
     };
 
     // ── Schema Validation Gate ────────────────────────────────────
@@ -1831,7 +1846,12 @@
           }
         } else if (schema.requiredFields && schema.requiredFields.some(g => g.includes('EventID'))) {
           // No EventID at all for a schema that requires one.
-          // This IS unexpected — a Windows rule ran on an event with no EventID.
+          // FIX v22: If the event has an explicit event_type (custom JSON schema),
+          // this is a legitimate cross-channel skip — NOT a misconfiguration.
+          // Only flag SKIP_UNEXPECTED when it's a Windows-looking event (has Computer,
+          // TimeGenerated, etc.) but inexplicably lacks EventID.
+          const isCustomJson = !!(event.event_type || event._isCustomJson);
+          if (isCustomJson) return 'SKIP_EXPECTED';
           return 'SKIP_UNEXPECTED';
         }
       }
@@ -1839,13 +1859,26 @@
       // ── Required-field gate ─────────────────────────────────────
       // Each sub-array is an OR group: at least ONE field in the group must exist.
       if (schema.requiredFields) {
+        // FIX v22: Custom JSON events (event_type present) and hard-schema channels
+        // legitimately lack OS-specific required fields (e.g. Linux rules require
+        // 'message'/'msg'/'raw'; Windows rules require 'EventID'). These are valid
+        // cross-channel skips — NOT misconfigurations — so return SKIP_EXPECTED.
+        // Only return SKIP_UNEXPECTED when a Windows-native event (has Computer +
+        // TimeGenerated) inexplicably lacks fields that Windows rules declare required.
+        const isCustomJsonEvent = !!(event.event_type || event._isCustomJson);
+        const isHardSchemaChannel = ['linux_syslog','linux_auditd','firewall',
+          'web','database','sysmon','windows_powershell'].includes(cat);
         for (const group of schema.requiredFields) {
           const satisfied = group.some(f => {
             const v = event[f];
             return v !== undefined && v !== null && v !== '';
           });
-          // Missing required field → rule misconfiguration or truly wrong log source.
-          if (!satisfied) return 'SKIP_UNEXPECTED';
+          if (!satisfied) {
+            // Cross-schema miss: custom JSON or hard-schema-channel miss is expected.
+            if (isCustomJsonEvent || isHardSchemaChannel) return 'SKIP_EXPECTED';
+            // Windows-event missing a Windows-required field is a real misconfiguration.
+            return 'SKIP_UNEXPECTED';
+          }
         }
       }
 
@@ -2965,6 +2998,11 @@
           })(),
         };
         incObj.narrative = _generateForensicNarrative(incObj, behavior, confidence);
+        // FIX v22: alias phaseTimeline → killChainStages on the raw incident object.
+        // The UI reads inc.killChainStages || inc.phaseTimeline; the incident summary
+        // builder (confidenceSummary) separately constructs its own killChainStages from
+        // inc.phaseTimeline — so this alias only serves UI code that reads raw incidents.
+        incObj.killChainStages = incObj.phaseTimeline || [];
 
         // ── P1 Auto-Escalation ────────────────────────────────────────────
         // FIX v7: Force critical severity and 100 risk for log-tampering incidents.
@@ -3103,14 +3141,61 @@
     function _normalizeEvent(raw) {
       const e = Object.assign({}, raw);
       e.EventID     = parseInt(e.EventID ?? e.eventId ?? e.event_id, 10) || e.EventID;
-      e.commandLine = e.commandLine || e.CommandLine || e.cmdLine || e.ProcessCmdLine || '';
-      e.process     = e.process     || e.NewProcessName || e.ProcessName || e.Image || e.exe || '';
-      e.parentProcess = e.parentProcess || e.ParentProcessName || e.ParentProcess || e.ParentImage || '';
-      e.user        = e.user        || e.User || e.SubjectUserName || e.TargetUserName || e.username || '';
-      e.computer    = e.computer    || e.Computer || e.ComputerName || e.hostname || e.host || '';
-      e.srcIp       = e.srcIp       || e.SourceIP || e.SourceIPAddress || e.src_ip || e.IpAddress || '';
-      e.destIp      = e.destIp      || e.DestinationIp || e.DestinationAddress || e.dest_ip || '';
-      e.destPort    = e.destPort    || e.DestinationPort || e.dest_port || '';
+      // ── v22: Custom JSON schema field aliases ──────────────────────
+      // Map snake_case / custom fields to the normalized camelCase names
+      // the detection engine expects.
+      e.commandLine   = e.commandLine   || e.CommandLine   || e.cmdLine       || e.ProcessCmdLine ||
+                        e.command_line  || e.cmd           || '';
+      e.process       = e.process       || e.NewProcessName || e.ProcessName  || e.Image         ||
+                        e.exe           || '';
+      e.parentProcess = e.parentProcess || e.ParentProcessName || e.ParentProcess || e.ParentImage ||
+                        e.parent_process || '';
+      e.user          = e.user          || e.User          || e.SubjectUserName || e.TargetUserName ||
+                        e.username      || '';
+      e.computer      = e.computer      || e.Computer      || e.ComputerName  || e.hostname      ||
+                        e.host          || e.source_host   || '';
+      e.srcIp         = e.srcIp         || e.SourceIP      || e.SourceIPAddress || e.src_ip      ||
+                        e.IpAddress     || e.source_ip     || e.clientIP      || '';
+      e.destIp        = e.destIp        || e.DestinationIp || e.DestinationAddress || e.dest_ip  ||
+                        e.dst_ip        || '';
+      e.destPort      = e.destPort      || e.DestinationPort || e.dest_port   || e.port          || '';
+      // ── v22: Additional custom fields ─────────────────────────────
+      e.destHost      = e.destHost      || e.dest_host     || e.DestinationHost || '';
+      e.sourceHost    = e.sourceHost    || e.source_host   || e.SourceHost    || '';
+      e.registryPath  = e.registryPath  || e.TargetObject  || e.registry_path || e.RegistryPath  || '';
+      e.registryValue = e.registryValue || e.registry_value || e.RegistryValue || '';
+      e.domain        = e.domain        || e.Domain        || e.dns_domain    || '';
+      e.bytesSent     = parseInt(e.bytesSent || e.bytes_sent || e.BytesSent || e.bytes_out || 0, 10);
+      e.authType      = e.authType      || e.auth_type     || e.AuthType      || e.AuthenticationPackageName || '';
+      e.fileName      = e.fileName      || e.file_name     || e.FileName      || e.file          || '';
+      e.protocol      = e.protocol      || e.Protocol      || e.proto         || '';
+      e.status        = e.status        || e.Status        || e.logon_status  || '';
+      e.logonType     = parseInt(e.LogonType || e.logon_type || e.logonType || 0, 10) || '';
+      // ── v22: MITRE passthrough — preserve raw technique/tactic fields ──
+      // When events carry explicit MITRE annotations, preserve them so
+      // detections and incident builders can use them directly.
+      e._mitreTechnique = e._mitreTechnique || e.mitre_technique || e.technique    || '';
+      e._mitreTactic    = e._mitreTactic    || e.mitre_tactic    || e.tactic       || '';
+      // ── v22: Synthetic EventID for custom event_type-based events ──
+      // Events with a recognised custom event_type but no EventID are assigned
+      // a synthetic ID so existing schema validators do NOT gate them out.
+      // Synthetic IDs start at 60000 (well outside all real Windows/Sysmon ranges).
+      if (isNaN(e.EventID) && e.event_type) {
+        const syntheticMap = {
+          'process_creation'      : 60001,
+          'email_attachment_opened': 60002,
+          'registry_modification' : 60003,
+          'network_connection'    : 60004,
+          'smb_authentication'    : 60005,
+          'data_exfiltration'     : 60006,
+          'authentication'        : 60007,
+          'file_created'          : 60008,
+          'dns_query'             : 60009,
+          'scheduled_task'        : 60010,
+        };
+        const sid = syntheticMap[e.event_type];
+        if (sid) e.EventID = sid;
+      }
       // ── Timestamp: enforce original log time as source of truth ──
       // NEVER fall back to system/processing time — null means unknown
       e.timestamp   = e.timestamp   || e.TimeGenerated || e.TimeCreated
@@ -4317,6 +4402,205 @@
           `Command: "${(e.commandLine||'?').slice(0,200)}". Classic web-shell execution pattern (T1190).`,
       },
 
+
+      // ══════════════════════════════════════════════════════════════
+      //  v22 CUSTOM JSON SCHEMA DETECTION RULES
+      //  These rules fire on events with synthetic EventIDs (60001-60099)
+      //  assigned by _normalizeEvent for custom JSON telemetry.
+      //  They match on event_type + domain-specific fields.
+      // ══════════════════════════════════════════════════════════════
+
+      // ── Rule CJ-001: Malicious Document Spawning Process ────────
+      {
+        id: 'CSDE-CJ-001', title: 'Malicious Document Execution (Office → Shell)',
+        os: 'any', severity: 'high', category: 'initial-access',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1566.001', name: 'Phishing: Spearphishing Attachment', tactic: 'initial-access' },
+        tags: ['attack.initial_access', 'attack.t1566.001', 'phishing', 'macro'],
+        mitre_confidence: 'high',
+        riskScore: 88,
+        match: e => {
+          const eid = parseInt(e.EventID, 10);
+          const proc = (e.process || '').toLowerCase();
+          const parent = (e.parentProcess || '').toLowerCase();
+          const file = (e.fileName || e.file_name || e.file || '').toLowerCase();
+          const eType = (e.event_type || '').toLowerCase();
+          // Custom JSON: email_attachment_opened with office process
+          if (eType === 'email_attachment_opened') return true;
+          // Office document spawning shell (EventID-based or custom)
+          const officeApps = ['winword', 'excel', 'powerpnt', 'outlook', 'onenote', 'visio'];
+          const isOfficeParent = officeApps.some(o => parent.includes(o));
+          if (isOfficeParent) return true;
+          // Macro document extensions
+          const macroExts = ['.docm', '.xlsm', '.pptm', '.doc', '.xls', '.xlt', '.xlam'];
+          if (macroExts.some(x => file.endsWith(x))) return true;
+          return false;
+        },
+        narrative: e => `Suspicious document execution on ${e.computer||'unknown'}: ` +
+          `${e.process||e.fileName||'unknown file'} launched from ${e.parentProcess||'unknown parent'}. ` +
+          `Possible phishing / malicious macro (T1566.001).`,
+      },
+
+      // ── Rule CJ-002: PowerShell Encoded Command (Custom Schema) ──
+      {
+        id: 'CSDE-CJ-002', title: 'PowerShell Encoded Command (Custom JSON Schema)',
+        os: 'any', severity: 'high', category: 'execution',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1059.001', name: 'Command and Scripting Interpreter: PowerShell', tactic: 'execution' },
+        tags: ['attack.execution', 'attack.t1059.001', 'attack.defense_evasion', 'encoded'],
+        mitre_confidence: 'high',
+        riskScore: 85,
+        match: e => {
+          const proc = (e.process || e.commandLine || '').toLowerCase();
+          const cmd  = (e.commandLine || e.command_line || '').toLowerCase();
+          const eType = (e.event_type || '').toLowerCase();
+          const isPSEvent = eType === 'process_creation' ||
+                            proc.includes('powershell') || proc.includes('pwsh');
+          if (!isPSEvent && !cmd.includes('powershell')) return false;
+          return cmd.includes('-enc') || cmd.includes('-encodedcommand') ||
+                 cmd.includes('-e ') || /powershell.*-[eE]\s+[A-Za-z0-9+/]{10}/.test(cmd) ||
+                 // Check commandLine field in parent-spawned PS
+                 (proc.includes('powershell') && (e.parentProcess||'').toLowerCase().match(/winword|excel|outlook|office/));
+        },
+        narrative: e => `PowerShell encoded command on ${e.computer||'unknown'} by ${e.user||'unknown'}: ` +
+          `"${(e.commandLine||e.command_line||'?').slice(0,200)}" — Base64 obfuscation detected (T1059.001).`,
+        variants: [
+          { id: 'CSDE-CJ-002-ENC',
+            match: e => { const c=(e.commandLine||e.command_line||'').toLowerCase(); return c.includes('-encodedcommand'); }},
+          { id: 'CSDE-CJ-002-SHORT',
+            match: e => { const c=(e.commandLine||e.command_line||'').toLowerCase(); return c.includes('-enc ') || c.includes('-e '); }},
+          { id: 'CSDE-CJ-002-OFFICE',
+            match: e => { const p=(e.parentProcess||e.parent_process||'').toLowerCase();
+              return p.includes('winword')||p.includes('excel')||p.includes('outlook'); }},
+        ],
+      },
+
+      // ── Rule CJ-003: Registry Run Key Persistence ────────────────
+      {
+        id: 'CSDE-CJ-003', title: 'Registry Run Key Persistence (Custom JSON Schema)',
+        os: 'any', severity: 'high', category: 'persistence',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1547.001', name: 'Boot or Logon Autostart Execution: Registry Run Keys', tactic: 'persistence' },
+        tags: ['attack.persistence', 'attack.t1547.001', 'registry'],
+        mitre_confidence: 'high',
+        riskScore: 82,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const regPath = (e.registryPath || e.registry_path || e.TargetObject || '').toLowerCase();
+          const regVal  = (e.registryValue || e.registry_value || '').toLowerCase();
+          const cmd     = (e.commandLine || e.command_line || '').toLowerCase();
+          if (eType === 'registry_modification') return true;
+          // Registry path contains run key
+          const runKeys = ['\\run\\', '\\runonce\\', '\\runonceex\\', 'currentversion\\run'];
+          if (runKeys.some(k => regPath.includes(k))) return true;
+          // CommandLine touches registry with persistence paths
+          if (cmd.includes('reg add') && runKeys.some(k => cmd.includes(k))) return true;
+          return false;
+        },
+        narrative: e => `Registry persistence on ${e.computer||'unknown'} by ${e.user||'unknown'}: ` +
+          `Key "${e.registryPath||e.registry_path||'?'}" set to ` +
+          `"${(e.registryValue||e.registry_value||'?').slice(0,100)}" — Run key autostart (T1547.001).`,
+      },
+
+      // ── Rule CJ-004: HTTPS C2 Beaconing ──────────────────────────
+      {
+        id: 'CSDE-CJ-004', title: 'HTTPS C2 Beaconing / Suspicious Outbound Connection',
+        os: 'any', severity: 'high', category: 'command-and-control',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1071.001', name: 'Application Layer Protocol: Web Protocols', tactic: 'command-and-control' },
+        tags: ['attack.command_and_control', 'attack.t1071.001', 'c2', 'beaconing'],
+        mitre_confidence: 'high',
+        riskScore: 85,
+        match: e => {
+          const eType   = (e.event_type || '').toLowerCase();
+          const proc    = (e.process || '').toLowerCase();
+          const proto   = (e.protocol || e.Protocol || '').toLowerCase();
+          const domain  = (e.domain || e.Domain || '').toLowerCase();
+          const dest    = (e.destIp || e.dest_ip || '').toLowerCase();
+          const port    = parseInt(e.destPort || e.dest_port || e.port || 0, 10);
+          // network_connection from suspicious process over HTTPS
+          if (eType === 'network_connection' || eType === 'data_exfiltration') {
+            // Scripting / loader processes making HTTPS connections
+            const suspProcs = ['powershell', 'pwsh', 'cmd.exe', 'wscript', 'cscript',
+                               'mshta', 'regsvr32', 'rundll32', 'msiexec', 'certutil'];
+            const isSuspProc = suspProcs.some(p => proc.includes(p));
+            const isHTTPS = proto.includes('https') || port === 443 || port === 8443;
+            if (isSuspProc && (isHTTPS || dest || domain)) return true;
+            // Suspicious domain indicators (DGA-like)
+            if (domain && domain.match(/[a-z0-9]{8,}-[a-z0-9]{4,}\.(com|net|xyz|top|pw|cc)/)) return true;
+            // Any HTTPS connection carrying large bytes_sent
+            if (isHTTPS && e.bytesSent > 0) return true;
+            // Non-browser process making HTTPS
+            if (isHTTPS && proc && !proc.match(/chrome|firefox|edge|iexplore|safari|opera/)) return true;
+          }
+          return false;
+        },
+        narrative: e => `Suspicious outbound HTTPS connection from ${e.computer||'unknown'} by ${e.user||'unknown'}: ` +
+          `Process "${e.process||'?'}" → ${e.destIp||e.dest_ip||e.domain||'?'}:${e.destPort||e.dest_port||443} ` +
+          `${e.bytesSent > 0 ? '('+Math.round(e.bytesSent/1024)+'KB sent)' : ''} — Possible C2 beaconing (T1071.001).`,
+      },
+
+      // ── Rule CJ-005: SMB Lateral Movement ───────────────────────
+      {
+        id: 'CSDE-CJ-005', title: 'Lateral Movement via SMB / NTLM Authentication',
+        os: 'any', severity: 'high', category: 'lateral-movement',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1021.002', name: 'Remote Services: SMB/Windows Admin Shares', tactic: 'lateral-movement' },
+        tags: ['attack.lateral_movement', 'attack.t1021.002', 'smb', 'ntlm'],
+        mitre_confidence: 'high',
+        riskScore: 80,
+        match: e => {
+          const eType    = (e.event_type || '').toLowerCase();
+          const authType = (e.authType || e.auth_type || e.AuthType || '').toLowerCase();
+          const srcHost  = (e.sourceHost || e.source_host || e.computer || '').toLowerCase();
+          const dstHost  = (e.destHost || e.dest_host || '').toLowerCase();
+          const proto    = (e.protocol || '').toLowerCase();
+          const port     = parseInt(e.destPort || e.dest_port || e.port || 0, 10);
+          // Custom JSON: explicit smb_authentication event
+          if (eType === 'smb_authentication') return true;
+          // NTLM auth to different host
+          if (authType.includes('ntlm') && srcHost && dstHost && srcHost !== dstHost) return true;
+          // SMB port with cross-host auth
+          if ((port === 445 || port === 139) && srcHost && dstHost) return true;
+          // Kerberos lateral movement
+          if (authType.includes('kerberos') && srcHost && dstHost && srcHost !== dstHost) return true;
+          return false;
+        },
+        narrative: e => `Lateral movement via SMB on ${e.computer||'unknown'}: ` +
+          `${e.sourceHost||e.source_host||e.computer||'?'} → ${e.destHost||e.dest_host||'?'} ` +
+          `using ${e.authType||e.auth_type||'NTLM'} by ${e.user||'unknown'} (T1021.002).`,
+      },
+
+      // ── Rule CJ-006: Large Data Exfiltration ────────────────────
+      {
+        id: 'CSDE-CJ-006', title: 'Large Data Exfiltration (> 100MB Outbound)',
+        os: 'any', severity: 'critical', category: 'exfiltration',
+        logCategory: 'generic_json',
+        mitre: { technique: 'T1041', name: 'Exfiltration Over C2 Channel', tactic: 'exfiltration' },
+        tags: ['attack.exfiltration', 'attack.t1041', 'data_theft'],
+        mitre_confidence: 'high',
+        riskScore: 95,
+        match: e => {
+          const eType = (e.event_type || '').toLowerCase();
+          const bytes = parseInt(e.bytesSent || e.bytes_sent || e.BytesSent || e.bytes_out ||
+                                 e.fwBytes || 0, 10);
+          if (eType === 'data_exfiltration') return true;
+          // Large outbound transfer (>100MB)
+          if (bytes > 100 * 1024 * 1024) return true;
+          // Archiving tool making network connection
+          const proc = (e.process || '').toLowerCase();
+          const archiveTools = ['rar.exe', 'winrar', '7z.exe', '7zip', 'zip.exe', 'tar'];
+          if (archiveTools.some(a => proc.includes(a)) && (e.destIp || e.dest_ip || e.destHost)) return true;
+          return false;
+        },
+        narrative: e => {
+          const mb = Math.round((parseInt(e.bytesSent||e.bytes_sent||0,10)) / (1024*1024));
+          return `Large data exfiltration from ${e.computer||'unknown'} by ${e.user||'unknown'}: ` +
+            `Process "${e.process||'?'}" sent ${mb > 0 ? mb+'MB' : 'unknown amount'} to ` +
+            `${e.destIp||e.dest_ip||e.destHost||'?'} — possible data theft (T1041).`;
+        },
+      },
+
     ];
 
     // ════════════════════════════════════════════════════════════════
@@ -4525,6 +4809,19 @@
         _seenEventIds  : seenIds,
         timestamp      : det.timestamp || det.first_seen,
         confidence_score: 30, // placeholder; recalculated at end
+        // FIX v22: preserve MITRE enrichment fields through deduplication.
+        // _newAggEntry previously dropped mitreTactics/mitreMappings/mitreDetail
+        // from raw detections — UI components rely on these fields being present
+        // on the final aggregated detection object returned by analyzeEvents().
+        mitreDetail    : det.mitreDetail || (det.mitre?.technique
+          ? { technique: det.mitre.technique, name: det.mitre.name||'',
+              tactic: det.mitre.tactic||'', confidence: 70, role: 'primary' }
+          : undefined),
+        mitreTactics   : det.mitreTactics  || (det.mitre?.tactic   ? [det.mitre.tactic]   : []),
+        mitreMappings  : det.mitreMappings || (det.mitre?.technique
+          ? [{ technique: det.mitre.technique, name: det.mitre.name||'',
+               tactic: det.mitre.tactic||'', role: 'primary', confidence: 70 }]
+          : []),
       };
     }
 
@@ -5029,6 +5326,17 @@
                 confidence: 70, // single-event detection baseline
                 role      : 'primary',
               },
+              // FIX v22: populate mitreTactics + mitreMappings on every detection
+              // so UI components (incident-detail, case-panel, detections tab) can
+              // read them without falling back to undefined.
+              mitreTactics : rule.mitre?.tactic  ? [rule.mitre.tactic]  : [],
+              mitreMappings: rule.mitre?.technique
+                ? [{ technique: rule.mitre.technique,
+                     name     : rule.mitre.name || '',
+                     tactic   : rule.mitre.tactic || '',
+                     role     : 'primary',
+                     confidence: 70 }]
+                : [],
               technique  : rule.mitre?.technique,
               tags       : rule.tags || [],
               riskScore  : rule.riskScore,
@@ -5093,7 +5401,22 @@
                     d.evidence || [],
                     null
                   );
-                rawDets.push({ ...d, mitre_confidence: batchMitreConf, variantId: d.id || d.ruleId });
+                // FIX v22: ensure batch detections also carry mitreTactics/mitreMappings/mitreDetail
+                const batchMitre = d.mitre || rule.mitre || {};
+                const batchMitreTactics  = d.mitreTactics  || (batchMitre.tactic  ? [batchMitre.tactic]  : []);
+                const batchMitreMappings = d.mitreMappings || (batchMitre.technique
+                  ? [{ technique: batchMitre.technique, name: batchMitre.name||'', tactic: batchMitre.tactic||'', role:'primary', confidence:70 }]
+                  : []);
+                const batchMitreDetail   = d.mitreDetail   || (batchMitre.technique
+                  ? { technique: batchMitre.technique, name: batchMitre.name||'', tactic: batchMitre.tactic||'', confidence:70, role:'primary' }
+                  : undefined);
+                rawDets.push({ ...d,
+                  mitre_confidence: batchMitreConf,
+                  variantId       : d.id || d.ruleId,
+                  mitreTactics    : batchMitreTactics,
+                  mitreMappings   : batchMitreMappings,
+                  mitreDetail     : batchMitreDetail,
+                });
               }
             });
           }
@@ -6045,9 +6368,27 @@
     // ════════════════════════════════════════════════════════════════
     function _logNorm(raw) {
       if (!raw || typeof raw !== 'object') return null;
+      // v22: pre-apply _normalizeEvent aliases so _logNorm works with any
+      // custom JSON schema (command_line, parent_process, source_ip, etc.)
       const r = Object.assign({}, raw);
+      // Canonical field aliases ─ map custom snake_case to camelCase
+      r.commandLine   = r.commandLine   || r.CommandLine   || r.cmdLine       || r.command_line  || r.ProcessCmdLine || '';
+      r.parentProcess = r.parentProcess || r.ParentProcessName || r.ParentProcess || r.ParentImage || r.parent_process || '';
+      r.process       = r.process       || r.NewProcessName || r.ProcessName  || r.Image         || r.exe           || '';
+      r.computer      = r.computer      || r.Computer      || r.ComputerName  || r.hostname      || r.host          || r.source_host || '';
+      r.srcIp         = r.srcIp         || r.SourceIP      || r.SourceIPAddress || r.src_ip      || r.source_ip     || r.IpAddress || r.clientIP || '';
+      r.destIp        = r.destIp        || r.DestinationIp || r.DestinationAddress || r.dest_ip  || r.dst_ip        || '';
+      r.destPort      = r.destPort      || r.DestinationPort || r.dest_port   || r.port          || '';
+      r.registryPath  = r.registryPath  || r.TargetObject   || r.registry_path || r.RegistryPath || '';
+      r.bytesSent     = parseInt(r.bytesSent || r.bytes_sent || r.BytesSent   || r.bytes_out     || 0, 10);
+      r.domain        = r.domain        || r.Domain         || r.dns_domain   || '';
+      r.destHost      = r.destHost      || r.dest_host      || r.DestinationHost || '';
+      r.authType      = r.authType      || r.auth_type      || r.AuthType     || r.AuthenticationPackageName || '';
+      r.fileName      = r.fileName      || r.file_name      || r.FileName     || r.file          || '';
+      r.protocol      = r.protocol      || r.Protocol       || r.proto        || '';
+      r.logonType     = r.LogonType     || r.logon_type     || r.logonType    || '';
 
-      // ── Universal field aliases ────────────────────────────────
+      // ── Universal field aliases ─────────────────────────────────
       const ts = r.timestamp || r.TimeGenerated || r.TimeCreated ||
                  r.time || r.date || r['@timestamp'] || r.eventTime ||
                  r.occurred || r.created_at || null;
@@ -6059,41 +6400,61 @@
       const target = r.target || r.object || r.resource || r.dest_resource ||
                      r.process || r.NewProcessName || r.ProcessName || r.Image ||
                      r.file || r.filename || r.table || r.db_object || r.url ||
-                     r.destIp || r.DestinationIp || r.dest_ip || r.dst_ip || '';
+                     r.destHost || r.destIp || r.DestinationIp || r.dest_ip || r.dst_ip || '';
 
       const action = r.action || r.activity || r.operation || r.event_action ||
                      r.verb || r.method || r.http_method || r.commandLine ||
-                     r.CommandLine || r.cmdLine || r.query_type || r.db_action || '';
+                     r.CommandLine || r.cmdLine || r.query_type || r.db_action ||
+                     r.event_type || '';
 
-      // ── Source-type detection (pre-norm) ─────────────────────
+      // ── Source-type detection (pre-norm) ──────────────────────
       const rawSrc = (r.source || r.log_source || r.logsource || r.Channel ||
                       r.source_type || r.log_type || r.type || '').toLowerCase();
       const rawMsg = (r.message || r.msg || r.raw || r.description || '').toLowerCase();
       const eid    = parseInt(r.EventID ?? r.eventId ?? r.event_id, 10);
+      // v22: honour explicit event_type for source classification
+      const customEType = (r.event_type || '').toLowerCase();
 
       let sourceType = 'endpoint';
       if (r.query || r.sql || r.statement || r.db_name || r.database ||
-          rawSrc.match(/(mssql|mysql|oracle|postgres|mongo|db)/) ||
-          rawMsg.match(/(select|insert|update|delete|drop|grant|revoke)/)) {
+          rawSrc.match(/(mssql|mysql|oracle|postgres|mongo|db)/) ||
+          rawMsg.match(/(select|insert|update|delete|drop|grant|revoke)/)) {
         sourceType = 'database';
       } else if (r.url || r.uri || r.request || r.http_method || r.response_code ||
-                 r.status_code || rawSrc.match(/(apache|nginx|iis|squid|proxy|web)/) ||
-                 rawMsg.match(/(get |post |put |delete |http\/)/)) {
+                 r.status_code || rawSrc.match(/(apache|nginx|iis|squid|proxy|web)/) ||
+                 rawMsg.match(/(get |post |put |delete |http\/)/)) {
         sourceType = 'application';
-      } else if (r.destIp || r.DestinationIp || r.dest_ip || r.dst_ip || r.bytes_in ||
-                 r.bytes_out || r.protocol || rawSrc.match(/(firewall|fw|palo|fortinet|checkpoint|nsg|acl|flow)/) ||
+      } else if (r.destIp || r.DestinationIp || r.dest_ip || r.dst_ip || r.destHost ||
+                 r.bytes_in || r.bytes_out || r.bytesSent > 0 || r.protocol ||
+                 customEType === 'network_connection' || customEType === 'data_exfiltration' ||
+                 customEType === 'smb_authentication' ||
+                 rawSrc.match(/(firewall|fw|palo|fortinet|checkpoint|nsg|acl|flow)/) ||
                  (eid >= 5152 && eid <= 5159)) {
         sourceType = 'network';
       } else if (r.cloud_provider || r.awsRegion || r.azure_resource || r.gcp_project ||
                  r.eventSource || r.recipientAccountId || r.subscriptionId || r.projectId ||
-                 rawSrc.match(/(aws|azure|gcp|cloudtrail|guard.?duty|sentinel|defender)/) ||
-                 rawMsg.match(/(arn:|resourceId:|projects\/|accounts\/)/)) {
+                 rawSrc.match(/(aws|azure|gcp|cloudtrail|guard.?duty|sentinel|defender)/) ||
+                 rawMsg.match(/(arn:|resourceId:|projects\/|accounts\/)/)) {
         sourceType = 'cloud';
       }
 
-      // ── event_type classification (behavior-based) ────────────
+      // ── event_type classification ──────────────────────────────
+      // v22: honour explicit event_type from custom JSON schema first
       let eventType = 'generic';
-      if (sourceType === 'endpoint') {
+      if (customEType && customEType !== 'generic') {
+        const etMap = {
+          'process_creation'       : 'process_creation',
+          'email_attachment_opened': 'file_created',
+          'registry_modification'  : 'registry_write',
+          'network_connection'     : 'network_connection',
+          'smb_authentication'     : 'authentication',
+          'data_exfiltration'      : 'network_connection',
+          'authentication'         : 'authentication',
+          'file_created'           : 'file_created',
+          'dns_query'              : 'network_connection',
+        };
+        eventType = etMap[customEType] || customEType;
+      } else if (sourceType === 'endpoint') {
         if (eid === 4688 || r.NewProcessName || r.Image) eventType = 'process_creation';
         else if (eid === 4624 || eid === 4625 || eid === 4634 ||
                  (r.LogonType !== undefined)) eventType = 'authentication';
@@ -6103,20 +6464,20 @@
         else if (eid >= 5140 && eid <= 5145) eventType = 'file_share_access';
         else if (eid === 4698 || eid === 4702 || eid === 4703 ||
                  eid === 4704 || eid === 7045 || eid === 4697) eventType = 'scheduled_task_service';
-        else if (eid === 1 || r.Image) eventType = 'process_creation';      // Sysmon EID 1
+        else if (eid === 1 || r.Image) eventType = 'process_creation';
         else if (eid === 3 || r.DestinationIp) eventType = 'network_connection';
         else if (eid === 11 || r.TargetFilename) eventType = 'file_created';
-        else if (eid === 13 || r.TargetObject) eventType = 'registry_write';
+        else if (eid === 13 || r.TargetObject || r.registryPath) eventType = 'registry_write';
       } else if (sourceType === 'network') {
         const act = (r.action || r.direction || '').toLowerCase();
         eventType = act.includes('deny') || act.includes('block') || act.includes('drop')
           ? 'connection_blocked' : 'network_connection';
       } else if (sourceType === 'database') {
         const q = (r.query || r.sql || r.statement || '').toLowerCase();
-        if (q.match(/(select|read)/)) eventType = 'query_execution';
-        else if (q.match(/(insert|update|delete|merge)/)) eventType = 'data_modification';
-        else if (q.match(/(drop|truncate|alter)/)) eventType = 'schema_modification';
-        else if (q.match(/(grant|revoke|create user|alter user)/)) eventType = 'privilege_change';
+        if (q.match(/(select|read)/)) eventType = 'query_execution';
+        else if (q.match(/(insert|update|delete|merge)/)) eventType = 'data_modification';
+        else if (q.match(/(drop|truncate|alter)/)) eventType = 'schema_modification';
+        else if (q.match(/(grant|revoke|create user|alter user)/)) eventType = 'privilege_change';
         else eventType = 'query_execution';
       } else if (sourceType === 'cloud') {
         const ev = (r.eventName || r.operationName || r.methodName || '').toLowerCase();
@@ -6135,42 +6496,54 @@
         else eventType = 'http_request';
       }
 
-      // ── Build unified normalized event ─────────────────────────
+      // ── Build unified normalized event ──────────────────────────
       const norm = {
-        // ── Schema fields (Policy §1) ──────────────────────────
         event_type    : eventType,
         source_type   : sourceType,
         actor         : actor,
         action        : action,
         target        : target,
         context       : {
-          commandLine   : r.commandLine || r.CommandLine || r.cmdLine || '',
-          parentProcess : r.parentProcess || r.ParentProcessName || r.ParentImage || '',
+          commandLine   : r.commandLine || '',
+          parentProcess : r.parentProcess || '',
           query         : r.query || r.sql || r.statement || '',
-          port          : r.destPort || r.DestinationPort || r.dest_port || r.port || '',
-          protocol      : r.protocol || r.Protocol || '',
+          port          : r.destPort || '',
+          protocol      : r.protocol || '',
           url           : r.url || r.uri || r.request || '',
           cloudRegion   : r.awsRegion || r.region || r.location || '',
           cloudResource : r.resourceId || r.arn || r.azure_resource || r.gcp_resource || '',
+          registryPath  : r.registryPath || '',
+          bytesSent     : r.bytesSent || 0,
+          destHost      : r.destHost || '',
+          domain        : r.domain || '',
         },
-        // ── Identity (enriched) ────────────────────────────────
-        actor_host    : r.computer || r.Computer || r.ComputerName || r.hostname || r.host || '',
-        actor_ip      : r.srcIp || r.SourceIP || r.SourceIPAddress || r.src_ip || r.IpAddress || r.clientIP || '',
-        dest_ip       : r.destIp || r.DestinationIp || r.DestinationAddress || r.dest_ip || r.dst_ip || '',
-        dest_port     : r.destPort || r.DestinationPort || r.dest_port || r.port || '',
-        // ── Time ───────────────────────────────────────────────
+        actor_host    : r.computer || '',
+        actor_ip      : r.srcIp || '',
+        dest_ip       : r.destIp || '',
+        dest_port     : r.destPort || '',
         timestamp     : ts,
-        // ── Raw passthrough (for rule engine compat) ──────────
+        // Raw passthrough for rule engine compat
         EventID       : isNaN(eid) ? r.EventID : eid,
-        commandLine   : r.commandLine || r.CommandLine || r.cmdLine || r.ProcessCmdLine || '',
-        process       : r.process || r.NewProcessName || r.ProcessName || r.Image || r.exe || '',
-        parentProcess : r.parentProcess || r.ParentProcessName || r.ParentProcess || r.ParentImage || '',
+        commandLine   : r.commandLine || '',
+        process       : r.process || '',
+        parentProcess : r.parentProcess || '',
         user          : actor,
-        computer      : r.computer || r.Computer || r.ComputerName || r.hostname || r.host || '',
-        srcIp         : r.srcIp || r.SourceIP || r.SourceIPAddress || r.src_ip || r.IpAddress || r.clientIP || '',
-        destIp        : r.destIp || r.DestinationIp || r.DestinationAddress || r.dest_ip || r.dst_ip || '',
-        destPort      : r.destPort || r.DestinationPort || r.dest_port || r.port || '',
-        LogonType     : r.LogonType || r.logon_type || '',
+        computer      : r.computer || '',
+        srcIp         : r.srcIp || '',
+        destIp        : r.destIp || '',
+        destPort      : r.destPort || '',
+        LogonType     : r.logonType || r.LogonType || r.logon_type || '',
+        registryPath  : r.registryPath || '',
+        registryValue : r.registryValue || r.registry_value || '',
+        bytesSent     : r.bytesSent || 0,
+        destHost      : r.destHost || '',
+        domain        : r.domain || '',
+        authType      : r.authType || '',
+        fileName      : r.fileName || '',
+        protocol      : r.protocol || '',
+        // v22: MITRE passthrough fields
+        _mitreTechnique: r._mitreTechnique || r.mitre_technique || '',
+        _mitreTactic   : r._mitreTactic    || r.mitre_tactic    || '',
         // Cloud-specific
         cloudProvider : r.cloud_provider || r.eventSource?.split('.')[0] || '',
         cloudEventName: r.eventName || r.operationName || r.methodName || '',
@@ -6192,13 +6565,13 @@
         // Firewall/Network-specific
         fwAction      : r.action || r.fw_action || r.disposition || '',
         fwProtocol    : r.protocol || r.Protocol || r.proto || '',
-        fwBytes       : parseInt(r.bytes || r.bytes_total || 0, 10),
+        fwBytes       : r.bytesSent || parseInt(r.bytes || r.bytes_total || 0, 10),
         fwPkts        : parseInt(r.packets || r.pkt_count || 0, 10),
         // Original raw event passthrough
         _raw          : raw,
         _os           : _detectOS(r),
         _logSource    : sourceType,
-        _normVersion  : 'LOG_NORM-v1',
+        _normVersion  : 'LOG_NORM-v2',
       };
       return norm;
     }
