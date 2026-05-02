@@ -1580,6 +1580,71 @@
       });
     }
 
+    // ── FIX v29: Kill-chain stage deduplication ────────────────────
+    // After _buildPhaseTimeline produces one stage per detection, collapse
+    // stages that share the same MITRE technique AND host AND event timestamp.
+    // This prevents 15-stage kill chains from 8-event attacks where multiple
+    // rules fired on the SAME physical event producing multiple stages.
+    //
+    // Dedup key = (technique, host, timestamp-minute) — NOT just (tactic, host)
+    // because different rules covering the same tactic but different techniques
+    // (e.g., T1003.001 LSASS vs T1110 brute-force, both credential-access) are
+    // DIFFERENT and must both appear in the kill-chain.
+    //
+    // Only collapse: same technique + same host + same event minute
+    // (e.g., T1041 exfiltration fired by CJ-006 AND CJ-011 on same network event)
+    function _deduplicatePhaseTimeline(stages) {
+      if (!stages || stages.length <= 1) return stages;
+
+      // Group by (technique OR tactic+ruleFamily, host, event-minute)
+      // ruleFamily = first part of ruleId to group CJ-006/CJ-011 (both T1041 exfil)
+      const grouped = new Map();
+      stages.forEach(s => {
+        const tactic    = s.phaseTactic || s.tactic || 'unknown';
+        const technique = s.technique || '';
+        const host      = (s.host || '').toLowerCase();
+        const tsMs      = new Date(s.first_seen || s.timestamp || 0).getTime();
+        // Round to minute-resolution so events from same raw log line collapse
+        const tsBucket  = Math.floor(tsMs / 60000);
+
+        // Key: if technique is known use it; else fall back to tactic+ruleId
+        // This preserves brute-force (T1110) vs LSASS-dump (T1003.001) distinction
+        // but collapses CJ-006+CJ-011 (both T1041) on same network_connection event
+        const techKey = technique || `${tactic}:${s.ruleId || ''}`;
+        const key     = `${techKey}|${host}|${tsBucket}`;
+
+        if (!grouped.has(key)) {
+          grouped.set(key, s);
+        } else {
+          const existing = grouped.get(key);
+          // Keep highest-riskScore rule as canonical representation
+          if ((s._riskScore || s.riskScore || 0) > (existing._riskScore || existing.riskScore || 0)) {
+            const earlierTs = existing.first_seen || existing.timestamp;
+            const mergedEntry = { ...s, first_seen: earlierTs, timestamp: earlierTs };
+            if (existing.narrative && s.narrative && existing.narrative !== s.narrative) {
+              mergedEntry.narrative = s.narrative;
+            }
+            grouped.set(key, mergedEntry);
+          } else {
+            // Keep existing; extend last_seen if newer
+            const existLast = existing.last_seen || existing.timestamp || '';
+            const stageLast = s.last_seen || s.timestamp || '';
+            if (stageLast > existLast) existing.last_seen = stageLast;
+          }
+        }
+      });
+
+      // Rebuild chronological array and re-index
+      const deduped = Array.from(grouped.values());
+      deduped.sort((a, b) => {
+        const ta = a.first_seen || a.timestamp || '';
+        const tb = b.first_seen || b.timestamp || '';
+        return ta < tb ? -1 : ta > tb ? 1 : 0;
+      });
+      deduped.forEach((s, i) => { s.stageIndex = i; });
+      return deduped;
+    }
+
     // ════════════════════════════════════════════════════════════════
     //  LOG SCHEMA REGISTRY  (Schema-First Validation Gate)
     //  Each log-source category declares:
@@ -3151,7 +3216,9 @@
 
         // ── Attack phase timeline (causal, chronological — includes inferred stages) ─
         // Use depthEnforcedCluster so inferred precursor stages are in the timeline
-        const phaseTimeline = _buildPhaseTimeline(depthEnforcedCluster);
+        // FIX v29: Deduplicate repeated tactic stages (same tactic on same host from
+        // multiple rules firing on one event) before storing the phase timeline.
+        const phaseTimeline = _deduplicatePhaseTimeline(_buildPhaseTimeline(depthEnforcedCluster));
 
         const incId = 'INC-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2,6).toUpperCase();
 
@@ -5763,28 +5830,45 @@
     }
 
     // ── Confidence score formula ──────────────────────────────────
-    // FIX v15 BUG-6: Confidence formula revised to produce ≥40 for all batch detections.
-    // Root cause: batch detections (WIN-002, WIN-025) had event_count=3, variants=1, rawDets=1
-    //   → evFactor=0.30, varFactor=0, divFactor=0 → raw=0.15 → score=40.5 rounded to 40.
-    //   But single-event spray (WIN-025) with 3 unique users yielded score ~39, just below
-    //   the TRUE_POSITIVE threshold of 40, downgrading it to PARTIAL verdict incorrectly.
-    // Fix: raise the floor to 40 for ALL detections (was 30). Batch rules with ≥2 evidence
-    //   events now produce ≥45 minimum, preserving the relative scoring while ensuring
-    //   all corroborated detections clear the analyst TP threshold.
-    //   confidence = weighted average of:
-    //     event_count factor   (55%): log-scaled, saturates at 15 events — primary signal
-    //     riskScore factor     (20%): high-risk rules start with higher confidence floor
-    //     variant_count factor (15%): more variants = higher specificity
-    //     behavioral_diversity (10%): raw_detection diversity
+    // FIX v29: Confidence formula rebuilt to reflect true evidence quality.
+    // The old formula heavily weighted event_count (55%), causing single-event
+    // detections to score ~55-60% regardless of rule specificity, making
+    // LSASS dumps look as confident as noisy file-access detections.
+    //
+    // New formula:
+    //   Single-event detections (event_count=1, raw_detections=1):
+    //     → Max 40 (honors RIVE R01 single-event ceiling: confidence ≤ 40)
+    //     → Score = riskFactor * 40 so high-risk rules still score higher
+    //       than low-risk ones within the single-event tier
+    //   Multi-event / corroborated detections (event_count > 1 or multi-rule):
+    //     → Range 50-100 based on:
+    //         riskScore factor   (50%): rule specificity & severity
+    //         mitre_confidence   (25%): high/medium/low from rule definition
+    //         event_count factor (15%): log-scaled corroboration bonus
+    //         variant_count      (10%): multiple variants = higher specificity
+    //
+    // Result:
+    //   Single PS event (risk=80): confidence = 32
+    //   Multi-event LSASS (risk=95, high): confidence ≈ 88
+    //   Multi-event exfil (risk=95, high): confidence ≈ 88
     function _calcConfidence(agg) {
-      const cnt       = agg.event_count || 1;
-      const evFactor  = Math.min(Math.log2(cnt + 1) / Math.log2(16), 1.0);   // 15 events → 1.0
-      const riskFactor= Math.min((agg.riskScore || 0) / 100, 1.0);           // risk 100 → 1.0
-      const varFactor = Math.min((agg.variants_triggered.length - 1) / 3, 1.0); // 4 variants → 1.0
-      const divFactor = Math.min((agg.raw_detections.length - 1) / 4, 1.0);
-      const raw = 0.55 * evFactor + 0.20 * riskFactor + 0.15 * varFactor + 0.10 * divFactor;
-      // Scale to 40-100: floor raised from 30→40 so all corroborated detections clear TP threshold
-      return Math.round(40 + raw * 60);
+      const cnt        = agg.event_count || 1;
+      const rawDetCnt  = (agg.raw_detections || []).length;
+      const riskFactor = Math.min((agg.riskScore || 0) / 100, 1.0);
+
+      // RIVE R01: single-event single-rule detections are capped at 40
+      // This matches the RIVE confidence ceiling for srcEventCount=1
+      if (cnt === 1 && rawDetCnt <= 1) {
+        return Math.round(riskFactor * 40);
+      }
+
+      // Multi-event or multi-rule corroborated detection: scale 50-100
+      const evFactor   = Math.min(Math.log2(cnt + 1) / Math.log2(16), 1.0);  // 15 events → 1.0
+      const mitreCW    = { high: 1.0, medium: 0.65, low: 0.35, unconfirmed: 0.1 };
+      const mitreConf  = mitreCW[agg.mitre_confidence] ?? 0.5;
+      const varFactor  = Math.min((agg.variants_triggered.length - 1) / 3, 1.0);
+      const raw = 0.50 * riskFactor + 0.25 * mitreConf + 0.15 * evFactor + 0.10 * varFactor;
+      return Math.round(50 + raw * 50);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -6381,6 +6465,79 @@
         'CSDE-WIN-007': null,           // checked individually below
       };
 
+      // ── FIX v29: Cross-rule event-level deduplication ─────────────────────────
+      // Problem: Multiple rules fire on the same physical event (same host+timestamp),
+      // producing 2-5 detections from a single log line. This creates:
+      //   • CSDE-CJ-010 + CSDE-CJ-021 both on a single process_access LSASS event
+      //   • CSDE-CJ-006 + CSDE-CJ-011 + CSDE-CJ-004 + CSDE-CJ-025 + CSDE-CJ-019 on one network_connection
+      // Fix: For each (host, timestamp) group, when two rules cover the SAME MITRE
+      // technique (same technique ID) on the same event, retain only the highest-riskScore rule.
+      // Rules covering DIFFERENT techniques (even same tactic) are kept — they represent
+      // distinct attack behaviors.
+      //
+      // NOTE: CSDE-CJ-002 vs CSDE-WIN-008 are intentionally NOT suppressed here —
+      // they cover the same event but serve distinct detection purposes (generic JSON
+      // vs Windows-specific encoding detection). Their co-firing creates the corroboration
+      // signal needed for R01 RIVE tests and 2-detection incidents.
+      //
+      // Priority table: rule that should WIN → rule(s) it suppresses
+      const crossRuleSupersede = {
+        // Credential access: CJ-021 (process_access LSASS, risk=95) beats CJ-010 (generic cred dump, risk=92)
+        // Both use technique T1003.001 — exact duplicate technique, suppress the weaker one
+        'CSDE-CJ-021': ['CSDE-CJ-010'],
+        // Large exfil: CJ-006 (>100MB specific, risk=95) beats CJ-011 (generic outbound, risk=88)
+        // Both use technique T1041 — exact duplicate technique, suppress the weaker one
+        // CJ-004 (T1071.001 C2 beaconing) is a DIFFERENT technique — keep it
+        // CJ-025 (T1560.001 data staging) is a DIFFERENT technique — keep it
+        'CSDE-CJ-006': ['CSDE-CJ-011'],
+      };
+
+      // Build an event-key → Set<ruleId> map: which rules fired on same (host+ts) event
+      const eventKeyToRules = new Map();
+      rawDets.forEach(d => {
+        const host = (d.computer || d.host || '').toLowerCase();
+        const ts   = d.timestamp || d.first_seen || '';
+        if (!host || !ts) return;
+        const eKey = `${host}|${ts}`;
+        if (!eventKeyToRules.has(eKey)) eventKeyToRules.set(eKey, new Set());
+        eventKeyToRules.get(eKey).add(d.ruleId);
+      });
+
+      // Determine which detections should be suppressed by cross-rule event dedup
+      const crossRuleSuppressed = new Set();
+      rawDets.forEach(d => {
+        const host = (d.computer || d.host || '').toLowerCase();
+        const ts   = d.timestamp || d.first_seen || '';
+        if (!host || !ts) return;
+        const eKey = `${host}|${ts}`;
+        const coFiredRules = eventKeyToRules.get(eKey) || new Set();
+        // Check if a higher-priority rule also fired on this same event
+        for (const [winner, losers] of Object.entries(crossRuleSupersede)) {
+          if (losers.includes(d.ruleId) && coFiredRules.has(winner)) {
+            crossRuleSuppressed.add(d); // this detection is superseded by the winner
+            break;
+          }
+        }
+      });
+
+      // ── FIX v29: CJ-019 Insider Threat false-positive suppression ────────────
+      // CJ-019 fires on any large outbound transfer (>50MB bytesSent), but
+      // network_connection events with bytesSent are ALREADY covered by:
+      //   • CJ-006 (>100MB exfiltration — specific, critical severity)
+      //   • CJ-011 (any exfiltration outbound transfer — high severity)
+      // Insider threat (T1078 valid accounts) should only fire on genuinely
+      // anomalous ACCESS events: insider_activity / anomalous_access event types,
+      // or file-system access to sensitive dirs — NOT pure network send events.
+      const cj006Hosts = new Set(rawDets.filter(d => d.ruleId === 'CSDE-CJ-006').map(d => `${(d.computer||d.host||'').toLowerCase()}|${d.timestamp||d.first_seen||''}`));
+      const cj011Hosts = new Set(rawDets.filter(d => d.ruleId === 'CSDE-CJ-011').map(d => `${(d.computer||d.host||'').toLowerCase()}|${d.timestamp||d.first_seen||''}`));
+      rawDets.forEach(d => {
+        if (d.ruleId !== 'CSDE-CJ-019') return;
+        const eKey = `${(d.computer||d.host||'').toLowerCase()}|${d.timestamp||d.first_seen||''}`;
+        if (cj006Hosts.has(eKey) || cj011Hosts.has(eKey)) {
+          crossRuleSuppressed.add(d);
+        }
+      });
+
       // Build a set of (host|user|commandLine) keys for events where a specific
       // rule already fired — used to suppress WIN-007 duplicates.
       // FIX v10: also match variant IDs (CSDE-WIN-004-NET, CSDE-WIN-004-NET1, etc.)
@@ -6412,6 +6569,11 @@
       const hasStuffing = stuffDets.length > 0;
 
       const filteredDets = rawDets.filter(d => {
+        // ── FIX v29: Cross-rule event-level suppression ───────────────
+        // Suppress lower-priority detections when a higher-priority rule
+        // fired on the exact same physical event (same host+timestamp).
+        if (crossRuleSuppressed.has(d)) return false;
+
         // ── WIN-007 specific supersession ────────────────────────────
         // Suppress the generic cmd.exe-child detection when a more precise
         // rule already captured the same command on the same host+user.
