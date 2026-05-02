@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-04-26T05:43:51.997Z",
+  "timestamp": "2026-05-02T16:03:35.095Z",
   "engine": "ACE-v6",
   "total": 15,
   "passed": 15,
@@ -22,7 +22,7 @@
       "id": "T03",
       "description": "Lateral movement (SMB+PsExec) → cross-host incident (score ≥71)",
       "status": "PASS",
-      "detail": "score=79, hosts=[\"HOST-A\",\"HOST-B\",\"HOST-C\"]"
+      "detail": "score=89, hosts=[\"HOST-A\",\"HOST-B\",\"HOST-C\"]"
     },
     {
       "id": "T04",
@@ -40,13 +40,13 @@
       "id": "T06",
       "description": "Causal DAG rejects execution-before-logon (invalid edge)",
       "status": "PASS",
-      "detail": "detections=2, incidents=1, invalidEdges=3"
+      "detail": "detections=5, incidents=1, invalidEdges=0"
     },
     {
       "id": "T07",
       "description": "Multi-factor ACE scoring → Critical band (score ≥90)",
       "status": "PASS",
-      "detail": "topScore=100, band=Critical, reasons=[\"Technique severity: T1490 (+28)\",\"4-phase attack chain (+14)\",\"SYSTEM-privilege execution (+12)\"]"
+      "detail": "topScore=100, band=Critical, reasons=[\"Technique severity: T1486 (+30)\",\"Full kill chain — 6 phases (+18)\",\"SYSTEM-privilege execution (+12)\"]"
     },
     {
       "id": "T08",
@@ -64,19 +64,19 @@
       "id": "T10",
       "description": "MITRE phase coverage: ≥4 distinct phases across chain",
       "status": "PASS",
-      "detail": "phases=6: [\"impact\",\"credential-access\",\"persistence\",\"execution\",\"command-and-control\",\"lateral-movement\"]"
+      "detail": "phases=9: [\"impact\",\"credential-access\",\"persistence\",\"initial-access\",\"execution\",\"privilege-escalation\",\"command-and-control\",\"lateral-movement\",\"discovery\"]"
     },
     {
       "id": "T11",
       "description": "Intent inference: admin activity separated from attacker",
       "status": "PASS",
-      "detail": "attackerInc=true, dominated=attacker, score=97"
+      "detail": "attackerInc=true, dominated=attacker, score=100"
     },
     {
       "id": "T12",
       "description": "APT chain: spear-phishing → PowerShell → persistence",
       "status": "PASS",
-      "detail": "dets=3, ruleIds=[\"CSDE-WIN-019\",\"CSDE-WIN-008\",\"CSDE-WIN-015\"]"
+      "detail": "dets=6, ruleIds=[\"CSDE-WIN-019\",\"CSDE-CJ-001\",\"CSDE-CJ-002\",\"CSDE-WIN-008\",\"CSDE-WIN-032\",\"CSDE-WIN-015\"]"
     },
     {
       "id": "T13",
@@ -94,7 +94,7 @@
       "id": "T15",
       "description": "Standalone detection: single high-risk event preserved",
       "status": "PASS",
-      "detail": "detections=1, shadowDet=CSDE-WIN-013, incidents=1"
+      "detail": "detections=3, shadowDet=CSDE-WIN-013, incidents=1"
     }
   ]
 }
