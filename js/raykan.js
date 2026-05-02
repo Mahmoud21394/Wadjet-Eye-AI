@@ -15255,11 +15255,15 @@ return {
   function _tplDetections() {
     return `
 <div>
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
-    <div style="font-size:13px;color:#8b949e;">All triggered detections from the current session.</div>
-    <div style="display:flex;gap:8px;align-items:center;">
+  <!-- ══ HEADER + CONTROLS ═══════════════════════════════════════ -->
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+    <div>
+      <div style="font-size:14px;color:#e6edf3;font-weight:700;">🔍 Detection Log — Chronological View</div>
+      <div style="font-size:12px;color:#8b949e;margin-top:2px;">Auto-sorted by First Seen · Attack-chain progression highlighted</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
       <input type="text" class="rk-input" id="rk-det-search" placeholder="Search detections…"
-        oninput="RAYKAN_UI._searchDetections()" style="width:200px;padding:6px 12px;font-size:12px;"/>
+        oninput="RAYKAN_UI._searchDetections()" style="width:180px;padding:6px 12px;font-size:12px;"/>
       <select class="rk-select" id="rk-det-sev" onchange="RAYKAN_UI._filterDetections()">
         <option value="">All Severities</option>
         <option value="critical">Critical</option>
@@ -15267,9 +15271,20 @@ return {
         <option value="medium">Medium</option>
         <option value="low">Low</option>
       </select>
+      <select class="rk-select" id="rk-det-sort" onchange="RAYKAN_UI._filterDetections()" style="font-size:12px;">
+        <option value="first_seen_asc" selected>⬆ First Seen (oldest first)</option>
+        <option value="first_seen_desc">⬇ First Seen (newest first)</option>
+        <option value="risk_desc">Risk Score ↓</option>
+        <option value="severity_desc">Severity ↓</option>
+      </select>
       <button class="rk-btn rk-btn-ghost" onclick="RAYKAN_UI._exportDetections()">↓ Export</button>
     </div>
   </div>
+
+  <!-- ══ ATTACK-CHAIN PROGRESSION BANNER ══════════════════════════ -->
+  <div id="rk-det-chain-banner" style="margin-bottom:12px;"></div>
+
+  <!-- ══ DETECTION TABLE ══════════════════════════════════════════ -->
   <div id="rk-det-list" class="rk-card" style="overflow:hidden;"></div>
 </div>`;
   }
@@ -16169,57 +16184,280 @@ return {
   //  RENDERERS
   // ════════════════════════════════════════════════════════════════
 
-  // ── Detections list ──────────────────────────────────────────
+  // ── v32: Detection sort state ────────────────────────────────
+  // Tracks the current sort key so _filterDetections / _searchDetections
+  // always read from the control and pass a consistently-sorted list.
+  const _DET_SEV_WEIGHT = { critical:4, high:3, medium:2, low:1, informational:0 };
+
+  function _sortDetectionArray(arr) {
+    const sortEl = document.getElementById('rk-det-sort');
+    const mode   = sortEl ? sortEl.value : 'first_seen_asc';
+    const copy   = arr.slice(); // avoid mutating the caller's array
+    switch (mode) {
+      case 'first_seen_desc':
+        return copy.sort((a,b) => _safeTs(b.first_seen||b.timestamp) - _safeTs(a.first_seen||a.timestamp));
+      case 'risk_desc':
+        return copy.sort((a,b) => (b.riskScore||0) - (a.riskScore||0));
+      case 'severity_desc':
+        return copy.sort((a,b) => (_DET_SEV_WEIGHT[b.severity]||0) - (_DET_SEV_WEIGHT[a.severity]||0)
+                               || _safeTs(a.first_seen||a.timestamp) - _safeTs(b.first_seen||b.timestamp));
+      case 'first_seen_asc':
+      default:
+        return copy.sort((a,b) => _safeTs(a.first_seen||a.timestamp) - _safeTs(b.first_seen||b.timestamp));
+    }
+  }
+
+  // ── v32: Attack-chain progression banner ─────────────────────
+  // Builds a horizontal step-by-step attack-chain visualization from
+  // the chronologically-sorted detection list, collapsing detections
+  // into their MITRE tactic phase (Initial Access → Execution → …).
+  // Each step shows: tactic pill, detection count, dominant host/user,
+  // and a coloured connector arrow. Clicking a step scrolls the table
+  // to the first detection in that phase.
+  function _buildDetChainBanner(sortedDets) {
+    const bannerEl = document.getElementById('rk-det-chain-banner');
+    if (!bannerEl) return;
+
+    // Need at least 2 detections with tactic info to draw a chain
+    const detsWithTactic = sortedDets.filter(d =>
+      d.mitre?.tactic || d.category || d.mitreTactic
+    );
+    if (detsWithTactic.length < 2) { bannerEl.innerHTML = ''; return; }
+
+    // MITRE kill-chain ordering (same as inner PHASE_ORDER)
+    const PHASE_IDX = {
+      'reconnaissance':0,'resource-development':1,'initial-access':2,
+      'execution':3,'persistence':4,'privilege-escalation':5,
+      'defense-evasion':6,'credential-access':7,'discovery':8,
+      'lateral-movement':9,'collection':10,'command-and-control':11,
+      'exfiltration':12,'impact':13,
+      // aliases
+      'authentication':2,'network':11,'file':10,'process':3,
+    };
+
+    const PHASE_LABEL = {
+      'initial-access':'Initial Access','execution':'Execution',
+      'persistence':'Persistence','privilege-escalation':'Priv. Escalation',
+      'defense-evasion':'Defense Evasion','credential-access':'Cred. Access',
+      'discovery':'Discovery','lateral-movement':'Lateral Movement',
+      'collection':'Collection','command-and-control':'C2',
+      'exfiltration':'Exfiltration','impact':'Impact',
+      'reconnaissance':'Recon','resource-development':'Resource Dev',
+      'authentication':'Authentication','network':'Network','file':'File',
+      'process':'Process',
+    };
+
+    // Group detections into phase buckets (preserve first-seen order within bucket)
+    const phaseMap = new Map(); // key = normalised tactic, value = {label, color, dets, firstTs}
+    for (const d of sortedDets) {
+      const rawTac = (d.mitre?.tactic || d.mitreTactic || d.category || 'unknown')
+        .toLowerCase().replace(/\s+/g,'-');
+      const tac = rawTac;
+      if (!phaseMap.has(tac)) {
+        phaseMap.set(tac, {
+          tac,
+          label  : PHASE_LABEL[tac] || tac.replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase()),
+          color  : TACTIC_NODE_COLOR[tac] || TACTIC_NODE_COLOR['unknown'] || '#374151',
+          dets   : [],
+          firstTs: _safeTs(d.first_seen || d.timestamp),
+        });
+      }
+      phaseMap.get(tac).dets.push(d);
+    }
+
+    // Sort phases by kill-chain order, breaking ties by first timestamp
+    const phases = [...phaseMap.values()].sort((a, b) => {
+      const ia = PHASE_IDX[a.tac] ?? 99;
+      const ib = PHASE_IDX[b.tac] ?? 99;
+      return ia !== ib ? ia - ib : a.firstTs - b.firstTs;
+    });
+
+    // Determine max severity colour per phase for the node ring
+    const sevRingColor = (dets) => {
+      let top = 0;
+      for (const d of dets) { const w = _DET_SEV_WEIGHT[d.severity]||0; if(w>top) top=w; }
+      return top >= 4 ? '#ef4444' : top >= 3 ? '#f97316' : top >= 2 ? '#eab308' : '#6b7280';
+    };
+
+    // Build the HTML — scrollable horizontal flow
+    const steps = phases.map((ph, idx) => {
+      const cnt      = ph.dets.length;
+      const ringCol  = sevRingColor(ph.dets);
+      const firstDet = ph.dets[0];
+      const hostLabel= (firstDet.computer || firstDet.host || '').slice(0,12);
+      const userLabel= (firstDet.user || '').slice(0,12);
+      const anchor   = `det-phase-${ph.tac}`;
+      const isLast   = idx === phases.length - 1;
+
+      return `
+<div style="display:flex;align-items:center;gap:0;">
+  <div class="rk-chain-step" id="${anchor}"
+       onclick="RAYKAN_UI._scrollToDetPhase('${ph.tac}')"
+       title="Click to highlight ${ph.label} detections (${cnt} total)"
+       style="
+         cursor:pointer;
+         display:flex;flex-direction:column;align-items:center;
+         background:rgba(10,15,22,0.9);
+         border:1.5px solid ${ph.color}55;
+         border-top:3px solid ${ph.color};
+         border-radius:8px;
+         padding:8px 12px;
+         min-width:110px;max-width:130px;
+         position:relative;
+         transition:border-color 0.2s,box-shadow 0.2s;
+       "
+       onmouseenter="this.style.borderColor='${ph.color}';this.style.boxShadow='0 0 10px ${ph.color}44';"
+       onmouseleave="this.style.borderColor='${ph.color}55';this.style.boxShadow='';">
+    <!-- Phase number badge -->
+    <div style="
+      position:absolute;top:-10px;left:50%;transform:translateX(-50%);
+      font-size:9px;font-weight:700;padding:1px 7px;
+      background:${ph.color};color:#fff;border-radius:8px;white-space:nowrap;">
+      ${idx + 1}
+    </div>
+    <!-- Tactic label -->
+    <div style="font-size:10px;font-weight:700;color:${ph.color};text-align:center;margin-top:4px;
+                text-transform:uppercase;letter-spacing:0.4px;line-height:1.2;">
+      ${ph.label}
+    </div>
+    <!-- Detection count ring -->
+    <div style="margin:5px 0 2px;width:30px;height:30px;border-radius:50%;
+                border:2px solid ${ringCol};display:flex;align-items:center;justify-content:center;">
+      <span style="font-size:12px;font-weight:800;color:${ringCol};">${cnt}</span>
+    </div>
+    <div style="font-size:9px;color:#6b7280;">det${cnt===1?'':'s'}</div>
+    ${hostLabel ? `<div style="font-size:9px;color:#8b949e;margin-top:3px;font-family:monospace;
+                               overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:106px;"
+                       title="${firstDet.computer||firstDet.host||''}">🖥 ${hostLabel}</div>` : ''}
+    ${userLabel ? `<div style="font-size:9px;color:#60a5fa;
+                               overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:106px;"
+                       title="${firstDet.user||''}">👤 ${userLabel}</div>` : ''}
+  </div>
+  ${!isLast ? `
+  <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+              padding:0 2px;position:relative;min-width:36px;">
+    <svg width="36" height="18" viewBox="0 0 36 18">
+      <defs>
+        <linearGradient id="ag-${idx}" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="${ph.color}" stop-opacity="0.7"/>
+          <stop offset="100%" stop-color="${phases[idx+1].color}" stop-opacity="0.7"/>
+        </linearGradient>
+      </defs>
+      <line x1="0" y1="9" x2="30" y2="9" stroke="url(#ag-${idx})" stroke-width="1.5"
+            stroke-dasharray="4 3"/>
+      <polygon points="30,5 36,9 30,13" fill="${phases[idx+1].color}" opacity="0.8"/>
+    </svg>
+  </div>` : ''}
+</div>`;
+    }).join('');
+
+    bannerEl.innerHTML = `
+<div style="
+  background:rgba(2,6,10,0.6);
+  border:1px solid rgba(255,255,255,0.06);
+  border-radius:10px;
+  padding:18px 14px 12px;
+  overflow-x:auto;
+  -webkit-overflow-scrolling:touch;
+">
+  <div style="font-size:11px;color:#6b7280;margin-bottom:10px;font-weight:600;letter-spacing:0.5px;">
+    ⚔️ ATTACK-CHAIN PROGRESSION — ${phases.length} phase${phases.length===1?'':'s'} · ${sortedDets.length} detection${sortedDets.length===1?'':'s'} · chronological order
+  </div>
+  <div style="display:flex;align-items:center;gap:0;flex-wrap:nowrap;padding-bottom:8px;">
+    ${steps}
+  </div>
+</div>`;
+  }
+
+  // ── v32: Scroll detections table to a specific tactic phase ──
+  function _scrollToDetPhase(tac) {
+    // Highlight all rows whose tactic matches, dim others
+    const rows = document.querySelectorAll('#rk-det-list tbody tr[data-tac]');
+    rows.forEach(r => {
+      const match = r.getAttribute('data-tac') === tac;
+      r.style.background   = match ? 'rgba(255,255,255,0.05)' : '';
+      r.style.opacity      = match || tac === '' ? '1' : '0.35';
+      r.style.transition   = 'opacity 0.2s,background 0.2s';
+    });
+    // Scroll the first matching row into view
+    const first = document.querySelector(`#rk-det-list tbody tr[data-tac="${tac}"]`);
+    if (first) first.scrollIntoView({ behavior:'smooth', block:'nearest' });
+    // Auto-clear highlight after 3 s
+    clearTimeout(_scrollToDetPhase._timer);
+    _scrollToDetPhase._timer = setTimeout(() => {
+      rows.forEach(r => { r.style.background = ''; r.style.opacity = '1'; });
+    }, 3000);
+  }
+  _scrollToDetPhase._timer = null;
+
+  // ── Detections list (v32: auto-sort + attack-chain banner) ───
   function _renderDetectionsList(dets) {
     const el = document.getElementById('rk-det-list');
     if (!el) return;
-    if (!dets.length) {
+
+    if (!dets || !dets.length) {
+      // Clear attack-chain banner too
+      const cb = document.getElementById('rk-det-chain-banner');
+      if (cb) cb.innerHTML = '';
       el.innerHTML = `<div style="padding:60px;text-align:center;color:#4b5563;font-size:13px;">No detections yet — run a demo or ingest logs.</div>`;
       return;
     }
-    // Count aggregated vs raw
-    const aggCount = dets.filter(d => d.variants_triggered && d.variants_triggered.length > 0).length;
-    const banner = aggCount > 0 ? `
+
+    // ── 1. Sort by the selected sort mode (default: first_seen asc) ──
+    const sorted = _sortDetectionArray(dets);
+
+    // ── 2. Build / refresh the attack-chain progression banner ───
+    _buildDetChainBanner(sorted);
+
+    // ── 3. Build dedup / aggregation info banner ──────────────────
+    const aggCount = sorted.filter(d => d.variants_triggered && d.variants_triggered.length > 0).length;
+    const infoBanner = aggCount > 0 ? `
 <div style="padding:8px 14px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:8px;margin-bottom:10px;display:flex;align-items:center;gap:10px;">
   <span style="font-size:13px;">🧹</span>
-  <span style="font-size:12px;color:#60a5fa;">Deduplicated view — <strong>${dets.length}</strong> unique detection(s) from ${dets.reduce((s,d)=>s+(d.event_count||1),0)} total events. Click any row to expand variants &amp; evidence.</span>
+  <span style="font-size:12px;color:#60a5fa;">Deduplicated view — <strong>${sorted.length}</strong> unique detection(s) from ${sorted.reduce((s,d)=>s+(d.event_count||1),0)} total events. Click any row to expand variants &amp; evidence.</span>
 </div>` : '';
-    el.innerHTML = banner + `
-<table class="rk-table">
-  <thead><tr>
-    <th>Severity</th><th>Detection Name</th><th>Host</th><th>User</th>
-    <th>MITRE</th><th>Events</th><th>Confidence</th><th>Risk</th><th>First Seen</th><th></th>
-  </tr></thead>
-  <tbody>${dets.map(d => {
-    const sev    = d.aggregated_severity || d.severity || 'medium';
-    const eCount = d.event_count || (d.evidence ? d.evidence.length : 1);
-    const vCount = d.variants_triggered ? d.variants_triggered.length : 1;
-    const conf   = d.confidence_score || 30;
-    const confColor = conf >= 80 ? '#ef4444' : conf >= 60 ? '#f97316' : conf >= 40 ? '#eab308' : '#6b7280';
-    // Extract MITRE technique from nested or flat field
-    const mitreTech = (d.mitre && d.mitre.technique) ? d.mitre.technique
-                    : (d.technique || d.technique_id || d.mitre_technique || '');
-    const mitreName = (d.mitre && d.mitre.name) ? d.mitre.name : '';
-    const mitreTactic  = (d.mitre && d.mitre.tactic) ? d.mitre.tactic.replace(/-/g,' ') : '';
-    const mitreConfidence = d.mitre_confidence || 'medium';
-    const confBadgeColor  = { high:'#22c55e', medium:'#f59e0b', low:'#ef4444', unconfirmed:'#6b7280' }[mitreConfidence] || '#f59e0b';
-    const confBadge = `<span title="MITRE confidence: ${mitreConfidence}" style="font-size:8px;color:${confBadgeColor};margin-left:3px;vertical-align:middle;">[${mitreConfidence.charAt(0).toUpperCase()}]</span>`;
-    const mitreDisplay = mitreTech
-      ? `<a href="https://attack.mitre.org/techniques/${mitreTech.replace('.','/')}/" target="_blank"
-             title="${mitreName}${mitreTactic ? ' — '+mitreTactic : ''} (confidence: ${mitreConfidence})"
-             style="color:#a78bfa;text-decoration:none;font-size:10px;"
-             onclick="event.stopPropagation();">${mitreTech}</a>${confBadge}`
-      : '<span style="color:#374151;font-size:10px;">—</span>';
-    const varBadge = vCount > 1
-      ? `<span style="font-size:9px;padding:1px 5px;background:rgba(167,139,250,0.15);color:#a78bfa;border-radius:8px;margin-left:4px;">${vCount} variants</span>`
-      : '';
-    // Category badge
-    const cat = d.category || '';
-    const catColor = cat.includes('credential') ? '#ef4444' : cat.includes('execut') ? '#f97316'
-                   : cat.includes('persist') ? '#eab308' : cat.includes('lateral') ? '#a78bfa'
-                   : cat.includes('discovery') ? '#60a5fa' : '#6b7280';
-    return `
-  <tr onclick="RAYKAN_UI._showDetDetail('${d.id||''}')" style="cursor:pointer;">
+
+    // ── 4. Render rows — chunked for large datasets (>200 rows) ──
+    //    We render synchronously for ≤200 dets; for larger sets we
+    //    write the first 200 immediately then append the rest in
+    //    requestAnimationFrame batches to keep the UI responsive.
+    const CHUNK = 200;
+    const buildRow = (d, rowIdx) => {
+      const sev    = d.aggregated_severity || d.severity || 'medium';
+      const eCount = d.event_count || (d.evidence ? d.evidence.length : 1);
+      const vCount = d.variants_triggered ? d.variants_triggered.length : 1;
+      const conf   = d.confidence_score || 30;
+      const confColor = conf >= 80 ? '#ef4444' : conf >= 60 ? '#f97316' : conf >= 40 ? '#eab308' : '#6b7280';
+      const mitreTech = (d.mitre && d.mitre.technique) ? d.mitre.technique
+                      : (d.technique || d.technique_id || d.mitre_technique || '');
+      const mitreName = (d.mitre && d.mitre.name) ? d.mitre.name : '';
+      const mitreTactic  = (d.mitre && d.mitre.tactic) ? d.mitre.tactic.replace(/-/g,' ') : '';
+      const mitreConfidence = d.mitre_confidence || 'medium';
+      const confBadgeColor  = { high:'#22c55e', medium:'#f59e0b', low:'#ef4444', unconfirmed:'#6b7280' }[mitreConfidence] || '#f59e0b';
+      const confBadge = `<span title="MITRE confidence: ${mitreConfidence}" style="font-size:8px;color:${confBadgeColor};margin-left:3px;vertical-align:middle;">[${mitreConfidence.charAt(0).toUpperCase()}]</span>`;
+      const mitreDisplay = mitreTech
+        ? `<a href="https://attack.mitre.org/techniques/${mitreTech.replace('.','/')}/" target="_blank"
+               title="${mitreName}${mitreTactic ? ' — '+mitreTactic : ''} (confidence: ${mitreConfidence})"
+               style="color:#a78bfa;text-decoration:none;font-size:10px;"
+               onclick="event.stopPropagation();">${mitreTech}</a>${confBadge}`
+        : '<span style="color:#374151;font-size:10px;">—</span>';
+      const varBadge = vCount > 1
+        ? `<span style="font-size:9px;padding:1px 5px;background:rgba(167,139,250,0.15);color:#a78bfa;border-radius:8px;margin-left:4px;">${vCount} variants</span>`
+        : '';
+      const cat = d.category || '';
+      const catColor = cat.includes('credential') ? '#ef4444' : cat.includes('execut') ? '#f97316'
+                     : cat.includes('persist') ? '#eab308' : cat.includes('lateral') ? '#a78bfa'
+                     : cat.includes('discovery') ? '#60a5fa' : '#6b7280';
+      // Normalise tactic for the data attribute used by _scrollToDetPhase
+      const tacAttr = (d.mitre?.tactic || d.mitreTactic || d.category || 'unknown')
+                        .toLowerCase().replace(/\s+/g,'-');
+      // Left border colour = tactic colour (visual link to chain banner)
+      const tacColor = TACTIC_NODE_COLOR[tacAttr] || '';
+      const rowStyle = tacColor
+        ? `cursor:pointer;border-left:3px solid ${tacColor};`
+        : 'cursor:pointer;';
+      return `
+  <tr onclick="RAYKAN_UI._showDetDetail('${d.id||''}')" style="${rowStyle}" data-tac="${tacAttr}" data-row="${rowIdx}">
     <td>${_sevBadge(sev)}</td>
     <td style="font-weight:600;color:#e6edf3;max-width:220px;">
       <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${(d.detection_name||d.ruleName||d.title||'Detection').replace(/"/g,'&quot;')}">${d.detection_name||d.ruleName||d.title||'Detection'}${varBadge}</div>
@@ -16247,9 +16485,41 @@ return {
       </div>
     </td>
   </tr>`;
-  }).join('')}
-  </tbody>
-</table>`;
+    };
+
+    const tableHead = `
+<table class="rk-table">
+  <thead><tr>
+    <th>Severity</th><th>Detection Name</th><th>Host</th><th>User</th>
+    <th>MITRE</th><th>Events</th><th>Confidence</th><th>Risk</th><th>First Seen</th><th></th>
+  </tr></thead>
+  <tbody>`;
+    const tableClose = `</tbody></table>`;
+
+    if (sorted.length <= CHUNK) {
+      // Synchronous render for small-to-medium datasets
+      el.innerHTML = infoBanner + tableHead + sorted.map((d,i) => buildRow(d,i)).join('') + tableClose;
+    } else {
+      // Chunked async render for large datasets — paint first chunk immediately
+      const firstChunk = sorted.slice(0, CHUNK);
+      el.innerHTML = infoBanner + tableHead + firstChunk.map((d,i) => buildRow(d,i)).join('') + tableClose;
+
+      // Append remaining rows in rAF batches to stay below 16 ms/frame
+      let offset = CHUNK;
+      const tbody = el.querySelector('tbody');
+      const appendChunk = () => {
+        if (!tbody || offset >= sorted.length) return;
+        const end  = Math.min(offset + CHUNK, sorted.length);
+        const frag = document.createDocumentFragment();
+        const tmp  = document.createElement('tbody');
+        tmp.innerHTML = sorted.slice(offset, end).map((d,i) => buildRow(d, offset+i)).join('');
+        while (tmp.firstChild) frag.appendChild(tmp.firstChild);
+        tbody.appendChild(frag);
+        offset = end;
+        if (offset < sorted.length) requestAnimationFrame(appendChunk);
+      };
+      requestAnimationFrame(appendChunk);
+    }
   }
 
   // ── Timeline ─────────────────────────────────────────────────
@@ -17900,20 +18170,19 @@ return {
   // ════════════════════════════════════════════════════════════════
   function _filterDetections() {
     const sev = document.getElementById('rk-det-sev')?.value || '';
-    const filtered = sev ? S.detections.filter(d => d.severity === sev) : S.detections;
-    _renderDetectionsList(filtered);
-  }
-
-  function _searchDetections() {
     const q   = document.getElementById('rk-det-search')?.value?.toLowerCase() || '';
-    const sev = document.getElementById('rk-det-sev')?.value || '';
     const filtered = S.detections.filter(d =>
-      (!sev || d.severity === sev) &&
-      (!q   || (d.ruleName||d.title||'').toLowerCase().includes(q) ||
+      (!sev || (d.aggregated_severity||d.severity) === sev) &&
+      (!q   || (d.detection_name||d.ruleName||d.title||'').toLowerCase().includes(q) ||
                (d.computer||d.host||'').toLowerCase().includes(q) ||
                (d.user||'').toLowerCase().includes(q))
     );
     _renderDetectionsList(filtered);
+  }
+
+  function _searchDetections() {
+    // v32: unified with _filterDetections so sort + chain banner always refresh
+    _filterDetections();
   }
 
   function _filterTimeline() {
@@ -19246,6 +19515,9 @@ ${(s3.sessionTimelines||[]).slice(0,5).map(sess => `
     _filterDetections,
     _searchDetections,
     _filterTimeline,
+    _scrollToDetPhase,
+    _sortDetectionArray,
+    _buildDetChainBanner,
     _exportDetections,
     _exportTimeline,
     _exportHuntCSV,
