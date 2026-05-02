@@ -698,9 +698,13 @@ class EvidenceContext {
     );
     flags.multiple_target_users = targetUsers.size >= 3;
 
-    // Multi-host: ≥2 distinct computers
+    // Multi-host: ≥2 distinct computers OR sourceHost/targetHost cross-host signals
+    // FIX #3: also detect sourceHost/targetHost EDR-style lateral movement fields
     const computers = new Set(evts.map(e => (e.computer || e.raw?.Computer || '').toLowerCase()).filter(Boolean));
-    flags.multi_host_activity = computers.size >= 2;
+    const eventArr  = evts; // alias for clarity in the lambda below
+    flags.multi_host_activity =
+      computers.size >= 2 ||
+      eventArr.some(e => e.sourceHost && e.targetHost && e.sourceHost !== e.targetHost);
 
     // Web-server telemetry
     flags.has_webserver_logs = evts.some(e => {

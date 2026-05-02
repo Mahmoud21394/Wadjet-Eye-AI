@@ -73,6 +73,15 @@ try {
   console.warn('[RAYKAN/engine] detection-context-validator not found — behavioral correlation disabled');
 }
 
+// ── ARCH #2 — Schema Registry (field-alias profiles per source type) ─────────
+let schemaRegistry = null;
+try {
+  schemaRegistry = require('./schema-registry');
+  console.log('[RAYKAN/engine] Schema Registry loaded — multi-source field normalization ACTIVE');
+} catch (e) {
+  console.warn('[RAYKAN/engine] schema-registry not found — using built-in alias table only');
+}
+
 // ── Sub-engines ──────────────────────────────────────────────────
 const SigmaEngine    = require('./sigma-engine');
 const AIDetector     = require('./ai-detector');
@@ -177,6 +186,11 @@ class RaykanEngine extends EventEmitter {
    * @returns {Object}           — { processed, detections, anomalies, timeline }
    */
   async ingestEvents(rawEvents, context = {}) {
+    // ── FIX #8 / ARCH-1: Reset session state before every new ingest ──
+    // Prevents UEBA profiles, risk caches, and IOC caches from leaking
+    // between independent analysis sessions.
+    this.resetSession();
+
     const startTs   = Date.now();
     const results   = {
       sessionId  : this._sessionId,
@@ -315,8 +329,14 @@ class RaykanEngine extends EventEmitter {
       mitre: this.mitre.mapDetection(det, evidenceCtx),
     }));
 
+    // ── ARCH-1: Detection deduplication (before risk scoring) ─────────
+    // Deduplicate on composite key (eventId + techniqueId), keeping the
+    // higher-confidence variant.  Prevents duplicate detections from
+    // Sigma + BCE both firing on the same event+technique pair.
+    const dedupedMapped = this._deduplicateDetections(mapped);
+
     // ── Stage 11: Risk Scoring ────────────────────────────────────────
-    const scored = mapped.map(det => ({
+    const scored = dedupedMapped.map(det => ({
       ...det,
       riskScore: this.scorer.scoreDetection(det, context),
     }));
@@ -521,35 +541,53 @@ class RaykanEngine extends EventEmitter {
         return true;
       })
       .map((evt, idx) => {
+      // ARCH #2 — Apply schema-registry profile FIRST so that any source-specific
+      // aliases are promoted to top-level before the manual alias table runs.
+      // This is non-destructive: applyProfile() returns a shallow copy.
+      const evtR = schemaRegistry ? schemaRegistry.applyProfile(evt) : evt;
+
       const normalized = {
-        id         : evt.id         || crypto.randomUUID(),
-        timestamp  : this._parseTimestamp(evt.timestamp || evt.ts || evt.TimeCreated || Date.now()),
-        source     : context.source || evt.source || 'unknown',
-        format     : context.format || this._detectFormat(evt),
+        id         : evtR.id         || crypto.randomUUID(),
+        timestamp  : this._parseTimestamp(evtR.timestamp || evtR.ts || evtR.TimeCreated || Date.now()),
+        source     : context.source || evtR.source || 'unknown',
+        format     : context.format || this._detectFormat(evtR),
         tenant     : context.tenant || 'default',
+        _schemaSource: evtR._schemaSource || 'unknown',  // schema registry stamp
 
         // Normalized common fields
-        eventId    : evt.EventID || evt.event_id   || evt.id     || null,
-        channel    : evt.Channel  || evt.channel    || evt.log   || null,
-        computer   : evt.Computer || evt.hostname   || evt.host  || null,
-        user       : evt.User     || evt.username   || evt.user  || null,
-        process    : evt.ProcessName || evt.process_name || evt.Image || null,
-        pid        : parseInt(evt.ProcessId || evt.pid || 0, 10),
-        commandLine: evt.CommandLine || evt.cmd || evt.command || null,
-        parentProc : evt.ParentProcessName || evt.parent_process || null,
-        srcIp      : evt.SourceIp  || evt.src_ip    || evt.src   || null,
-        dstIp      : evt.DestinationIp || evt.dst_ip || evt.dst  || null,
-        srcPort    : parseInt(evt.SourcePort || evt.src_port || 0, 10) || null,
-        dstPort    : parseInt(evt.DestinationPort || evt.dst_port || 0, 10) || null,
-        filePath   : evt.TargetFilename || evt.file_path || evt.path || null,
-        hash       : evt.Hashes    || evt.hash      || evt.md5   || null,
-        regKey     : evt.TargetObject || evt.registry_key || null,
-        networkProto: evt.Protocol || evt.protocol || null,
-        url        : evt.Url       || evt.url       || null,
-        domain     : evt.QueryName || evt.domain    || null,
+        channel    : evtR.Channel  || evtR.channel    || evtR.log   || null,
+        computer   : evtR.Computer || evtR.hostname   || evtR.host  || null,
+        user       : evtR.User     || evtR.username   || evtR.user  || null,
+        process    : evtR.ProcessName || evtR.process_name || evtR.Image
+                   || evtR.process   || evtR.source_process || null,
+        pid        : parseInt(evtR.ProcessId || evtR.pid || 0, 10),
+        commandLine: evtR.CommandLine || evtR.cmd || evtR.command || null,
+        parentProc : evtR.ParentProcessName || evtR.parent_process || null,
+        srcIp      : evtR.SourceIp  || evtR.src_ip    || evtR.src   || null,
+        dstIp      : evtR.DestinationIp || evtR.dest_ip || evtR.dst_ip || evtR.dst || null,
+        srcPort    : parseInt(evtR.SourcePort || evtR.src_port || 0, 10) || null,
+        dstPort    : parseInt(evtR.DestinationPort || evtR.dest_port || evtR.dst_port || 0, 10) || null,
+        filePath   : evtR.TargetFilename || evtR.file_path || evtR.path || null,
+        hash       : evtR.Hashes    || evtR.hash      || evtR.md5   || null,
+        regKey     : evtR.TargetObject || evtR.registry_key || null,
+        networkProto: evtR.Protocol || evtR.protocol || null,
+        url        : evtR.Url       || evtR.url       || null,
+        domain     : evtR.QueryName || evtR.domain    || null,
+
+        // ── FIX #1 — EDR-style field aliases (v29-audit) ──────────────
+        // Fields present in custom EDR telemetry but previously unmapped.
+        // Without these, GLC classifies all custom events as 'unknown'
+        // domain which blocks the Sigma logsource gate entirely.
+        eventCategory : evtR.event_type        || evtR.eventCategory    || null,
+        bytesSent     : parseInt(evtR.bytes_sent || 0, 10)              || null,
+        targetProcess : evtR.target_process    || null,
+        accessType    : evtR.access_type       || null,
+        fileName      : evtR.file_name         || evtR.TargetFilename   || null,
+        sourceHost    : evtR.source_host       || null,
+        targetHost    : evtR.target_host       || evtR.dest_host        || null,
 
         // Raw fields preserved for advanced queries
-        raw        : evt,
+        raw        : evt,   // keep original (pre-profile) raw for forensic fidelity
         _idx       : idx,
       };
 
@@ -561,6 +599,58 @@ class RaykanEngine extends EventEmitter {
 
       return normalized;
     });
+  }
+
+  // ── ARCH-1: Detection Deduplication ────────────────────────────────
+  // Collapses detections sharing the same (eventId + techniqueId) pair,
+  // keeping the higher-confidence variant.  Called before risk scoring.
+  _deduplicateDetections(detections) {
+    const seen    = new Map();
+    const result  = [];
+
+    for (const det of detections) {
+      const techniques = det.mitre?.techniques || det.techniques || [];
+      // Build one composite key per technique on this detection
+      const techIds = techniques.length > 0
+        ? techniques.map(t => t.id || t)
+        : ['__no_technique__'];
+
+      const evtId = det.eventId || det.event?.id || '';
+
+      let dominated = false;
+      for (const tid of techIds) {
+        const key = `${evtId}|${tid}`;
+        if (seen.has(key)) {
+          // Replace existing entry only if this one has higher confidence
+          const existingIdx = seen.get(key);
+          if ((det.confidence || 0) > (result[existingIdx]?.confidence || 0)) {
+            result[existingIdx] = det;
+          }
+          dominated = true;
+        } else {
+          seen.set(key, result.length);
+        }
+      }
+      if (!dominated) result.push(det);
+    }
+
+    return result;
+  }
+
+  // ── ARCH-1: resetSession ─────────────────────────────────────────────
+  // Clears all session-scoped state on sub-engines before each new ingest
+  // call so that state from run N cannot bleed into run N+1.
+  resetSession() {
+    this._eventBuffer = [];
+    this._sessionId   = (typeof crypto !== 'undefined' && crypto.randomUUID)
+                        ? crypto.randomUUID() : Date.now().toString(36);
+    this.ueba?.reset?.();
+    this.scorer?.reset?.();
+    this.enricher?.resetCache?.();
+    normalizerMetrics?.reset?.();
+    cea?.resetAuditLog?.();
+    glc?.resetMetrics?.();
+    bce?.resetMetrics?.();
   }
 
   _parseTimestamp(ts) {

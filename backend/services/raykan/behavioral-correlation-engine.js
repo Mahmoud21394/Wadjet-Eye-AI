@@ -102,8 +102,9 @@ const TECHNIQUE_STAGE_MAP = {
   'T1053.005': ATTACK_STAGES.PERSISTENCE,
   'T1098'  : ATTACK_STAGES.PERSISTENCE,
   'T1505.003': ATTACK_STAGES.PERSISTENCE,
-  'T1071.001': ATTACK_STAGES.EXFILTRATION,
-  'T1071.004': ATTACK_STAGES.EXFILTRATION,
+  // FIX #4 — T1071.001 misclassification corrected: C2 precedes exfiltration
+  'T1071.001': ATTACK_STAGES.COLLECTION,    // C2 precedes exfiltration in kill chain
+  'T1071.004': ATTACK_STAGES.COLLECTION,
   'T1048'  : ATTACK_STAGES.EXFILTRATION,
   'T1572'  : ATTACK_STAGES.EXFILTRATION,
   'T1005'  : ATTACK_STAGES.COLLECTION,
@@ -113,6 +114,23 @@ const TECHNIQUE_STAGE_MAP = {
   'T1490'  : ATTACK_STAGES.IMPACT,
   'T1498'  : ATTACK_STAGES.IMPACT,
   'T1562.001': ATTACK_STAGES.DEFENSE_EVASION,
+
+  // FIX #4 — Missing technique entries (T1566.002, T1083, T1560.001, T1041, etc.)
+  // Absence caused sort-order fallback to 99, corrupting kill-chain ordering.
+  'T1566'    : ATTACK_STAGES.INITIAL_ACCESS,
+  'T1566.001': ATTACK_STAGES.INITIAL_ACCESS,
+  'T1566.002': ATTACK_STAGES.INITIAL_ACCESS,
+  'T1204'    : ATTACK_STAGES.INITIAL_ACCESS,
+  'T1562'    : ATTACK_STAGES.DEFENSE_EVASION,
+  'T1083'    : ATTACK_STAGES.COLLECTION,
+  'T1135'    : ATTACK_STAGES.COLLECTION,
+  'T1560'    : ATTACK_STAGES.COLLECTION,
+  'T1560.001': ATTACK_STAGES.COLLECTION,
+  'T1041'    : ATTACK_STAGES.EXFILTRATION,
+  'T1030'    : ATTACK_STAGES.EXFILTRATION,
+  'T1020'    : ATTACK_STAGES.EXFILTRATION,
+  'T1074'    : ATTACK_STAGES.COLLECTION,
+  'T1074.001': ATTACK_STAGES.COLLECTION,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -161,10 +179,14 @@ function correlate(events, detections, ceaCtx) {
     { windowsChains, linuxChains, webChains, firewallChains, databaseChains }
   );
 
+  // FIX #5 — Semantic EDR chain (full APT via event_type fields)
+  const semanticChains = _correlateSemanticChain(classifiedEvents, entityIndex, ceaCtx);
+
   // Merge all chains
   const allChains = [
     ...windowsChains, ...linuxChains, ...webChains,
     ...firewallChains, ...databaseChains, ...crossDomainChains,
+    ...semanticChains,
   ];
 
   // De-duplicate and validate all emitted techniques through CEA
@@ -843,6 +865,51 @@ function _buildChain(id, techniques, events, domain) {
     linkedChains: [],
     metadata    : {},
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  FIX #5 — Semantic EDR chain correlator
+//  Detects full APT kill chains from EDR-style event telemetry that does not
+//  have standard Windows EventIDs or Sysmon channel metadata.
+//  Called at the end of correlate() and results pushed into allChains.
+// ─────────────────────────────────────────────────────────────────────────────
+function _correlateSemanticChain(events, entityIndex, ceaCtx) {
+  const chains = [];
+  const evtType = e => (e.eventCategory || e.raw?.event_type || '').toLowerCase();
+
+  const downloads = events.filter(e => ['web_download', 'file_download'].includes(evtType(e)));
+  const psExec    = events.filter(e => evtType(e) === 'process_creation' &&
+    /(powershell|cmd).*(-enc|-encodedcommand)/i.test(e.commandLine || ''));
+  const credDump  = events.filter(e => evtType(e) === 'process_access' &&
+    /lsass/i.test(e.targetProcess || e.raw?.target_process || ''));
+  const c2        = events.filter(e => evtType(e) === 'network_connection' &&
+    [443, 80, 8080].includes(parseInt(e.dstPort || e.raw?.dest_port || 0, 10)));
+  const wmi       = events.filter(e => evtType(e) === 'wmi_execution');
+  const exfil     = events.filter(e => evtType(e) === 'network_connection' &&
+    (parseInt(e.bytesSent || e.raw?.bytes_sent || 0, 10)) > 10_000_000);
+
+  if (downloads.length > 0 && psExec.length > 0 && credDump.length > 0) {
+    const techniques = [
+      { id: 'T1566.002', confidence: 85, evidence: 'Spearphish ISO/document download' },
+      { id: 'T1059.001', confidence: 88, evidence: 'Encoded PowerShell execution' },
+      { id: 'T1003.001', confidence: 92, evidence: 'LSASS process access — credential dump' },
+      ...(c2.length    ? [{ id: 'T1071.001', confidence: 80, evidence: 'C2 beaconing over HTTP/HTTPS' }]              : []),
+      ...(wmi.length   ? [{ id: 'T1047',     confidence: 82, evidence: 'WMI remote execution — lateral movement' }]   : []),
+      ...(exfil.length ? [{ id: 'T1041',     confidence: 85, evidence: 'Large-volume outbound data exfiltration' }]    : []),
+    ];
+
+    const chain = _buildChain(
+      'WIN-EDR-APT-CHAIN',
+      techniques,
+      [...downloads, ...psExec, ...credDump, ...c2, ...wmi, ...exfil],
+      'windows_process'
+    );
+    chain.confidence = 88;
+    chain.label      = 'EDR — Full APT Kill Chain';
+    chains.push(chain);
+  }
+
+  return chains;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

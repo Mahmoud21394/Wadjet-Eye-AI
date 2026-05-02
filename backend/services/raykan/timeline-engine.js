@@ -259,11 +259,30 @@ class TimelineEngine {
   }
 
   _classifyType(evt) {
+    // FIX #10 — Check semantic event_type / eventCategory BEFORE falling back
+    // to EventID matching.  EDR-style events carry no EventID, so without this
+    // block every EDR event was silently typed as 'generic', losing its icon
+    // and color classification in the frontend timeline.
+    const et = (evt.eventCategory || evt.event_type || evt.raw?.event_type || '').toLowerCase();
+    if (et) {
+      if (['web_download','file_download','initial_access'].includes(et))    return 'file_event';
+      if (['process_creation','process_start'].includes(et))                 return 'process_creation';
+      if (['process_access','process_inject'].includes(et))                  return 'process_creation';
+      if (['network_connection','network_connect','c2_beacon'].includes(et)) return 'network_connection';
+      if (['wmi_execution','wmi_event','remote_exec'].includes(et))          return 'process_creation';
+      if (['file_creation','file_write','file_enum','file_enumeration'].includes(et)) return 'file_event';
+      if (['dns_query','dns_response'].includes(et))                         return 'network_connection';
+      if (['data_exfiltration','exfil'].includes(et))                        return 'network_connection';
+      if (['registry_set','registry_create','registry_delete'].includes(et)) return 'registry_event';
+      if (['logon','login','authentication','logoff'].includes(et))          return 'authentication';
+    }
+
+    // Fallback: EventID-based classification (Windows / Sysmon)
     const eid = String(evt.eventId || '');
     if (['4624','4625','4634','4647','4648','4768','4769','4771'].includes(eid)) return 'authentication';
     if (['1','4688'].includes(eid)) return 'process_creation';
     if (['3','5156','5157','5158'].includes(eid)) return 'network_connection';
-    if (['11','12','23','4663','4660'].includes(eid)) return 'file_event';
+    if (['11','23','4663','4660'].includes(eid)) return 'file_event';
     if (['12','13','14'].includes(eid)) return 'registry_event';
     return 'generic';
   }

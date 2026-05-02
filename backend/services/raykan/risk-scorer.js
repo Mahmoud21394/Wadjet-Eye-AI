@@ -35,6 +35,9 @@ const TECHNIQUE_BONUS = {
   'T1505.003': 25, // Web shell
   'T1059.001': 10, // PowerShell
   'T1490'    : 25, // Shadow copy deletion
+  // FIX #6 — additional technique bonuses for APT kill-chain techniques
+  'T1041'    : 20, // Exfiltration Over C2 Channel
+  'T1560.001': 15, // Archive via Utility (staging before exfil)
 };
 
 class RiskScorer {
@@ -56,6 +59,11 @@ class RiskScorer {
     for (const tech of techs) {
       score += TECHNIQUE_BONUS[tech.id] || 0;
     }
+
+    // FIX #6 — Volume-based risk multiplier (large byte transfers = higher risk)
+    const bytes = parseInt(detection.bytesSent || detection.raw?.bytes_sent || 0, 10) || 0;
+    if      (bytes > 100_000_000) score += 25;   // >100 MB
+    else if (bytes > 10_000_000)  score += 12;   // >10 MB
 
     // IOC enrichment bonus
     if (detection.externalThreat > 50)  score += 15;
@@ -125,6 +133,11 @@ class RiskScorer {
 
   getEntityRisk(entityId) {
     return this._entityRiskCache.get(entityId) || null;
+  }
+
+  // FIX #8 — Session state reset
+  reset() {
+    this._entityRiskCache.clear();
   }
 }
 
