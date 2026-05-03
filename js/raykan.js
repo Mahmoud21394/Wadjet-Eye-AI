@@ -5954,48 +5954,38 @@
         const hasInitial     = phases.includes('initial-access') || phases.includes('credential-access');
         const hasLogTamper   = techniques.some(t => t === 'T1070.001' || t === 'T1070');
 
-        // Priority order: full APT first, then ransomware, then sub-chains
+        // ── v33: Chain type classification (priority order) ───────
+        // Determines chainType for categorization; chainName is always
+        // built from the ACTUAL chronological tactic sequence via
+        // _buildChainNameFromSequence() so it reflects what really happened
+        // rather than a pre-set MITRE theory label.
         if (hasRansomware && hasCredDump && hasLateral) {
           chainType = 'full-apt-ransomware';
-          chainName = 'Full APT Kill Chain — Credential Theft → Lateral Movement → Ransomware';
         } else if (hasRansomware && hasLateral) {
           chainType = 'ransomware-apt';
-          chainName = 'APT Ransomware — Lateral Movement → Ransomware';
         } else if (hasRansomware) {
           chainType = 'ransomware';
-          chainName = 'Ransomware Kill Chain';
         } else if (hasCredDump && hasLateral) {
           chainType = 'apt';
-          chainName = 'APT — Credential Theft → Lateral Movement';
         } else if (hasCredDump && hasPersistence && hasExecution) {
           chainType = 'apt';
-          chainName = 'APT — Credential Access → Execution → Persistence';
         } else if (hasCredDump) {
           chainType = 'credential-theft';
-          chainName = 'Credential Theft Chain';
         } else if (hasLateral && hasInitial) {
           chainType = 'apt';
-          chainName = 'APT — Initial Access → Lateral Movement';
         } else if (hasLateral) {
           chainType = 'lateral-movement';
-          chainName = 'Cross-Host Lateral Movement Chain';
         } else if (hasInitial && hasExecution && hasPersistence) {
           chainType = 'initial-compromise';
-          chainName = 'Initial Compromise → Execution → Persistence';
         } else if (phases.includes('credential-access') && hasPersistence) {
-          // FIX v11: brute-force → account creation pattern (credential-access + persistence)
-          // produces this combination; give it a meaningful name instead of the generic fallback.
           chainType = 'brute-force-persistence';
-          chainName = 'Credential Attack → Persistence Chain';
         } else if (phases.includes('credential-access') && hasExecution) {
           chainType = 'credential-exec';
-          chainName = 'Credential Access → Execution Chain';
         } else if (phases.length >= 3) {
           chainType = 'multi-stage';
-          chainName = `Multi-Stage Attack (${phases.length} phases)`;
-        } else {
-          chainName = `Attack Chain — ${entities[0] || 'Unknown Host'}`;
         }
+        // ── v33: Name is built from the actual chronological phase sequence ──
+        chainName = _buildChainNameFromSequence(dag.phaseSequence, entities, chainType);
 
         // Build stages array (DAG nodes in STRICT CHRONOLOGICAL order)
         // NEVER re-sort stages by phase-order — that would invert cause/effect
@@ -6057,6 +6047,9 @@
           severityBand: aceScore.severityBand,
           description : `${filtered.length} correlated detections across ${allHosts.length} host${allHosts.length>1?'s':''} ` +
                         `forming a ${phases.length}-phase attack chain. Cross-host: ${crossHost}.`,
+          // v33: analyst summary — generated post-push via _generateChainSummary
+          // (populated by the renderer so the CSDE engine stays summary-free)
+          analystSummary: null,
           timestamp   : firstMs > 0 ? new Date(firstMs).toISOString() : (parent.timestamp || new Date().toISOString()),
           last_seen   : lastMs  > 0 ? new Date(lastMs).toISOString()  : null,
           duration_ms : Math.max(0, lastMs - firstMs),
@@ -6087,6 +6080,127 @@
 
       // Sort by riskScore descending
       return chains.sort((a, b) => (b.riskScore || 0) - (a.riskScore || 0));
+    }
+
+    // ── v33: Chronological chain-name builder ─────────────────────
+    // Builds a descriptive name that reflects the ACTUAL tactic sequence
+    // observed in chronological order (not MITRE theory), e.g.:
+    //   "Credential Access → Execution → Persistence → Defense Evasion"
+    function _buildChainNameFromSequence(phaseSequence, entities, chainType) {
+      const PHASE_LABEL = {
+        'initial-access'        : 'Initial Access',
+        'execution'             : 'Execution',
+        'persistence'           : 'Persistence',
+        'privilege-escalation'  : 'Privilege Escalation',
+        'defense-evasion'       : 'Defense Evasion',
+        'credential-access'     : 'Credential Access',
+        'discovery'             : 'Discovery',
+        'lateral-movement'      : 'Lateral Movement',
+        'collection'            : 'Collection',
+        'command-and-control'   : 'C2',
+        'exfiltration'          : 'Exfiltration',
+        'impact'                : 'Impact',
+        'reconnaissance'        : 'Recon',
+        'resource-development'  : 'Resource Dev',
+        'authentication'        : 'Auth',
+        'network'               : 'Network',
+        'process'               : 'Process',
+        'unknown'               : 'Unknown',
+      };
+      // ── Prefix: a short type-label that preserves recognisable keywords
+      // (required by T65: full-APT chains must still carry "APT" / "Kill Chain")
+      const TYPE_PREFIX = {
+        'full-apt-ransomware' : 'Full APT Kill Chain — ',
+        'ransomware-apt'      : 'APT Ransomware — ',
+        'ransomware'          : 'Ransomware — ',
+        'apt'                 : 'APT — ',
+        'credential-theft'    : 'Credential Theft — ',
+        'lateral-movement'    : 'Lateral Movement — ',
+        'initial-compromise'  : 'Initial Compromise — ',
+        'brute-force-persistence': 'Brute-Force + Persistence — ',
+        'credential-exec'     : 'Credential Exec — ',
+        'multi-stage'         : 'Multi-Stage — ',
+      };
+      const prefix = TYPE_PREFIX[chainType] || '';
+
+      if (!phaseSequence || !phaseSequence.length) {
+        return prefix
+          ? `${prefix}${entities[0] || 'Unknown Host'}`
+          : `Attack Chain — ${entities[0] || 'Unknown Host'}`;
+      }
+      // Use up to first 4 phases to avoid extremely long names
+      const labels = phaseSequence.slice(0, 4).map(p => PHASE_LABEL[p] || p.replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase()));
+      const suffix = phaseSequence.length > 4 ? ` (+${phaseSequence.length - 4} more)` : '';
+      return prefix + labels.join(' → ') + suffix;
+    }
+
+    // ── v33: Per-chain analyst narrative generator ────────────────
+    // Produces a 3–5 sentence contextual summary covering:
+    //   1. Adversary action sequence (from actual chronological stages)
+    //   2. Targeted accounts / hosts
+    //   3. Likely adversary intent / potential impact
+    //   4. Top priority response action
+    function _generateChainSummary(chain) {
+      const stages      = chain.stages || [];
+      const hosts       = chain.allHosts  || chain.entities || [];
+      const users       = chain.allUsers  || [];
+      const techniques  = chain.techniques || [];
+      const phases      = (chain.dag && chain.dag.phaseSequence) || chain.mitreTactics || [];
+      const riskScore   = chain.riskScore || 0;
+      const crossHost   = chain.crossHost || hosts.length > 1;
+      const chainName   = chain.title || chain.name || '';
+
+      // Sentence 1 — adversary action sequence
+      const phaseDesc = phases.length
+        ? phases.slice(0,4).map(p => p.replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase())).join(' → ')
+        : (stages.length ? `${stages.length} sequential stages` : 'multiple stages');
+      const s1 = `Adversary executed a ${stages.length}-stage attack progressing through: ${phaseDesc}.`;
+
+      // Sentence 2 — targeted accounts/hosts
+      const hostList  = hosts.slice(0,3).join(', ')  || 'unknown host';
+      const userList  = users.slice(0,3).join(', ')  || 'unknown user';
+      const s2 = crossHost
+        ? `Activity spanned ${hosts.length} host${hosts.length>1?'s':''} (${hostList}) under account${users.length>1?'s':''} ${userList}, indicating cross-host lateral movement.`
+        : `Targeted host ${hostList} under account ${userList}.`;
+
+      // Sentence 3 — intent / impact inference
+      const hasCred    = phases.includes('credential-access') || techniques.some(t => t && t.startsWith('T1003') || t === 'T1110');
+      const hasLateral = phases.includes('lateral-movement');
+      const hasExfil   = phases.includes('exfiltration');
+      const hasPersist = phases.includes('persistence');
+      const hasImpact  = phases.includes('impact') || techniques.some(t => t === 'T1486' || t === 'T1490');
+      const hasLogTamp = techniques.some(t => t === 'T1070.001' || t === 'T1070');
+      const hasPrivEsc = phases.includes('privilege-escalation');
+
+      let intent = '';
+      if (hasImpact)            intent = 'likely ransomware or destructive attack targeting data availability';
+      else if (hasExfil)        intent = 'data exfiltration campaign targeting sensitive information';
+      else if (hasCred && hasLateral) intent = 'APT-style credential theft followed by lateral movement across the environment';
+      else if (hasCred && hasPersist) intent = 'persistent credential-based access establishment';
+      else if (hasLateral)      intent = 'lateral movement to expand foothold within the network';
+      else if (hasPersist)      intent = 'persistence mechanism installation for sustained access';
+      else if (hasPrivEsc)      intent = 'privilege escalation to obtain elevated system access';
+      else                      intent = 'targeted intrusion with unknown final objective';
+      const s3 = `Likely intent: ${intent}. Risk score: ${riskScore}/100${hasLogTamp ? '; audit log tampering detected — forensic evidence may be incomplete.' : '.'}`;
+
+      // Sentence 4 — top priority response action
+      let response = '';
+      if (hasImpact)             response = 'Isolate affected hosts immediately, initiate IR plan, assess backup integrity.';
+      else if (hasLogTamp)       response = 'Preserve all remaining logs immediately; isolate host and revoke compromised credentials.';
+      else if (hasCred && crossHost) response = 'Force password reset for compromised accounts, isolate lateral-movement hosts, audit privileged group membership.';
+      else if (hasCred)          response = 'Force immediate credential rotation for affected accounts and review privileged access.';
+      else if (hasLateral)       response = 'Contain lateral movement by isolating bridging hosts and blocking attacker source IP.';
+      else if (hasPersist)       response = 'Remove persistence mechanisms (scheduled tasks, services, new accounts) and audit startup entries.';
+      else                       response = 'Investigate and contain the affected host; review associated user activity for scope.';
+      const s4 = `Priority response: ${response}`;
+
+      // Sentence 5 — MITRE technique callout (if notable techniques present)
+      const notableTechs = techniques.filter(Boolean).slice(0, 4);
+      const s5 = notableTechs.length
+        ? `Key MITRE techniques observed: ${notableTechs.join(', ')}.`
+        : '';
+
+      return [s1, s2, s3, s4, s5].filter(Boolean).join(' ');
     }
 
     // ── Build timeline entry from event ───────────────────────────
@@ -15295,10 +15409,22 @@ return {
   function _tplChains() {
     return `
 <div>
-  <div style="font-size:13px;color:#8b949e;margin-bottom:14px;">
-    Multi-stage attack chain reconstruction. Each chain represents a connected sequence of adversary actions mapped to MITRE ATT&CK.
+  <!-- ══ HEADER ═══════════════════════════════════════════════════ -->
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+    <div>
+      <div style="font-size:14px;font-weight:700;color:#e6edf3;">⛓ Attack Chain Reconstruction</div>
+      <div style="font-size:12px;color:#8b949e;margin-top:2px;">
+        Chronological multi-stage attack chains · Stages ordered by First Seen timestamp · Sorted by risk score (highest first)
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <span style="font-size:11px;color:#4b5563;padding:4px 10px;border:1px solid #21262d;border-radius:6px;background:#0d1117;">
+        BCE v10 · ACE v6 · <span style="color:#60a5fa;">strict-chrono</span>
+      </span>
+    </div>
   </div>
-  <div id="rk-chains-list" style="display:flex;flex-direction:column;gap:16px;"></div>
+  <!-- ══ CHAIN CARDS ════════════════════════════════════════════════ -->
+  <div id="rk-chains-list" style="display:flex;flex-direction:column;gap:20px;"></div>
 </div>`;
   }
 
@@ -16619,143 +16745,392 @@ return {
     }).join('');
   }
 
-  // ── Chains ───────────────────────────────────────────────────
+  // ════════════════════════════════════════════════════════════════
+  //  v33 — ATTACK CHAIN RENDERERS
+  //  Design goals:
+  //    • Stages ordered strictly by First Seen timestamp (chronological)
+  //    • Each stage: #, tactic, detection name (≤40 chars), technique ID, severity
+  //    • Card: descriptive name (actual tactic sequence), risk badge top-right,
+  //      severity badge, entities section (hosts/users as tags), MITRE technique IDs
+  //    • Per-card analyst summary (3-5 sentences)
+  //    • Dark-theme, severity-color-coded, ordered highest-risk first
+  // ════════════════════════════════════════════════════════════════
+
+  // ── Chains list — renders all chain cards sorted by risk desc ──
   function _renderChainsList(chains) {
     const el = document.getElementById('rk-chains-list');
     if (!el) return;
-    // FIX v12: Filter out degenerate chains that have 0 stages before rendering.
-    // These are ghost records created when the engine builds a chain object but
-    // the bucket had only 1 detection (which passes the old ACE_MIN_NODES=1 gate
-    // but has nothing to visualize).
+
+    // Filter degenerate chains (< 2 stages)
     const validChains = (chains || []).filter(c => {
       const stageCount = (c.stages || c.steps || c.detections || []).length;
-      // Also accept incidentSummary-shaped chains (killChainStages)
       const killCount  = (c.killChainStages || []).length;
       return stageCount >= 2 || killCount >= 2;
     });
+
     if (!validChains.length) {
       const hasDetections = (S.detections || []).length > 0;
       el.innerHTML = hasDetections ? `
 <div style="padding:60px;text-align:center;color:#4b5563;font-size:13px;">
-  <div style="font-size:28px;margin-bottom:10px;">⛓</div>
-  <div style="font-size:14px;color:#6b7280;margin-bottom:6px;">No multi-stage attack chains formed from these events.</div>
-  <span style="font-size:11px;">BCE v10 requires ≥2 correlated detections to reconstruct an attack chain.</span><br/>
+  <div style="font-size:32px;margin-bottom:12px;">⛓</div>
+  <div style="font-size:14px;color:#6b7280;margin-bottom:8px;font-weight:600;">No multi-stage attack chains formed.</div>
+  <div style="font-size:12px;color:#4b5563;margin-bottom:12px;">BCE v10 requires ≥2 correlated detections sharing a common adversary identity (user/IP/host) to reconstruct a chain.</div>
   <span style="font-size:11px;color:#374151;">
     ${(S.detections || []).length} detection(s) found — check the
     <button class="rk-btn rk-btn-ghost" style="font-size:11px;padding:2px 8px;" onclick="RAYKAN_UI._setTab('detections')">Detections tab</button>
     for individual alerts.
   </span>
-</div>` : `<div style="padding:60px;text-align:center;color:#4b5563;font-size:13px;">No attack chains detected yet — run a demo or ingest logs.</div>`;
+</div>` : `
+<div style="padding:60px;text-align:center;color:#4b5563;font-size:13px;">
+  <div style="font-size:32px;margin-bottom:12px;">⛓</div>
+  No attack chains detected yet — ingest logs or run a demo.
+</div>`;
       return;
     }
+
+    // Chains already sorted by riskScore desc from _buildAttackChain
+    // Generate analyst summaries now (deferred from engine for performance)
+    validChains.forEach(c => {
+      if (!c.analystSummary) c.analystSummary = _generateChainSummary(c);
+    });
+
     el.innerHTML = validChains.map((c, i) => _renderChainCard(c, i)).join('');
   }
 
-  // ── SOC v2: Horizontal kill-chain timeline renderer ──────────────────
-  function _buildHorizKillChain(stages, chainIdx) {
-    if (!stages || !stages.length) return '';
-    return `<div class="soc-chain-timeline"><div class="soc-chain-rail">` +
-      stages.map((s, si) => {
-        const tactic    = (s.tactic || s.phaseTactic || '').toLowerCase().replace(/\s+/g, '-');
-        const nodeCol   = TACTIC_NODE_COLOR[tactic] || '#3D6080';
-        const sev       = s.severity || 'medium';
-        const isInf     = !!(s.inferred || s.inferredFrom);
-        const tech      = s.technique || s.mitre?.technique || '';
-        const name      = s.ruleName || s.title || s.technique || 'Stage ' + (si+1);
-        const truncName = name.length > 28 ? name.slice(0,26) + '…' : name;
-        const detailId  = `soc-nd-${chainIdx}-${si}`;
-        return `
-      <div class="soc-chain-node${isInf ? ' inferred' : ''}" style="--soc-node-color:${nodeCol};"
-           onclick="(function(n){n.classList.toggle('expanded');
-             var d=document.getElementById('${detailId}');
-             if(d){d.style.display=n.classList.contains('expanded')?'block':'none';}
-           })(this)">
-        <div class="soc-chain-node-inner">
-          <div class="soc-node-tactic">${tactic.replace(/-/g,' ') || 'Unknown'}</div>
-          <div class="soc-node-name">${truncName}</div>
-          <div class="soc-node-footer">
-            ${tech ? `<span class="soc-node-technique">${tech}</span>` : ''}
-            <span class="soc-node-sev ${sev}">${sev.slice(0,4).toUpperCase()}</span>
-          </div>
-        </div>
-        <span class="soc-node-expand">▾</span>
-        <!-- Drill-down detail panel -->
-        <div class="soc-node-detail" id="${detailId}" style="display:none;">
-          <div style="font-size:10px;font-weight:700;color:${nodeCol};margin-bottom:6px;">${name}</div>
-          ${tech ? `<div style="font-size:9px;margin-bottom:4px;"><span style="color:#4A6080;">Technique:</span> <span style="color:#60A5FA;font-family:monospace;">${tech}</span></div>` : ''}
-          ${s.confidence ? `<div style="font-size:9px;margin-bottom:4px;"><span style="color:#4A6080;">Confidence:</span> <span style="color:#E8EDF5;">${s.confidence}%</span></div>` : ''}
-          ${s.narrative ? `<div style="font-size:9px;color:#8FA3BF;line-height:1.4;margin-top:4px;">${_safeNarrative(s.narrative).slice(0,200)}${_safeNarrative(s.narrative).length>200?'…':''}</div>` : ''}
-          ${isInf ? `<div style="font-size:8px;color:#6B7280;margin-top:4px;font-style:italic;">⚙ Inferred stage — based on behavioral correlation</div>` : ''}
-        </div>
-      </div>
-      ${si < stages.length-1 ? `
-      <div class="soc-chain-connector" style="--soc-node-color:${nodeCol}66;"></div>` : ''}`;
-      }).join('') +
-    `</div></div>`;
+  // ── v33: Stage severity helper ────────────────────────────────
+  function _stageSevColor(sev) {
+    const s = (sev || 'medium').toLowerCase();
+    if (s === 'critical') return '#ef4444';
+    if (s === 'high')     return '#f97316';
+    if (s === 'medium')   return '#eab308';
+    return '#6b7280';
   }
 
-  function _renderChainCard(c, i) {
-    const stages    = c.stages || c.steps || c.detections || [];
-    const techniques= c.techniques || stages.map(s => s.technique || s.mitre?.technique).filter(Boolean);
-    const riskColor = c.riskScore >= 80 ? '#EF4444' : c.riskScore >= 60 ? '#F97316' : c.riskScore >= 40 ? '#F59E0B' : '#60A5FA';
-    const riskClass = c.riskScore >= 80 ? 'critical' : c.riskScore >= 60 ? 'high' : c.riskScore >= 40 ? 'medium' : 'low';
-    const animDelay = (i * 0.06).toFixed(2);
-    // FIX v15 BUG-2: Use c.title first (now always populated), fallback to c.name
-    const chainName = c.title || c.name || c.type || 'Multi-stage Attack';
+  // ── v33: Horizontal stage-flow builder ───────────────────────
+  // Left-to-right stage nodes, strictly chronological, with:
+  //   • Stage # badge  • Tactic label  • Detection name (≤40 chars)
+  //   • Technique ID badge  • Severity badge  • Timestamp
+  // SVG gradient arrows between nodes.
+  function _buildHorizKillChain(stages, chainIdx) {
+    if (!stages || !stages.length) return '';
 
-    // Build horizontal kill-chain timeline
-    const horizChain = _buildHorizKillChain(stages, i);
+    const nodes = stages.map((s, si) => {
+      const tactic    = (s.tactic || s.phaseTactic || s.mitre?.tactic || '').toLowerCase().replace(/\s+/g, '-');
+      const nodeCol   = TACTIC_NODE_COLOR[tactic] || '#3D6080';
+      const sev       = (s.aggregated_severity || s.severity || 'medium').toLowerCase();
+      const sevCol    = _stageSevColor(sev);
+      const sevLabel  = sev.slice(0,1).toUpperCase() + sev.slice(1,4).toUpperCase();
+      const isInf     = !!(s.inferred || s.inferredFrom);
+      const tech      = s.technique || s.mitre?.technique || '';
+      const rawName   = s.detection_name || s.ruleName || s.title || s.technique || ('Stage ' + (si+1));
+      const detName   = rawName.length > 40 ? rawName.slice(0, 38) + '…' : rawName;
+      const tacLabel  = tactic.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'Unknown';
+      const tsLabel   = _fmtTime(s.first_seen || s.timestamp || '');
+      const hostLabel = (s.host || s.computer || '').slice(0, 16);
+      const userLabel = (s.user || '').slice(0, 16);
+      const confPct   = s.confidence || s.riskScore || 0;
+      const detailId  = `v33-nd-${chainIdx}-${si}`;
 
-    return `
-<div class="rk-card" style="padding:0;overflow:hidden;animation:soc-card-in 0.3s ease-out ${animDelay}s both;">
-  <!-- Thin severity top bar -->
-  <div style="height:2px;background:linear-gradient(90deg,transparent,${riskColor},transparent);"></div>
+      return { tactic, nodeCol, sev, sevCol, sevLabel, isInf, tech, detName, tacLabel,
+               tsLabel, hostLabel, userLabel, confPct, detailId, si, rawName };
+    });
 
-  <!-- Header: chain name, risk badge, techniques, entity chips -->
-  <div class="rk-card-hdr">
-    <div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1;">
-      <div style="width:32px;height:32px;border-radius:8px;
-        background:rgba(${c.riskScore>=80?'239,68,68':'167,139,250'},0.1);
-        border:1px solid rgba(${c.riskScore>=80?'239,68,68':'167,139,250'},0.2);
-        display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;">⛓</div>
-      <div style="min-width:0;">
-        <div style="font-size:12px;font-weight:700;color:#E8EDF5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-          Chain #${i+1} — <span style="font-weight:400;color:#8FA3BF;">${chainName}</span>
-        </div>
-        <div style="font-size:9px;color:#4A6080;margin-top:2px;font-family:'JetBrains Mono',monospace;">
-          ${stages.length} stage${stages.length!==1?'s':''}
-          ${c.entities?.length ? ` · ${c.entities.slice(0,2).join(', ')}` : ''}
-        </div>
-      </div>
+    const stageNodes = nodes.map((n, idx) => {
+      const nextCol = idx < nodes.length - 1 ? nodes[idx+1].nodeCol : n.nodeCol;
+      return `
+<div style="display:flex;align-items:stretch;gap:0;min-width:0;">
+  <!-- Stage node -->
+  <div style="
+    position:relative;
+    min-width:160px;max-width:190px;
+    background:rgba(10,15,22,0.85);
+    border:1.5px solid ${n.nodeCol}44;
+    border-top:3px solid ${n.nodeCol};
+    border-radius:8px;
+    padding:10px 10px 8px;
+    cursor:pointer;
+    transition:border-color 0.2s,box-shadow 0.2s;
+    flex-shrink:0;
+  "
+  onmouseenter="this.style.borderColor='${n.nodeCol}';this.style.boxShadow='0 0 12px ${n.nodeCol}33';"
+  onmouseleave="this.style.borderColor='${n.nodeCol}44';this.style.boxShadow='';"
+  onclick="(function(el){
+    var dd=document.getElementById('${n.detailId}');
+    if(!dd) return;
+    var open=dd.style.display!=='none';
+    dd.style.display=open?'none':'block';
+    el.style.borderColor=open?'${n.nodeCol}44':'${n.nodeCol}';
+  })(this)"
+  title="${n.rawName}">
+
+    <!-- Stage number badge -->
+    <div style="
+      position:absolute;top:-10px;left:10px;
+      font-size:9px;font-weight:800;
+      padding:1px 7px;
+      background:${n.nodeCol};color:#fff;
+      border-radius:8px;white-space:nowrap;
+      font-family:'JetBrains Mono',monospace;
+    ">Stage ${n.si + 1}${n.isInf ? ' ⚙' : ''}</div>
+
+    <!-- Tactic label -->
+    <div style="
+      font-size:9px;font-weight:700;color:${n.nodeCol};
+      text-transform:uppercase;letter-spacing:0.5px;
+      margin-top:4px;margin-bottom:5px;
+      line-height:1.2;
+    ">${n.tacLabel}</div>
+
+    <!-- Detection name -->
+    <div style="
+      font-size:11px;font-weight:600;color:#e6edf3;
+      line-height:1.35;margin-bottom:6px;
+      word-break:break-word;
+    " title="${n.rawName}">${n.detName}</div>
+
+    <!-- Technique ID + Severity row -->
+    <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-bottom:4px;">
+      ${n.tech ? `<span style="
+        font-family:'JetBrains Mono',monospace;
+        font-size:9px;font-weight:700;
+        padding:2px 6px;
+        background:${n.nodeCol}18;
+        border:1px solid ${n.nodeCol}55;
+        color:${n.nodeCol};
+        border-radius:5px;
+        white-space:nowrap;
+      ">${n.tech}</span>` : ''}
+      <span style="
+        font-size:8px;font-weight:700;
+        padding:2px 5px;
+        background:${n.sevCol}18;
+        border:1px solid ${n.sevCol}55;
+        color:${n.sevCol};
+        border-radius:4px;
+        white-space:nowrap;
+        text-transform:uppercase;
+        letter-spacing:0.4px;
+      ">${n.sevLabel}</span>
     </div>
-    <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
-      <span class="soc-risk-badge ${riskClass}">RISK ${c.riskScore||'—'}</span>
-      ${_sevBadge(c.severity||'high')}
+
+    <!-- Timestamp + entities -->
+    ${n.tsLabel ? `<div style="font-size:9px;color:#4b5563;margin-top:2px;font-family:'JetBrains Mono',monospace;">${n.tsLabel}</div>` : ''}
+    ${n.hostLabel ? `<div style="font-size:9px;color:#8b949e;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${n.hostLabel}">🖥 ${n.hostLabel}</div>` : ''}
+    ${n.userLabel ? `<div style="font-size:9px;color:#60a5fa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${n.userLabel}">👤 ${n.userLabel}</div>` : ''}
+
+    <!-- Drill-down panel (hidden by default) -->
+    <div id="${n.detailId}" style="display:none;margin-top:8px;padding-top:8px;border-top:1px solid ${n.nodeCol}33;">
+      ${n.tech ? `<div style="font-size:9px;margin-bottom:3px;color:#8b949e;">Technique: <span style="color:#a78bfa;font-family:monospace;">${n.tech}</span></div>` : ''}
+      <div style="font-size:9px;color:#8b949e;margin-bottom:3px;">Confidence: <span style="color:#e6edf3;">${n.confPct}%</span></div>
+      ${n.isInf ? `<div style="font-size:8px;color:#4b5563;font-style:italic;margin-top:4px;">⚙ Inferred stage — behavioral correlation</div>` : ''}
     </div>
   </div>
 
-  <!-- Horizontal kill-chain timeline -->
-  ${horizChain || '<div style="padding:16px;color:#4A6080;font-size:12px;text-align:center;">No stages available</div>'}
-
-  <!-- MITRE techniques row -->
-  ${techniques.length ? `
-  <div style="padding:0 16px 10px;display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
-    <span style="font-size:9px;color:#4A6080;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;margin-right:2px;">MITRE</span>
-    ${techniques.slice(0,10).map(t => `<span class="rk-tag" style="font-family:'JetBrains Mono',monospace;">${t}</span>`).join('')}
-    ${techniques.length > 10 ? `<span style="color:#4A6080;font-size:9px;">+${techniques.length-10} more</span>` : ''}
+  <!-- Connector arrow (SVG gradient) -->
+  ${idx < nodes.length - 1 ? `
+  <div style="display:flex;align-items:center;justify-content:center;min-width:32px;flex-shrink:0;">
+    <svg width="32" height="20" viewBox="0 0 32 20" style="overflow:visible;">
+      <defs>
+        <linearGradient id="ch${chainIdx}-arr${idx}" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="${n.nodeCol}" stop-opacity="0.7"/>
+          <stop offset="100%" stop-color="${nextCol}" stop-opacity="0.7"/>
+        </linearGradient>
+      </defs>
+      <line x1="0" y1="10" x2="26" y2="10"
+            stroke="url(#ch${chainIdx}-arr${idx})"
+            stroke-width="1.5" stroke-dasharray="4 3"/>
+      <polygon points="26,6 32,10 26,14"
+               fill="${nextCol}" opacity="0.85"/>
+    </svg>
   </div>` : ''}
+</div>`;
+    }).join('');
 
-  <!-- Entity chips -->
-  ${c.entities?.length ? `
-  <div style="padding:0 16px 12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-    <span style="font-size:9px;color:#4A6080;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;">Entities</span>
-    ${c.entities.map(e => `<button class="rk-entity-btn" onclick="RAYKAN_UI._invEntity('${e}')">${e}</button>`).join('')}
-  </div>` : ''}
+    return `
+<div style="
+  overflow-x:auto;
+  -webkit-overflow-scrolling:touch;
+  padding:18px 16px 12px;
+  scrollbar-width:thin;
+  scrollbar-color:#21262d transparent;
+">
+  <div style="display:flex;align-items:flex-start;gap:0;width:max-content;min-width:100%;">
+    ${stageNodes}
+  </div>
 </div>`;
   }
 
+  // ── v33: Full chain card renderer ─────────────────────────────
+  function _renderChainCard(c, i) {
+    const stages     = c.stages || c.steps || c.detections || [];
+    const techniques = [...new Set(
+      (c.techniques || stages.map(s => s.technique || s.mitre?.technique).filter(Boolean))
+    )];
+    const allHosts   = [...new Set(c.allHosts || c.entities || [])].filter(Boolean);
+    const allUsers   = [...new Set(c.allUsers || [])].filter(Boolean);
+
+    const riskScore  = c.riskScore || 0;
+    const riskColor  = riskScore >= 90 ? '#ef4444' : riskScore >= 70 ? '#f97316' : riskScore >= 40 ? '#eab308' : '#60a5fa';
+    const riskClass  = riskScore >= 90 ? 'critical' : riskScore >= 70 ? 'high' : riskScore >= 40 ? 'medium' : 'low';
+    const sev        = c.severity || c.severityBand || 'high';
+    const sevColor   = _stageSevColor(sev);
+    const animDelay  = (i * 0.08).toFixed(2);
+
+    // Chain name from actual tactic sequence (set by _buildChainNameFromSequence)
+    const chainName  = c.title || c.name || 'Multi-Stage Attack';
+    const chainId    = c.id || `CHAIN-${i+1}`;
+
+    // Phase sequence from DAG (chronological, not theory-sorted)
+    const phases     = (c.dag && c.dag.phaseSequence) || c.mitreTactics || [];
+
+    // Duration label
+    const durLabel   = c.durationLabel || (c.duration_ms > 0 ? _formatDuration(c.duration_ms) : '');
+
+    // Analyst summary (pre-generated in _renderChainsList)
+    const summary    = c.analystSummary || '';
+
+    // Build horizontal stage flow
+    const stageFlow  = _buildHorizKillChain(stages, i);
+
+    // Cross-host indicator
+    const crossHost  = c.crossHost || allHosts.length > 1;
+
+    return `
+<div class="rk-card" style="
+  padding:0;overflow:hidden;
+  border:1px solid ${riskColor}22;
+  animation:soc-card-in 0.3s ease-out ${animDelay}s both;
+  position:relative;
+">
+  <!-- Severity accent bar (top) -->
+  <div style="height:3px;background:linear-gradient(90deg,${riskColor},${riskColor}88,transparent);"></div>
+
+  <!-- ═══ CARD HEADER ════════════════════════════════════════════ -->
+  <div style="
+    display:flex;align-items:flex-start;justify-content:space-between;
+    padding:14px 16px 12px;gap:12px;flex-wrap:wrap;
+    border-bottom:1px solid rgba(255,255,255,0.04);
+  ">
+    <!-- Left: chain id + name + metadata -->
+    <div style="display:flex;align-items:flex-start;gap:10px;min-width:0;flex:1;">
+      <div style="
+        width:36px;height:36px;border-radius:8px;flex-shrink:0;
+        background:${riskColor}18;border:1px solid ${riskColor}44;
+        display:flex;align-items:center;justify-content:center;font-size:16px;
+      ">⛓</div>
+      <div style="min-width:0;">
+        <div style="font-size:11px;color:#4b5563;font-family:'JetBrains Mono',monospace;margin-bottom:3px;">
+          ${chainId}
+          ${crossHost ? `<span style="margin-left:6px;font-size:9px;padding:1px 6px;background:rgba(239,68,68,0.12);color:#f87171;border-radius:4px;border:1px solid rgba(239,68,68,0.25);">CROSS-HOST</span>` : ''}
+          ${c.chainValid === false ? `<span style="margin-left:6px;font-size:9px;padding:1px 6px;background:rgba(245,158,11,0.12);color:#fbbf24;border-radius:4px;border:1px solid rgba(245,158,11,0.25);">CAUSAL VIOLATIONS</span>` : ''}
+        </div>
+        <div style="font-size:13px;font-weight:700;color:#e6edf3;line-height:1.35;margin-bottom:4px;">
+          ${chainName}
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span style="font-size:11px;color:#6b7280;">
+            ${stages.length} stage${stages.length !== 1 ? 's' : ''}
+          </span>
+          ${durLabel ? `<span style="font-size:11px;color:#6b7280;">⏱ ${durLabel}</span>` : ''}
+          ${phases.length ? `<span style="font-size:10px;color:#4b5563;font-family:'JetBrains Mono',monospace;">${phases.length} phase${phases.length!==1?'s':''}</span>` : ''}
+          ${c.dag && c.dag.edgeCount ? `<span style="font-size:10px;color:#4b5563;">${c.dag.edgeCount} causal edge${c.dag.edgeCount!==1?'s':''}</span>` : ''}
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: risk badge + severity badge (top-right) -->
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;">
+      <!-- Risk score badge (top-right, prominent) -->
+      <div style="
+        display:flex;align-items:center;gap:6px;
+        padding:6px 12px;
+        background:${riskColor}18;
+        border:1.5px solid ${riskColor}55;
+        border-radius:8px;
+      ">
+        <span style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Risk</span>
+        <span style="font-size:18px;font-weight:800;color:${riskColor};font-family:'JetBrains Mono',monospace;line-height:1;">${riskScore}</span>
+        <span style="font-size:9px;color:#4b5563;">/100</span>
+      </div>
+      <!-- Severity badge -->
+      ${_sevBadge(sev)}
+    </div>
+  </div>
+
+  <!-- ═══ HORIZONTAL STAGE FLOW ═══════════════════════════════════ -->
+  <div style="border-bottom:1px solid rgba(255,255,255,0.04);">
+    ${stageFlow || '<div style="padding:16px;color:#4b5563;font-size:12px;text-align:center;">No stages available</div>'}
+  </div>
+
+  <!-- ═══ ANALYST SUMMARY ══════════════════════════════════════════ -->
+  ${summary ? `
+  <div style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.04);">
+    <div style="font-size:9px;color:#4b5563;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;margin-bottom:6px;">
+      🔍 Analyst Summary
+    </div>
+    <div style="font-size:11px;color:#9ca3af;line-height:1.65;">
+      ${summary}
+    </div>
+  </div>` : ''}
+
+  <!-- ═══ MITRE TECHNIQUES + ENTITIES ══════════════════════════════ -->
+  <div style="padding:10px 16px 14px;display:flex;flex-direction:column;gap:8px;">
+
+    <!-- MITRE technique IDs as badges -->
+    ${techniques.length ? `
+    <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;">
+      <span style="font-size:9px;color:#4b5563;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;margin-right:4px;white-space:nowrap;">MITRE ATT&CK</span>
+      ${techniques.slice(0, 12).map(t => {
+        const techUrl = t.replace('.', '/');
+        return `<a href="https://attack.mitre.org/techniques/${techUrl}/" target="_blank"
+          onclick="event.stopPropagation();"
+          style="display:inline-block;text-decoration:none;"
+          title="View ${t} on MITRE ATT&CK">
+          <span style="
+            font-family:'JetBrains Mono',monospace;
+            font-size:9px;font-weight:700;
+            padding:2px 7px;
+            background:rgba(167,139,250,0.1);
+            border:1px solid rgba(167,139,250,0.35);
+            color:#a78bfa;
+            border-radius:5px;
+            white-space:nowrap;
+            cursor:pointer;
+            display:inline-block;
+          ">${t}</span>
+        </a>`;
+      }).join('')}
+      ${techniques.length > 12 ? `<span style="color:#4b5563;font-size:9px;">+${techniques.length-12} more</span>` : ''}
+    </div>` : ''}
+
+    <!-- Entities: hosts + users as tag chips -->
+    ${(allHosts.length || allUsers.length) ? `
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+      <span style="font-size:9px;color:#4b5563;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;margin-right:2px;white-space:nowrap;">Entities</span>
+      <!-- Hosts -->
+      ${allHosts.map(h => `
+        <button class="rk-entity-btn"
+          onclick="RAYKAN_UI._invEntity('${h.replace(/'/g,"\\'")}');"
+          style="background:rgba(139,148,158,0.08);border-color:rgba(139,148,158,0.25);color:#8b949e;"
+          title="Investigate host ${h}">
+          🖥 ${h}
+        </button>`).join('')}
+      <!-- Users -->
+      ${allUsers.map(u => `
+        <button class="rk-entity-btn"
+          onclick="RAYKAN_UI._invEntity('${u.replace(/'/g,"\\'")}');"
+          style="background:rgba(96,165,250,0.08);border-color:rgba(96,165,250,0.25);color:#60a5fa;"
+          title="Investigate user ${u}">
+          👤 ${u}
+        </button>`).join('')}
+    </div>` : ''}
+  </div>
+</div>`;
+  }
+
+  // ── v33: Compact chain preview card (used in incident / sidebar views) ──
   function _chainPreview(c) {
-    const stages = c.stages || c.steps || c.detections || [];
+    const stages    = c.stages || c.steps || c.detections || [];
     const riskColor = c.riskScore >= 80 ? '#EF4444' : c.riskScore >= 60 ? '#F97316' : '#A78BFA';
     const riskClass = c.riskScore >= 80 ? 'critical' : c.riskScore >= 60 ? 'high' : c.riskScore >= 40 ? 'medium' : 'low';
     return `
@@ -16767,20 +17142,22 @@ return {
     </div>
     ${c.riskScore ? `<span class="soc-risk-badge ${riskClass}" style="font-size:10px;">RISK ${c.riskScore}</span>` : ''}
   </div>
-  <!-- Compact horizontal chain -->
+  <!-- Compact horizontal stage chips -->
   <div style="display:flex;align-items:center;gap:3px;overflow-x:auto;padding-bottom:3px;">
-    ${stages.slice(0, 6).map((s, i) => {
+    ${stages.slice(0, 6).map((s, si) => {
       const tactic = (s.tactic || s.phaseTactic || '').toLowerCase().replace(/\s+/g, '-');
       const nc = TACTIC_NODE_COLOR[tactic] || '#2D4A5A';
-      const name = s.ruleName || s.title || 'Stage';
-      const shortName = name.length > 18 ? name.slice(0,16) + '…' : name;
+      const name = s.detection_name || s.ruleName || s.title || 'Stage';
+      const shortName = name.length > 18 ? name.slice(0, 16) + '…' : name;
+      const tech = s.technique || s.mitre?.technique || '';
       return `
-      <span style="display:inline-flex;align-items:center;padding:3px 8px;border-radius:5px;
-        font-size:9px;font-weight:600;background:${nc}14;border:1px solid ${nc}44;
-        color:#C9D1D9;white-space:nowrap;flex-shrink:0;">
-        <span style="color:${nc};font-weight:800;margin-right:3px;">${i+1}</span>${shortName}
-      </span>
-      ${i < Math.min(stages.length-1, 5) ? '<span style="color:rgba(0,212,255,0.2);font-size:11px;flex-shrink:0;">›</span>' : ''}`;
+      <div style="display:inline-flex;flex-direction:column;align-items:flex-start;padding:4px 8px;border-radius:6px;
+        font-size:9px;background:${nc}14;border:1px solid ${nc}44;
+        color:#C9D1D9;white-space:nowrap;flex-shrink:0;gap:2px;">
+        <span style="color:${nc};font-weight:800;">${si+1}. ${shortName}</span>
+        ${tech ? `<span style="font-family:monospace;font-size:8px;color:${nc}bb;">${tech}</span>` : ''}
+      </div>
+      ${si < Math.min(stages.length-1, 5) ? `<span style="color:rgba(0,212,255,0.2);font-size:11px;flex-shrink:0;">›</span>` : ''}`;
     }).join('')}
     ${stages.length > 6 ? `<span style="font-size:9px;color:#4A6080;padding:3px 7px;
       border:1px solid rgba(255,255,255,0.06);border-radius:4px;flex-shrink:0;">+${stages.length-6} more</span>` : ''}
