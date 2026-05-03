@@ -12773,9 +12773,11 @@ return {
   ══════════════════════════════════════════════════════════════ */
 
   /* ── Base & Reset ── */
-  .rk-root { display:flex; flex-direction:column; height:100%; min-height:600px;
-    background:#050a0f; color:#c9d1d9; font-family:'Inter',system-ui,sans-serif;
-    position:relative; overflow:hidden; }
+  .rk-root { display:flex; flex-direction:column; height:100%; width:100%;
+    min-width:0; background:#0A0C10; color:#E6EDF3;
+    font-family:'Inter',system-ui,sans-serif; font-size:12px;
+    position:relative; overflow:hidden; box-sizing:border-box; }
+  .rk-root *, .rk-root *::before, .rk-root *::after { box-sizing:border-box; }
 
   /* ── Animated hex-grid background ── */
   .rk-root::before {
@@ -12806,12 +12808,11 @@ return {
 
   /* ── HEADER ── */
   .rk-hdr {
-    display:flex; align-items:center; gap:12px; padding:10px 20px;
-    background:rgba(6,12,20,0.95);
-    border-bottom:1px solid rgba(0,212,255,0.15);
+    display:flex; align-items:center; gap:10px; padding:0 16px;
+    height:42px; min-height:42px; max-height:42px;
+    background:#0A0C10;
+    border-bottom:1px solid #21262D;
     flex-shrink:0;
-    backdrop-filter: blur(12px);
-    box-shadow: 0 1px 0 rgba(0,212,255,0.08), 0 4px 24px rgba(0,0,0,0.6);
   }
 
   /* ── Logo icon with pulse ring ── */
@@ -12912,13 +12913,14 @@ return {
   /* ── STATS ROW ── */
   .rk-stats-row {
     display:grid; grid-template-columns:repeat(6,1fr); gap:1px;
-    background:rgba(0,212,255,0.06);
-    border-bottom:1px solid rgba(0,212,255,0.12); flex-shrink:0;
+    background:#21262D;
+    border-bottom:1px solid #21262D; flex-shrink:0;
   }
   .rk-stat {
-    padding:12px 16px; background:rgba(6,12,20,0.96);
+    padding:6px 12px; height:56px; background:#0F1117;
     position:relative; overflow:hidden; cursor:default;
-    transition: background 0.3s;
+    display:flex; flex-direction:column; justify-content:center;
+    transition: background 0.2s;
   }
   .rk-stat::before {
     content:''; position:absolute; bottom:0; left:0; right:0; height:2px;
@@ -12929,13 +12931,12 @@ return {
   .rk-stat:hover { background:rgba(0,212,255,0.03); }
   .rk-stat:hover::before { transform:scaleX(1); }
   .rk-stat-val {
-    font-size:24px; font-weight:800; font-family:'JetBrains Mono',monospace;
-    line-height:1; transition:all 0.5s;
-    filter: drop-shadow(0 0 6px currentColor);
+    font-size:18px; font-weight:600; font-family:'JetBrains Mono',monospace;
+    line-height:1; transition:all 0.3s; color:#E6EDF3;
   }
   .rk-stat-lbl {
-    font-size:9px; color:#3d5a6b; margin-top:3px;
-    text-transform:uppercase; letter-spacing:1px; font-weight:600;
+    font-size:10px; color:#484F58; margin-top:2px;
+    text-transform:uppercase; letter-spacing:0.06em; font-weight:500;
   }
   .rk-stat-trend {
     position:absolute; top:10px; right:12px; font-size:9px;
@@ -12948,27 +12949,19 @@ return {
 
   /* ── TABS ── */
   .rk-tabs {
-    display:flex; background:rgba(6,12,20,0.98);
-    border-bottom:1px solid rgba(0,212,255,0.1);
+    display:flex; background:#0F1117;
+    border-bottom:1px solid #21262D;
     flex-shrink:0; overflow-x:auto; scrollbar-width:none;
   }
   .rk-tabs::-webkit-scrollbar { display:none; }
   .rk-tab {
-    padding:10px 15px; font-size:11px; font-weight:600; cursor:pointer;
-    background:none; color:#3d5a6b; border:none; border-bottom:2px solid transparent;
-    white-space:nowrap; transition:all 0.2s; letter-spacing:0.3px;
-    position:relative;
+    padding:0 12px; height:34px; font-size:11px; font-weight:500; cursor:pointer;
+    background:none; color:#484F58; border:none; border-bottom:2px solid transparent;
+    white-space:nowrap; transition:color 0.15s,border-color 0.15s;
+    display:inline-flex; align-items:center; gap:5px;
   }
-  .rk-tab:hover { color:#8bb5cc; background:rgba(0,212,255,0.03); }
-  .rk-tab.active {
-    color:#00d4ff; border-bottom-color:#00d4ff;
-    text-shadow: 0 0 12px rgba(0,212,255,0.6);
-  }
-  .rk-tab.active::after {
-    content:''; position:absolute; bottom:-1px; left:0; right:0; height:2px;
-    background:linear-gradient(90deg,transparent,#00d4ff,transparent);
-    filter:blur(2px);
-  }
+  .rk-tab:hover { color:#8B949E; }
+  .rk-tab.active { color:#E6EDF3; border-bottom-color:#58A6FF; }
   /* Alert dot on tab */
   .rk-tab-alert {
     display:inline-block; width:5px; height:5px; border-radius:50%;
@@ -12978,92 +12971,62 @@ return {
   }
 
   /* ── BODY ── */
-  .rk-body { flex:1; overflow:auto; scrollbar-width:thin; scrollbar-color:#1a2535 transparent; }
-  .rk-body::-webkit-scrollbar { width:5px; }
+  .rk-body { flex:1; overflow-y:auto; overflow-x:hidden; min-width:0; width:100%;
+    scrollbar-width:thin; scrollbar-color:#21262D transparent; }
+  .rk-body::-webkit-scrollbar { width:4px; }
   .rk-body::-webkit-scrollbar-track { background:transparent; }
-  .rk-body::-webkit-scrollbar-thumb { background:#1a2535; border-radius:3px; }
+  .rk-body::-webkit-scrollbar-thumb { background:#21262D; border-radius:2px; }
 
   /* ── PANEL ── */
-  .rk-panel { padding:20px; animation:rk-panel-in 0.25s ease-out; }
-  @keyframes rk-panel-in { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+  .rk-panel { padding:10px 12px; width:100%; min-width:0; box-sizing:border-box;
+    animation:rk-panel-in 0.2s ease-out; }
+  @keyframes rk-panel-in { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
 
   /* ── CARDS ── */
   .rk-card {
-    background:rgba(10,18,28,0.9);
-    border:1px solid rgba(0,212,255,0.1);
-    border-radius:12px;
-    backdrop-filter:blur(4px);
-    transition: border-color 0.3s, box-shadow 0.3s;
+    background:#161B22;
+    border:1px solid #21262D;
+    border-radius:4px;
+    transition: border-color 0.2s;
     position:relative;
   }
-  .rk-card:hover {
-    border-color:rgba(0,212,255,0.2);
-    box-shadow:0 4px 24px rgba(0,0,0,0.4), 0 0 0 1px rgba(0,212,255,0.05);
-  }
-  /* Corner accent on cards */
-  .rk-card::before {
-    content:''; position:absolute; top:0; left:0; width:40px; height:2px;
-    background:linear-gradient(90deg,#00d4ff,transparent);
-    border-radius:12px 0 0 0; pointer-events:none;
-  }
+  .rk-card:hover { border-color:#30363D; }
   .rk-card-hdr {
-    padding:14px 18px; border-bottom:1px solid rgba(0,212,255,0.08);
+    padding:8px 12px; border-bottom:1px solid #21262D;
     display:flex; align-items:center; justify-content:space-between;
   }
   .rk-card-title {
-    font-size:12px; font-weight:700; color:#7aa5be; text-transform:uppercase;
-    letter-spacing:0.8px;
+    font-size:11px; font-weight:500; color:#8B949E; text-transform:uppercase;
+    letter-spacing:0.06em;
   }
 
-  /* ── INCIDENT CARD (critical-level) ── */
+  /* ── INCIDENT CARD ── */
   .rk-inc-card {
-    background:rgba(8,14,24,0.95);
-    border-radius:14px; overflow:hidden;
+    background:#161B22;
+    border:1px solid #21262D;
+    border-radius:4px; overflow:hidden;
     position:relative;
-    transition:transform 0.2s, box-shadow 0.3s;
-    animation: rk-card-appear 0.35s ease-out forwards;
+    transition:border-color 0.15s, background 0.15s;
+    animation: rk-card-appear 0.2s ease-out forwards;
+    cursor:pointer;
   }
   @keyframes rk-card-appear {
-    from { opacity:0; transform:translateY(12px); }
+    from { opacity:0; transform:translateY(6px); }
     to   { opacity:1; transform:translateY(0); }
   }
-  .rk-inc-card:hover { transform:translateY(-2px); }
-  .rk-inc-card.sev-critical {
-    border:1px solid rgba(239,68,68,0.3);
-    box-shadow: 0 0 30px rgba(239,68,68,0.08), 0 4px 20px rgba(0,0,0,0.5);
-  }
-  .rk-inc-card.sev-critical::before {
-    content:''; position:absolute; top:0; left:0; right:0; height:2px;
-    background:linear-gradient(90deg,#ef4444,#f97316,#ef4444);
-    background-size:200% 100%;
-    animation: rk-border-flow 2s linear infinite;
-  }
-  @keyframes rk-border-flow { 0%{background-position:0 0} 100%{background-position:200% 0} }
-  .rk-inc-card.sev-high {
-    border:1px solid rgba(249,115,22,0.25);
-    box-shadow:0 0 20px rgba(249,115,22,0.07);
-  }
-  .rk-inc-card.sev-medium {
-    border:1px solid rgba(234,179,8,0.2);
-    box-shadow:0 0 16px rgba(234,179,8,0.05);
-  }
-  .rk-inc-card.sev-low, .rk-inc-card.sev-informational {
-    border:1px solid rgba(0,212,255,0.12);
-  }
+  .rk-inc-card:hover { background:#1C2130; border-color:#30363D; }
+  .rk-inc-card.sev-critical { border-left:3px solid #FF4444; }
+  .rk-inc-card.sev-high     { border-left:3px solid #FF8C00; }
+  .rk-inc-card.sev-medium   { border-left:3px solid #E3B341; }
+  .rk-inc-card.sev-low, .rk-inc-card.sev-informational { border-left:3px solid #3FB950; }
 
   /* ── BUTTONS ── */
   .rk-btn {
-    padding:7px 16px; border-radius:7px; font-size:12px; font-weight:700;
-    cursor:pointer; border:none; transition:all 0.2s; letter-spacing:0.3px;
-    position:relative; overflow:hidden;
+    padding:0 10px; height:24px; border-radius:3px; font-size:11px; font-weight:500;
+    cursor:pointer; border:1px solid #21262D; background:#161B22;
+    color:#8B949E; transition:border-color 0.15s,color 0.15s; white-space:nowrap;
   }
-  .rk-btn::after {
-    content:''; position:absolute; top:50%; left:50%; width:0; height:0;
-    background:rgba(255,255,255,0.2); border-radius:50%;
-    transform:translate(-50%,-50%); transition:width 0.4s, height 0.4s, opacity 0.4s;
-    opacity:0;
-  }
-  .rk-btn:active::after { width:200px; height:200px; opacity:0; }
+  .rk-btn:hover { border-color:#58A6FF; color:#E6EDF3; background:#1C2130; }
   .rk-btn-primary {
     background:linear-gradient(135deg,#1a3fa0,#1e5ed4);
     color:#fff; box-shadow:0 0 16px rgba(30,94,212,0.3), inset 0 1px 0 rgba(255,255,255,0.1);
@@ -13079,11 +13042,8 @@ return {
     color:#fff; box-shadow:0 0 16px rgba(124,58,237,0.3), inset 0 1px 0 rgba(255,255,255,0.1);
   }
   .rk-btn-purple:hover { box-shadow:0 0 24px rgba(124,58,237,0.5); transform:translateY(-1px); }
-  .rk-btn-ghost {
-    background:rgba(255,255,255,0.04); color:#6b8fa3;
-    border:1px solid rgba(255,255,255,0.08);
-  }
-  .rk-btn-ghost:hover { color:#b0cad8; border-color:rgba(0,212,255,0.3); background:rgba(0,212,255,0.06); }
+  .rk-btn-ghost { background:transparent; color:#8B949E; border:1px solid #21262D; }
+  .rk-btn-ghost:hover { color:#E6EDF3; border-color:#30363D; }
   .rk-btn-cyan {
     background:linear-gradient(135deg,#0891b2,#0e7490);
     color:#fff; box-shadow:0 0 16px rgba(8,145,178,0.3);
@@ -13092,29 +13052,25 @@ return {
 
   /* ── INPUTS ── */
   .rk-input {
-    background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.08);
-    border-radius:8px; padding:9px 14px; color:#c9d1d9;
-    font-size:13px; outline:none; width:100%; box-sizing:border-box;
-    transition:all 0.2s; font-family:'Inter',system-ui,sans-serif;
+    background:#0F1117; border:1px solid #21262D;
+    border-radius:3px; padding:5px 10px; color:#E6EDF3;
+    font-size:12px; outline:none; width:100%; box-sizing:border-box;
+    transition:border-color 0.15s;
   }
-  .rk-input:focus {
-    border-color:rgba(0,212,255,0.5);
-    background:rgba(0,212,255,0.03);
-    box-shadow: 0 0 0 3px rgba(0,212,255,0.08), 0 0 20px rgba(0,212,255,0.1);
-  }
-  .rk-input::placeholder { color:#2d4a5a; }
+  .rk-input:focus { border-color:#58A6FF; }
+  .rk-input::placeholder { color:#484F58; }
 
   /* ── BADGES & PILLS ── */
   .rk-badge {
-    display:inline-flex; align-items:center; padding:2px 8px;
-    border-radius:10px; font-size:10px; font-weight:700; text-transform:uppercase;
-    letter-spacing:0.5px;
+    display:inline-flex; align-items:center; padding:1px 6px;
+    border-radius:3px; font-size:10px; font-weight:500; text-transform:uppercase;
+    letter-spacing:0.04em; white-space:nowrap;
   }
-  .rk-sev-critical { background:rgba(239,68,68,0.15); color:#ef4444; box-shadow:0 0 8px rgba(239,68,68,0.2); }
-  .rk-sev-high     { background:rgba(249,115,22,0.15); color:#f97316; }
-  .rk-sev-medium   { background:rgba(234,179,8,0.12); color:#eab308; }
-  .rk-sev-low      { background:rgba(34,197,94,0.1); color:#22c55e; }
-  .rk-sev-info     { background:rgba(107,114,128,0.15); color:#6b7280; }
+  .rk-sev-critical { background:rgba(255,68,68,0.15); color:#FF4444; }
+  .rk-sev-high     { background:rgba(255,140,0,0.15); color:#FF8C00; }
+  .rk-sev-medium   { background:rgba(227,179,65,0.15); color:#E3B341; }
+  .rk-sev-low      { background:rgba(63,185,80,0.12); color:#3FB950; }
+  .rk-sev-info     { background:rgba(72,79,88,0.3); color:#8B949E; }
 
   /* ── CHIPS ── */
   .rk-chip {
@@ -13140,16 +13096,12 @@ return {
 
   /* ── DETECTION ROWS ── */
   .rk-det-row {
-    display:flex; align-items:flex-start; gap:12px; padding:11px 16px;
-    border-bottom:1px solid rgba(255,255,255,0.04); cursor:pointer;
-    transition:all 0.15s; position:relative; overflow:hidden;
+    display:flex; align-items:center; gap:10px; padding:0 12px;
+    height:34px; min-height:34px;
+    border-bottom:1px solid #21262D; cursor:pointer;
+    transition:background 0.1s;
   }
-  .rk-det-row::before {
-    content:''; position:absolute; left:0; top:0; bottom:0; width:2px;
-    background:transparent; transition:background 0.2s;
-  }
-  .rk-det-row:hover { background:rgba(0,212,255,0.03); }
-  .rk-det-row:hover::before { background:#00d4ff; }
+  .rk-det-row:hover { background:#1C2130; }
   .rk-det-row:last-child { border-bottom:none; }
 
   /* ── TIMELINE ── */
@@ -13190,11 +13142,12 @@ return {
 
   /* ── ENTITY BUTTONS ── */
   .rk-entity-btn {
-    padding:4px 10px; border-radius:6px; font-size:11px; cursor:pointer;
-    background:rgba(0,212,255,0.06); color:#00d4ff;
-    border:1px solid rgba(0,212,255,0.2); transition:all 0.2s;
-    font-weight:600;
+    padding:0 8px; height:24px; border-radius:3px; font-size:11px; cursor:pointer;
+    background:#0F1117; color:#8B949E;
+    border:1px solid #21262D; transition:border-color 0.15s,color 0.15s;
+    font-weight:500; display:inline-flex; align-items:center;
   }
+  .rk-entity-btn:hover { border-color:#58A6FF; color:#E6EDF3; }
   .rk-entity-btn:hover {
     background:rgba(0,212,255,0.12);
     box-shadow:0 0 12px rgba(0,212,255,0.2);
@@ -13637,6 +13590,243 @@ return {
     opacity:0.72;
     border-style:dashed !important;
   }
+
+  /* ══════════════════════════════════════════════════════════════
+     DENSE-UI OVERRIDES v35 — Issues 1 + 2
+     Full-screen fill · Exact typographic scale · Flat dark palette
+     No glow/shadow/gradient on non-critical elements
+  ══════════════════════════════════════════════════════════════ */
+
+  /* ── Full-screen fill ── */
+  .rk-root {
+    position:absolute; inset:0;
+    width:100%; height:100%;
+    overflow:hidden !important;
+  }
+  /* flex container fills its slot */
+  .rk-hdr, .rk-stats-row, .rk-tabs { flex-shrink:0; width:100%; }
+  .rk-body { flex:1; min-height:0; width:100%; min-width:0; overflow-y:auto; overflow-x:hidden; }
+  .rk-panel { width:100%; min-width:0; }
+
+  /* ── Typographic scale (Issue 2) ── */
+  .rk-root { font-size:12px; line-height:1.45; }
+  .rk-panel-title  { font-size:13px; font-weight:500; color:#E6EDF3; }
+  .rk-section-label {
+    font-size:11px; font-weight:500; color:#8B949E;
+    text-transform:uppercase; letter-spacing:0.06em;
+  }
+  .rk-metric-num  { font-size:18px; font-weight:600; line-height:1; }
+  .rk-logo-title  { font-size:13px !important; font-weight:500 !important;
+    letter-spacing:2px !important; background:none !important;
+    -webkit-text-fill-color:#E6EDF3 !important; filter:none !important; }
+  .rk-logo-sub    { font-size:9px !important; color:#484F58 !important; }
+
+  /* ── Header 40–42px ── */
+  .rk-hdr { height:42px !important; min-height:42px !important;
+    max-height:42px !important; padding:0 14px !important; gap:8px !important; }
+  .rk-logo-icon { width:26px !important; height:26px !important;
+    font-size:13px !important; border-radius:4px !important;
+    box-shadow:none !important; animation:none !important; }
+  .rk-logo-icon::after { display:none !important; }
+  #rk-risk-badge { font-size:10px !important; padding:2px 8px !important;
+    border-radius:3px !important; }
+  .rk-ws-badge  { font-size:10px !important; padding:2px 8px !important;
+    border-radius:3px !important; }
+  .rk-hdr-btn, .rk-focus-btn { font-size:11px !important;
+    padding:0 8px !important; height:24px !important;
+    border-radius:3px !important; box-shadow:none !important; }
+  .rk-hdr-btn:hover { transform:none !important; }
+
+  /* ── KPI strip 56–64px ── */
+  .rk-stats-row { height:56px !important; }
+  .rk-stat { padding:6px 10px !important; height:56px !important; }
+  .rk-stat-val { font-size:18px !important; font-weight:600 !important;
+    filter:none !important; }
+  .rk-stat-lbl { font-size:10px !important; letter-spacing:0.05em !important; }
+
+  /* ── Tabs 34px ── */
+  .rk-tabs { height:34px !important; overflow-x:auto; }
+  .rk-tab  { height:34px !important; padding:0 10px !important;
+    font-size:11px !important; }
+
+  /* ── Panel padding ── */
+  .rk-panel { padding:10px 12px !important; }
+
+  /* ── Cards: 3–4px radius, no glow/shadow/backdrop ── */
+  .rk-card, .rk-inc-card, .rk-chain-preview,
+  .rk-anom-card, .rk-engine-card, .rk-inv-section {
+    border-radius:3px !important; backdrop-filter:none !important;
+    box-shadow:none !important;
+  }
+  .rk-card::before { display:none !important; }
+  .rk-card-hdr { padding:7px 10px !important; }
+  .rk-inc-card-hdr { padding:8px 12px !important; }
+  .rk-inc-card-hdr::after { display:none !important; }
+  /* All cards 100% width of parent */
+  .rk-card, .rk-inc-card, .rk-anom-card, .rk-engine-card,
+  .rk-inv-section, .rk-chain-preview { width:100%; }
+
+  /* ── Buttons 24px ── */
+  .rk-btn, .rk-entity-btn, .rk-hdr-btn-demo {
+    height:24px !important; font-size:11px !important;
+    border-radius:3px !important; box-shadow:none !important; }
+  .rk-btn:hover, .rk-hdr-btn-demo:hover { transform:none !important; box-shadow:none !important; }
+  .rk-btn-primary, .rk-btn-red, .rk-btn-purple, .rk-btn-cyan {
+    background:#161B22 !important; color:#E6EDF3 !important;
+    border:1px solid #21262D !important; }
+  .rk-btn-primary:hover, .rk-btn-red:hover,
+  .rk-btn-purple:hover, .rk-btn-cyan:hover {
+    background:#1C2130 !important; border-color:#58A6FF !important; }
+
+  /* ── Inputs 28px ── */
+  .rk-input, .rk-select {
+    font-size:12px !important; padding:4px 8px !important;
+    border-radius:3px !important; height:28px !important; }
+
+  /* ── Badges 10px, 3px radius ── */
+  .rk-badge { font-size:10px !important; padding:1px 5px !important;
+    border-radius:3px !important; }
+
+  /* ── Tactic badge 18×10px constraints ── */
+  .rk-tactic-pill { font-size:10px !important; padding:0 6px !important;
+    height:18px !important; line-height:18px !important;
+    border-radius:3px !important; }
+  .rk-tactic-pill:hover { transform:none !important; filter:none !important; }
+
+  /* ── MITRE badge 16×10px ── */
+  .soc-mitre-pill {
+    display:inline-block; font-size:10px; padding:0 5px;
+    height:16px; line-height:16px;
+    background:#1F2937; color:#58A6FF; border:1px solid #30363D;
+    border-radius:3px; font-weight:500; white-space:nowrap; margin:1px; }
+
+  /* ── Severity badges 18×10px ── */
+  .rk-sev-critical, .rk-sev-high, .rk-sev-medium, .rk-sev-low, .rk-sev-info {
+    height:18px !important; line-height:18px !important;
+    padding:0 6px !important; font-size:10px !important; }
+
+  /* ── Detection row 32–36px ── */
+  .rk-det-row { height:34px !important; min-height:34px !important;
+    padding:0 10px !important; }
+
+  /* ── Grid layouts ── */
+  .rk-grid-2 { gap:10px !important; }
+  .rk-grid-3 { gap:8px !important; }
+
+  /* ── Attack-chain step cards ≤150×80px ── */
+  .rk-chain-step {
+    max-width:150px !important; max-height:80px !important;
+    min-width:90px !important;
+    padding:6px 8px !important;
+    border-radius:3px !important;
+    box-shadow:none !important;
+  }
+  .rk-chain-step:hover { box-shadow:none !important; }
+  /* Attack-chain stage number circle 18px */
+  .rk-chain-step > div[style*="border-radius:50%"] {
+    width:18px !important; height:18px !important; font-size:9px !important; }
+  /* Connector arrows 16×8px */
+  .rk-chain-step + div svg { width:16px !important; height:8px !important; }
+
+  /* ── Attack chain card compact (chain tab) ── */
+  .rk-chain-preview { max-height:160px !important; overflow:hidden !important;
+    padding:8px 10px !important; }
+
+  /* ── Severity accents flat (Issue 2 color tokens) ── */
+  .rk-sev-critical { background:rgba(255,68,68,0.12)  !important; color:#FF4444 !important; }
+  .rk-sev-high     { background:rgba(255,140,0,0.12)  !important; color:#FF8C00 !important; }
+  .rk-sev-medium   { background:rgba(227,179,65,0.12) !important; color:#E3B341 !important; }
+  .rk-sev-low      { background:rgba(63,185,80,0.10)  !important; color:#3FB950 !important; }
+  .rk-sev-info     { background:rgba(72,79,88,0.20)   !important; color:#8B949E !important; }
+
+  /* ── Suppress all glows / shadows / gradients on non-critical elements ── */
+  .rk-inc-card:not(.sev-critical)::before,
+  .rk-inc-card:not(.sev-critical)::after { display:none !important; }
+  .rk-logo-icon  { animation:none !important; }
+  .rk-chain-svg-wrap { border-radius:3px !important; background:#0F1117 !important;
+    box-shadow:none !important; }
+  .rk-progress-bar { box-shadow:none !important; }
+  .rk-entity-btn:hover { box-shadow:none !important; }
+  .rk-engine-card:hover { transform:none !important; box-shadow:none !important; }
+  .rk-ov-stat:hover    { transform:none !important; }
+  .rk-scenario-btn:hover { transform:none !important; }
+  /* Suppress scan-line overlay (dead visual weight) */
+  .rk-root::after { display:none !important; }
+  /* Suppress hex-grid drift if it causes layout reflow */
+  .rk-root::before { animation:none !important; }
+
+  /* ── @media responsive down to 1280px ── */
+  @media (max-width:1280px) {
+    .rk-stats-row { grid-template-columns:repeat(3,1fr) !important; }
+    .rk-grid-2 { grid-template-columns:1fr !important; }
+    .rk-grid-3 { grid-template-columns:1fr 1fr !important; }
+  }
+
+  /* ── Incident Drawer ── */
+  .rk-inc-drawer-overlay {
+    position:fixed; inset:0; z-index:4000;
+    background:rgba(0,0,0,0.55);
+    opacity:0; pointer-events:none;
+    transition:opacity 0.2s ease-out;
+  }
+  .rk-inc-drawer-overlay.open {
+    opacity:1; pointer-events:auto;
+  }
+  .rk-inc-drawer {
+    position:fixed; top:0; right:0; bottom:0;
+    width:550px; max-width:100vw;
+    background:#0F1117; border-left:1px solid #21262D;
+    display:flex; flex-direction:column;
+    transform:translateX(100%);
+    transition:transform 0.2s ease-out;
+    z-index:4001;
+    overflow:hidden;
+  }
+  .rk-inc-drawer-overlay.open .rk-inc-drawer {
+    transform:translateX(0);
+  }
+  .rk-inc-drawer-hdr {
+    display:flex; align-items:center; gap:8px;
+    padding:0 14px; height:48px; min-height:48px;
+    border-bottom:1px solid #21262D; flex-shrink:0;
+  }
+  .rk-inc-drawer-tabs {
+    display:flex; border-bottom:1px solid #21262D;
+    flex-shrink:0; overflow-x:auto; scrollbar-width:none;
+    background:#0A0C10;
+  }
+  .rk-inc-drawer-tabs::-webkit-scrollbar { display:none; }
+  .rk-inc-drawer-tab {
+    padding:0 12px; height:34px; font-size:11px; font-weight:500;
+    background:none; border:none; border-bottom:2px solid transparent;
+    color:#484F58; cursor:pointer; white-space:nowrap;
+    transition:color 0.15s, border-color 0.15s;
+  }
+  .rk-inc-drawer-tab:hover  { color:#8B949E; }
+  .rk-inc-drawer-tab.active { color:#E6EDF3; border-bottom-color:#58A6FF; }
+  .rk-inc-drawer-body {
+    flex:1; overflow-y:auto; overflow-x:hidden;
+    scrollbar-width:thin; scrollbar-color:#21262D transparent;
+  }
+  .rk-inc-drawer-body::-webkit-scrollbar { width:4px; }
+  .rk-inc-drawer-body::-webkit-scrollbar-thumb { background:#21262D; border-radius:2px; }
+  .rk-inc-drawer-panel { display:none; }
+  .rk-inc-drawer-panel.active { display:block; }
+  .rk-inc-drawer-footer {
+    padding:8px 12px; border-top:1px solid #21262D;
+    display:flex; gap:6px; flex-wrap:wrap; flex-shrink:0;
+    background:#0A0C10;
+  }
+  /* Response action buttons in drawer */
+  .rk-drawer-action {
+    padding:0 10px; height:26px; font-size:11px; font-weight:500;
+    border-radius:3px; border:1px solid #21262D; background:#161B22;
+    color:#8B949E; cursor:pointer; white-space:nowrap;
+    transition:border-color 0.15s, color 0.15s;
+  }
+  .rk-drawer-action:hover { border-color:#58A6FF; color:#E6EDF3; }
+  .rk-drawer-action.danger { border-color:rgba(255,68,68,0.3); color:#FF4444; }
+  .rk-drawer-action.danger:hover { border-color:#FF4444; background:rgba(255,68,68,0.08); }
 </style>
 
 <div class="rk-root" id="rk-root">
@@ -13736,6 +13926,27 @@ return {
 
   <!-- Toast container -->
   <div id="rk-toast-root" style="position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;"></div>
+
+  <!-- Incident Detail Drawer (Issue 3) -->
+  <div id="rk-inc-drawer-overlay" class="rk-inc-drawer-overlay" onclick="RAYKAN_UI._closeIncidentDrawer(event)">
+    <div class="rk-inc-drawer" id="rk-inc-drawer" onclick="event.stopPropagation()">
+      <!-- Drawer Header -->
+      <div class="rk-inc-drawer-hdr" id="rk-inc-drawer-hdr">
+        <div style="flex:1;min-width:0;">
+          <div id="rk-inc-drawer-id" style="font-size:10px;color:#484F58;font-family:'JetBrains Mono',monospace;margin-bottom:2px;"></div>
+          <div id="rk-inc-drawer-title" style="font-size:13px;font-weight:500;color:#E6EDF3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></div>
+        </div>
+        <div id="rk-inc-drawer-badges" style="display:flex;gap:4px;align-items:center;flex-shrink:0;"></div>
+        <button style="padding:0 6px;height:24px;font-size:14px;background:none;border:none;color:#484F58;cursor:pointer;flex-shrink:0;line-height:1;" onclick="RAYKAN_UI._closeIncidentDrawer()" title="Close">✕</button>
+      </div>
+      <!-- Drawer Tabs -->
+      <div class="rk-inc-drawer-tabs" id="rk-inc-drawer-tabs"></div>
+      <!-- Drawer Body -->
+      <div class="rk-inc-drawer-body" id="rk-inc-drawer-body"></div>
+      <!-- Drawer Footer — Response Actions -->
+      <div class="rk-inc-drawer-footer" id="rk-inc-drawer-footer"></div>
+    </div>
+  </div>
 
 </div>`;
   }
@@ -16431,55 +16642,49 @@ return {
        style="
          cursor:pointer;
          display:flex;flex-direction:column;align-items:center;
-         background:rgba(10,15,22,0.9);
-         border:1.5px solid ${ph.color}55;
-         border-top:3px solid ${ph.color};
-         border-radius:8px;
-         padding:8px 12px;
-         min-width:110px;max-width:130px;
+         background:#0F1117;
+         border:1px solid ${ph.color}44;
+         border-top:2px solid ${ph.color};
+         border-radius:3px;
+         padding:6px 8px;
+         min-width:90px;max-width:150px;max-height:80px;
+         overflow:hidden;
          position:relative;
-         transition:border-color 0.2s,box-shadow 0.2s;
+         transition:border-color 0.15s;
        "
-       onmouseenter="this.style.borderColor='${ph.color}';this.style.boxShadow='0 0 10px ${ph.color}44';"
-       onmouseleave="this.style.borderColor='${ph.color}55';this.style.boxShadow='';">
-    <!-- Phase number badge -->
+       onmouseenter="this.style.borderTopColor='${ph.color}';this.style.borderColor='${ph.color}88';"
+       onmouseleave="this.style.borderTopColor='${ph.color}';this.style.borderColor='${ph.color}44';">
+    <!-- Phase number circle 18px -->
     <div style="
-      position:absolute;top:-10px;left:50%;transform:translateX(-50%);
-      font-size:9px;font-weight:700;padding:1px 7px;
-      background:${ph.color};color:#fff;border-radius:8px;white-space:nowrap;">
+      position:absolute;top:-9px;left:50%;transform:translateX(-50%);
+      width:18px;height:18px;border-radius:50%;
+      font-size:9px;font-weight:700;
+      background:${ph.color};color:#fff;
+      display:flex;align-items:center;justify-content:center;
+      flex-shrink:0;">
       ${idx + 1}
     </div>
-    <!-- Tactic label -->
-    <div style="font-size:10px;font-weight:700;color:${ph.color};text-align:center;margin-top:4px;
-                text-transform:uppercase;letter-spacing:0.4px;line-height:1.2;">
+    <!-- Tactic badge 10px uppercase -->
+    <div style="font-size:10px;font-weight:500;color:${ph.color};text-align:center;margin-top:6px;
+                text-transform:uppercase;letter-spacing:0.4px;line-height:1.1;
+                overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%;">
       ${ph.label}
     </div>
-    <!-- Detection count ring -->
-    <div style="margin:5px 0 2px;width:30px;height:30px;border-radius:50%;
-                border:2px solid ${ringCol};display:flex;align-items:center;justify-content:center;">
-      <span style="font-size:12px;font-weight:800;color:${ringCol};">${cnt}</span>
+    <!-- Detection count -->
+    <div style="margin:3px 0 1px;display:flex;align-items:center;gap:3px;">
+      <span style="font-size:11px;font-weight:700;color:${ringCol};">${cnt}</span>
+      <span style="font-size:9px;color:#484F58;">det${cnt===1?'':'s'}</span>
     </div>
-    <div style="font-size:9px;color:#6b7280;">det${cnt===1?'':'s'}</div>
-    ${hostLabel ? `<div style="font-size:9px;color:#8b949e;margin-top:3px;font-family:monospace;
-                               overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:106px;"
+    ${hostLabel ? `<div style="font-size:9px;color:#8B949E;font-family:monospace;
+                               overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%;text-align:center;"
                        title="${firstDet.computer||firstDet.host||''}">🖥 ${hostLabel}</div>` : ''}
-    ${userLabel ? `<div style="font-size:9px;color:#60a5fa;
-                               overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:106px;"
-                       title="${firstDet.user||''}">👤 ${userLabel}</div>` : ''}
   </div>
   ${!isLast ? `
-  <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
-              padding:0 2px;position:relative;min-width:36px;">
-    <svg width="36" height="18" viewBox="0 0 36 18">
-      <defs>
-        <linearGradient id="ag-${idx}" x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stop-color="${ph.color}" stop-opacity="0.7"/>
-          <stop offset="100%" stop-color="${phases[idx+1].color}" stop-opacity="0.7"/>
-        </linearGradient>
-      </defs>
-      <line x1="0" y1="9" x2="30" y2="9" stroke="url(#ag-${idx})" stroke-width="1.5"
-            stroke-dasharray="4 3"/>
-      <polygon points="30,5 36,9 30,13" fill="${phases[idx+1].color}" opacity="0.8"/>
+  <div style="display:flex;align-items:center;justify-content:center;padding:0 1px;flex-shrink:0;">
+    <svg width="16" height="8" viewBox="0 0 16 8">
+      <line x1="0" y1="4" x2="11" y2="4" stroke="${ph.color}88" stroke-width="1"
+            stroke-dasharray="3 2"/>
+      <polygon points="11,1 16,4 11,7" fill="${phases[idx+1].color}" opacity="0.7"/>
     </svg>
   </div>` : ''}
 </div>`;
@@ -16487,17 +16692,18 @@ return {
 
     bannerEl.innerHTML = `
 <div style="
-  background:rgba(2,6,10,0.6);
-  border:1px solid rgba(255,255,255,0.06);
-  border-radius:10px;
-  padding:18px 14px 12px;
+  background:#0F1117;
+  border:1px solid #21262D;
+  border-radius:3px;
+  padding:14px 12px 10px;
   overflow-x:auto;
   -webkit-overflow-scrolling:touch;
 ">
-  <div style="font-size:11px;color:#6b7280;margin-bottom:10px;font-weight:600;letter-spacing:0.5px;">
-    ⚔️ ATTACK-CHAIN PROGRESSION — ${phases.length} phase${phases.length===1?'':'s'} · ${sortedDets.length} detection${sortedDets.length===1?'':'s'} · chronological order
+  <div style="font-size:11px;font-weight:500;color:#8B949E;margin-bottom:10px;
+              text-transform:uppercase;letter-spacing:0.06em;">
+    ACE v6 ATTACK-CHAIN · ${phases.length} phase${phases.length===1?'':'s'} · ${sortedDets.length} detection${sortedDets.length===1?'':'s'} · first seen asc
   </div>
-  <div style="display:flex;align-items:center;gap:0;flex-wrap:nowrap;padding-bottom:8px;">
+  <div style="display:flex;align-items:center;gap:0;flex-wrap:nowrap;padding-bottom:6px;">
     ${steps}
   </div>
 </div>`;
@@ -18178,8 +18384,14 @@ return {
   // Called by the "View Details" button on every incident card.
   // Renders a complete investigation view: SVG attack chain, detections,
   // timeline, MITRE mapping, cross-host correlation, raw log evidence.
+  // ════════════════════════════════════════════════════════════════
+  //  INCIDENT DETAIL DRAWER  (Issue 3 — v34)
+  //  Slide-in right-side drawer, 550px, state: S.selectedIncident
+  // ════════════════════════════════════════════════════════════════
+
   function _openIncidentDetail(incidentId) {
     if (!incidentId) return;
+
     const inc = (S.incidents || []).find(x =>
       (x.incidentId || x.id) === incidentId
     );
@@ -18188,6 +18400,40 @@ return {
       return;
     }
 
+    // Store selected incident in state
+    S.selectedIncident = incidentId;
+
+    const overlay = document.getElementById('rk-inc-drawer-overlay');
+    if (!overlay) {
+      // Fallback to old modal if drawer not injected yet
+      _openIncidentDetailModal(incidentId);
+      return;
+    }
+
+    _renderIncidentDrawer(inc, incidentId);
+
+    overlay.classList.add('open');
+
+    // Keyboard close
+    overlay._escHandler = function(e) {
+      if (e.key === 'Escape') _closeIncidentDrawer();
+    };
+    document.addEventListener('keydown', overlay._escHandler);
+  }
+
+  function _closeIncidentDrawer(event) {
+    if (event && event.target !== event.currentTarget) return;
+    const overlay = document.getElementById('rk-inc-drawer-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('open');
+    S.selectedIncident = null;
+    if (overlay._escHandler) {
+      document.removeEventListener('keydown', overlay._escHandler);
+      overlay._escHandler = null;
+    }
+  }
+
+  function _renderIncidentDrawer(inc, incidentId) {
     const sev    = inc.severity || 'medium';
     const cs     = _sev(sev);
     const conf   = (typeof inc.confidence === 'object' && inc.confidence !== null)
@@ -18197,295 +18443,451 @@ return {
     const title        = inc.title || inc.behavior?.behaviorTitle || 'Correlated Attack Chain';
     const mitreTactics = (inc.mitreTactics   || []).slice(0, 8);
     const mitreMappings= (inc.mitreMappings  || (inc.techniques||[]).map(t=>({technique:t,tactic:'',role:'secondary'}))).slice(0, 12);
-    // FIX v23: killChainStages is now always present in incidentSummaries
     const killChain    = inc.killChainStages || inc.phaseChain || inc.phaseTimeline || [];
     const allHosts     = inc.allHosts || (inc.host ? [inc.host] : []);
     const allUsers     = inc.allUsers || (inc.user ? [inc.user] : []);
-    // FIX v23: _detections and _timeline are now enriched into incidentSummaries
     const linkedDets   = (inc._detections || []).slice(0, 30);
     const timelineItems= (inc._timeline   || []).slice(0, 50);
     const narrative    = inc.narrative || inc.behavior?.description || '';
 
-    // ── MITRE tactic pills ──────────────────────────────────────────
-    const tacticPills = mitreTactics.map(t =>
-      `<span style="display:inline-block;padding:2px 9px;background:rgba(96,165,250,0.1);color:#60a5fa;
-        border:1px solid rgba(96,165,250,0.2);border-radius:10px;font-size:10px;margin:2px;">
-        ${t.replace(/-/g,' ')}</span>`
-    ).join('');
+    // ── Header ──────────────────────────────────────────────────
+    const hdrEl = document.getElementById('rk-inc-drawer-hdr');
+    const idEl  = document.getElementById('rk-inc-drawer-id');
+    const ttlEl = document.getElementById('rk-inc-drawer-title');
+    const bdgEl = document.getElementById('rk-inc-drawer-badges');
 
-    // ── MITRE technique matrix ──────────────────────────────────────
-    const techniqueRows = mitreMappings.map(m =>
-      `<tr style="border-bottom:1px solid #21262d;">
-        <td style="padding:5px 8px;font-size:11px;font-family:'JetBrains Mono',monospace;color:#60a5fa;
-          cursor:pointer;" onclick="RAYKAN_UI._openMITRE('${m.technique||''}')" title="Open ATT&CK">
-          ${m.technique||'—'}</td>
-        <td style="padding:5px 8px;font-size:11px;color:#8b949e;">${m.tactic||m.category||'—'}</td>
-        <td style="padding:5px 8px;font-size:11px;color:#c9d1d9;">${m.name||m.title||'—'}</td>
-        <td style="padding:5px 8px;font-size:10px;color:${m.role==='primary'?'#f97316':'#6b7280'};">` +
-          `${m.role||'secondary'}${m.role==='primary'?' ★':''}</td>
-      </tr>`
-    ).join('');
+    if (idEl)  idEl.textContent  = incidentId;
+    if (ttlEl) ttlEl.textContent = title;
+    if (bdgEl) bdgEl.innerHTML   = [
+      `<span class="rk-badge rk-sev-${sev}">${sev.toUpperCase()}</span>`,
+      `<span class="rk-badge" style="background:rgba(88,166,255,0.1);color:#58A6FF;">${conf.level}</span>`,
+      inc.riskScore ? `<span class="rk-badge" style="background:rgba(63,185,80,0.1);color:#3FB950;">RISK ${inc.riskScore}</span>` : '',
+      inc.crossHost ? `<span class="rk-badge" style="background:rgba(167,139,250,0.1);color:#A78BFA;">CROSS-HOST</span>` : '',
+    ].filter(Boolean).join('');
+    if (hdrEl) hdrEl.style.borderLeftWidth = '3px';
+    if (hdrEl) hdrEl.style.borderLeftStyle = 'solid';
+    if (hdrEl) hdrEl.style.borderLeftColor = cs.color || '#21262D';
 
-    // ── FIX v23: Full SVG attack chain flow (same quality as incident card) ──
-    // Build vizStages in strict chronological order
+    // ── Build vizStages ─────────────────────────────────────────
+    const PHASE_ORDER = [
+      'reconnaissance','resource-development','initial access','execution',
+      'persistence','privilege escalation','defense evasion','credential access',
+      'discovery','lateral movement','collection','command and control',
+      'exfiltration','impact'
+    ];
     const vizStages = killChain
       .map((p, si) => ({
         ...p,
-        _riskScore : p.riskScore || p._riskScore || 0,
+        _riskScore : p.riskScore || 0,
         tactic     : p.phaseTactic || p.tacticRole || p.tactic || '',
-        tacticRole : p.phaseTactic || p.tacticRole || p.tactic || '',
         inferred   : !!(p.inferred || p.inferredFrom),
         confidence : p.confidence || (p.riskScore ? Math.min(p.riskScore, 100) : 30),
         _ts        : _safeTs(p.first_seen || p.timestamp),
       }))
       .sort((a, b) => {
         if (a._ts !== b._ts) return a._ts - b._ts;
-        const PHASE_ORDER = [
-          'reconnaissance','resource-development','initial access','execution',
-          'persistence','privilege escalation','defense evasion','credential access',
-          'discovery','lateral movement','collection','command and control',
-          'exfiltration','impact'
-        ];
         const ai = PHASE_ORDER.findIndex(p => (a.tactic||'').toLowerCase().includes(p));
         const bi = PHASE_ORDER.findIndex(p => (b.tactic||'').toLowerCase().includes(p));
         if (ai !== -1 && bi !== -1) return ai - bi;
-        return (b._riskScore || 0) - (a._riskScore || 0);
+        return (b._riskScore||0) - (a._riskScore||0);
       });
 
-    const modalIncId       = 'MODAL-' + (inc.incidentId || incidentId).replace(/[^a-zA-Z0-9]/g, '-');
-    const chainFlowSVG     = vizStages.length > 0 ? _buildChainFlowSVG(vizStages, modalIncId) : '';
-    const riskEvolutionBar = vizStages.length >= 2 ? _buildRiskEvolutionBar(vizStages, modalIncId) : '';
-    const stageDetails     = vizStages.map((s, si) => _buildStageDetail(s, si, modalIncId)).join('');
-    const observedCount    = vizStages.filter(s => !s.inferred).length;
-    const inferredCount    = vizStages.filter(s =>  s.inferred).length;
+    // ── Tabs ────────────────────────────────────────────────────
+    const TABS = [
+      { id:'overview',       label:'Summary' },
+      { id:'chain',          label:'Attack Chain' },
+      { id:'entities',       label:'Entities' },
+      { id:'detections',     label:`Detections${linkedDets.length?' ('+linkedDets.length+')':''}` },
+      { id:'timeline',       label:`Timeline${timelineItems.length?' ('+timelineItems.length+')':''}` },
+      { id:'mitre',          label:'MITRE' },
+    ];
+    const tabsEl = document.getElementById('rk-inc-drawer-tabs');
+    if (tabsEl) {
+      tabsEl.innerHTML = TABS.map((t, i) =>
+        `<button class="rk-inc-drawer-tab${i===0?' active':''}" data-drawer-tab="${t.id}"
+           onclick="RAYKAN_UI._switchDrawerTab(this,'${t.id}')">${t.label}</button>`
+      ).join('');
+    }
 
-    // ── Detections panel rows ───────────────────────────────────────
-    const detRows = linkedDets.length ? linkedDets.map((d, di) => {
-      const ds = d.severity || d.aggregated_severity || 'medium';
-      const dc = _sev(ds);
-      const dHost = d.host || d.computer || '';
-      const dUser = d.user || '';
-      const dTs   = d.first_seen ? new Date(d.first_seen).toLocaleTimeString() : '';
-      const dm    = d.mitre?.technique || d.technique || '';
-      const dmt   = d.mitre?.tactic   || d.category  || '';
-      return `<div style="padding:10px 14px;border-bottom:1px solid #1c2128;display:flex;gap:10px;align-items:flex-start;
-        border-left:3px solid ${dc.color}44;background:${di%2?'rgba(8,14,24,0.4)':'transparent'};">
-        <div style="width:8px;height:8px;border-radius:50%;background:${dc.color};flex-shrink:0;margin-top:4px;"></div>
-        <div style="flex:1;min-width:0;">
-          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px;">
-            ${_sevBadge(ds)}
-            <span style="font-size:11.5px;font-weight:700;color:#e6edf3;">${d.detection_name||d.ruleName||d.title||'Detection'}</span>
-            ${d.ruleId?`<span style="font-size:9px;color:#4b5563;font-family:monospace;">${d.ruleId}</span>`:''}
-          </div>
-          <div style="font-size:10px;color:#6b7280;display:flex;gap:8px;flex-wrap:wrap;">
-            ${dm?`<span style="color:#a78bfa;font-family:monospace;font-weight:700;">${dm}</span>`:''}
-            ${dmt?`<span style="color:#6d28d9;">${dmt.replace(/-/g,' ')}</span>`:''}
-            ${dTs?`<span>⏱ ${dTs}</span>`:''}
-            ${dHost?`<span>🖥 ${dHost}</span>`:''}
-            ${dUser?`<span>👤 ${dUser}</span>`:''}
-          </div>
-          ${d.narrative?`<div style="font-size:10.5px;color:#8b949e;margin-top:3px;line-height:1.4;">${_safeNarrative(d.narrative).slice(0,140)}${_safeNarrative(d.narrative).length>140?'…':''}</div>`:''}
-        </div>
-        <span style="font-size:13px;font-weight:800;color:${_riskColor(d.riskScore||0)};font-family:monospace;flex-shrink:0;">${d.riskScore||'?'}</span>
+    // ── Build panel HTML ─────────────────────────────────────────
+    // Panel 1: Summary
+    const summaryPanel = _buildDrawerSummaryPanel(inc, conf, narrative, allHosts, allUsers, vizStages, linkedDets);
+    // Panel 2: Attack Chain mini-view
+    const chainPanel   = _buildDrawerChainPanel(vizStages, title, inc);
+    // Panel 3: Entities
+    const entPanel     = _buildDrawerEntitiesPanel(inc, allHosts, allUsers, mitreMappings);
+    // Panel 4: Detections
+    const detPanel     = _buildDrawerDetectionsPanel(linkedDets, sev);
+    // Panel 5: Timeline
+    const tlPanel      = _buildDrawerTimelinePanel(timelineItems);
+    // Panel 6: MITRE
+    const mitrePanel   = _buildDrawerMITREPanel(mitreMappings, mitreTactics);
+
+    const bodyEl = document.getElementById('rk-inc-drawer-body');
+    if (bodyEl) bodyEl.innerHTML = [
+      `<div class="rk-inc-drawer-panel active" data-drawer-panel="overview">${summaryPanel}</div>`,
+      `<div class="rk-inc-drawer-panel" data-drawer-panel="chain">${chainPanel}</div>`,
+      `<div class="rk-inc-drawer-panel" data-drawer-panel="entities">${entPanel}</div>`,
+      `<div class="rk-inc-drawer-panel" data-drawer-panel="detections">${detPanel}</div>`,
+      `<div class="rk-inc-drawer-panel" data-drawer-panel="timeline">${tlPanel}</div>`,
+      `<div class="rk-inc-drawer-panel" data-drawer-panel="mitre">${mitrePanel}</div>`,
+    ].join('');
+
+    // ── Footer: Response Actions ─────────────────────────────────
+    const footerEl = document.getElementById('rk-inc-drawer-footer');
+    if (footerEl) footerEl.innerHTML = [
+      `<button class="rk-drawer-action" onclick="RAYKAN_UI._setTab('incidents');RAYKAN_UI._closeIncidentDrawer()">↗ Escalate</button>`,
+      `<button class="rk-drawer-action" onclick="RAYKAN_UI._setTab('incidents');RAYKAN_UI._closeIncidentDrawer()">👤 Assign</button>`,
+      `<button class="rk-drawer-action" onclick="RAYKAN_UI._showToast&&RAYKAN_UI._showToast('Note added','info')">📝 Add Note</button>`,
+      `<button class="rk-drawer-action" onclick="(function(){var incObj=(window.RAYKAN_UI?window.RAYKAN_UI.getState().incidents||[]:[]).find(function(x){return (x.id||x.incidentId)==='${incidentId}';});if(incObj&&typeof window.createCaseFromIncident==='function'){window.createCaseFromIncident(incObj,window.RAYKAN_UI?window.RAYKAN_UI.getState():null);}else if(typeof navigateTo==='function'){navigateTo('case-management');}})()">📁 Create Case</button>`,
+      `<button class="rk-drawer-action danger" onclick="RAYKAN_UI._isolateHost('${inc.host||allHosts[0]||''}')">🔒 Contain Host</button>`,
+      `<button class="rk-drawer-action" onclick="RAYKAN_UI.exportResults()">⬇ Export</button>`,
+    ].join('');
+  }
+
+  function _switchDrawerTab(btn, panelId) {
+    const drawer = document.getElementById('rk-inc-drawer');
+    if (!drawer) return;
+    drawer.querySelectorAll('.rk-inc-drawer-tab').forEach(t => t.classList.remove('active'));
+    drawer.querySelectorAll('.rk-inc-drawer-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    const panel = drawer.querySelector('[data-drawer-panel="'+panelId+'"]');
+    if (panel) panel.classList.add('active');
+    // Scroll body to top when switching tabs
+    const body = document.getElementById('rk-inc-drawer-body');
+    if (body) body.scrollTop = 0;
+  }
+
+  // ── Drawer panel builders ──────────────────────────────────────
+  function _buildDrawerSummaryPanel(inc, conf, narrative, allHosts, allUsers, vizStages, linkedDets) {
+    const DROW = (label, val, color) =>
+      `<div style="display:flex;justify-content:space-between;align-items:center;
+         padding:5px 12px;border-bottom:1px solid #21262D;">
+        <span style="font-size:11px;color:#8B949E;">${label}</span>
+        <span style="font-size:12px;font-weight:600;color:${color||'#E6EDF3'};
+          max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+          text-align:right;">${val}</span>
       </div>`;
-    }).join('') : '';
 
-    // ── Timeline panel rows ─────────────────────────────────────────
-    const tlRows = timelineItems.length ? timelineItems
-      .sort((a,b) => _safeTs(a.timestamp||a.ts) - _safeTs(b.timestamp||b.ts))
-      .map((t, ti) => {
-        const tHost = t.computer || t.host || t.entity || '';
-        const tTs   = t.timestamp ? new Date(t.timestamp).toLocaleTimeString() : '';
-        const tType = t.type || '';
-        const tIcon = t.icon || (tType==='detection'?'🚨':tType==='process'?'⚡':tType==='network'?'🌐':'📋');
-        return `<div style="display:flex;gap:10px;align-items:flex-start;padding:7px 14px;
-          border-bottom:1px solid #1c2128;${ti%2?'background:rgba(8,14,24,0.3)':''}">
-          <span style="font-size:9px;color:#4b5563;white-space:nowrap;font-family:monospace;min-width:60px;">${tTs}</span>
-          <span style="font-size:12px;flex-shrink:0;">${tIcon}</span>
-          <div style="flex:1;min-width:0;">
-            <div style="font-size:11px;color:#c9d1d9;">${t.description||t.detection_name||t.label||'Event'}</div>
-            ${t.commandLine?`<div style="font-size:9.5px;font-family:monospace;color:#60a5fa;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${t.commandLine.slice(0,120)}</div>`:''}
+    const sev      = inc.severity || 'medium';
+    const status   = inc.status   || inc.state || 'Open';
+    const analyst  = inc.assignedTo || inc.analyst || inc.owner || '—';
+    const priority = inc.priority || (sev === 'critical' ? 'P1' : sev === 'high' ? 'P2' : sev === 'medium' ? 'P3' : 'P4');
+    const incId    = inc.incidentId || inc.id || '—';
+    const title    = inc.title || inc.behavior?.behaviorTitle || 'Correlated Attack Chain';
+
+    // ── Header block: ID · Title · Severity · Status · Timestamps · Analyst · Priority ──
+    const headerBlock = `
+    <div style="padding:10px 12px;background:#0A0C10;border-bottom:1px solid #21262D;">
+      <div style="font-size:10px;color:#484F58;font-family:'JetBrains Mono',monospace;
+        margin-bottom:3px;letter-spacing:0.3px;">${incId}</div>
+      <div style="font-size:13px;font-weight:500;color:#E6EDF3;margin-bottom:6px;
+        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${title}">${title}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
+        <span class="rk-badge rk-sev-${sev}">${sev.toUpperCase()}</span>
+        <span style="font-size:10px;padding:1px 6px;border-radius:3px;font-weight:500;
+          background:rgba(63,185,80,0.1);color:#3FB950;border:1px solid rgba(63,185,80,0.2);">
+          ${status}</span>
+        <span style="font-size:10px;padding:1px 6px;border-radius:3px;font-weight:500;
+          background:rgba(88,166,255,0.1);color:#58A6FF;border:1px solid rgba(88,166,255,0.2);">
+          ${priority}</span>
+        ${conf.level ? `<span style="font-size:10px;padding:1px 6px;border-radius:3px;
+          background:rgba(167,139,250,0.1);color:#A78BFA;border:1px solid rgba(167,139,250,0.2);">
+          ${conf.level}</span>` : ''}
+        ${inc.crossHost ? `<span style="font-size:10px;padding:1px 6px;border-radius:3px;
+          background:rgba(245,158,11,0.1);color:#F59E0B;border:1px solid rgba(245,158,11,0.2);">
+          CROSS-HOST</span>` : ''}
+      </div>
+      <div style="display:flex;gap:16px;margin-top:6px;flex-wrap:wrap;">
+        <div style="font-size:11px;color:#484F58;">
+          <span style="color:#8B949E;">Analyst:</span>
+          <span style="color:#C9D1D9;margin-left:4px;">${analyst}</span>
+        </div>
+        <div style="font-size:11px;color:#484F58;">
+          <span style="color:#8B949E;">First Seen:</span>
+          <span style="color:#C9D1D9;margin-left:4px;">${inc.first_seen ? new Date(inc.first_seen).toLocaleString() : '—'}</span>
+        </div>
+        <div style="font-size:11px;color:#484F58;">
+          <span style="color:#8B949E;">Last Seen:</span>
+          <span style="color:#C9D1D9;margin-left:4px;">${inc.last_seen ? new Date(inc.last_seen).toLocaleString() : '—'}</span>
+        </div>
+      </div>
+    </div>`;
+
+    // ── Summary metric rows ──
+    const stats = [
+      DROW('Risk Score',       inc.riskScore||'—',                                   '#3FB950'),
+      DROW('Confidence',       conf.score+'%',                                        '#58A6FF'),
+      DROW('Avg Confidence',   conf.score ? Math.round(conf.score)+'%' : '—',        '#58A6FF'),
+      DROW('Total Risk',       inc.riskScore||'—',                                   '#FF8C00'),
+      DROW('Correlated Det.',  linkedDets.length||inc.detectionCount||0,             '#FF8C00'),
+      DROW('Chain Stages',     vizStages.length||'—',                                '#A78BFA'),
+      DROW('Affected Hosts',   allHosts.length ? allHosts.join(', ').slice(0,60) : '—', '#3FB950'),
+      DROW('Affected Users',   allUsers.length ? allUsers.join(', ').slice(0,60) : '—', '#E6EDF3'),
+      DROW('Duration',         inc.durationLabel||_formatDurationUI(inc.duration_ms||0)||'—', '#8B949E'),
+    ].join('');
+
+    const rootCause = inc.rootCauseSummary
+      ? `<div style="padding:8px 12px;margin:6px 12px;background:rgba(63,185,80,0.04);
+           border:1px solid rgba(63,185,80,0.12);border-radius:3px;">
+          <div style="font-size:10px;font-weight:500;color:#3FB950;text-transform:uppercase;
+            letter-spacing:0.06em;margin-bottom:4px;">Root Cause</div>
+          <div style="font-size:12px;color:#E6EDF3;line-height:1.5;">${inc.rootCauseSummary}</div>
+        </div>` : '';
+
+    const narr = narrative
+      ? `<div style="padding:8px 12px;margin:6px 12px;background:rgba(88,166,255,0.04);
+           border:1px solid rgba(88,166,255,0.10);border-radius:3px;">
+          <div style="font-size:10px;font-weight:500;color:#58A6FF;text-transform:uppercase;
+            letter-spacing:0.06em;margin-bottom:4px;">Analyst Summary</div>
+          <div style="font-size:12px;color:#C9D1D9;line-height:1.55;">${_safeNarrative(narrative)}</div>
+        </div>` : '';
+
+    const autoEsc = inc.autoEscalated||inc.escalated
+      ? `<div style="padding:5px 12px;background:rgba(255,68,68,0.06);border-top:1px solid rgba(255,68,68,0.15);
+           border-bottom:1px solid rgba(255,68,68,0.15);font-size:11px;color:#FF4444;">
+          ⚠ Auto-escalated: ${inc.escalationReason||'High severity / cross-host correlation'}
+        </div>` : '';
+
+    return `<div style="padding:0;">
+      ${headerBlock}
+      ${autoEsc}
+      ${narr}
+      ${rootCause}
+      <div style="font-size:10px;font-weight:500;color:#8B949E;text-transform:uppercase;
+        letter-spacing:0.06em;padding:6px 12px 2px;margin-top:4px;">Summary Metrics</div>
+      <div style="border-top:1px solid #21262D;overflow:hidden;">${stats}</div>
+    </div>`;
+  }
+
+  function _buildDrawerChainPanel(vizStages, title, inc) {
+    if (!vizStages.length) return `<div style="padding:40px;text-align:center;color:#484F58;font-size:12px;">
+      No attack chain stages available.</div>`;
+
+    const TACTIC_COLOR = {
+      'initial access':'#ef4444','execution':'#f97316','persistence':'#eab308',
+      'privilege escalation':'#a855f7','defense evasion':'#6366f1',
+      'credential access':'#ec4899','discovery':'#0ea5e9',
+      'lateral movement':'#a78bfa','collection':'#14b8a6',
+      'command and control':'#f59e0b','exfiltration':'#ef4444','impact':'#dc2626',
+      'reconnaissance':'#64748b','resource-development':'#64748b',
+    };
+
+    const stageCards = vizStages.map((s, si) => {
+      const tLow  = (s.tactic||'').toLowerCase();
+      const tColor= Object.entries(TACTIC_COLOR).find(([k]) => tLow.includes(k))?.[1] || '#58A6FF';
+      const sevC  = _sev(s.severity||'medium');
+      const ts    = s.first_seen ? new Date(s.first_seen).toLocaleTimeString() : '';
+      const det   = s.ruleName || s.detection_name || s.ruleId || 'Detection';
+      const tech  = s.technique || '';
+      const conf  = s.confidence || s.stageConfidence || 0;
+      return `<div style="display:flex;gap:8px;padding:8px 12px;border-bottom:1px solid #21262D;
+          ${s.inferred?'opacity:0.7;':''}">
+        <!-- Stage number -->
+        <div style="width:20px;height:20px;border-radius:50%;background:${tColor}22;
+          border:1px solid ${tColor}66;display:flex;align-items:center;justify-content:center;
+          font-size:10px;font-weight:600;color:${tColor};flex-shrink:0;margin-top:1px;">${si+1}</div>
+        <div style="flex:1;min-width:0;">
+          <!-- Tactic badge + severity -->
+          <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-bottom:3px;">
+            <span style="font-size:10px;padding:1px 5px;background:${tColor}18;color:${tColor};
+              border-radius:3px;text-transform:uppercase;letter-spacing:0.05em;font-weight:500;">${s.tactic||'unknown'}</span>
+            <span class="rk-badge rk-sev-${s.severity||'medium'}">${(s.severity||'MED').slice(0,4).toUpperCase()}</span>
+            ${s.inferred ? '<span style="font-size:10px;color:#484F58;font-style:italic;">inferred</span>' : ''}
           </div>
-          ${tHost?`<span style="font-size:9px;color:#6b7280;white-space:nowrap;flex-shrink:0;">🖥 ${tHost}</span>`:''}
-        </div>`;
-      }).join('') : '';
-
-    // ── Cross-host correlation graph (entity matrix) ────────────────
-    const crossHostHtml = inc.crossHost && allHosts.length > 1 ? `
-<div style="padding:14px;background:rgba(167,139,250,0.04);border:1px solid rgba(167,139,250,0.15);border-radius:8px;margin-bottom:12px;">
-  <div style="font-size:10px;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">🔀 Cross-Host Correlation</div>
-  <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
-    ${allHosts.map((h,hi) => `
-      <div style="padding:6px 12px;background:rgba(167,139,250,0.1);border:1px solid rgba(167,139,250,0.25);border-radius:8px;font-size:11px;color:#e6edf3;">
-        🖥 <strong>${h}</strong>
-      </div>
-      ${hi < allHosts.length-1 ? '<span style="color:#a78bfa;font-size:16px;font-weight:700;">→</span>' : ''}
-    `).join('')}
-  </div>
-  ${(inc.allSrcIps||[]).length ? `<div style="margin-top:6px;font-size:10px;color:#6b7280;">Attacker IPs: ${(inc.allSrcIps||[]).join(', ')}</div>` : ''}
-</div>` : '';
-
-    const html = `
-<div style="font-family:'Inter',sans-serif;color:#c9d1d9;">
-  <!-- ── Header ──────────────────────────────────────────────────── -->
-  <div style="padding:20px 24px 16px;border-bottom:1px solid #21262d;background:rgba(8,14,24,0.9);">
-    <div style="display:flex;align-items:flex-start;gap:14px;">
-      <div style="width:42px;height:42px;border-radius:10px;background:${cs.color}22;border:1px solid ${cs.color};
-        display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;">
-        ${cs.icon||'⚔️'}
-      </div>
-      <div style="flex:1;min-width:0;">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;flex-wrap:wrap;">
-          <span style="font-size:10px;font-family:'JetBrains Mono',monospace;color:#4b5563;">${incidentId}</span>
-          <span style="font-size:10px;padding:1px 8px;background:${cs.color}22;color:${cs.color};border-radius:5px;font-weight:700;">${sev.toUpperCase()}</span>
-          <span style="font-size:10px;padding:1px 8px;background:rgba(96,165,250,0.1);color:#60a5fa;border-radius:5px;">${conf.level}</span>
-          <span style="font-size:10px;padding:1px 8px;background:rgba(52,211,153,0.1);color:#34d399;border-radius:5px;">Risk: ${inc.riskScore||'—'}</span>
-          ${inc.crossHost ? `<span style="font-size:10px;padding:1px 8px;background:rgba(167,139,250,0.12);color:#a78bfa;border-radius:5px;">🔀 Cross-Host (${allHosts.length})</span>` : ''}
-          ${inc.verdict==='TRUE_POSITIVE' ? `<span style="font-size:10px;padding:1px 8px;background:rgba(239,68,68,0.12);color:#ef4444;border-radius:5px;">✓ TRUE POSITIVE</span>` : ''}
+          <!-- Detection name -->
+          <div style="font-size:12px;color:#E6EDF3;font-weight:500;margin-bottom:2px;
+            overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${det.slice(0,60)}</div>
+          <!-- Metadata row -->
+          <div style="font-size:11px;color:#8B949E;display:flex;gap:6px;flex-wrap:wrap;">
+            ${tech ? `<span style="color:#58A6FF;font-family:monospace;">${tech}</span>` : ''}
+            ${ts   ? `<span>⏱ ${ts}</span>` : ''}
+            ${s.host ? `<span>🖥 ${s.host}</span>` : ''}
+            ${s.user ? `<span>👤 ${s.user}</span>` : ''}
+            ${conf  ? `<span style="color:#484F58;">${conf}% conf</span>` : ''}
+          </div>
         </div>
-        <div style="font-size:15px;font-weight:700;color:#e6edf3;margin-bottom:6px;">${title}</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:10px;color:#6b7280;">
-          ${allHosts.map(h=>`<span>🖥 ${h}</span>`).join('')}
-          ${allUsers.map(u=>`<span>👤 ${u}</span>`).join('')}
-          ${(inc.allSrcIps||[]).slice(0,3).map(ip=>`<span>🌐 ${ip}</span>`).join('')}
-        </div>
+        <span style="font-size:12px;font-weight:600;color:${sevC.color};font-family:monospace;
+          flex-shrink:0;align-self:center;">${s.riskScore||'?'}</span>
+      </div>`;
+    }).join('');
+
+    return `<div>
+      <div style="padding:8px 12px;border-bottom:1px solid #21262D;display:flex;
+        align-items:center;gap:8px;background:#0A0C10;">
+        <span style="font-size:11px;color:#8B949E;">⛓ ${vizStages.length} stage${vizStages.length!==1?'s':''}</span>
+        <span style="font-size:10px;padding:1px 6px;background:rgba(88,166,255,0.08);
+          color:#58A6FF;border-radius:3px;">CHRONOLOGICAL →</span>
       </div>
-      <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;">
-        <button class="rk-entity-btn" style="padding:5px 14px;font-size:11px;font-weight:700;
-          background:rgba(59,130,246,0.12);color:#60a5fa;border-color:rgba(59,130,246,0.3);"
-          onclick="(function(){
-            var incObj=(window.RAYKAN_UI?window.RAYKAN_UI.getState().incidents||[]:[])
-              .find(function(x){return (x.id||x.incidentId)==='${incidentId}';});
-            if(!incObj) incObj={id:'${incidentId}',severity:'${sev}'};
-            if(typeof window.createCaseFromIncident==='function'){
-              window.createCaseFromIncident(incObj,window.RAYKAN_UI?window.RAYKAN_UI.getState():null);
-            } else if(typeof navigateTo==='function'){navigateTo('case-management');}
-          })()" title="Create case in Case Management">📁 Create Case</button>
-        <button class="rk-entity-btn" style="padding:5px 10px;font-size:11px;"
-          onclick="document.getElementById('detailModal').classList.remove('open')">✕ Close</button>
-      </div>
-    </div>
-    ${tacticPills ? `<div style="margin-top:10px;">${tacticPills}</div>` : ''}
-    ${narrative ? `<div style="margin-top:10px;padding:10px 14px;background:rgba(96,165,250,0.04);border:1px solid rgba(96,165,250,0.1);border-radius:8px;font-size:12px;line-height:1.6;">${narrative}</div>` : ''}
-  </div>
+      <div>${stageCards}</div>
+    </div>`;
+  }
 
-  <!-- ── Tab bar ─────────────────────────────────────────────────── -->
-  <div style="display:flex;border-bottom:1px solid #21262d;background:rgba(8,14,24,0.6);overflow-x:auto;">
-    ${['overview','attack-chain','detections','timeline','mitre'].map((tab,ti)=>`
-    <button class="modal-tab-btn${ti===0?' active':''}" data-modal-tab="${tab}"
-      onclick="switchModalTab(this,'${tab}')"
-      style="padding:10px 18px;font-size:11px;font-weight:600;border:none;background:none;
-        color:${ti===0?'#60a5fa':'#6b7280'};cursor:pointer;border-bottom:2px solid ${ti===0?'#60a5fa':'transparent'};
-        transition:all 0.2s;white-space:nowrap;">
-      ${{overview:'📊 Overview','attack-chain':'⛓ Attack Chain',
-         detections:`🔍 Detections${linkedDets.length?' ('+linkedDets.length+')':''}`,
-         timeline:`📅 Timeline${timelineItems.length?' ('+timelineItems.length+')':''}`,
-         mitre:'🛡 MITRE'}[tab]}
-    </button>`).join('')}
-  </div>
+  function _buildDrawerEntitiesPanel(inc, allHosts, allUsers, mitreMappings) {
+    const hostRows = allHosts.length
+      ? allHosts.map(h =>
+          `<tr><td style="padding:5px 10px;font-size:12px;color:#E6EDF3;">🖥 ${h}</td>
+           <td style="padding:5px 10px;font-size:11px;color:#8B949E;">host</td></tr>`
+        ).join('')
+      : `<tr><td colspan="2" style="padding:10px;color:#484F58;font-size:11px;">No hosts</td></tr>`;
 
-  <!-- ── Tab panels ──────────────────────────────────────────────── -->
-  <div style="max-height:520px;overflow-y:auto;">
+    const userRows = allUsers.length
+      ? allUsers.map(u =>
+          `<tr><td style="padding:5px 10px;font-size:12px;color:#E6EDF3;">👤 ${u}</td>
+           <td style="padding:5px 10px;font-size:11px;color:#8B949E;">user</td></tr>`
+        ).join('')
+      : `<tr><td colspan="2" style="padding:10px;color:#484F58;font-size:11px;">No users</td></tr>`;
 
-    <!-- Overview panel -->
-    <div class="modal-tab-panel" data-modal-panel="overview" style="padding:20px 24px;">
-      ${crossHostHtml}
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:16px;">
-        ${[
-          {label:'Risk Score',    val: inc.riskScore||'—',                        color:'#34d399'},
-          {label:'Confidence',    val: conf.score+'%',                              color:'#60a5fa'},
-          {label:'Detections',    val: linkedDets.length || inc.detectionCount||0, color:'#f97316'},
-          {label:'MITRE Tactics', val: mitreTactics.length||'—',                  color:'#a78bfa'},
-          {label:'Chain Stages',  val: vizStages.length||'—',                     color:'#00d4ff'},
-          {label:'Hosts',         val: allHosts.length||'—',                      color:'#34d399'},
-        ].map(s=>`
-        <div style="padding:12px;background:rgba(8,14,24,0.6);border:1px solid #21262d;border-radius:8px;text-align:center;">
-          <div style="font-size:22px;font-weight:900;color:${s.color};">${s.val}</div>
-          <div style="font-size:9px;color:#4b5563;text-transform:uppercase;letter-spacing:.5px;margin-top:3px;">${s.label}</div>
-        </div>`).join('')}
-      </div>
-      ${narrative ? `
-      <div style="padding:14px;background:rgba(96,165,250,0.04);border:1px solid rgba(96,165,250,0.1);border-radius:8px;margin-bottom:12px;">
-        <div style="font-size:10px;font-weight:700;color:#4b5563;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">🧠 Analyst Narrative</div>
-        <div style="font-size:12px;line-height:1.7;color:#c9d1d9;">${narrative}</div>
-      </div>` : ''}
-      ${inc.rootCauseSummary && inc.rootCauseSummary !== narrative ? `
-      <div style="padding:12px 14px;background:rgba(52,211,153,0.04);border:1px solid rgba(52,211,153,0.12);border-radius:8px;">
-        <div style="font-size:10px;font-weight:700;color:#34d399;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">🎯 Root Cause Summary</div>
-        <div style="font-size:11.5px;color:#c9d1d9;line-height:1.6;">${inc.rootCauseSummary}</div>
-      </div>` : ''}
-    </div>
+    const ipRows = (inc.allSrcIps||[]).length
+      ? (inc.allSrcIps||[]).slice(0,6).map(ip =>
+          `<tr><td style="padding:5px 10px;font-size:12px;color:#E6EDF3;font-family:monospace;">🌐 ${ip}</td>
+           <td style="padding:5px 10px;font-size:11px;color:#8B949E;">src IP</td></tr>`
+        ).join('')
+      : '';
 
-    <!-- Attack Chain panel — full SVG flow, same as incident card -->
-    <div class="modal-tab-panel" data-modal-panel="attack-chain" style="display:none;">
-      ${vizStages.length > 0 ? `
-      <!-- Chain header -->
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px 8px;
-           background:rgba(8,14,24,0.55);border-bottom:1px solid rgba(0,212,255,0.08);">
-        <div style="display:flex;align-items:center;gap:10px;">
-          <span style="font-size:12px;font-weight:700;color:#e6edf3;">⛓ Full Attack Chain — ${title}</span>
-          <span style="font-size:9px;padding:2px 8px;background:rgba(0,212,255,0.07);color:#00d4ff;
-            border-radius:10px;border:1px solid rgba(0,212,255,0.15);font-family:monospace;">
-            CHRONOLOGICAL ➔
+    const techTable = mitreMappings.length
+      ? `<table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:10px;">
+          <thead><tr style="border-bottom:1px solid #21262D;">
+            <th style="padding:5px 10px;text-align:left;color:#484F58;font-weight:500;">ID</th>
+            <th style="padding:5px 10px;text-align:left;color:#484F58;font-weight:500;">Tactic</th>
+            <th style="padding:5px 10px;text-align:left;color:#484F58;font-weight:500;">Name</th>
+          </tr></thead>
+          <tbody>${mitreMappings.slice(0,8).map(m =>
+            `<tr style="border-bottom:1px solid #21262D;">
+              <td style="padding:5px 10px;color:#58A6FF;font-family:monospace;cursor:pointer;"
+                onclick="RAYKAN_UI._openMITRE('${m.technique||''}')">${m.technique||'—'}</td>
+              <td style="padding:5px 10px;color:#8B949E;">${m.tactic||'—'}</td>
+              <td style="padding:5px 10px;color:#C9D1D9;">${(m.name||m.title||'—').slice(0,30)}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>` : '';
+
+    return `<div style="padding:10px 0;">
+      <div style="padding:0 0 6px;margin:0 12px;border-bottom:1px solid #21262D;
+        font-size:11px;font-weight:500;color:#8B949E;text-transform:uppercase;letter-spacing:0.06em;">Hosts</div>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+        <tbody>${hostRows}${userRows}${ipRows}</tbody>
+      </table>
+      ${techTable ? `<div style="padding:0 0 6px;margin:0 12px;border-bottom:1px solid #21262D;
+        font-size:11px;font-weight:500;color:#8B949E;text-transform:uppercase;letter-spacing:0.06em;
+        margin-bottom:4px;">MITRE IDs</div>${techTable}` : ''}
+    </div>`;
+  }
+
+  function _buildDrawerDetectionsPanel(linkedDets, parentSev) {
+    if (!linkedDets.length) return `<div style="padding:40px;text-align:center;color:#484F58;font-size:12px;">
+      No detections linked to this incident.</div>`;
+
+    // Sort by first_seen ascending
+    const sorted = [...linkedDets].sort((a,b) =>
+      _safeTs(a.first_seen||a.timestamp) - _safeTs(b.first_seen||b.timestamp));
+
+    return `<div style="font-size:10px;font-weight:500;color:#8B949E;text-transform:uppercase;
+        letter-spacing:0.06em;padding:6px 12px;border-bottom:1px solid #21262D;background:#0A0C10;">
+      DETECTIONS — sorted by First Seen ascending · ${sorted.length} total · click row to inspect
+    </div>` + sorted.map((d, di) => {
+      const ds  = d.severity || d.aggregated_severity || 'medium';
+      const dc  = _sev(ds);
+      const ts  = d.first_seen ? new Date(d.first_seen).toLocaleString() : (d.timestamp ? new Date(d.timestamp).toLocaleString() : '');
+      const tech= (d.mitre && d.mitre.technique) ? d.mitre.technique : (d.technique || '');
+      const host= d.host || d.computer || '';
+      const user= d.user || '';
+      const detId = d.id || '';
+      return `<div style="padding:8px 12px;border-bottom:1px solid #21262D;cursor:pointer;
+          transition:background 0.1s;border-left:3px solid ${dc.color}44;"
+          onclick="(function(){if(typeof RAYKAN_UI._showDetDetail==='function')RAYKAN_UI._showDetDetail('${detId}');})()"
+          onmouseenter="this.style.background='#1C2130'" onmouseleave="this.style.background=''">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;flex-wrap:wrap;">
+          <span class="rk-badge rk-sev-${ds}">${ds.toUpperCase().slice(0,4)}</span>
+          <span style="font-size:12px;font-weight:500;color:#E6EDF3;
+            overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px;">
+            ${d.detection_name||d.ruleName||d.title||'Detection'}
           </span>
-          <span style="font-size:9.5px;color:#4b5563;">
-            ${observedCount} observed${inferredCount>0?' · '+inferredCount+' inferred':''} · ${vizStages.length} stage${vizStages.length!==1?'s':''}
-          </span>
+          <span style="font-size:12px;font-weight:600;color:${dc.color};
+            font-family:monospace;margin-left:auto;">${d.riskScore||'—'}</span>
         </div>
-      </div>
-      <!-- SVG chain flow (scrollable) -->
-      <div style="overflow-x:auto;padding:16px 16px 8px;">${chainFlowSVG}</div>
-      ${riskEvolutionBar}
-      <!-- Stage detail panels (click node to expand) -->
-      <div id="rk-stage-details-${modalIncId}" style="padding:8px 16px 12px;">${stageDetails}</div>
-      ` : `<div style="color:#6b7280;font-size:12px;padding:40px;text-align:center;">
-        <div style="font-size:28px;margin-bottom:10px;">⛓</div>
-        No attack chain stages available for this incident.
-      </div>`}
-    </div>
+        <div style="font-size:11px;color:#8B949E;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          ${tech ? `<span style="color:#58A6FF;font-family:monospace;font-size:10px;">${tech}</span>` : ''}
+          ${ts   ? `<span style="color:#484F58;">⏱ ${ts}</span>` : ''}
+          ${host ? `<span>🖥 ${host}</span>` : ''}
+          ${user ? `<span>👤 ${user}</span>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+  }
 
-    <!-- Detections panel — full enriched detection cards -->
-    <div class="modal-tab-panel" data-modal-panel="detections" style="display:none;">
-      ${detRows || `<div style="color:#6b7280;font-size:12px;padding:40px;text-align:center;">
-        <div style="font-size:28px;margin-bottom:10px;">🔍</div>
-        <div>No detections linked to this incident.</div>
-        <div style="font-size:11px;margin-top:6px;color:#4b5563;">Re-run analysis or check the Detections tab for individual alerts.</div>
-      </div>`}
-    </div>
+  function _buildDrawerTimelinePanel(timelineItems) {
+    if (!timelineItems.length) return `<div style="padding:40px;text-align:center;color:#484F58;font-size:12px;">
+      No timeline events available.</div>`;
 
-    <!-- Timeline panel — full chronological event log -->
-    <div class="modal-tab-panel" data-modal-panel="timeline" style="display:none;">
-      ${tlRows || `<div style="color:#6b7280;font-size:12px;padding:40px;text-align:center;">
-        <div style="font-size:28px;margin-bottom:10px;">📅</div>
-        No timeline events linked to this incident.
-      </div>`}
-    </div>
+    const sorted = [...timelineItems].sort((a,b) =>
+      _safeTs(a.timestamp||a.ts) - _safeTs(b.timestamp||b.ts));
 
-    <!-- MITRE panel -->
-    <div class="modal-tab-panel" data-modal-panel="mitre" style="display:none;padding:16px 20px;">
-      ${mitreMappings.length ? `
-      <table style="width:100%;border-collapse:collapse;font-size:11px;">
-        <thead><tr style="border-bottom:2px solid #30363d;">
-          <th style="padding:6px 8px;text-align:left;color:#6b7280;font-weight:600;">Technique</th>
-          <th style="padding:6px 8px;text-align:left;color:#6b7280;font-weight:600;">Tactic</th>
-          <th style="padding:6px 8px;text-align:left;color:#6b7280;font-weight:600;">Name</th>
-          <th style="padding:6px 8px;text-align:left;color:#6b7280;font-weight:600;">Role</th>
+    const SEV_COLOR = { critical:'#FF4444', high:'#FF8C00', medium:'#E3B341', low:'#3FB950' };
+    return `<div style="padding:8px 0;">${sorted.map((t, ti) => {
+      const tTs  = t.timestamp ? new Date(t.timestamp).toLocaleTimeString() : '';
+      const tType= t.type || 'event';
+      const tSev = t.severity || 'informational';
+      const dotC = SEV_COLOR[tSev] || '#484F58';
+      const icon = t.icon || (tType==='detection'?'🚨':tType==='process'?'⚡':tType==='network'?'🌐':'📋');
+      return `<div style="display:flex;gap:8px;padding:6px 12px;border-bottom:1px solid #21262D;">
+        <span style="font-size:10px;color:#484F58;white-space:nowrap;font-family:monospace;
+          min-width:58px;padding-top:1px;">${tTs}</span>
+        <div style="display:flex;flex-direction:column;align-items:center;padding-top:3px;">
+          <span style="width:6px;height:6px;border-radius:50%;background:${dotC};flex-shrink:0;"></span>
+          ${ti<sorted.length-1?'<div style="width:1px;flex:1;min-height:10px;background:#21262D;margin-top:2px;"></div>':''}
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:12px;color:#C9D1D9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            ${icon} ${t.description||t.detection_name||t.label||'Event'}
+          </div>
+          ${t.commandLine?`<div style="font-size:10px;font-family:monospace;color:#58A6FF;
+            overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${t.commandLine.slice(0,100)}</div>`:''}
+          ${t.computer||t.host?`<div style="font-size:11px;color:#8B949E;">🖥 ${t.computer||t.host}</div>`:''}
+        </div>
+      </div>`;
+    }).join('')}</div>`;
+  }
+
+  function _buildDrawerMITREPanel(mitreMappings, mitreTactics) {
+    const tacticPills = mitreTactics.map(t =>
+      `<span style="display:inline-block;font-size:10px;padding:2px 8px;
+        background:#1F2937;color:#58A6FF;border:1px solid #30363D;border-radius:3px;margin:2px;">
+        ${t.replace(/-/g,' ')}</span>`
+    ).join('');
+
+    const rows = mitreMappings.map(m =>
+      `<tr style="border-bottom:1px solid #21262D;">
+        <td style="padding:6px 10px;font-size:11px;font-family:monospace;color:#58A6FF;cursor:pointer;"
+          onclick="RAYKAN_UI._openMITRE('${m.technique||''}')">${m.technique||'—'}</td>
+        <td style="padding:6px 10px;font-size:11px;color:#8B949E;">${m.tactic||'—'}</td>
+        <td style="padding:6px 10px;font-size:11px;color:#C9D1D9;">${(m.name||m.title||'—').slice(0,35)}</td>
+        <td style="padding:6px 10px;font-size:10px;color:${m.role==='primary'?'#FF8C00':'#484F58'};">
+          ${m.role||'secondary'}${m.role==='primary'?' ★':''}</td>
+      </tr>`
+    ).join('');
+
+    return `<div style="padding:10px;">
+      ${tacticPills ? `<div style="margin-bottom:10px;">${tacticPills}</div>` : ''}
+      ${rows ? `<table style="width:100%;border-collapse:collapse;">
+        <thead><tr style="border-bottom:1px solid #21262D;">
+          <th style="padding:6px 10px;text-align:left;font-size:10px;color:#484F58;font-weight:500;text-transform:uppercase;">ID</th>
+          <th style="padding:6px 10px;text-align:left;font-size:10px;color:#484F58;font-weight:500;text-transform:uppercase;">Tactic</th>
+          <th style="padding:6px 10px;text-align:left;font-size:10px;color:#484F58;font-weight:500;text-transform:uppercase;">Name</th>
+          <th style="padding:6px 10px;text-align:left;font-size:10px;color:#484F58;font-weight:500;text-transform:uppercase;">Role</th>
         </tr></thead>
-        <tbody style="color:#c9d1d9;">${techniqueRows}</tbody>
-      </table>` : `<div style="color:#6b7280;font-size:12px;padding:20px;text-align:center;">No MITRE ATT&CK mappings in this incident.</div>`}
-    </div>
+        <tbody>${rows}</tbody>
+      </table>` : `<div style="color:#484F58;font-size:12px;text-align:center;padding:20px;">No MITRE mappings.</div>`}
+    </div>`;
+  }
 
-  </div>
-</div>`;
-
+  // Keep backward-compat: old modal-based fallback (called only if drawer DOM not present)
+  function _openIncidentDetailModal(incidentId) {
+    if (!incidentId) return;
+    const inc = (S.incidents || []).find(x => (x.incidentId || x.id) === incidentId);
+    if (!inc) return;
     if (typeof openDetailModal === 'function') {
-      openDetailModal(html);
-    } else {
-      // Fallback: inject directly into #detailModalBody and open overlay
-      const body = document.getElementById('detailModalBody');
-      if (body) body.innerHTML = html;
-      const overlay = document.getElementById('detailModal');
-      if (overlay) overlay.classList.add('open');
+      openDetailModal('<div style="padding:20px;color:#e6edf3;"><div style="font-size:14px;margin-bottom:8px;">' + (inc.title||incidentId) + '</div><div style="font-size:12px;color:#8b949e;">Open in RAYKAN Incidents tab for full details.</div></div>');
     }
   }
 
