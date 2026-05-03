@@ -16086,24 +16086,32 @@ return {
 
       let events;
       const ext = file.name.split('.').pop().toLowerCase();
-      if (ext === 'json' || ext === 'txt') {
-        // Try JSON parse first (handles .json.txt files too)
+      if (ext === 'json') {
+        // Pure JSON: try array first, then JSONL
         try {
           events = JSON.parse(text);
           if (!Array.isArray(events)) events = [events];
         } catch {
-          // Try JSON Lines (newline-delimited)
           const lines = text.split('\n').filter(Boolean);
-          const jsonLines = lines.filter(l => l.trim().startsWith('{') || l.trim().startsWith('['));
-          if (jsonLines.length) {
-            events = jsonLines.map(l => { try { return JSON.parse(l); } catch { return { raw: l }; } });
-          } else {
-            // Syslog / CEF / plain text lines
-            events = lines.map(l => _parseSyslogLine(l));
-          }
+          events = lines.map(l => { try { return JSON.parse(l); } catch { return { raw: l }; } });
         }
-      } else if (ext === 'log' || ext === 'syslog') {
-        events = text.split('\n').filter(Boolean).map(l => _parseSyslogLine(l));
+      } else if (ext === 'txt' || ext === 'log' || ext === 'syslog') {
+        // FIX v32: All plain-text line-based formats (including .log) now go
+        // through _parseLogInput which auto-detects Windows Security format
+        // (YYYY-MM-DD HH:MM:SS EventID: NNNN …) BEFORE falling back to syslog.
+        // Previously the .log branch hard-coded _parseSyslogLine(), silently
+        // dropping every structured field (EventID, user, srcIp, computer) and
+        // producing ZERO detections from Windows Security log exports.
+        try {
+          // .txt files may still be JSON — try that first
+          if (ext === 'txt') {
+            events = JSON.parse(text);
+            if (!Array.isArray(events)) events = [events];
+          } else { throw new Error('not json'); }
+        } catch {
+          // Use the unified parser that handles Windows Security, syslog, CEF
+          events = _parseLogInput(text, 'auto');
+        }
       } else if (ext === 'csv') {
         // Parse CSV headers
         const lines = text.split('\n').filter(Boolean);
