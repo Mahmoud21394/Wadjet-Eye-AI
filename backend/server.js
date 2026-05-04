@@ -132,6 +132,21 @@ const rakayRoutes         = require('./routes/rakay');
 const socIntelRoutes      = require('./routes/soc-intelligence');   // ← SOC v2.0
 // ── RAYKAN AI Threat Hunting & DFIR Engine v1.0 ──────────────────
 const raykanEngineRoutes  = require('./routes/raykan-engine');       // ← RAYKAN v1.0
+// ── Phase 3–9 New Routes ─────────────────────────────────────────
+const agentRoutes         = require('./routes/agents');              // ← Autonomous SOC Agents
+const stixRoutes          = require('./routes/stix');                // ← STIX/TAXII
+const detectionRoutes     = require('./routes/detection');           // ← Detection Engine API
+const socMetricsRoutes    = require('./routes/soc-metrics');         // ← SOC Metrics v2
+const ragRoutes           = require('./routes/rag');                 // ← RAG Pipeline
+const graphRoutes         = require('./routes/graph');               // ← Neo4j Threat Graph
+const threatGraphRoutes   = require('./routes/threat-graph');        // ← Attack-chain graph
+const mfaRoutes           = require('./routes/mfa');                 // ← MFA management
+const purpleTeamRoutes    = require('./routes/purple-team');         // ← Purple-team / adversary sim
+const adversarySimRoutes  = require('./routes/adversary-sim');       // ← Adversary simulation
+const sysmonRoutes        = require('./routes/sysmon');              // ← Sysmon telemetry
+const threatActorRoutes   = require('./routes/threat-actors');       // ← Threat actor Intel
+const whatifRoutes        = require('./routes/whatif');              // ← What-if scenario planner
+const v2MetricsRoutes     = require('./routes/v2/metrics');          // ← API v2 metrics
 
 // ── Realtime ─────────────────────────────────────────────────────
 const { initWebSockets } = require('./realtime/websockets');
@@ -614,6 +629,21 @@ app.use('/api/settings',  settingsRoutes);
 // ── v7.0 New Routes ───────────────────────────────────────────────
 const rbacRoutes = require('./routes/rbac');
 app.use('/api/rbac',           rbacRoutes);
+// ── Phase 3–9 Protected Routes ────────────────────────────────────
+app.use('/api/agents',         agentRoutes);
+app.use('/api/stix',           stixRoutes);
+app.use('/api/detection',      detectionRoutes);
+app.use('/api/v2/metrics',     v2MetricsRoutes);
+app.use('/api/rag',            ragRoutes);
+app.use('/api/graph',          graphRoutes);
+app.use('/api/threat-graph',   threatGraphRoutes);
+app.use('/api/mfa',            mfaRoutes);
+app.use('/api/purple-team',    purpleTeamRoutes);
+app.use('/api/adversary-sim',  adversarySimRoutes);
+app.use('/api/sysmon',         sysmonRoutes);
+app.use('/api/threat-actors',  threatActorRoutes);
+app.use('/api/whatif',         whatifRoutes);
+app.use('/api/soc-metrics',    socMetricsRoutes);
 // NOTE: /api/raykan is mounted BEFORE verifyToken (see PUBLIC ROUTES section above)
 //       so it is accessible without JWT for demo mode and frontend integration.
 // ════════════════════════════════════════════════════════════════

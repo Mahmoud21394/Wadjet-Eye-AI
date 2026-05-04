@@ -1,0 +1,30 @@
+apiVersion: v2
+name: wadjet-eye
+description: Wadjet-Eye AI — Enterprise Threat Detection & SOC Automation Platform
+type: application
+version: 3.2.0
+appVersion: "4.1.0"
+keywords:
+  - soc
+  - siem
+  - threat-detection
+  - security
+  - ai
+home: https://wadjet-eye.io
+sources:
+  - https://github.com/wadjet-eye/platform
+maintainers:
+  - name: Wadjet-Eye AI Platform Team
+    email: platform@wadjet-eye.io
+annotations:
+  artifacthub.io/changes: |
+    - kind: added
+      description: Kafka event streaming
+    - kind: added
+      description: Neo4j attack-chain graph
+    - kind: added
+      description: RAG pipeline with Pinecone
+    - kind: added
+      description: Autonomous SOC agents
+    - kind: changed
+      description: Phase 1 security hardening

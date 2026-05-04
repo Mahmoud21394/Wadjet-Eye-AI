@@ -1,0 +1,91 @@
+# ══════════════════════════════════════════════════════════════════
+#  Wadjet-Eye AI — Persistent Volume Claims
+#  infra/helm/wadjet-eye/templates/persistentvolume.yaml
+# ══════════════════════════════════════════════════════════════════
+
+# ── Neo4j Data Volume ────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-neo4j-data
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+    app.kubernetes.io/component: neo4j
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.global.storageClass | default "standard" }}
+  resources:
+    requests:
+      storage: {{ .Values.neo4j.storage | default "20Gi" }}
+---
+# ── Vault Data Volume ────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-vault-data
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+    app.kubernetes.io/component: vault
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.global.storageClass | default "standard" }}
+  resources:
+    requests:
+      storage: {{ .Values.vault.storage | default "5Gi" }}
+---
+# ── Redis Data Volume ────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-redis-data
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.global.storageClass | default "standard" }}
+  resources:
+    requests:
+      storage: {{ .Values.redis.storage | default "5Gi" }}
+---
+# ── Kafka Log Volumes (StatefulSet-managed) ───────────────────────
+# These are defined per-broker in the StatefulSet volumeClaimTemplates.
+# This PVC is for the Zookeeper quorum data.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-zookeeper-data
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+    app.kubernetes.io/component: zookeeper
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.global.storageClass | default "standard" }}
+  resources:
+    requests:
+      storage: {{ .Values.kafka.zookeeperStorage | default "5Gi" }}
+---
+# ── Report Output Volume ─────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-reports-output
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reports
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: {{ .Values.global.storageClass | default "standard" }}
+  resources:
+    requests:
+      storage: {{ .Values.reports.storage | default "10Gi" }}

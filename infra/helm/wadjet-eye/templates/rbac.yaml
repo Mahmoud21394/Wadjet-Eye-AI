@@ -1,0 +1,43 @@
+{{- /*
+  Wadjet-Eye AI — Helm RBAC (Role + RoleBinding)
+  infra/helm/wadjet-eye/templates/rbac.yaml
+*/ -}}
+{{- if .Values.serviceAccount.create -}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-role
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+rules:
+  # Allow the backend pod to read its own ConfigMaps and Secrets
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+  # Allow reading pod info (health checks, leader election)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  # Allow emitting Kubernetes events for audit trail
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-rolebinding
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "wadjet-eye.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "wadjet-eye.fullname" . }}-role
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

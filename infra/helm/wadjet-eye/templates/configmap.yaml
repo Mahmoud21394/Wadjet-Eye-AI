@@ -1,0 +1,115 @@
+# ══════════════════════════════════════════════════════════════════
+#  Wadjet-Eye AI — Helm ConfigMaps
+#  infra/helm/wadjet-eye/templates/configmap.yaml
+# ══════════════════════════════════════════════════════════════════
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-backend-config
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+data:
+  NODE_ENV: "production"
+  PORT: "4000"
+  LOG_LEVEL: "info"
+  VAULT_ENABLED: "true"
+  VAULT_ADDR: "http://{{ include "wadjet-eye.fullname" . }}-vault:8200"
+  KAFKA_BROKERS: "{{ include "wadjet-eye.fullname" . }}-kafka:9092"
+  REDIS_URL: "redis://{{ include "wadjet-eye.fullname" . }}-redis:6379"
+  NEO4J_URI: "bolt://{{ include "wadjet-eye.fullname" . }}-neo4j:7687"
+  REPORT_SERVICE_URL: "http://{{ include "wadjet-eye.fullname" . }}-reports:8001"
+  CORS_ALLOWED_ORIGINS: "https://wadjet-eye-ai.vercel.app,https://www.genspark.ai"
+  KAFKA_PARTITIONS: "6"
+  KAFKA_REPLICATION: "3"
+  KAFKA_SSL: "false"
+  RAG_CHUNK_SIZE: "800"
+  RAG_CHUNK_OVERLAP: "100"
+  EMBED_MODEL: "text-embedding-3-large"
+  EMBED_DIMENSIONS: "1536"
+  MFA_APP_NAME: "Wadjet-Eye AI"
+  MFA_REQUIRED: "true"
+  AGENT_LLM_PROVIDER: "openai"
+  CLUSTER_ALGO: "dbscan"
+  DETECTION_FEEDBACK_ENABLED: "true"
+  DARK_WEB_MONITOR_ENABLED: "true"
+  STIX_TAXII_ENABLED: "true"
+  SOC_METRICS_ENABLED: "true"
+  TZ: "UTC"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-nginx-config
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+data:
+  nginx.conf: |
+    worker_processes auto;
+    worker_rlimit_nofile 65535;
+    events { worker_connections 4096; use epoll; multi_accept on; }
+    http {
+      include       /etc/nginx/mime.types;
+      default_type  application/octet-stream;
+      sendfile      on;
+      tcp_nopush    on;
+      keepalive_timeout 65;
+      server_tokens off;
+      gzip on;
+      gzip_types application/json text/plain text/css application/javascript;
+      limit_req_zone $binary_remote_addr zone=api_global:20m rate=100r/m;
+      limit_req_zone $binary_remote_addr zone=llm:10m rate=10r/m;
+      limit_req_zone $binary_remote_addr zone=auth:10m rate=5r/m;
+      upstream wadjet_api {
+        least_conn;
+        server {{ include "wadjet-eye.fullname" . }}-backend:4000;
+        keepalive 32;
+      }
+      upstream wadjet_reports {
+        server {{ include "wadjet-eye.fullname" . }}-reports:8001;
+        keepalive 8;
+      }
+      server {
+        listen 80;
+        return 301 https://$host$request_uri;
+      }
+      server {
+        listen 443 ssl http2;
+        ssl_certificate     /etc/nginx/certs/tls.crt;
+        ssl_certificate_key /etc/nginx/certs/tls.key;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+        ssl_session_cache shared:SSL:10m;
+        ssl_session_timeout 10m;
+        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        location /api/ai/ { limit_req zone=llm burst=5 nodelay; proxy_pass http://wadjet_api; proxy_read_timeout 120s; }
+        location /api/reports/ { limit_req zone=api_global burst=10 nodelay; proxy_pass http://wadjet_reports; proxy_read_timeout 300s; }
+        location /api/auth/ { limit_req zone=auth burst=3 nodelay; proxy_pass http://wadjet_api; }
+        location /socket.io/ { proxy_pass http://wadjet_api; proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_read_timeout 3600s; }
+        location /api/ { limit_req zone=api_global burst=50 nodelay; proxy_pass http://wadjet_api; }
+        location /health { proxy_pass http://wadjet_api; }
+        location / { return 404 '{"error":"Not Found"}'; add_header Content-Type application/json always; }
+      }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-vault-config
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+data:
+  vault.hcl: |
+    ui = true
+    disable_mlock = true
+    storage "file" { path = "/vault/data" }
+    listener "tcp" { address = "0.0.0.0:8200"; tls_disable = true }
+    api_addr = "http://0.0.0.0:8200"
+    log_level = "Info"
