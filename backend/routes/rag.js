@@ -19,7 +19,7 @@
 const router = require('express').Router();
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { asyncHandler, createError } = require('../middleware/errorHandler');
-const { llmRateLimiter } = require('../middleware/rateLimiter');
+const { llmRateLimit: llmRateLimiter } = require('../middleware/rateLimiter');
 const ragPipeline = require('../services/rag/rag-pipeline');
 const { supabase }  = require('../config/supabase');
 const { z }         = require('zod');

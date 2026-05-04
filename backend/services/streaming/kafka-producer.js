@@ -12,30 +12,67 @@
  */
 'use strict';
 
-const { Kafka, Partitioners, CompressionTypes } = require('kafkajs');
+// ── Lazy-load kafkajs ─────────────────────────────────────────────
+// Kafka is an optional infrastructure dependency — not required for
+// basic API operation.  Lazy-loading prevents a crash at server.js
+// startup when Kafka brokers are not configured (e.g., plain Render
+// deployment without a Kafka add-on).
+// When KAFKA_BROKERS is unset the module still loads correctly; every
+// publish/connect call checks _kafkaAvailable() and returns a safe
+// no-op rather than throwing MODULE_NOT_FOUND at boot time.
+let _KafkaLib = null;
+let _kafkaLoadError = null;
+
+function _requireKafka() {
+  if (_KafkaLib) return _KafkaLib;
+  if (_kafkaLoadError) return null;
+  try {
+    _KafkaLib = require('kafkajs');
+    return _KafkaLib;
+  } catch (err) {
+    _kafkaLoadError = err.message;
+    console.warn('[Kafka] kafkajs not available:', err.message);
+    return null;
+  }
+}
+
+function _kafkaAvailable() {
+  return !!_requireKafka();
+}
 
 // ── Kafka connection config ───────────────────────────────────────
 const KAFKA_BROKERS = (process.env.KAFKA_BROKERS || 'kafka:9092').split(',');
 const CLIENT_ID     = process.env.KAFKA_CLIENT_ID || 'wadjet-eye-api';
 
-const kafka = new Kafka({
-  clientId: CLIENT_ID,
-  brokers:  KAFKA_BROKERS,
-  connectionTimeout: 10000,
-  requestTimeout:    30000,
-  retry: {
-    initialRetryTime: 300,
-    retries:          8,
-    maxRetryTime:     30000,
-    multiplier:       2,
-  },
-  ssl:  process.env.KAFKA_SSL === 'true' ? {} : false,
-  sasl: process.env.KAFKA_SASL_USERNAME ? {
-    mechanism: process.env.KAFKA_SASL_MECHANISM || 'scram-sha-256',
-    username:  process.env.KAFKA_SASL_USERNAME,
-    password:  process.env.KAFKA_SASL_PASSWORD,
-  } : undefined,
-});
+// Build the Kafka instance lazily so that the module can be required
+// even when kafkajs is not installed or Kafka is not configured.
+let kafka = null;
+
+function _getKafkaInstance() {
+  if (kafka) return kafka;
+  const lib = _requireKafka();
+  if (!lib) return null;
+  const { Kafka } = lib;
+  kafka = new Kafka({
+    clientId: CLIENT_ID,
+    brokers:  KAFKA_BROKERS,
+    connectionTimeout: 10000,
+    requestTimeout:    30000,
+    retry: {
+      initialRetryTime: 300,
+      retries:          8,
+      maxRetryTime:     30000,
+      multiplier:       2,
+    },
+    ssl:  process.env.KAFKA_SSL === 'true' ? {} : false,
+    sasl: process.env.KAFKA_SASL_USERNAME ? {
+      mechanism: process.env.KAFKA_SASL_MECHANISM || 'scram-sha-256',
+      username:  process.env.KAFKA_SASL_USERNAME,
+      password:  process.env.KAFKA_SASL_PASSWORD,
+    } : undefined,
+  });
+  return kafka;
+}
 
 // ── Topic definitions ─────────────────────────────────────────────
 const TOPICS = {
@@ -60,7 +97,12 @@ let _connected = false;
 async function getProducer() {
   if (_connected && producer) return producer;
 
-  producer = kafka.producer({
+  const ki = _getKafkaInstance();
+  if (!ki) throw new Error('[Kafka] kafkajs not available — set KAFKA_BROKERS to enable streaming');
+  const lib = _requireKafka();
+  const { Partitioners, CompressionTypes } = lib;
+
+  producer = ki.producer({
     createPartitioner:   Partitioners.LegacyPartitioner,
     transactionTimeout:  30000,
     idempotent:          true,   // Exactly-once delivery
@@ -266,7 +308,9 @@ async function deadLetterQueue(topic, messages, err) {
 
 /** createTopics — idempotent topic creation */
 async function createTopics() {
-  const admin = kafka.admin();
+  const ki = _getKafkaInstance();
+  if (!ki) { console.warn('[Kafka] createTopics: Kafka not available'); return; }
+  const admin = ki.admin();
   try {
     await admin.connect();
     const topicList = Object.values(TOPICS).map(topic => ({
@@ -299,7 +343,9 @@ async function disconnect() {
 
 // ── Health check ──────────────────────────────────────────────────
 async function healthCheck() {
-  const admin = kafka.admin();
+  const ki = _getKafkaInstance();
+  if (!ki) return { healthy: false, error: 'Kafka not configured', brokers: KAFKA_BROKERS };
+  const admin = ki.admin();
   try {
     await admin.connect();
     const metadata = await admin.fetchTopicMetadata({ topics: [TOPICS.ALERTS] });
