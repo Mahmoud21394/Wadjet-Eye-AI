@@ -18,6 +18,59 @@
 
 'use strict';
 
+// ══════════════════════════════════════════════════════════════════
+// WebSocket polyfill — MUST be the very first runtime statement.
+//
+// WHY THIS IS NEEDED:
+//   @supabase/realtime-js ≥ 2.10 ships WebSocketFactory which probes
+//   globalThis.WebSocket at module-load time.  Node.js < 22 has no
+//   native WebSocket global, so the factory throws:
+//
+//     "Node.js 20 detected without native WebSocket support."
+//
+//   The `ws` package is already a transitive dep of realtime-js itself
+//   (see its package.json: "ws": "^8.18.2"), so no extra install is
+//   needed.  We simply surface it as globalThis.WebSocket BEFORE any
+//   Supabase module is required.
+//
+// WHY globalThis (not global):
+//   WebSocketFactory checks: typeof WebSocket → typeof globalThis.WebSocket
+//   → typeof global.WebSocket in that order.  globalThis is the spec-
+//   compliant alias for the global object in every JS runtime and is
+//   the first branch that succeeds, keeping us aligned with the library.
+//
+// WHY NOT Node 22 right now:
+//   Node 22 has native WebSocket (behind --experimental-websocket in
+//   22.0, unflagged in 22.4+). Upgrading is the long-term goal but
+//   requires Render NODE_VERSION=22 and a full regression cycle.
+//   This polyfill is the safe, zero-risk bridge for Node 20.x LTS.
+//
+// PRODUCTION SAFETY:
+//   • `ws` is a mature, RFC-6455-compliant implementation (12M+ wkly
+//     downloads, used by socket.io, Supabase SDK itself, etc.).
+//   • Assignment is guarded — skipped if native WebSocket already
+//     exists (future-proof for when we move to Node 22).
+//   • No side-effects on any other module; the polyfill is inert for
+//     all code that never touches globalThis.WebSocket directly.
+// ══════════════════════════════════════════════════════════════════
+if (typeof globalThis.WebSocket === 'undefined') {
+  try {
+    // eslint-disable-next-line global-require
+    globalThis.WebSocket = require('ws');
+    // Only emit in non-production so the startup banner stays clean
+    if (process.env.NODE_ENV !== 'production') {
+      // eslint-disable-next-line no-console
+      console.log('[boot] WebSocket polyfill applied (ws) — Node', process.version);
+    }
+  } catch (e) {
+    // ws is a direct dep in package.json — this branch should never
+    // execute in a correctly installed environment, but we guard
+    // anyway to prevent a missing optional dep from crashing boot.
+    // eslint-disable-next-line no-console
+    console.warn('[boot] WARNING: ws package not found — Supabase Realtime may fail.', e.message);
+  }
+}
+
 // ── Load .env FIRST before any other module ─────────────────────
 require('dotenv').config();
 

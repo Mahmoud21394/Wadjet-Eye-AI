@@ -52,6 +52,26 @@
 
 const { createClient } = require('@supabase/supabase-js');
 
+// ── WebSocket transport for Supabase Realtime ─────────────────────
+// @supabase/realtime-js ≥ 2.10 uses WebSocketFactory which requires
+// a WebSocket constructor available at module-load time.  Node.js < 22
+// has no native globalThis.WebSocket.  The globalThis polyfill in
+// server.js covers the normal startup path, but supabase.js may also
+// be required directly in workers or tests where server.js never runs.
+// Passing `ws` explicitly via `realtime.transport` on every createClient
+// call is the belt-and-suspenders defence: it works regardless of the
+// globalThis state and is the pattern explicitly recommended by the
+// Supabase SDK docs for Node.js < 22.
+// Reference: https://supabase.com/docs/reference/javascript/initializing
+let _wsTransport;
+try {
+  _wsTransport = require('ws');
+} catch (_) {
+  // ws not installed — Realtime features will rely on the globalThis polyfill
+  _wsTransport = undefined;
+}
+const _realtimeOpts = _wsTransport ? { transport: _wsTransport } : {};
+
 // ── Environment ────────────────────────────────────────────────────
 const SUPABASE_URL      = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
@@ -315,6 +335,7 @@ const supabase = (SUPABASE_URL && SERVICE_KEY) ? createClient(
       fetch:   _dbFetchWithTimeout,
       headers: { 'x-application-name': 'wadjet-eye-ai-backend' },
     },
+    realtime: _realtimeOpts,
   }
 ) : null;
 
@@ -340,6 +361,7 @@ const supabaseAuth = (SUPABASE_URL && SERVICE_KEY) ? createClient(
       fetch:   _authFetchWithTimeout,
       headers: { 'x-application-name': 'wadjet-eye-ai-auth' },
     },
+    realtime: _realtimeOpts,
   }
 ) : null;
 
@@ -382,6 +404,7 @@ function createLoginClient() {
         fetch:   _loginFetchWithTimeout,
         headers: { 'x-application-name': 'wadjet-eye-ai-login' },
       },
+      realtime: _realtimeOpts,
     }
   );
 }
@@ -396,6 +419,7 @@ const supabaseAnon = SUPABASE_ANON_KEY
         persistSession:     false,
         detectSessionInUrl: false,
       },
+      realtime: _realtimeOpts,
     })
   : supabase;
 
@@ -422,6 +446,7 @@ const supabaseIngestion = (SUPABASE_URL && SERVICE_KEY) ? createClient(
       fetch:   _ingestionFetchWithTimeout,
       headers: { 'x-application-name': 'wadjet-eye-ai-ingestion' },
     },
+    realtime: _realtimeOpts,
   }
 ) : null;
 
@@ -443,6 +468,7 @@ function supabaseForUser(accessToken) {
         persistSession:     false,
         detectSessionInUrl: false,
       },
+      realtime: _realtimeOpts,
     }
   );
 }
