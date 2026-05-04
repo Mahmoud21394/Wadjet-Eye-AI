@@ -23,7 +23,7 @@ const { asyncHandler, createError } = require('../middleware/errorHandler');
 const agentOrchestrator = require('../services/agents/agent-orchestrator');
 const { supabase } = require('../config/supabase');
 const { z } = require('zod');
-const { llmRateLimiter } = require('../middleware/rateLimiter');
+const { llmRateLimit: llmRateLimiter } = require('../middleware/rateLimiter');
 
 router.use(verifyToken);
 

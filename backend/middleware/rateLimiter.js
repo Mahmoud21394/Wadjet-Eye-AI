@@ -23,8 +23,27 @@ async function initRedis() {
     const { createClient } = require('redis');
     const { RedisStore: RS } = require('rate-limit-redis');
     RedisStore = RS;
-    redisClient = createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
-    redisClient.on('error', (err) => console.warn('[RateLimit] Redis error:', err.message));
+    redisClient = createClient({
+      url: process.env.REDIS_URL || 'redis://localhost:6379',
+      socket: {
+        // Do NOT reconnect forever if Redis is absent — fall back to memory store.
+        // reconnectStrategy: false means one attempt then give up gracefully.
+        reconnectStrategy: (retries) => {
+          if (retries >= 3) return false; // stop after 3 retries
+          return Math.min(retries * 200, 1000);
+        },
+        connectTimeout: 3000,  // 3 s connect timeout — fail fast on Render without Redis
+      },
+    });
+    // Suppress repeated reconnection-error spam — log only the first error per connection cycle.
+    let _redisErrLogged = false;
+    redisClient.on('error', (err) => {
+      if (!_redisErrLogged) {
+        console.warn('[RateLimit] Redis unavailable (falling back to memory store):', err.message);
+        _redisErrLogged = true;
+      }
+    });
+    redisClient.on('ready', () => { _redisErrLogged = false; }); // reset on reconnect
     await redisClient.connect();
     console.log('[RateLimit] Redis connected — using persistent rate-limit store');
     return true;

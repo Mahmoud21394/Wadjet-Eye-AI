@@ -9,17 +9,43 @@
  */
 'use strict';
 
-const { Kafka }  = require('kafkajs');
+// ── Lazy-load kafkajs ─────────────────────────────────────────────
+// Matches the pattern in kafka-producer.js — see that file for rationale.
+let _KafkaLib = null;
+let _kafkaLoadError = null;
+
+function _requireKafka() {
+  if (_KafkaLib) return _KafkaLib;
+  if (_kafkaLoadError) return null;
+  try {
+    _KafkaLib = require('kafkajs');
+    return _KafkaLib;
+  } catch (err) {
+    _kafkaLoadError = err.message;
+    console.warn('[KafkaConsumer] kafkajs not available:', err.message);
+    return null;
+  }
+}
+
 const { TOPICS } = require('./kafka-producer');
 
 const KAFKA_BROKERS = (process.env.KAFKA_BROKERS || 'kafka:9092').split(',');
 const CLIENT_ID     = process.env.KAFKA_CLIENT_ID || 'wadjet-eye-api';
 
-const kafka = new Kafka({
-  clientId: `${CLIENT_ID}-consumer`,
-  brokers:  KAFKA_BROKERS,
-  retry: { retries: 5, initialRetryTime: 300 },
-});
+// Build lazily — returns null when kafkajs is unavailable
+let kafka = null;
+function _getKafkaInstance() {
+  if (kafka) return kafka;
+  const lib = _requireKafka();
+  if (!lib) return null;
+  const { Kafka } = lib;
+  kafka = new Kafka({
+    clientId: `${CLIENT_ID}-consumer`,
+    brokers:  KAFKA_BROKERS,
+    retry: { retries: 5, initialRetryTime: 300 },
+  });
+  return kafka;
+}
 
 // ── Consumer registry ─────────────────────────────────────────────
 const _consumers = new Map();
@@ -31,7 +57,9 @@ const _consumers = new Map();
  * @param {Function} handler - async (topic, partition, message) => void
  */
 async function createConsumer(groupId, topics, handler) {
-  const consumer = kafka.consumer({
+  const ki = _getKafkaInstance();
+  if (!ki) throw new Error('[Kafka] kafkajs not available — set KAFKA_BROKERS to enable streaming');
+  const consumer = ki.consumer({
     groupId,
     sessionTimeout:    30000,
     heartbeatInterval: 3000,

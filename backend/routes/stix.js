@@ -25,7 +25,7 @@
 const router = require('express').Router();
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { asyncHandler, createError } = require('../middleware/errorHandler');
-const { validateBody, validateQuery } = require('../middleware/rateLimiter');
+const { validateBody, validateQuery } = require('../schemas/validation');
 const stixService = require('../services/stix/stix-service');
 const { supabase } = require('../config/supabase');
 const { z } = require('zod');

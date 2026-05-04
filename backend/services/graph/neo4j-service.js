@@ -14,7 +14,32 @@
  */
 'use strict';
 
-const neo4j = require('neo4j-driver');
+// ── Lazy-load neo4j-driver ────────────────────────────────────────
+// neo4j-driver is an optional infrastructure dependency — Neo4j is
+// only available when NEO4J_URI is configured.  Loading it lazily
+// means the process does NOT crash at startup when Neo4j is absent
+// (e.g., basic Render deployment without a Neo4j add-on).
+// Every public function checks _neo4jAvailable() before attempting
+// any driver operation and returns a safe fallback when unavailable.
+let neo4j = null;
+let _neo4jLoadError = null;
+
+function _requireNeo4j() {
+  if (neo4j) return neo4j;
+  if (_neo4jLoadError) return null;
+  try {
+    neo4j = require('neo4j-driver');
+    return neo4j;
+  } catch (err) {
+    _neo4jLoadError = err.message;
+    console.warn('[Neo4j] neo4j-driver not available:', err.message);
+    return null;
+  }
+}
+
+function _neo4jAvailable() {
+  return !!_requireNeo4j() && !!process.env.NEO4J_URI;
+}
 
 // ── Connection ────────────────────────────────────────────────────
 const NEO4J_URI      = process.env.NEO4J_URI      || 'bolt://neo4j:7687';
@@ -24,10 +49,12 @@ const NEO4J_PASSWORD = process.env.NEO4J_PASSWORD || 'password';
 let driver = null;
 
 function getDriver() {
+  const n4j = _requireNeo4j();
+  if (!n4j) throw new Error('neo4j-driver not available — set NEO4J_URI to enable graph features');
   if (!driver) {
-    driver = neo4j.driver(
+    driver = n4j.driver(
       NEO4J_URI,
-      neo4j.auth.basic(NEO4J_USER, NEO4J_PASSWORD),
+      n4j.auth.basic(NEO4J_USER, NEO4J_PASSWORD),
       {
         maxConnectionPoolSize: 50,
         connectionAcquisitionTimeout: 10000,
@@ -41,7 +68,9 @@ function getDriver() {
 }
 
 async function getSession(database = 'neo4j') {
-  return getDriver().session({ database, defaultAccessMode: neo4j.session.WRITE });
+  const n4j = _requireNeo4j();
+  if (!n4j) throw new Error('neo4j-driver not available');
+  return getDriver().session({ database, defaultAccessMode: n4j.session.WRITE });
 }
 
 // ── Schema initialization ─────────────────────────────────────────
