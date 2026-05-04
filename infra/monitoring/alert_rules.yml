@@ -1,0 +1,136 @@
+# ══════════════════════════════════════════════════════════════════
+#  Wadjet-Eye AI — Prometheus Alert Rules
+#  infra/monitoring/alert_rules.yml
+# ══════════════════════════════════════════════════════════════════
+groups:
+
+  - name: wadjet_backend
+    interval: 30s
+    rules:
+
+      - alert: BackendDown
+        expr: up{job="wadjet-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Wadjet-Eye backend is down"
+          description: "Backend instance {{ $labels.instance }} has been unreachable for >1 minute."
+
+      - alert: HighErrorRate
+        expr: |
+          rate(http_requests_total{job="wadjet-backend",status=~"5.."}[5m]) /
+          rate(http_requests_total{job="wadjet-backend"}[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "High HTTP error rate on Wadjet-Eye backend"
+          description: "Error rate is {{ $value | humanizePercentage }} over the last 5 minutes."
+
+      - alert: HighResponseLatency
+        expr: |
+          histogram_quantile(0.95,
+            rate(http_request_duration_seconds_bucket{job="wadjet-backend"}[5m])
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "P95 latency > 2 seconds"
+          description: "95th-percentile response time is {{ $value | humanizeDuration }}."
+
+      - alert: HighMemoryUsage
+        expr: |
+          process_resident_memory_bytes{job="wadjet-backend"} /
+          (1024 * 1024 * 1024) > 1.5
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Backend memory usage > 1.5 GB"
+          description: "Resident memory is {{ $value | humanize }} GB."
+
+  - name: wadjet_kafka
+    interval: 60s
+    rules:
+
+      - alert: KafkaConsumerLag
+        expr: kafka_consumer_group_lag > 10000
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Kafka consumer lag > 10k messages"
+          description: "Consumer group {{ $labels.group }} on topic {{ $labels.topic }} has lag {{ $value }}."
+
+      - alert: KafkaBrokerDown
+        expr: up{job="kafka"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Kafka broker {{ $labels.instance }} is down"
+
+  - name: wadjet_redis
+    interval: 30s
+    rules:
+
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Redis is down"
+
+      - alert: RedisHighMemory
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Redis memory usage > 85%"
+          description: "Redis is using {{ $value | humanizePercentage }} of configured maxmemory."
+
+  - name: wadjet_soc
+    interval: 60s
+    rules:
+
+      - alert: CriticalAlertSLABreach
+        expr: wadjet_sla_breach_total{severity="critical"} > 0
+        for: 0m
+        labels:
+          severity: critical
+          team: soc
+        annotations:
+          summary: "Critical alert SLA breached"
+          description: "{{ $value }} critical alerts have exceeded 24-hour SLA."
+
+      - alert: HighFalsePositiveRate
+        expr: wadjet_false_positive_rate > 0.3
+        for: 10m
+        labels:
+          severity: warning
+          team: soc
+        annotations:
+          summary: "False positive rate > 30%"
+          description: "FPR is {{ $value | humanizePercentage }} — detection model may need retraining."
+
+      - alert: AgentTaskQueueDepth
+        expr: wadjet_agent_queue_depth > 100
+        for: 5m
+        labels:
+          severity: warning
+          team: soc
+        annotations:
+          summary: "Agent task queue depth > 100"
+          description: "{{ $value }} agent tasks are queued — capacity may be exhausted."

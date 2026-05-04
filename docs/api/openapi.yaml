@@ -1,0 +1,826 @@
+openapi: 3.1.0
+info:
+  title: Wadjet-Eye AI — Enterprise SOC Platform API
+  version: 4.1.0
+  description: |
+    Production REST API for the Wadjet-Eye AI Enterprise Threat Detection &
+    SOC Automation Platform.
+
+    ## Authentication
+    All endpoints require a JWT Bearer token obtained via `/api/auth/login`.
+    MFA (TOTP) must be verified before accessing privileged endpoints.
+
+    ## Rate Limits
+    - Global API: 100 req/min per IP
+    - Auth endpoints: 10 req/15min per IP
+    - LLM/AI endpoints: 20 req/min per IP
+
+    ## Tenant Isolation
+    All data is tenant-scoped. Include `X-Tenant-ID` header for multi-tenant operations.
+  contact:
+    name: Wadjet-Eye Platform Team
+    email: platform@wadjet-eye.io
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://api.wadjet-eye.io
+    description: Production
+  - url: https://wadjet-eye-ai.onrender.com
+    description: Staging
+  - url: http://localhost:4000
+    description: Local development
+
+tags:
+  - name: Auth
+    description: Authentication, MFA, session management
+  - name: Alerts
+    description: Security alert CRUD and triage
+  - name: Cases
+    description: Incident case management
+  - name: IOCs
+    description: Indicators of Compromise
+  - name: Detection
+    description: Detection rules, clustering, self-learning
+  - name: AI Copilot
+    description: LLM-powered RAKAY threat copilot
+  - name: RAG
+    description: Retrieval-Augmented Generation pipeline
+  - name: Agents
+    description: Autonomous SOC agent orchestration
+  - name: Graph
+    description: Neo4j attack-chain reconstruction
+  - name: Dark Web
+    description: Dark web intelligence monitoring
+  - name: Predictive
+    description: Predictive threat intelligence
+  - name: Purple Team
+    description: Adversary simulation and ATT&CK coverage
+  - name: Reports
+    description: SIGINT-style PDF report generation
+  - name: Metrics
+    description: SOC operations metrics and dashboards
+  - name: Integrations
+    description: SIEM connectors, STIX/TAXII, CEF/Syslog
+  - name: Threat Intel
+    description: CTI feeds and threat actor profiles
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    CsrfToken:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:  { type: string }
+        code:   { type: string }
+        path:   { type: string }
+
+    Severity:
+      type: string
+      enum: [CRITICAL, HIGH, MEDIUM, LOW, INFO]
+
+    AlertStatus:
+      type: string
+      enum: [open, investigating, escalated, closed, suppressed]
+
+    Alert:
+      type: object
+      properties:
+        id:               { type: string, format: uuid }
+        tenant_id:        { type: string, format: uuid }
+        rule_id:          { type: string, format: uuid }
+        title:            { type: string }
+        description:      { type: string }
+        severity:         { $ref: '#/components/schemas/Severity' }
+        category:         { type: string }
+        status:           { $ref: '#/components/schemas/AlertStatus' }
+        outcome:          { type: string, enum: [true_positive, false_positive, benign, escalated, undecided] }
+        confidence:       { type: integer, minimum: 0, maximum: 100 }
+        risk_score:       { type: integer, minimum: 0, maximum: 100 }
+        src_ip:           { type: string }
+        dst_ip:           { type: string }
+        mitre_tactic:     { type: string }
+        mitre_technique:  { type: string }
+        iocs:             { type: array, items: { $ref: '#/components/schemas/IOC' } }
+        cluster_id:       { type: string }
+        created_at:       { type: string, format: date-time }
+        updated_at:       { type: string, format: date-time }
+
+    IOC:
+      type: object
+      properties:
+        id:         { type: string, format: uuid }
+        type:       { type: string, enum: [ip, domain, url, hash_md5, hash_sha1, hash_sha256, email, filename] }
+        value:      { type: string }
+        severity:   { $ref: '#/components/schemas/Severity' }
+        confidence: { type: integer }
+        source:     { type: string }
+        tags:       { type: array, items: { type: string } }
+        first_seen: { type: string, format: date-time }
+        last_seen:  { type: string, format: date-time }
+
+    Case:
+      type: object
+      properties:
+        id:              { type: string, format: uuid }
+        tenant_id:       { type: string, format: uuid }
+        title:           { type: string }
+        severity:        { $ref: '#/components/schemas/Severity' }
+        priority:        { type: string, enum: [P1, P2, P3, P4] }
+        status:          { type: string }
+        assignee_id:     { type: string, format: uuid }
+        alert_ids:       { type: array, items: { type: string, format: uuid } }
+        mitre_techniques: { type: array, items: { type: string } }
+        sla_due_at:      { type: string, format: date-time }
+        sla_breached:    { type: boolean }
+        created_at:      { type: string, format: date-time }
+        closed_at:       { type: string, format: date-time }
+
+    AlertCluster:
+      type: object
+      properties:
+        cluster_id:       { type: string }
+        alert_count:      { type: integer }
+        severity:         { $ref: '#/components/schemas/Severity' }
+        risk_score:       { type: integer }
+        first_seen:       { type: string, format: date-time }
+        last_seen:        { type: string, format: date-time }
+        src_ips:          { type: array, items: { type: string } }
+        mitre_techniques: { type: array, items: { type: string } }
+        narrative:        { type: string }
+        is_campaign:      { type: boolean }
+        campaign_confidence: { type: integer }
+
+    AgentTask:
+      type: object
+      properties:
+        id:           { type: string, format: uuid }
+        agent_type:   { type: string, enum: [triage, investigation, response] }
+        status:       { type: string }
+        decision:     { type: string }
+        confidence:   { type: integer }
+        reasoning:    { type: string }
+        hitl_required: { type: boolean }
+        hitl_approved: { type: boolean }
+        actions_taken: { type: array, items: { type: object } }
+
+    SocMetrics:
+      type: object
+      properties:
+        generated_at:   { type: string, format: date-time }
+        window_days:    { type: integer }
+        overview:
+          type: object
+          properties:
+            total_alerts:      { type: integer }
+            total_cases:       { type: integer }
+            open_cases:        { type: integer }
+            critical_alerts:   { type: integer }
+            sla_compliance:    { type: number }
+            avg_quality_score: { type: integer }
+            analysts_at_risk:  { type: integer }
+        mttd:
+          type: object
+          properties:
+            mean:   { type: number }
+            median: { type: number }
+            p95:    { type: number }
+            count:  { type: integer }
+            unit:   { type: string }
+        mttr:
+          type: object
+          properties:
+            mean:   { type: number }
+            median: { type: number }
+            p95:    { type: number }
+        sla_compliance:
+          type: object
+        analyst_workload:
+          type: array
+          items:
+            type: object
+
+security:
+  - BearerAuth: []
+
+paths:
+
+  # ── AUTH ───────────────────────────────────────────────────────
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Login with email/password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:    { type: string, format: email }
+                password: { type: string, minLength: 8 }
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:         { type: string }
+                  refresh_token: { type: string }
+                  user:          { type: object }
+                  mfa_required:  { type: boolean }
+        '401': { description: Invalid credentials }
+        '429': { description: Rate limit exceeded }
+
+  /api/auth/mfa/setup:
+    post:
+      tags: [Auth]
+      summary: Set up TOTP MFA — returns QR code URI
+      responses:
+        '200':
+          description: MFA setup initiated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  qr_uri:      { type: string }
+                  secret:      { type: string }
+                  backup_codes: { type: array, items: { type: string } }
+
+  /api/auth/mfa/verify:
+    post:
+      tags: [Auth]
+      summary: Verify TOTP code to complete MFA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [totp_code]
+              properties:
+                totp_code: { type: string, pattern: '^\d{6}$' }
+      responses:
+        '200': { description: MFA verified }
+        '401': { description: Invalid TOTP code }
+
+  /api/auth/csrf-token:
+    get:
+      tags: [Auth]
+      summary: Get CSRF token for state-changing requests
+      security: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+
+  # ── ALERTS ─────────────────────────────────────────────────────
+
+  /api/alerts:
+    get:
+      tags: [Alerts]
+      summary: List alerts with filtering and pagination
+      parameters:
+        - in: query
+          name: severity
+          schema: { type: string, enum: [CRITICAL, HIGH, MEDIUM, LOW, INFO] }
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50, maximum: 200 }
+        - in: query
+          name: since
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:  { type: array, items: { $ref: '#/components/schemas/Alert' } }
+                  total: { type: integer }
+                  page:  { type: integer }
+
+  /api/alerts/{id}/feedback:
+    post:
+      tags: [Alerts]
+      summary: Submit analyst feedback (TP/FP labeling)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outcome]
+              properties:
+                outcome:    { type: string, enum: [true_positive, false_positive, benign, escalated] }
+                notes:      { type: string }
+                rule_ids:   { type: array, items: { type: string } }
+      responses:
+        '200':
+          description: Feedback processed — returns rule weight updates
+
+  # ── DETECTION ──────────────────────────────────────────────────
+
+  /api/detection/cluster:
+    post:
+      tags: [Detection]
+      summary: Cluster a set of alerts using DBSCAN or HDBSCAN
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                alert_ids:  { type: array, items: { type: string, format: uuid } }
+                algorithm:  { type: string, enum: [dbscan, hdbscan], default: dbscan }
+                epsilon:    { type: number, default: 0.3 }
+                min_pts:    { type: integer, default: 3 }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  clusters: { type: array, items: { $ref: '#/components/schemas/AlertCluster' } }
+                  stats:    { type: object }
+
+  /api/detection/rules/effectiveness:
+    get:
+      tags: [Detection]
+      summary: Get rule effectiveness metrics with FP/TP rates
+      parameters:
+        - in: query
+          name: window_days
+          schema: { type: integer, default: 30 }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rules:       { type: array }
+                  suggestions: { type: array }
+
+  # ── AI COPILOT ────────────────────────────────────────────────
+
+  /api/rakay/explain:
+    post:
+      tags: [AI Copilot]
+      summary: AI explanation of an alert or investigation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [alert_id]
+              properties:
+                alert_id:    { type: string, format: uuid }
+                context:     { type: string }
+                session_id:  { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  explanation:    { type: string }
+                  ioc_analysis:   { type: object }
+                  mitre_context:  { type: string }
+                  recommendations: { type: array, items: { type: string } }
+                  session_id:     { type: string }
+
+  /api/rakay/narrative:
+    post:
+      tags: [AI Copilot]
+      summary: Generate auto-incident narrative from case data
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [case_id]
+              properties:
+                case_id:    { type: string, format: uuid }
+                style:      { type: string, enum: [sigint, executive, technical], default: sigint }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  narrative:     { type: string }
+                  word_count:    { type: integer }
+                  generated_at:  { type: string, format: date-time }
+
+  # ── RAG ───────────────────────────────────────────────────────
+
+  /api/rag/search:
+    post:
+      tags: [RAG]
+      summary: Semantic search over threat intelligence corpus
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:    { type: string }
+                top_k:    { type: integer, default: 5, maximum: 20 }
+                min_score: { type: number, default: 0.72 }
+                namespaces: { type: array, items: { type: string } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:  { type: array }
+                  query:    { type: string }
+                  total:    { type: integer }
+
+  # ── AGENTS ───────────────────────────────────────────────────
+
+  /api/agents/triage/{alert_id}:
+    post:
+      tags: [Agents]
+      summary: Trigger autonomous triage agent for alert
+      parameters:
+        - in: path
+          name: alert_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '202':
+          description: Triage task queued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentTask' }
+
+  /api/agents/hitl/pending:
+    get:
+      tags: [Agents]
+      summary: List pending human-in-the-loop checkpoints
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  checkpoints: { type: array }
+                  total:       { type: integer }
+
+  /api/agents/hitl/{checkpoint_id}/approve:
+    post:
+      tags: [Agents]
+      summary: Approve or reject an agent action checkpoint
+      parameters:
+        - in: path
+          name: checkpoint_id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [approved]
+              properties:
+                approved: { type: boolean }
+                note:     { type: string }
+      responses:
+        '200': { description: Checkpoint resolved }
+
+  # ── GRAPH ────────────────────────────────────────────────────
+
+  /api/graph/attack-chain/{incident_id}:
+    get:
+      tags: [Graph]
+      summary: Reconstruct live attack chain from Neo4j
+      parameters:
+        - in: path
+          name: incident_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nodes: { type: array }
+                  edges: { type: array }
+                  stages: { type: array }
+                  generated_at: { type: string, format: date-time }
+
+  # ── DARK WEB ─────────────────────────────────────────────────
+
+  /api/darkweb/scan:
+    post:
+      tags: [Dark Web]
+      summary: Trigger dark web scan cycle
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                org_keywords: { type: array, items: { type: string } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scan_id:       { type: string }
+                  total_findings: { type: integer }
+                  critical:      { type: integer }
+                  findings:      { type: array }
+
+  # ── PREDICTIVE TI ─────────────────────────────────────────────
+
+  /api/predictive/report:
+    get:
+      tags: [Predictive]
+      summary: Get predictive threat intelligence report (GDELT + campaigns)
+      parameters:
+        - in: query
+          name: window
+          schema: { type: string, default: '2weeks' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  geopolitical:          { type: object }
+                  campaign_predictions:  { type: array }
+                  cve_priority_queue:    { type: array }
+                  overall_threat_level:  { type: string }
+
+  /api/predictive/cve/{cve_id}/forecast:
+    get:
+      tags: [Predictive]
+      summary: Forecast exploitation probability for a CVE
+      parameters:
+        - in: path
+          name: cve_id
+          required: true
+          schema: { type: string, example: 'CVE-2024-12345' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  probability:     { type: number }
+                  confidence:      { type: string }
+                  trend:           { type: string }
+                  horizon_days:    { type: integer }
+                  forecast:        { type: array }
+
+  # ── PURPLE TEAM ───────────────────────────────────────────────
+
+  /api/purple-team/coverage:
+    get:
+      tags: [Purple Team]
+      summary: Get current ATT&CK coverage score
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  score:              { type: integer }
+                  total_techniques:   { type: integer }
+                  covered_count:      { type: integer }
+                  gap_count:          { type: integer }
+                  gaps_by_tactic:     { type: object }
+
+  /api/purple-team/gap-report:
+    get:
+      tags: [Purple Team]
+      summary: Get detection gap analysis report
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  attack_coverage_score: { type: integer }
+                  critical_gaps:        { type: array }
+                  recommendations:      { type: object }
+
+  /api/purple-team/simulate:
+    post:
+      tags: [Purple Team]
+      summary: Start adversary simulation via Caldera
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                adversary_id:  { type: string }
+                technique_ids: { type: array, items: { type: string } }
+                name:          { type: string }
+      responses:
+        '202':
+          description: Simulation started
+
+  # ── REPORTS ──────────────────────────────────────────────────
+
+  /api/reports/generate:
+    post:
+      tags: [Reports]
+      summary: Generate a SIGINT-style PDF report
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [report_type]
+              properties:
+                report_type:  { type: string, enum: [incident, executive, soc_metrics, threat_intel] }
+                case_id:      { type: string, format: uuid }
+                period_start: { type: string, format: date }
+                period_end:   { type: string, format: date }
+                classification: { type: string, default: CONFIDENTIAL }
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  report_id:    { type: string }
+                  download_url: { type: string }
+                  status:       { type: string }
+
+  /api/reports/{id}/download:
+    get:
+      tags: [Reports]
+      summary: Download generated PDF report
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+
+  # ── SOC METRICS ───────────────────────────────────────────────
+
+  /api/metrics/dashboard:
+    get:
+      tags: [Metrics]
+      summary: Get full SOC metrics dashboard
+      parameters:
+        - in: query
+          name: window_days
+          schema: { type: integer, default: 30 }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SocMetrics' }
+
+  /api/metrics/analyst-workload:
+    get:
+      tags: [Metrics]
+      summary: Get analyst workload and burnout risk scores
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  analysts: { type: array }
+                  at_risk:  { type: integer }
+
+  # ── INTEGRATIONS ──────────────────────────────────────────────
+
+  /api/integrations/stix/bundle:
+    get:
+      tags: [Integrations]
+      summary: Export STIX 2.1 bundle for tenant
+      parameters:
+        - in: query
+          name: since
+          schema: { type: string, format: date-time }
+        - in: query
+          name: types
+          schema: { type: string, description: 'Comma-separated STIX types' }
+      responses:
+        '200':
+          content:
+            application/stix+json:
+              schema:
+                type: object
+                properties:
+                  type:    { type: string, example: bundle }
+                  id:      { type: string }
+                  objects: { type: array }
+
+  /api/integrations/stix/import:
+    post:
+      tags: [Integrations]
+      summary: Import STIX 2.1 bundle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bundle: { type: object }
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  imported: { type: integer }
+                  skipped:  { type: integer }
+
+  /api/integrations/splunk/test:
+    post:
+      tags: [Integrations]
+      summary: Test Splunk HEC connectivity
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connected: { type: boolean }
+                  latency_ms: { type: integer }
+
+  /api/integrations/sentinel/test:
+    post:
+      tags: [Integrations]
+      summary: Test Microsoft Sentinel connectivity
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connected: { type: boolean }

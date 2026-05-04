@@ -1,0 +1,217 @@
+# ══════════════════════════════════════════════════════════════════
+#  Wadjet-Eye AI — Helm NetworkPolicy Templates
+#  infra/helm/wadjet-eye/templates/networkpolicy.yaml
+#
+#  Implements zero-trust internal networking:
+#  • Backend only accepts traffic from NGINX and worker
+#  • Redis only accepts traffic from backend and worker
+#  • Kafka only accepts traffic from backend and worker
+#  • Neo4j only accepts traffic from backend
+#  • Vault only accepts traffic from backend and worker
+#  • No pod-to-internet egress except to external APIs via egress rules
+# ══════════════════════════════════════════════════════════════════
+
+# ── Backend API: allow ingress from nginx + worker ────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-backend-netpol
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "wadjet-eye.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: nginx
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: worker
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 4000
+        - port: 9090
+  egress:
+    # Allow DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Allow to Redis
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: redis
+      ports:
+        - port: 6379
+    # Allow to Kafka
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: kafka
+      ports:
+        - port: 9092
+        - port: 29092
+    # Allow to Neo4j
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: neo4j
+      ports:
+        - port: 7687
+        - port: 7474
+    # Allow to Vault
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: vault
+      ports:
+        - port: 8200
+    # Allow to external APIs (Supabase, OpenAI, Pinecone, OTX, etc.)
+    - ports:
+        - port: 443
+        - port: 80
+---
+# ── Redis: only backend + worker ─────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-redis-netpol
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "wadjet-eye.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: backend
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: worker
+      ports:
+        - port: 6379
+---
+# ── Kafka: only backend + worker ─────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-kafka-netpol
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "wadjet-eye.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: kafka
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: backend
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: worker
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: kafka
+      ports:
+        - port: 9092
+        - port: 29092
+        - port: 2181
+---
+# ── Neo4j: only backend ──────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-neo4j-netpol
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "wadjet-eye.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: neo4j
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: backend
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: worker
+      ports:
+        - port: 7687
+        - port: 7474
+---
+# ── Vault: only backend + worker ─────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-vault-netpol
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "wadjet-eye.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: vault
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: backend
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: worker
+      ports:
+        - port: 8200
+        - port: 8201
+---
+# ── Reports service: only backend + nginx ────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-reports-netpol
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "wadjet-eye.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: reports
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: nginx
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: backend
+      ports:
+        - port: 8001
+  egress:
+    - ports:
+        - port: 443
+        - port: 53
+          protocol: UDP

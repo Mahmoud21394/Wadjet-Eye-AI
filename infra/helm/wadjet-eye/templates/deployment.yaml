@@ -1,0 +1,166 @@
+{{/*
+  Wadjet-Eye AI — Backend Deployment Template
+  infra/helm/wadjet-eye/templates/deployment.yaml
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-backend
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+    reloader.stakater.com/auto: "true"
+spec:
+  replicas: {{ .Values.backend.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "wadjet-eye.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        {{- include "wadjet-eye.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "{{ .Values.backend.service.port }}"
+        prometheus.io/path:   "/metrics"
+        checksum/config:      {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.global.imagePullSecrets | nindent 8 }}
+      {{- end }}
+      topologySpreadConstraints:
+        {{- toYaml .Values.topologySpreadConstraints | nindent 8 }}
+      initContainers:
+        - name: wait-for-redis
+          image: redis:7-alpine
+          command: ["sh", "-c", "until redis-cli -u $REDIS_URL ping; do sleep 2; done"]
+          env:
+            - name: REDIS_URL
+              value: {{ .Values.backend.env.REDIS_URL | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 999
+      containers:
+        - name: backend
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.backend.service.port }}
+              protocol: TCP
+          env:
+            {{- range $key, $val := .Values.backend.env }}
+            - name: {{ $key }}
+              value: {{ $val | quote }}
+            {{- end }}
+            {{- range .Values.backend.envFromSecrets }}
+            {{- range .keys }}
+            - name: {{ . }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.secretName }}
+                  key: {{ . }}
+            {{- end }}
+            {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.backend.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.backend.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp-dir
+              mountPath: /tmp
+            - name: reports-dir
+              mountPath: /app/reports
+      volumes:
+        - name: tmp-dir
+          emptyDir: {}
+        - name: reports-dir
+          emptyDir: {}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/component
+                      operator: In
+                      values: [backend]
+                topologyKey: kubernetes.io/hostname
+      terminationGracePeriodSeconds: 30
+---
+{{- if .Values.backend.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-backend-hpa
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "wadjet-eye.fullname" . }}-backend
+  minReplicas: {{ .Values.backend.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.backend.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.backend.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.backend.autoscaling.targetMemoryUtilizationPercentage }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type:          Pods
+          value:         1
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type:          Pods
+          value:         2
+          periodSeconds: 30
+{{- end }}
+---
+{{- if .Values.backend.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-backend-pdb
+  namespace: {{ .Values.global.namespace }}
+spec:
+  minAvailable: {{ .Values.backend.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "wadjet-eye.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
+{{- end }}

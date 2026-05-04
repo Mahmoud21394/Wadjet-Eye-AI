@@ -1,0 +1,266 @@
+# ══════════════════════════════════════════════════════════════════
+#  Wadjet-Eye AI — Helm Values (Production Defaults)
+#  infra/helm/wadjet-eye/values.yaml
+# ══════════════════════════════════════════════════════════════════
+
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  storageClass: "standard"
+  namespace: wadjet-eye
+
+# ── Backend API ──────────────────────────────────────────────────
+backend:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: wadjet-eye/backend
+    tag: "4.1.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 4000
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  env:
+    NODE_ENV: production
+    PORT: "4000"
+    VAULT_ENABLED: "true"
+    VAULT_ADDR: "http://vault:8200"
+    KAFKA_BROKERS: "kafka-1:29092,kafka-2:29093,kafka-3:29094"
+    REDIS_URL: "redis://redis-master:6379"
+  envFromSecrets:
+    - secretName: wadjet-eye-secrets
+      keys:
+        - JWT_SECRET
+        - SUPABASE_URL
+        - SUPABASE_SERVICE_KEY
+        - OPENAI_API_KEY
+        - VAULT_ROLE_ID
+        - VAULT_SECRET_ID
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 4000
+    initialDelaySeconds: 30
+    periodSeconds: 15
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: 4000
+    initialDelaySeconds: 10
+    periodSeconds: 10
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+# ── NGINX API Gateway ────────────────────────────────────────────
+nginx:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: nginx
+    tag: "1.25-alpine"
+    pullPolicy: IfNotPresent
+  service:
+    type: LoadBalancer
+    port: 443
+    httpPort: 80
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: nlb
+      service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+  tls:
+    enabled: true
+    secretName: wadjet-eye-tls
+    certManager:
+      enabled: true
+      issuer: letsencrypt-prod
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# ── Redis ────────────────────────────────────────────────────────
+redis:
+  enabled: true
+  architecture: replication
+  auth:
+    enabled: true
+    existingSecret: wadjet-eye-redis-secret
+    existingSecretPasswordKey: redis-password
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  replica:
+    replicaCount: 2
+
+# ── Neo4j ────────────────────────────────────────────────────────
+neo4j:
+  enabled: true
+  neo4j:
+    name: wadjet-eye-graph
+    password: ""  # set via secret
+    edition: community
+    resources:
+      cpu: "500m"
+      memory: "2Gi"
+  volumes:
+    data:
+      mode: defaultStorageClass
+      defaultStorageClass:
+        requests:
+          storage: 20Gi
+
+# ── Vault ────────────────────────────────────────────────────────
+vault:
+  enabled: true
+  server:
+    ha:
+      enabled: true
+      replicas: 3
+      raft:
+        enabled: true
+    resources:
+      requests:
+        memory: 256Mi
+        cpu: 250m
+      limits:
+        memory: 512Mi
+        cpu: 500m
+    dataStorage:
+      enabled: true
+      size: 10Gi
+    auditStorage:
+      enabled: true
+      size: 10Gi
+
+# ── Kafka (via Strimzi or Bitnami) ───────────────────────────────
+kafka:
+  enabled: true
+  replicaCount: 3
+  persistence:
+    enabled: true
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  zookeeper:
+    replicaCount: 3
+    persistence:
+      enabled: true
+      size: 8Gi
+
+# ── Report Service (Python/PDF) ──────────────────────────────────
+reportService:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: wadjet-eye/report-service
+    tag: "1.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 5002
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ── Ingress ──────────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: api.wadjet-eye.io
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: wadjet-eye-api-tls
+      hosts:
+        - api.wadjet-eye.io
+
+# ── Monitoring ───────────────────────────────────────────────────
+monitoring:
+  enabled: true
+  prometheus:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      interval: 30s
+  grafana:
+    enabled: true
+    adminPassword: ""  # set via secret
+
+# ── Service Account ──────────────────────────────────────────────
+serviceAccount:
+  create: true
+  name: wadjet-eye-backend
+  automountToken: false
+  annotations:
+    eks.amazonaws.com/role-arn: ""  # set for IRSA in EKS
+
+# ── DB Migrations job ────────────────────────────────────────────
+migrations:
+  enabled: true
+
+# ── Pod security ─────────────────────────────────────────────────
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# ── Network policy ───────────────────────────────────────────────
+networkPolicy:
+  enabled: true
+
+# ── Topology spread ──────────────────────────────────────────────
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: wadjet-eye-backend

@@ -1,0 +1,161 @@
+# ══════════════════════════════════════════════════════════════════
+#  Wadjet-Eye AI — Helm Service Templates
+#  infra/helm/wadjet-eye/templates/service.yaml
+# ══════════════════════════════════════════════════════════════════
+
+# ── Backend API Service ──────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-backend
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "4000"
+    prometheus.io/path: "/metrics"
+spec:
+  type: {{ .Values.backend.service.type | default "ClusterIP" }}
+  selector:
+    {{- include "wadjet-eye.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+  ports:
+    - name: http
+      port: {{ .Values.backend.service.port | default 4000 }}
+      targetPort: 4000
+      protocol: TCP
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+      protocol: TCP
+---
+# ── NGINX API Gateway Service ────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-nginx
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nginx
+spec:
+  type: LoadBalancer
+  selector:
+    {{- include "wadjet-eye.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: nginx
+  ports:
+    - name: https
+      port: 443
+      targetPort: 443
+      protocol: TCP
+    - name: http
+      port: 80
+      targetPort: 80
+      protocol: TCP
+---
+# ── Redis Service ────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-redis
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "wadjet-eye.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+      protocol: TCP
+---
+# ── Kafka Service (headless for broker discovery) ────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-kafka
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka
+spec:
+  clusterIP: None
+  selector:
+    {{- include "wadjet-eye.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka
+  ports:
+    - name: kafka-internal
+      port: 9092
+      targetPort: 9092
+    - name: kafka-external
+      port: 29092
+      targetPort: 29092
+---
+# ── Python Report Service ────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-reports
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reports
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "wadjet-eye.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: reports
+  ports:
+    - name: http
+      port: 8001
+      targetPort: 8001
+---
+# ── Neo4j Graph Database Service ────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-neo4j
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+    app.kubernetes.io/component: neo4j
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "wadjet-eye.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: neo4j
+  ports:
+    - name: bolt
+      port: 7687
+      targetPort: 7687
+    - name: http
+      port: 7474
+      targetPort: 7474
+---
+# ── Vault Service ────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-vault
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+    app.kubernetes.io/component: vault
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "wadjet-eye.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: vault
+  ports:
+    - name: http
+      port: 8200
+      targetPort: 8200
+    - name: cluster
+      port: 8201
+      targetPort: 8201

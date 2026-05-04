@@ -1,0 +1,78 @@
+{{- /*
+  Wadjet-Eye AI — Helm Job: DB Migration + Vault Init
+  infra/helm/wadjet-eye/templates/job.yaml
+*/ -}}
+{{- if .Values.migrations.enabled }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-migrate-{{ .Release.Revision }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migration
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "wadjet-eye.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migration
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "wadjet-eye.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      containers:
+        - name: migrate
+          image: "{{ .Values.global.imageRegistry }}/{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy | default "IfNotPresent" }}
+          command: ["node", "scripts/migrate.js"]
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wadjet-eye.fullname" . }}-secrets
+                  key: DATABASE_URL
+            - name: SUPABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wadjet-eye.fullname" . }}-secrets
+                  key: SUPABASE_URL
+            - name: SUPABASE_SERVICE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wadjet-eye.fullname" . }}-secrets
+                  key: SUPABASE_SERVICE_KEY
+            - name: VAULT_ADDR
+              value: {{ .Values.backend.env.VAULT_ADDR | quote }}
+            - name: VAULT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wadjet-eye.fullname" . }}-secrets
+                  key: VAULT_TOKEN
+                  optional: true
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+{{- end }}

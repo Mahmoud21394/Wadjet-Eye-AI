@@ -1,0 +1,194 @@
+# ══════════════════════════════════════════════════════════════════
+#  Wadjet-Eye AI — Kafka + Zookeeper Docker Compose (Phase 2)
+#  infra/kafka/kafka-setup.yaml
+#
+#  Topics (auto-created by KafkaJS producer on first connect):
+#    raw-events          — raw log/telemetry ingestion
+#    normalized-events   — schema-normalized events
+#    detections          — detection engine output
+#    enrichments         — enrichment service output
+#    alerts              — alert objects (severity-tagged)
+#    incidents           — case/incident objects
+#    threat-intel        — CTI feeds & IOCs
+#    dark-web-intel      — dark-web monitor findings
+#    soar-actions        — SOAR playbook execution events
+#    audit-log           — immutable audit trail
+#    metrics             — SOC metrics pipeline
+#
+#  Usage:
+#    docker compose -f infra/kafka/kafka-setup.yaml up -d
+# ══════════════════════════════════════════════════════════════════
+
+version: '3.9'
+
+networks:
+  wadjet-kafka-net:
+    driver: bridge
+
+volumes:
+  zookeeper-data:
+  zookeeper-log:
+  kafka-data-1:
+  kafka-data-2:
+  kafka-data-3:
+
+services:
+
+  # ── Zookeeper ─────────────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: wadjet-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME:   2000
+      ZOOKEEPER_SYNC_LIMIT:  2
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-log:/var/lib/zookeeper/log
+    networks:
+      - wadjet-kafka-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "echo", "ruok", "|", "nc", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Kafka Broker 1 ────────────────────────────────────────────────
+  kafka-1:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: wadjet-kafka-1
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID:                      1
+      KAFKA_ZOOKEEPER_CONNECT:              zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS:           PLAINTEXT://kafka-1:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENERS:                      PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME:     PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR:        3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR:            2
+      KAFKA_DEFAULT_REPLICATION_FACTOR:               3
+      KAFKA_MIN_INSYNC_REPLICAS:            2
+      KAFKA_LOG_RETENTION_HOURS:            168
+      KAFKA_LOG_RETENTION_BYTES:            1073741824   # 1GB per partition
+      KAFKA_LOG_SEGMENT_BYTES:              536870912    # 512MB
+      KAFKA_NUM_PARTITIONS:                 6
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE:      'true'
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_JMX_PORT:                       9101
+      KAFKA_JMX_HOSTNAME:                   kafka-1
+    volumes:
+      - kafka-data-1:/var/lib/kafka/data
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    networks:
+      - wadjet-kafka-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── Kafka Broker 2 ────────────────────────────────────────────────
+  kafka-2:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: wadjet-kafka-2
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID:                      2
+      KAFKA_ZOOKEEPER_CONNECT:              zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS:           PLAINTEXT://kafka-2:29093,PLAINTEXT_HOST://localhost:9093
+      KAFKA_LISTENERS:                      PLAINTEXT://0.0.0.0:29093,PLAINTEXT_HOST://0.0.0.0:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME:     PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR:        3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR:            2
+      KAFKA_DEFAULT_REPLICATION_FACTOR:               3
+      KAFKA_MIN_INSYNC_REPLICAS:            2
+      KAFKA_LOG_RETENTION_HOURS:            168
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE:      'true'
+      KAFKA_NUM_PARTITIONS:                 6
+      KAFKA_JMX_PORT:                       9102
+      KAFKA_JMX_HOSTNAME:                   kafka-2
+    volumes:
+      - kafka-data-2:/var/lib/kafka/data
+    ports:
+      - "9093:9093"
+    networks:
+      - wadjet-kafka-net
+    restart: unless-stopped
+
+  # ── Kafka Broker 3 ────────────────────────────────────────────────
+  kafka-3:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: wadjet-kafka-3
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID:                      3
+      KAFKA_ZOOKEEPER_CONNECT:              zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS:           PLAINTEXT://kafka-3:29094,PLAINTEXT_HOST://localhost:9094
+      KAFKA_LISTENERS:                      PLAINTEXT://0.0.0.0:29094,PLAINTEXT_HOST://0.0.0.0:9094
+      KAFKA_INTER_BROKER_LISTENER_NAME:     PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR:        3
+      KAFKA_DEFAULT_REPLICATION_FACTOR:               3
+      KAFKA_MIN_INSYNC_REPLICAS:            2
+      KAFKA_LOG_RETENTION_HOURS:            168
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE:      'true'
+      KAFKA_NUM_PARTITIONS:                 6
+      KAFKA_JMX_PORT:                       9103
+      KAFKA_JMX_HOSTNAME:                   kafka-3
+    volumes:
+      - kafka-data-3:/var/lib/kafka/data
+    ports:
+      - "9094:9094"
+    networks:
+      - wadjet-kafka-net
+    restart: unless-stopped
+
+  # ── Kafka UI ──────────────────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: wadjet-kafka-ui
+    depends_on:
+      - kafka-1
+      - kafka-2
+      - kafka-3
+    environment:
+      KAFKA_CLUSTERS_0_NAME:              wadjet-eye
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS:  kafka-1:29092,kafka-2:29093,kafka-3:29094
+      KAFKA_CLUSTERS_0_ZOOKEEPER:         zookeeper:2181
+      KAFKA_CLUSTERS_0_METRICS_PORT:      9101
+      AUTH_TYPE:                          LOGIN_FORM
+      SPRING_SECURITY_USER_NAME:          ${KAFKA_UI_USER:-admin}
+      SPRING_SECURITY_USER_PASSWORD:      ${KAFKA_UI_PASS:-changeme}
+    ports:
+      - "8085:8080"
+    networks:
+      - wadjet-kafka-net
+    restart: unless-stopped
+
+  # ── Schema Registry ───────────────────────────────────────────────
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.0
+    container_name: wadjet-schema-registry
+    depends_on:
+      - kafka-1
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME:                     schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS:  kafka-1:29092,kafka-2:29093,kafka-3:29094
+      SCHEMA_REGISTRY_LISTENERS:                     http://0.0.0.0:8081
+    ports:
+      - "8081:8081"
+    networks:
+      - wadjet-kafka-net
+    restart: unless-stopped

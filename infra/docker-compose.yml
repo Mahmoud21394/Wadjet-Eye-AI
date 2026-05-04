@@ -1,0 +1,563 @@
+# ══════════════════════════════════════════════════════════════════
+#  Wadjet-Eye AI Platform — Full-Stack Docker Compose
+#  infra/docker-compose.yml
+#
+#  Orchestrates ALL platform services for local development and
+#  staging environments:
+#    • wadjet-backend     — Node.js Express API (port 4000)
+#    • wadjet-worker      — Kafka background worker
+#    • wadjet-clustering  — Python DBSCAN clustering (port 8002)
+#    • wadjet-reports     — Python FastAPI PDF reports (port 5002)
+#    • redis              — Cache + rate limiting (port 6379)
+#    • kafka-1/2/3        — Kafka brokers (ports 9092-9094)
+#    • zookeeper          — Kafka co-ordination (port 2181)
+#    • vault              — HashiCorp Vault (port 8200)
+#    • nginx              — Reverse proxy + TLS termination (port 443/80)
+#    • neo4j              — Attack-chain graph DB (port 7474/7687)
+#    • ollama             — Local LLM inference (port 11434, GPU optional)
+#
+#  Usage:
+#    cp backend/.env.example backend/.env   # populate secrets
+#    docker compose -f infra/docker-compose.yml up -d
+#    docker compose -f infra/docker-compose.yml logs -f wadjet-backend
+#
+#  Profile groups:
+#    --profile core      — backend, worker, redis, nginx
+#    --profile kafka     — kafka brokers + zookeeper
+#    --profile vault     — HashiCorp Vault
+#    --profile ml        — clustering + reports Python services
+#    --profile graph     — Neo4j
+#    --profile local-ai  — Ollama (requires GPU)
+# ══════════════════════════════════════════════════════════════════
+
+version: '3.9'
+
+# ── Shared networks ───────────────────────────────────────────────
+networks:
+  wadjet-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+  kafka-net:
+    driver: bridge
+
+# ── Persistent volumes ────────────────────────────────────────────
+volumes:
+  redis-data:
+  kafka-data-1:
+  kafka-data-2:
+  kafka-data-3:
+  zookeeper-data:
+  zookeeper-log:
+  vault-data:
+  vault-logs:
+  neo4j-data:
+  neo4j-logs:
+  neo4j-import:
+  ollama-models:
+  nginx-certs:
+  backend-logs:
+  clustering-models:
+  reports-output:
+
+# ════════════════════════════════════════════════════════════════
+#  SERVICES
+# ════════════════════════════════════════════════════════════════
+services:
+
+  # ── Redis ───────────────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: wadjet-redis
+    profiles: [core, full]
+    command: >
+      redis-server
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 60 1000
+      --appendonly yes
+      --appendfsync everysec
+      --requirepass ${REDIS_PASSWORD:-wadjet_redis_secret}
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - wadjet-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-wadjet_redis_secret}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+          cpus: '0.5'
+
+  # ── Zookeeper ───────────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: wadjet-zookeeper
+    profiles: [kafka, full]
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME:   2000
+      ZOOKEEPER_SYNC_LIMIT:  2
+      ZOOKEEPER_INIT_LIMIT:  5
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-log:/var/lib/zookeeper/log
+    networks:
+      - kafka-net
+      - wadjet-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Kafka Broker 1 ──────────────────────────────────────────────
+  kafka-1:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: wadjet-kafka-1
+    profiles: [kafka, full]
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-1:9092,PLAINTEXT_HOST://localhost:9192
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_RETENTION_HOURS: 168          # 7 days
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824     # 1 GB
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 2
+      KAFKA_NUM_PARTITIONS: 6
+      KAFKA_COMPRESSION_TYPE: gzip
+      KAFKA_LOG4J_LOGGERS: "kafka.controller=INFO,kafka.producer.async.DefaultEventHandler=INFO,state.change.logger=INFO"
+    volumes:
+      - kafka-data-1:/var/lib/kafka/data
+    ports:
+      - "9192:9192"
+    networks:
+      - kafka-net
+      - wadjet-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── Kafka Broker 2 ──────────────────────────────────────────────
+  kafka-2:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: wadjet-kafka-2
+    profiles: [kafka, full]
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 2
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:9093,PLAINTEXT_HOST://localhost:9193
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 2
+      KAFKA_NUM_PARTITIONS: 6
+      KAFKA_COMPRESSION_TYPE: gzip
+    volumes:
+      - kafka-data-2:/var/lib/kafka/data
+    ports:
+      - "9193:9193"
+    networks:
+      - kafka-net
+      - wadjet-net
+    restart: unless-stopped
+
+  # ── Kafka Broker 3 ──────────────────────────────────────────────
+  kafka-3:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: wadjet-kafka-3
+    profiles: [kafka, full]
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 3
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-3:9094,PLAINTEXT_HOST://localhost:9194
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 2
+      KAFKA_NUM_PARTITIONS: 6
+      KAFKA_COMPRESSION_TYPE: gzip
+    volumes:
+      - kafka-data-3:/var/lib/kafka/data
+    ports:
+      - "9194:9194"
+    networks:
+      - kafka-net
+      - wadjet-net
+    restart: unless-stopped
+
+  # ── Kafka UI (dev convenience) ──────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: wadjet-kafka-ui
+    profiles: [kafka, full]
+    depends_on:
+      - kafka-1
+      - kafka-2
+      - kafka-3
+    environment:
+      KAFKA_CLUSTERS_0_NAME: wadjet-cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-1:9092,kafka-2:9093,kafka-3:9094
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+      SERVER_PORT: 8080
+    ports:
+      - "8081:8080"
+    networks:
+      - kafka-net
+      - wadjet-net
+    restart: unless-stopped
+
+  # ── HashiCorp Vault ─────────────────────────────────────────────
+  vault:
+    image: hashicorp/vault:1.17
+    container_name: wadjet-vault
+    profiles: [vault, full]
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_TOKEN:-wadjet-dev-token}
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      VAULT_ADDR: http://0.0.0.0:8200
+    volumes:
+      - vault-data:/vault/data
+      - vault-logs:/vault/logs
+      - ./vault/vault-config.hcl:/vault/config/config.hcl:ro
+    ports:
+      - "8200:8200"
+    networks:
+      - wadjet-net
+    restart: unless-stopped
+    command: vault server -dev -dev-root-token-id=${VAULT_TOKEN:-wadjet-dev-token}
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ── Vault Init (one-shot) ───────────────────────────────────────
+  vault-init:
+    image: hashicorp/vault:1.17
+    container_name: wadjet-vault-init
+    profiles: [vault, full]
+    depends_on:
+      vault:
+        condition: service_healthy
+    env_file:
+      - ../backend/.env
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_TOKEN:-wadjet-dev-token}
+    volumes:
+      - ./vault/vault-init.sh:/vault-init.sh:ro
+    networks:
+      - wadjet-net
+    command: sh /vault-init.sh
+    restart: "no"
+
+  # ── Neo4j (Attack-chain graph) ──────────────────────────────────
+  neo4j:
+    image: neo4j:5.18-community
+    container_name: wadjet-neo4j
+    profiles: [graph, full]
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-wadjet_neo4j_pass}
+      NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
+      NEO4J_dbms_security_procedures_unrestricted: "apoc.*,gds.*"
+      NEO4J_dbms_memory_heap_initial__size: 512m
+      NEO4J_dbms_memory_heap_max__size: 1G
+      NEO4J_dbms_memory_pagecache_size: 512m
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+      - neo4j-import:/var/lib/neo4j/import
+    ports:
+      - "7474:7474"   # HTTP (browser)
+      - "7687:7687"   # Bolt (driver)
+    networks:
+      - wadjet-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 | grep -q 'Neo4j'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ── Wadjet-Eye Backend (Node.js API) ────────────────────────────
+  wadjet-backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+      target: production
+    image: wadjet-eye/backend:${VERSION:-latest}
+    container_name: wadjet-backend
+    profiles: [core, full]
+    depends_on:
+      redis:
+        condition: service_healthy
+      vault:
+        condition: service_started
+    env_file:
+      - ../backend/.env
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      REDIS_URL: redis://:${REDIS_PASSWORD:-wadjet_redis_secret}@redis:6379
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_TOKEN:-wadjet-dev-token}
+      KAFKA_BROKERS: kafka-1:9092,kafka-2:9093,kafka-3:9094
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-wadjet_neo4j_pass}
+      CLUSTERING_SERVICE_URL: http://wadjet-clustering:8002
+      REPORT_SERVICE_URL: http://wadjet-reports:5002
+    volumes:
+      - backend-logs:/app/logs
+    ports:
+      - "4000:4000"
+    networks:
+      - wadjet-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/health | grep -q 'ok'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: '1.0'
+        reservations:
+          memory: 512m
+          cpus: '0.25'
+
+  # ── Kafka Background Worker ──────────────────────────────────────
+  wadjet-worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+      target: production
+    image: wadjet-eye/backend:${VERSION:-latest}
+    container_name: wadjet-worker
+    profiles: [core, full]
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka-1:
+        condition: service_started
+    env_file:
+      - ../backend/.env
+    environment:
+      NODE_ENV: production
+      REDIS_URL: redis://:${REDIS_PASSWORD:-wadjet_redis_secret}@redis:6379
+      KAFKA_BROKERS: kafka-1:9092,kafka-2:9093,kafka-3:9094
+      CLUSTERING_SERVICE_URL: http://wadjet-clustering:8002
+      WORKER_MODE: 'true'
+    volumes:
+      - backend-logs:/app/logs
+    networks:
+      - wadjet-net
+      - kafka-net
+    restart: unless-stopped
+    command: node workers/kafka-worker.js
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+          cpus: '0.75'
+
+  # ── DBSCAN Clustering Microservice (Python) ─────────────────────
+  wadjet-clustering:
+    build:
+      context: ../python/clustering
+      dockerfile: Dockerfile
+    image: wadjet-eye/clustering:${VERSION:-latest}
+    container_name: wadjet-clustering
+    profiles: [ml, full]
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8002
+      LOG_LEVEL: info
+      MAX_ALERTS: 10000
+      MODEL_CACHE_DIR: /app/models
+    volumes:
+      - clustering-models:/app/models
+    ports:
+      - "8002:8002"
+    networks:
+      - wadjet-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8002/health | grep -q 'ok'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: '2.0'
+
+  # ── Report Generation Service (Python FastAPI) ──────────────────
+  wadjet-reports:
+    build:
+      context: ../python/report-service
+      dockerfile: Dockerfile
+    image: wadjet-eye/reports:${VERSION:-latest}
+    container_name: wadjet-reports
+    profiles: [ml, full]
+    env_file:
+      - ../backend/.env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 5002
+      LOG_LEVEL: info
+      OUTPUT_DIR: /app/reports
+    volumes:
+      - reports-output:/app/reports
+    ports:
+      - "5002:5002"
+    networks:
+      - wadjet-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5002/health | grep -q 'ok'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: '1.0'
+
+  # ── NGINX Reverse Proxy ──────────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: wadjet-nginx
+    profiles: [core, full]
+    depends_on:
+      wadjet-backend:
+        condition: service_healthy
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - nginx-certs:/etc/nginx/certs
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - wadjet-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/api/health | grep -q 'ok' || exit 0"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── Ollama (Local LLM — GPU optional) ───────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: wadjet-ollama
+    profiles: [local-ai, full]
+    volumes:
+      - ollama-models:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - wadjet-net
+    restart: unless-stopped
+    # Uncomment for GPU support:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 0"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
+
+  # ── Prometheus ──────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.50.1
+    container_name: wadjet-prometheus
+    profiles: [monitoring, full]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    networks:
+      - wadjet-net
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+
+  # ── Grafana ─────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.3.3
+    container_name: wadjet-grafana
+    profiles: [monitoring, full]
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-wadjet_grafana_pass}
+      GF_SERVER_HTTP_PORT: 3001
+    volumes:
+      - ./monitoring/grafana-dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana-datasources.yml:/etc/grafana/provisioning/datasources/ds.yml:ro
+    ports:
+      - "3001:3001"
+    networks:
+      - wadjet-net
+    restart: unless-stopped

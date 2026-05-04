@@ -83,3 +83,8 @@ pnpm-lock.yaml
 *.p12
 *.pfx
 *.bak
+core
+*.tar.gz
+*.tar
+*.bak.v*
+RAYKAN_AI_Threat_Hunting_*.tar.gz

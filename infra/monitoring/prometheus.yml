@@ -1,0 +1,68 @@
+# ══════════════════════════════════════════════════════════════════
+#  Wadjet-Eye AI — Prometheus Configuration
+#  infra/monitoring/prometheus.yml
+# ══════════════════════════════════════════════════════════════════
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+  scrape_timeout:      10s
+  external_labels:
+    cluster: wadjet-eye
+    env:     production
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+rule_files:
+  - "alert_rules.yml"
+
+scrape_configs:
+
+  # ── Wadjet-Eye Backend ─────────────────────────────────────────
+  - job_name: wadjet-backend
+    static_configs:
+      - targets: ['wadjet-backend:4000']
+    metrics_path: /api/metrics
+    scrape_interval: 15s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  # ── Python Clustering Service ──────────────────────────────────
+  - job_name: wadjet-clustering
+    static_configs:
+      - targets: ['wadjet-clustering:8002']
+    metrics_path: /metrics
+    scrape_interval: 30s
+
+  # ── Python Report Service ──────────────────────────────────────
+  - job_name: wadjet-reports
+    static_configs:
+      - targets: ['wadjet-reports:5002']
+    metrics_path: /metrics
+    scrape_interval: 30s
+
+  # ── Redis ─────────────────────────────────────────────────────
+  - job_name: redis
+    static_configs:
+      - targets: ['redis:6379']
+    scrape_interval: 30s
+
+  # ── NGINX ─────────────────────────────────────────────────────
+  - job_name: nginx
+    static_configs:
+      - targets: ['nginx:9113']
+    scrape_interval: 15s
+
+  # ── Kafka ─────────────────────────────────────────────────────
+  - job_name: kafka
+    static_configs:
+      - targets: ['kafka-1:9308', 'kafka-2:9308', 'kafka-3:9308']
+    scrape_interval: 30s
+
+  # ── Prometheus self ───────────────────────────────────────────
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
