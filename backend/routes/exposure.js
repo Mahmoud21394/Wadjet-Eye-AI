@@ -60,9 +60,15 @@ async function runExposureCorrelation(tenantId) {
       .order('risk_score', { ascending: false })
       .limit(2000);
 
-    if (iocErr || !iocs) {
-      console.warn('[Exposure] Failed to fetch IOCs:', iocErr?.message);
-      return { correlated: 0 };
+    if (iocErr) {
+      console.warn('[Exposure] Failed to fetch IOCs:', iocErr.message);
+      return { correlated: 0, error: iocErr.message };
+    }
+
+    // No IOCs yet — this is normal for a fresh tenant, not an error
+    if (!iocs || iocs.length === 0) {
+      console.info('[Exposure] No active IOCs found for tenant — skipping correlation (normal on first run)');
+      return { correlated: 0, skipped: true, reason: 'no_iocs' };
     }
 
     // 2. Get all active assets
@@ -72,9 +78,13 @@ async function runExposureCorrelation(tenantId) {
       .eq('tenant_id', tenantId)
       .eq('status', 'active');
 
-    if (assetErr || !assets || assets.length === 0) {
-      console.warn('[Exposure] No assets found or error:', assetErr?.message);
-      return { correlated: 0 };
+    if (assetErr) {
+      console.warn('[Exposure] Failed to fetch assets:', assetErr.message);
+      return { correlated: 0, error: assetErr.message };
+    }
+    if (!assets || assets.length === 0) {
+      console.info('[Exposure] No active assets found for tenant — skipping correlation (add assets to asset_inventory)');
+      return { correlated: 0, skipped: true, reason: 'no_assets' };
     }
 
     // 3. Build lookup maps for fast matching

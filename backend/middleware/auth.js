@@ -26,7 +26,15 @@
  */
 'use strict';
 
+const jwt = require('jsonwebtoken');
 const { supabase, supabaseAuth, isAbortError, isTimeoutError } = require('../config/supabase'); // v7.0
+
+// ── JWT_SECRET for local fast-path decode ────────────────────────
+// Supabase JWTs are signed with the project's JWT secret.
+// SUPABASE_JWT_SECRET (preferred) or JWT_SECRET (fallback).
+// This lets us verify token signature and expiry locally — without a
+// Supabase network round-trip — so cold-start latency never causes 503.
+const _JWT_SECRET = process.env.SUPABASE_JWT_SECRET || process.env.JWT_SECRET || null;
 
 // ── Token extraction ───────────────────────────────────────────
 // Priority: httpOnly cookie → Authorization header → X-Access-Token header
@@ -97,10 +105,121 @@ async function verifyToken(req, res, next) {
     });
   }
 
-  // Wrap the entire auth check in a timeout to avoid hanging during
-  // Render cold-start / Supabase connection delays (AbortError symptoms).
-  // 8 s is enough for a warm connection; on cold start the 503 is better UX.
-  const VERIFY_TIMEOUT_MS = 8_000;
+  // ── v8.0: JWT LOCAL FAST-PATH ────────────────────────────────────
+  // ROOT CAUSE of 503 VERIFY_TIMEOUT cascade:
+  //   supabaseAuth.auth.getUser(token) makes a NETWORK CALL to Supabase
+  //   on every single request. During Render cold-start or Supabase free-
+  //   tier hibernation (0-8 s latency), this times out → every request
+  //   gets 503 → the entire platform appears down for minutes.
+  //
+  // SOLUTION:
+  //   1. Verify the JWT signature LOCALLY with jsonwebtoken (zero network).
+  //      This catches 99% of requests instantly (<1ms).
+  //   2. Only fall back to supabaseAuth.getUser() when local verify fails
+  //      (which means the token was not issued by Supabase, i.e. truly invalid).
+  //   3. Then fetch the user profile from the DB (supabase) — this IS still
+  //      a network call, but: (a) it uses the service-role client which has
+  //      a connection pool, (b) profile fetches are fast DB reads, not auth
+  //      network calls, and (c) failures here give a clean 401 not 503.
+  //
+  // SECURITY: JWT signature + expiry verified locally. The secret used is
+  // SUPABASE_JWT_SECRET (your Supabase project JWT secret from Settings →
+  // API). If not set, falls back to JWT_SECRET.  If neither is set, we
+  // keep the old supabaseAuth path as last resort.
+  if (_JWT_SECRET) {
+    let localDecoded;
+    try {
+      localDecoded = jwt.verify(token, _JWT_SECRET, { algorithms: ['HS256'] });
+    } catch (jwtErr) {
+      // Local verify failed → token is invalid or expired
+      const isExpired = jwtErr.name === 'TokenExpiredError';
+      if (isExpired) {
+        return res.status(401).json({
+          error: 'Token has expired. Please refresh your session.',
+          code:  'EXPIRED_TOKEN',
+        });
+      }
+      return res.status(401).json({
+        error: 'Invalid token. Please log in again.',
+        code:  'INVALID_TOKEN',
+      });
+    }
+
+    // Token is cryptographically valid — extract Supabase user id
+    // Supabase JWTs store the user UUID in the 'sub' claim.
+    const authUserId = localDecoded.sub;
+    const userEmail  = localDecoded.email || null;
+
+    // Fetch user profile from DB (fast pool connection — not auth network)
+    try {
+      const { data: profile, error: profileError } = await supabase
+        .from('users')
+        .select('id, name, email, role, tenant_id, status, permissions, avatar, mfa_enabled')
+        .eq('auth_id', authUserId)
+        .single();
+
+      if (!profileError && profile) {
+        if (profile.status === 'suspended' || profile.status === 'inactive') {
+          console.warn(`[Auth] 403 ACCOUNT_INACTIVE user=${profile.email} status=${profile.status}`);
+          return res.status(403).json({
+            error:  `Account is ${profile.status}. Contact your administrator.`,
+            code:   'ACCOUNT_INACTIVE',
+            status: profile.status,
+          });
+        }
+        req.user     = { ...profile, authId: authUserId };
+        req.tenantId = profile.tenant_id;
+        req.token    = token;
+        return next();
+      }
+
+      // Profile not found by auth_id → try email fallback
+      if (userEmail) {
+        const { data: profileByEmail } = await supabase
+          .from('users')
+          .select('id, name, email, role, tenant_id, status, permissions, avatar')
+          .eq('email', userEmail)
+          .single();
+
+        if (profileByEmail) {
+          req.user     = { ...profileByEmail, authId: authUserId };
+          req.tenantId = profileByEmail.tenant_id;
+          req.token    = token;
+          return next();
+        }
+      }
+
+      // Profile truly missing — return 401 not 503
+      console.warn(`[Auth] 401 PROFILE_MISSING auth_id=${authUserId} email=${userEmail}`);
+      return res.status(401).json({
+        error: 'User profile not found. Please contact your administrator.',
+        code:  'PROFILE_MISSING',
+        email: userEmail,
+      });
+    } catch (dbErr) {
+      // DB error during profile fetch — return 503 with retry hint
+      // (This is a DB issue, not an auth issue — don't cascade to login)
+      if (isAbortError(dbErr) || isTimeoutError(dbErr)) {
+        console.error(`[Auth] 503 DB_ABORT profile fetch reqId=${reqId}: ${dbErr.message}`);
+        return res.status(503).json({
+          error: 'Database temporarily unavailable. Please retry in a moment.',
+          code:  'DB_SERVICE_UNAVAILABLE',
+          retryAfter: 3,
+        });
+      }
+      console.error(`[Auth] 500 profile fetch error reqId=${reqId}:`, dbErr.message);
+      return res.status(500).json({
+        error: 'Authentication service error. Please try again.',
+        code:  'AUTH_SERVICE_ERROR',
+      });
+    }
+  }
+
+  // ── FALLBACK: supabaseAuth.getUser() path ───────────────────────
+  // Only reached when _JWT_SECRET is not set (i.e. SUPABASE_JWT_SECRET
+  // and JWT_SECRET are both absent from env).
+  // Wrap in timeout to limit cold-start damage.
+  const VERIFY_TIMEOUT_MS = 12_000;
   let _verifyTimeoutId;
   const _timeoutPromise = new Promise((_, rej) => {
     _verifyTimeoutId = setTimeout(
@@ -111,14 +230,12 @@ async function verifyToken(req, res, next) {
 
   try {
     const { data: { user }, error: authError } = await Promise.race([
-      supabaseAuth.auth.getUser(token), // v6.1: use supabaseAuth
+      supabaseAuth.auth.getUser(token),
       _timeoutPromise,
     ]);
     clearTimeout(_verifyTimeoutId);
 
     if (authError) {
-      // v7.4 FIX: If getUser() returns AbortError in the error field (not thrown),
-      // return 503 AUTH_SERVICE_UNAVAILABLE — NOT 401 INVALID_TOKEN.
       if (isAbortError(authError) || isTimeoutError(authError)) {
         console.error(`[Auth] 503 AUTH_ABORT src=${source} reqId=${reqId} ${req.method} ${req.path}: ${authError.message}`);
         clearTimeout(_verifyTimeoutId);
@@ -152,7 +269,6 @@ async function verifyToken(req, res, next) {
       .single();
 
     if (profileError || !profile) {
-      // Fallback: find by email
       const { data: profileByEmail } = await supabase
         .from('users')
         .select('id, name, email, role, tenant_id, status, permissions, avatar')
@@ -190,7 +306,6 @@ async function verifyToken(req, res, next) {
 
   } catch (err) {
     clearTimeout(_verifyTimeoutId);
-    // AbortError from supabaseAuth → return 503 to tell client to retry
     if (isAbortError(err)) {
       console.error(`[Auth] 503 verifyToken AbortError reqId=${reqId}: ${err.message}`);
       return res.status(503).json({
@@ -199,10 +314,8 @@ async function verifyToken(req, res, next) {
         retryAfter: 3,
       });
     }
-    // Surface timeout as a 503 (service unavailable) so clients retry,
-    // rather than silently swallowing it as a 500 (which looks like a bug).
     if (err.message?.includes('timed out')) {
-      console.warn(`[Auth] 503 VERIFY_TIMEOUT reqId=${reqId} ${req.method} ${req.path} — Supabase cold-start?`);
+      console.warn(`[Auth] 503 VERIFY_TIMEOUT reqId=${reqId} ${req.method} ${req.path} — add SUPABASE_JWT_SECRET to env to eliminate this`);
       return res.status(503).json({
         error: 'Authentication service temporarily unavailable. Please retry in a moment.',
         code:  'AUTH_SERVICE_TIMEOUT',

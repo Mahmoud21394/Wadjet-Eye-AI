@@ -104,8 +104,19 @@ async function upsertIOCs(tenantId, iocs) {
   const deduped = [...seen.values()];
   if (deduped.length === 0) return { new: 0, updated: 0, duplicate: dupCount };
 
-  const CHUNK = 100;
+  // Chunk size: 50 rows (was 100) — smaller batches reduce per-statement time
+  // and avoid Supabase free-tier 15s statement timeout on large upserts.
+  const CHUNK = 50;
+  let consecutiveErrors = 0;
+  const MAX_CONSECUTIVE_ERRORS = 3; // circuit-breaker: stop if DB is overloaded
+
   for (let i = 0; i < deduped.length; i += CHUNK) {
+    // Circuit-breaker: if 3+ consecutive DB errors, stop upsert loop
+    if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+      console.warn(`[PhishTank] Circuit-breaker tripped after ${consecutiveErrors} consecutive DB errors — skipping remaining ${deduped.length - i} IOCs`);
+      break;
+    }
+
     const chunk = deduped.slice(i, i + CHUNK);
     const { data, error } = await supabase
       .from('iocs')
@@ -113,17 +124,31 @@ async function upsertIOCs(tenantId, iocs) {
       .select('id, created_at');
 
     if (error) {
-      console.error('[PhishTank] upsert error:', error.message);
+      consecutiveErrors++;
+      // Only log first error and every 10th after — suppress repeated spam
+      if (consecutiveErrors === 1 || consecutiveErrors % 10 === 0) {
+        console.error(`[PhishTank] upsert error (attempt ${consecutiveErrors}):`, error.message);
+      }
+      // Fallback: silent ignoreDuplicates upsert
       const { error: e2 } = await supabase
         .from('iocs')
         .upsert(chunk, { onConflict: 'tenant_id,value', ignoreDuplicates: true });
-      if (!e2) updatedCount += chunk.length;
-    } else if (data) {
-      const freshCutoff = Date.now() - 10000;
-      for (const row of data) {
-        if (new Date(row.created_at).getTime() > freshCutoff) newCount++;
-        else updatedCount++;
+      if (!e2) { updatedCount += chunk.length; consecutiveErrors = 0; }
+    } else {
+      consecutiveErrors = 0;
+      if (data) {
+        const freshCutoff = Date.now() - 10000;
+        for (const row of data) {
+          if (new Date(row.created_at).getTime() > freshCutoff) newCount++;
+          else updatedCount++;
+        }
       }
+    }
+
+    // Backpressure: 200ms sleep between chunks to avoid saturating
+    // Supabase free-tier connection pool and statement scheduler.
+    if (i + CHUNK < deduped.length) {
+      await new Promise(r => setTimeout(r, 200));
     }
   }
 

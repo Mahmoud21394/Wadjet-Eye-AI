@@ -639,20 +639,42 @@ async function ingestNVD(tenantId) {
   try {
     console.info('[Ingestion][NVD] Starting CVE pull...');
 
-    // Fetch CVEs modified in the last 24h
-    const pubStart = new Date(Date.now() - 24 * 3600000).toISOString();
-    const pubEnd   = new Date().toISOString();
+    // Fetch CVEs modified in the last 24h.
+    // NVD API v2 requires dates in ISO 8601 format with timezone offset,
+    // e.g. "2024-01-01T00:00:00.000+00:00" — plain "Z" suffix is rejected
+    // with HTTP 400.  Replace trailing 'Z' with '+00:00' to satisfy the API.
+    const pubStart = new Date(Date.now() - 24 * 3600000).toISOString().replace('Z', '+00:00');
+    const pubEnd   = new Date().toISOString().replace('Z', '+00:00');
 
     const headers = NVD_KEY ? { apiKey: NVD_KEY } : {};
-    const { data } = await axios.get('https://services.nvd.nist.gov/rest/json/cves/2.0', {
-      params: {
-        lastModStartDate: pubStart,
-        lastModEndDate:   pubEnd,
-        resultsPerPage:   100,
-      },
-      headers,
-      timeout: 30000,
-    });
+    let nvdData;
+    try {
+      const resp = await axios.get('https://services.nvd.nist.gov/rest/json/cves/2.0', {
+        params: {
+          lastModStartDate: pubStart,
+          lastModEndDate:   pubEnd,
+          resultsPerPage:   100,
+        },
+        headers,
+        timeout: 30000,
+        validateStatus: s => s < 500,
+      });
+      if (resp.status === 403) {
+        // NVD rate-limits unauthenticated requests to 5 req/30s; wait and skip
+        console.warn('[Ingestion][NVD] HTTP 403 — rate limited or blocked. Set NVD_API_KEY to increase quota.');
+        await finishFeedLog(logId, { error: 'NVD HTTP 403 — rate limited', duration_ms: Date.now() - t0 });
+        return { source: 'nvd', error: 'rate_limited', duration_ms: Date.now() - t0 };
+      }
+      if (resp.status !== 200) {
+        throw new Error(`NVD HTTP ${resp.status}: ${JSON.stringify(resp.data).slice(0, 200)}`);
+      }
+      nvdData = resp.data;
+    } catch (err) {
+      console.error('[Ingestion][NVD] Request failed:', err.message);
+      await finishFeedLog(logId, { error: err.message, duration_ms: Date.now() - t0 });
+      return { source: 'nvd', error: err.message };
+    }
+    const { data } = { data: nvdData };
 
     const cveList = [];
     for (const vuln of (data.vulnerabilities || [])) {

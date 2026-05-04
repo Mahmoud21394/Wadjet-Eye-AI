@@ -57,7 +57,8 @@ async function upsertIOCs(iocs, tenantId, feedName) {
     'ip','domain','url','md5','sha1','sha256','sha512',
     'email','filename','cve','hostname','cidr','hash_md5','hash_sha1','hash_sha256'
   ]);
-  const CHUNK = 100;
+  // Reduced chunk size: 50 rows — avoids 15s statement-timeout on Supabase free tier
+  const CHUNK = 50;
   let inserted = 0, errors = 0;
 
   const normalized = iocs
@@ -93,26 +94,46 @@ async function upsertIOCs(iocs, tenantId, feedName) {
   }
   const deduped = [...seen.values()];
 
+  // Circuit-breaker: stop after 3 consecutive DB errors to avoid timeout spam
+  let consecutiveErrors = 0;
+  const MAX_CONSECUTIVE_ERRORS = 3;
+
   for (let i = 0; i < deduped.length; i += CHUNK) {
+    if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+      console.warn(`[Ingest][${feedName}] Circuit-breaker: ${consecutiveErrors} consecutive DB errors — skipping remaining ${deduped.length - i} rows`);
+      errors += deduped.length - i;
+      break;
+    }
+
     const chunk = deduped.slice(i, i + CHUNK);
     const { error } = await supabaseAdmin
       .from('iocs')
       .upsert(chunk, { onConflict: 'tenant_id,value', ignoreDuplicates: false });
 
     if (error) {
-      console.error(`[Ingest][${feedName}] Upsert error:`, error.message);
+      consecutiveErrors++;
+      // Suppress repeated spam — only log first and every 5th error
+      if (consecutiveErrors === 1 || consecutiveErrors % 5 === 0) {
+        console.error(`[Ingest][${feedName}] Upsert error (${consecutiveErrors}):`, error.message);
+      }
       // Retry with ignoreDuplicates on conflict error
       if (error.message?.includes('cannot affect row')) {
         const { error: e2 } = await supabaseAdmin
           .from('iocs')
           .upsert(chunk, { onConflict: 'tenant_id,value', ignoreDuplicates: true });
-        if (!e2) inserted += chunk.length;
+        if (!e2) { inserted += chunk.length; consecutiveErrors = 0; }
         else errors += chunk.length;
       } else {
         errors += chunk.length;
       }
     } else {
+      consecutiveErrors = 0;
       inserted += chunk.length;
+    }
+
+    // Backpressure: 150ms between chunks — prevents saturating Supabase free-tier
+    if (i + CHUNK < deduped.length) {
+      await new Promise(r => setTimeout(r, 150));
     }
   }
 
@@ -139,10 +160,12 @@ async function logFeedRun(tenantId, feedName, result) {
   _feedRunLog.unshift(entry);
   if (_feedRunLog.length > 200) _feedRunLog.pop();
 
-  // Persist to DB (non-blocking)
-  try {
-    await supabaseAdmin.from('cti_feed_logs').upsert(entry, { ignoreDuplicates: false });
-  } catch (_) {}
+  // Persist to DB (non-blocking) — guard against null supabaseAdmin (no env vars)
+  if (supabaseAdmin) {
+    try {
+      await supabaseAdmin.from('cti_feed_logs').upsert(entry, { ignoreDuplicates: false });
+    } catch (_) {}
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -543,12 +566,17 @@ router.get('/status', verifyToken, asyncHandler(async (req, res) => {
   const tenantId = req.user.tenant_id || DEFAULT_TENANT;
   const limit     = parseInt(req.query.limit) || 50;
 
-  const { data: dbLogs } = await supabaseAdmin
-    .from('cti_feed_logs')
-    .select('*')
-    .eq('tenant_id', tenantId)
-    .order('finished_at', { ascending: false })
-    .limit(limit);
+  // Guard: supabaseAdmin is null when SUPABASE_URL/SERVICE_KEY not configured
+  let dbLogs = null;
+  if (supabaseAdmin) {
+    const { data } = await supabaseAdmin
+      .from('cti_feed_logs')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .order('finished_at', { ascending: false })
+      .limit(limit);
+    dbLogs = data;
+  }
 
   const logs = (dbLogs && dbLogs.length > 0) ? dbLogs : _feedRunLog.slice(0, limit);
 
@@ -705,6 +733,18 @@ router.post('/correlate', verifyToken, asyncHandler(async (req, res) => {
   let campaignsCreated = 0;
   let campaignsUpdated = 0;
 
+  // Guard: if supabaseAdmin is null (no env vars), return a graceful empty response
+  if (!supabaseAdmin) {
+    return res.json({
+      status:            'skipped',
+      iocs_analyzed:     0,
+      campaigns_created: 0,
+      campaigns_updated: 0,
+      error:             'Database not configured (SUPABASE_URL/SERVICE_KEY missing)',
+      correlated_at:     new Date().toISOString(),
+    });
+  }
+
   try {
     // Fetch recent active IOCs for this tenant (last 14 days)
     const since = new Date(Date.now() - 14 * 24 * 3600000).toISOString();
@@ -759,15 +799,15 @@ router.post('/correlate', verifyToken, asyncHandler(async (req, res) => {
           const { error: insertErr } = await supabaseAdmin
             .from('campaigns')
             .insert({
-              tenant_id:      tenantId,
-              name:           campaignName,
-              threat_actor:   actor,
-              status:         'active',
-              ioc_count:      members.length,
-              severity:       members.some(m => m.risk_score >= 80) ? 'HIGH' : 'MEDIUM',
-              created_at:     now,
-              updated_at:     now,
-              auto_generated: true,
+              tenant_id:    tenantId,
+              name:         campaignName,
+              threat_actor: actor,
+              status:       'active',
+              ioc_count:    members.length,
+              severity:     members.some(m => m.risk_score >= 80) ? 'HIGH' : 'MEDIUM',
+              created_at:   now,
+              updated_at:   now,
+              // auto_generated column removed — not in DB schema cache
             });
           if (!insertErr) campaignsCreated++;
           else console.warn('[Correlate] Campaign insert error:', insertErr.message);

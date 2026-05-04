@@ -527,32 +527,59 @@ router.get('/relationships/graph', asyncHandler(async (req, res) => {
 // ══════════════════════════════════════════════════════════
 
 // GET /api/cti/feed-logs
+// NOTE: Two tables exist for feed logs:
+//   feed_logs     — written by services/ingestion/index.js (OTX, AbuseIPDB, URLhaus, etc.)
+//   cti_feed_logs — written by routes/ioc-ingestion.js v5.2 (same feeds, newer path)
+// We query both tables and merge results to provide a complete view.
 router.get('/feed-logs', asyncHandler(async (req, res) => {
   const { page, limit, from, to } = paginate(req);
   const tid = req.tenantId;
 
-  let q = supabase
-    .from('feed_logs')
-    .select('*', { count: 'exact' })
-    .eq('tenant_id', tid)
-    .order('started_at', { ascending: false })
-    .range(from, to);
+  // Build base query filters
+  const buildQuery = (table) => {
+    let q = supabase
+      .from(table)
+      .select('*', { count: 'exact' })
+      .eq('tenant_id', tid)
+      .order('finished_at', { ascending: false })
+      .range(from, to);
+    if (req.query.status)    q = q.eq('status', req.query.status);
+    if (req.query.feed_name) q = q.eq('feed_name', req.query.feed_name);
+    return q;
+  };
 
-  if (req.query.status)    q = q.eq('status', req.query.status);
-  if (req.query.feed_name) q = q.eq('feed_name', req.query.feed_name);
+  // Query both tables in parallel; ignore errors on tables that don't exist yet
+  const [legacyRes, newRes] = await Promise.allSettled([
+    buildQuery('feed_logs'),
+    buildQuery('cti_feed_logs'),
+  ]);
 
-  const { data, error, count } = await q;
-  if (error) throw createError(500, error.message);
+  const legacyData = (legacyRes.status === 'fulfilled' && !legacyRes.value.error)
+    ? legacyRes.value.data || [] : [];
+  const newData    = (newRes.status === 'fulfilled' && !newRes.value.error)
+    ? newRes.value.data || [] : [];
 
-  // Summary stats
+  // Merge: deduplicate by (feed_name + finished_at) — prefer cti_feed_logs entries
+  const seen = new Map();
+  for (const row of [...newData, ...legacyData]) {
+    const key = `${row.feed_name}:${row.finished_at}`;
+    if (!seen.has(key)) seen.set(key, row);
+  }
+  const data = [...seen.values()]
+    .sort((a, b) => new Date(b.finished_at) - new Date(a.finished_at))
+    .slice(from, to + 1);
+
+  const total = seen.size;
+
+  // Summary stats: latest run per feed
   const latest = {};
-  for (const log of (data || [])) {
+  for (const log of data) {
     if (!latest[log.feed_name]) latest[log.feed_name] = log;
   }
 
   res.json({
-    data: data || [],
-    total: count || 0,
+    data,
+    total,
     page, limit,
     feed_status: Object.values(latest),
   });
@@ -791,7 +818,8 @@ router.post('/ingest/:feed', asyncHandler(async (req, res) => {
 router.get('/stats', asyncHandler(async (req, res) => {
   const tid = req.tenantId;
 
-  const [actors, campaigns, vulns, iocs, feedLogs] = await Promise.all([
+  // Query feed logs from both tables (see /feed-logs route comment for explanation)
+  const [actors, campaigns, vulns, iocs, feedLogsNew, feedLogsLegacy] = await Promise.all([
     supabase.from('threat_actors').select('id', { count: 'exact', head: true })
       .or(`tenant_id.eq.${tid},tenant_id.is.null`),
     supabase.from('campaigns').select('id', { count: 'exact', head: true })
@@ -800,9 +828,17 @@ router.get('/stats', asyncHandler(async (req, res) => {
       .or(`tenant_id.eq.${tid},tenant_id.is.null`),
     supabase.from('iocs').select('id, risk_score, reputation', { count: 'exact' })
       .eq('tenant_id', tid).eq('status', 'active').limit(1000),
+    supabase.from('cti_feed_logs').select('feed_name, status, finished_at, iocs_new')
+      .eq('tenant_id', tid).order('finished_at', { ascending: false }).limit(20),
     supabase.from('feed_logs').select('feed_name, status, finished_at, iocs_new')
       .eq('tenant_id', tid).order('finished_at', { ascending: false }).limit(20),
   ]);
+  // Merge both feed-log result sets
+  const allFeedLogs = [
+    ...(feedLogsNew.data || []),
+    ...(feedLogsLegacy.data || []),
+  ];
+  const feedLogs = { data: allFeedLogs };
 
   const iocData = iocs.data || [];
   const maliciousCount = iocData.filter(i => i.reputation === 'malicious').length;
