@@ -86,12 +86,12 @@ async function getEngine(req) {
       otx       : process.env.OTX_API_KEY,
     };
 
-    // Get supabase from parent module if available
+    // Get supabase client (optional — engine works without DB)
     let supabase = null;
     try {
-      const { getSupabaseClient } = require('../config/supabase');
-      supabase = getSupabaseClient();
-    } catch (e) { /* optional */ }
+      const { supabase: _sb } = require('../config/supabase');
+      supabase = _sb || null;
+    } catch (e) { /* optional — engine works without DB */ }
 
     _engine = new RaykanEngine({
       aiProviders,

@@ -352,16 +352,37 @@ async function feedFetch(feedName, url, options = {}, maxRetries = 2) {
       }
 
       if (response.status === 429) {
-        const retryAfter = parseInt(response.headers['retry-after'] || '60');
-        console.warn(`[FeedAuth][${feedName}] HTTP 429 — Rate limited. Retry in ${retryAfter}s`);
+        // Hard-cap the wait at 60 seconds regardless of what Retry-After says.
+        // AbuseIPDB free tier can return Retry-After: 86400 (24 h) or even
+        // ~20 000 s on the free blacklist endpoint.  Waiting that long would
+        // pin the event loop and starve every other scheduler job.
+        // Strategy: if the retry window exceeds our cap we bail out immediately
+        // and let the scheduler pick it up on the next normal interval.
+        const rawRetryAfter = parseInt(response.headers['retry-after'] || '60', 10);
+        const MAX_WAIT_S    = 60; // never block the process for more than 60 s
+        const waitS         = Math.min(rawRetryAfter, MAX_WAIT_S);
+
+        console.warn(`[FeedAuth][${feedName}] HTTP 429 — Rate limited. Retry-After=${rawRetryAfter}s (capped at ${waitS}s). attempt=${attempt}`);
+
+        // If the real retry-after exceeds our cap, bail out now — no point retrying
+        if (rawRetryAfter > MAX_WAIT_S) {
+          return {
+            ok:     false,
+            data:   response.data,
+            error:  `Rate limited (HTTP 429). Retry-After=${rawRetryAfter}s exceeds cap — skipping until next scheduled run.`,
+            status: 429,
+            attempts: attempt,
+          };
+        }
+
         if (attempt <= maxRetries) {
-          await sleep(Math.min(retryAfter * 1000, 30000));
+          await sleep(waitS * 1000);
           continue;
         }
         return {
           ok:     false,
           data:   response.data,
-          error:  `Rate limited (HTTP 429). Retry in ${retryAfter}s.`,
+          error:  `Rate limited (HTTP 429). Retry in ${rawRetryAfter}s.`,
           status: 429,
           attempts: attempt,
         };

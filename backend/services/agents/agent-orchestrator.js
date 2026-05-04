@@ -580,4 +580,8 @@ module.exports = {
   TriageAgent,
   InvestigationAgent,
   ResponseAgent,
+  // Export thresholds so routes can reference them without duplication
+  AUTO_EXECUTE_THRESHOLD,
+  ESCALATE_THRESHOLD,
+  CLOSE_THRESHOLD,
 };

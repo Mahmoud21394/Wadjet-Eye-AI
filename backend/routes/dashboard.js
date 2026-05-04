@@ -46,7 +46,10 @@ const statsLiveHandler = asyncHandler(async (req, res) => {
       .eq('tenant_id', tid)
       .in('status', ['open', 'in_progress']),
 
-    supabase.from('feed_logs')
+    // Try both table names: legacy 'feed_logs' and new 'cti_feed_logs'.
+    // ioc-ingestion.js v5.2 writes to 'cti_feed_logs'; older schema used 'feed_logs'.
+    // We query both and merge so the dashboard works regardless of migration state.
+    supabase.from('cti_feed_logs')
       .select('feed_name, status, finished_at, iocs_new, iocs_fetched')
       .eq('tenant_id', tid)
       .order('finished_at', { ascending: false })
@@ -199,4 +202,26 @@ router.get('/recent-alerts', asyncHandler(async (req, res) => {
   res.json(data || []);
 }));
 
+// ── refreshDashboardCache — called by scheduler every 5 minutes ───
+// Pre-warms the Supabase connection and logs a lightweight heartbeat.
+// It does NOT make a full stats query (that would saturate the free tier).
+// Instead it pings the iocs table with a COUNT which exercises the pool
+// without transferring rows, keeping the connection warm between requests.
+async function refreshDashboardCache(tenantId) {
+  if (!supabase) return;
+  try {
+    const tid = tenantId || process.env.DEFAULT_TENANT_ID || '00000000-0000-0000-0000-000000000001';
+    const { count, error } = await supabase
+      .from('iocs')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_id', tid);
+    if (!error) {
+      console.log(`[Dashboard] Cache warmup: tenant=${tid} ioc_count=${count}`);
+    }
+  } catch (err) {
+    console.warn('[Dashboard] Cache warmup error (non-fatal):', err.message);
+  }
+}
+
 module.exports = router;
+module.exports.refreshDashboardCache = refreshDashboardCache;

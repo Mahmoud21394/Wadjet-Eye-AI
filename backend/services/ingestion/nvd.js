@@ -276,4 +276,7 @@ async function syncExploitDB() {
 
 function _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-module.exports = { syncNVD, syncCISAKEV, syncExploitDB };
+// ingestNVD — alias used by the scheduler (matches scheduler's require name)
+const ingestNVD = syncNVD;
+
+module.exports = { syncNVD, syncCISAKEV, syncExploitDB, ingestNVD };

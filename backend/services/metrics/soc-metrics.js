@@ -19,14 +19,17 @@
 const crypto = require('crypto');
 
 // ── MTTD: Mean Time To Detect ────────────────────────────────────
-// event_time → alert_created_at gap in minutes
+// event_time → created_at (alert creation) gap in minutes.
+// Supports both the legacy `alert_created_at` field name and the
+// actual DB column `created_at` so that both old and new alert rows
+// produce valid deltas instead of always returning 0.
 function computeMttd(events) {
   if (!events || events.length === 0) return { mean: 0, median: 0, p95: 0, count: 0 };
   const deltas = events
-    .filter(e => e.event_time && e.alert_created_at)
+    .filter(e => e.event_time && (e.created_at || e.alert_created_at))
     .map(e => {
       const eventTs = new Date(e.event_time).getTime();
-      const alertTs = new Date(e.alert_created_at).getTime();
+      const alertTs = new Date(e.alert_created_at || e.created_at).getTime();
       return Math.max(0, (alertTs - eventTs) / 60000); // minutes
     })
     .filter(d => d >= 0 && d < 10080); // cap at 7 days
@@ -268,41 +271,98 @@ function computeFprTpr(alerts) {
 }
 
 // ── Full SOC dashboard metrics ────────────────────────────────────
-async function buildDashboardMetrics(db, opts = {}) {
-  const now      = new Date();
-  const window   = opts.windowDays || 30;
-  const since    = new Date(now - window * 86_400_000).toISOString();
+// Accepts two calling conventions:
+//   1. buildDashboardMetrics(alerts, analysts, opts)  ← route style
+//   2. buildDashboardMetrics(db, opts)                ← legacy style
+//
+// In convention 1, alerts and analysts arrays are passed directly by
+// the route (which already fetched them), so no extra DB call is made.
+// In convention 2, a Supabase client is passed and data is fetched here.
+async function buildDashboardMetrics(alertsOrDb, analystsOrOpts = {}, opts = {}) {
+  const now = new Date();
 
-  // Fetch data from Supabase (passed as db client)
-  const [
-    alertsRes,
-    casesRes,
-    investigationsRes,
-    assignmentsRes,
-  ] = await Promise.allSettled([
-    db.from('alerts').select('*').gte('created_at', since),
-    db.from('cases').select('*').gte('created_at', since),
-    db.from('investigations').select('*').gte('created_at', since),
-    db.from('case_assignments')
-      .select('*, cases(severity, priority, created_at, closed_at, escalated)')
-      .gte('created_at', since),
-  ]);
+  let alerts, analysts, cases, investigations, flatAssignments;
 
-  const alerts        = alertsRes.status === 'fulfilled'        ? (alertsRes.value.data || [])        : [];
-  const cases         = casesRes.status === 'fulfilled'         ? (casesRes.value.data || [])         : [];
-  const investigations = investigationsRes.status === 'fulfilled' ? (investigationsRes.value.data || []) : [];
-  const assignments   = assignmentsRes.status === 'fulfilled'   ? (assignmentsRes.value.data || [])   : [];
+  // Detect calling convention: if first arg is an Array, it's (alerts, analysts, opts)
+  if (Array.isArray(alertsOrDb)) {
+    // Convention 1 — route pre-fetched alerts/analysts
+    alerts   = alertsOrDb;
+    analysts = Array.isArray(analystsOrOpts) ? analystsOrOpts : [];
+    const { since, until, tenantId } = opts;
+    const window = opts.days || opts.windowDays || 30;
 
-  // Flatten assignments with case data
-  const flatAssignments = assignments.map(a => ({
-    analyst_id:   a.analyst_id,
-    analyst_name: a.analyst_name,
-    severity:     a.cases?.severity,
-    priority:     a.cases?.priority,
-    created_at:   a.cases?.created_at,
-    closed_at:    a.cases?.closed_at,
-    escalated:    a.cases?.escalated,
-  })).filter(a => a.severity);
+    // Fetch cases and investigations using the Supabase client from config
+    let db = null;
+    try { ({ supabase: db } = require('../../config/supabase')); } catch (_) {}
+
+    if (db && tenantId) {
+      const sinceTs = since || new Date(now - window * 86_400_000).toISOString();
+      const untilTs = until || now.toISOString();
+
+      const [casesRes, invRes, assignRes] = await Promise.allSettled([
+        db.from('cases').select('id,severity,priority,status,created_at,closed_at,escalated,assignee_id')
+          .eq('tenant_id', tenantId).gte('created_at', sinceTs).lte('created_at', untilTs).limit(10000),
+        db.from('investigations').select('id,case_id,analyst_id,created_at,completed_at,outcome,priority,mitre_techniques,peer_review_score,lateral_movement_traced,persistence_checked,data_exfil_assessed,recommendations,timeline,iocs,attack_vector,affected_assets,root_cause')
+          .eq('tenant_id', tenantId).gte('created_at', sinceTs).limit(5000),
+        db.from('case_assignments').select('analyst_id,analyst_name,cases(severity,priority,created_at,closed_at,escalated)')
+          .gte('created_at', sinceTs).limit(5000),
+      ]);
+
+      cases         = casesRes.status === 'fulfilled'  ? (casesRes.value.data   || []) : [];
+      investigations = invRes.status === 'fulfilled'   ? (invRes.value.data     || []) : [];
+      const rawAssign = assignRes.status === 'fulfilled' ? (assignRes.value.data || []) : [];
+      flatAssignments = rawAssign.map(a => ({
+        analyst_id:   a.analyst_id,
+        analyst_name: a.analyst_name,
+        severity:     a.cases?.severity,
+        priority:     a.cases?.priority,
+        created_at:   a.cases?.created_at,
+        closed_at:    a.cases?.closed_at,
+        escalated:    a.cases?.escalated,
+      })).filter(a => a.severity);
+    } else {
+      cases          = [];
+      investigations = [];
+      flatAssignments = analysts.map(a => ({
+        analyst_id: a.id || a.auth_id,
+        analyst_name: a.display_name || a.name || a.email,
+        severity: null, created_at: null, closed_at: null, escalated: false,
+      })).filter(a => a.analyst_id);
+    }
+
+  } else {
+    // Convention 2 — db client passed directly (legacy)
+    const db     = alertsOrDb;
+    const window = (analystsOrOpts.windowDays || 30);
+    const since  = new Date(now - window * 86_400_000).toISOString();
+
+    const [alertsRes, casesRes, investigationsRes, assignmentsRes] = await Promise.allSettled([
+      db.from('alerts').select('*').gte('created_at', since),
+      db.from('cases').select('*').gte('created_at', since),
+      db.from('investigations').select('*').gte('created_at', since),
+      db.from('case_assignments')
+        .select('*, cases(severity, priority, created_at, closed_at, escalated)')
+        .gte('created_at', since),
+    ]);
+
+    alerts        = alertsRes.status === 'fulfilled'         ? (alertsRes.value.data        || []) : [];
+    analysts      = [];
+    cases         = casesRes.status === 'fulfilled'          ? (casesRes.value.data          || []) : [];
+    investigations = investigationsRes.status === 'fulfilled' ? (investigationsRes.value.data || []) : [];
+    const rawAssign = assignmentsRes.status === 'fulfilled'   ? (assignmentsRes.value.data   || []) : [];
+    flatAssignments = rawAssign.map(a => ({
+      analyst_id:   a.analyst_id,
+      analyst_name: a.analyst_name,
+      severity:     a.cases?.severity,
+      priority:     a.cases?.priority,
+      created_at:   a.cases?.created_at,
+      closed_at:    a.cases?.closed_at,
+      escalated:    a.cases?.escalated,
+    })).filter(a => a.severity);
+  }
+
+  const window = opts.days || opts.windowDays ||
+    (Array.isArray(alertsOrDb) ? (opts.days || 30) : (analystsOrOpts.windowDays || 30));
 
   const mttd       = computeMttd(alerts);
   const mttr       = computeMttr(cases);
@@ -321,14 +381,14 @@ async function buildDashboardMetrics(db, opts = {}) {
   return {
     generated_at:   now.toISOString(),
     window_days:    window,
-    period_start:   since,
-    period_end:     now.toISOString(),
+    period_start:   opts.since || new Date(now - window * 86_400_000).toISOString(),
+    period_end:     opts.until || now.toISOString(),
 
     overview: {
       total_alerts:      alerts.length,
       total_cases:       cases.length,
       open_cases:        cases.filter(c => !c.closed_at).length,
-      critical_alerts:   alerts.filter(a => a.severity === 'CRITICAL').length,
+      critical_alerts:   alerts.filter(a => a.severity === 'CRITICAL' || a.severity === 'critical').length,
       sla_compliance:    sla.rate,
       avg_quality_score: avgQuality,
       analysts_at_risk:  criticalBurnout,
@@ -415,6 +475,100 @@ function _stats(arr) {
   return { mean, median, p95: Math.round(p95 * 10) / 10, count: n };
 }
 
+// ── computeMitreCoverage ────────────────────────────────────────────
+// Builds a tactic→technique coverage map from an array of alert objects.
+// Each alert is expected to have optional mitre_tactic / mitre_technique fields.
+function computeMitreCoverage(alerts = []) {
+  const tactics = {};
+  for (const a of alerts) {
+    const tactic    = a.mitre_tactic    || a.metadata?.mitre_tactic    || 'unknown';
+    const technique = a.mitre_technique || a.metadata?.mitre_technique || null;
+    if (!tactics[tactic]) tactics[tactic] = { count: 0, techniques: new Set() };
+    tactics[tactic].count++;
+    if (technique) tactics[tactic].techniques.add(technique);
+  }
+  // Convert Sets to arrays for JSON serialisation
+  const result = {};
+  for (const [tactic, data] of Object.entries(tactics)) {
+    result[tactic] = { count: data.count, techniques: [...data.techniques] };
+  }
+  return result;
+}
+
+// ── detectBurnoutRisk ──────────────────────────────────────────────
+// Analyses alert assignments per analyst and flags burnout risk.
+// Returns an array of { analyst_id, email, alert_count, avg_resolution_ms,
+//   cases_per_day, risk_level } entries.
+function detectBurnoutRisk(alerts = [], analysts = [], { days = 30 } = {}) {
+  const workload = {};
+  const now = Date.now();
+  const windowMs = days * 24 * 3600 * 1000;
+
+  for (const a of alerts) {
+    const assignee = a.assigned_to || a.assignee_id;
+    if (!assignee) continue;
+    const age = now - new Date(a.created_at || 0).getTime();
+    if (age > windowMs) continue;
+    if (!workload[assignee]) workload[assignee] = { alert_count: 0, resolution_times: [] };
+    workload[assignee].alert_count++;
+    if (a.resolved_at && a.created_at) {
+      const res = new Date(a.resolved_at).getTime() - new Date(a.created_at).getTime();
+      if (res > 0) workload[assignee].resolution_times.push(res);
+    }
+  }
+
+  return (analysts || []).map(analyst => {
+    const id   = analyst.id || analyst.auth_id;
+    const data = workload[id] || { alert_count: 0, resolution_times: [] };
+    const alertsPerDay = data.alert_count / Math.max(days, 1);
+    const avgRes = data.resolution_times.length
+      ? data.resolution_times.reduce((s, v) => s + v, 0) / data.resolution_times.length
+      : null;
+    let risk_level = 'LOW';
+    if (alertsPerDay > 20)      risk_level = 'CRITICAL';
+    else if (alertsPerDay > 10) risk_level = 'HIGH';
+    else if (alertsPerDay > 5)  risk_level = 'MEDIUM';
+    return {
+      analyst_id:          id,
+      email:               analyst.email,
+      name:                analyst.name || analyst.email,
+      alert_count:         data.alert_count,
+      alerts_per_day:      Math.round(alertsPerDay * 10) / 10,
+      avg_resolution_ms:   avgRes ? Math.round(avgRes) : null,
+      risk_level,
+    };
+  });
+}
+
+// ── persistMetricsSnapshot ─────────────────────────────────────────
+// Persists a SOC metrics snapshot to the soc_metrics table.
+// Returns the inserted row (with .id).
+async function persistMetricsSnapshot(tenantId, { period_start, period_end, period_type, dashboard }) {
+  const { supabase } = require('../../config/supabase');
+  if (!supabase) return { id: null, error: 'Supabase not configured' };
+
+  const row = {
+    tenant_id:    tenantId,
+    period_start,
+    period_end,
+    period_type:  period_type || 'daily',
+    metrics:      dashboard || {},
+    created_at:   new Date().toISOString(),
+  };
+
+  const { data, error } = await supabase
+    .from('soc_metrics')
+    .insert(row)
+    .select('id')
+    .single();
+
+  if (error) {
+    console.error('[SocMetrics] persistMetricsSnapshot error:', error.message);
+    return { id: null, error: error.message };
+  }
+  return { id: data?.id };
+}
+
 module.exports = {
   computeMttd,
   computeMttr,
@@ -424,4 +578,7 @@ module.exports = {
   computeSlaCompliance,
   computeFprTpr,
   buildDashboardMetrics,
+  computeMitreCoverage,
+  detectBurnoutRisk,
+  persistMetricsSnapshot,
 };
