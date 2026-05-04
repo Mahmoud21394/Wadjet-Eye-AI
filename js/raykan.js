@@ -13520,15 +13520,14 @@ return {
 
   /* ── Chain node hover tooltip ── */
   .rk-chain-svg-wrap {
-    border-radius:10px;
+    border-radius:3px;
     background:rgba(2,8,16,0.7);
-    padding:8px;
-    border:1px solid rgba(0,212,255,0.07);
-    overflow:hidden;
+    padding:4px;
+    border:1px solid rgba(0,212,255,0.06);
+    overflow:visible;
   }
   .rk-chain-svg-wrap:hover {
-    border-color:rgba(0,212,255,0.15);
-    box-shadow:0 0 30px rgba(0,212,255,0.06);
+    border-color:rgba(0,212,255,0.12);
   }
 
   /* ── Risk evolution bar enhancement ── */
@@ -13729,8 +13728,8 @@ return {
   .rk-chain-step + div svg { width:16px !important; height:8px !important; }
 
   /* ── Attack chain card compact (chain tab) ── */
-  .rk-chain-preview { max-height:160px !important; overflow:hidden !important;
-    padding:8px 10px !important; }
+  /* rk-chain-preview: no max-height clip — nodes must be fully visible */
+  .rk-chain-preview { padding:6px 8px !important; }
 
   /* ── Severity accents flat (Issue 2 color tokens) ── */
   .rk-sev-critical { background:rgba(255,68,68,0.12)  !important; color:#FF4444 !important; }
@@ -14767,11 +14766,11 @@ return {
   function _buildChainFlowSVG(stages, incId) {
     if (!stages || !stages.length) return '';
 
-    const NODE_W    = 190;    // wider for full label readability
-    const NODE_H    = 90;     // taller for 3-line content (tactic + label + technique)
-    const H_GAP     = 48;     // wider gap for the animated arrow
-    const MAX_ROW   = 4;      // max nodes per row before wrapping
-    const ROW_GAP   = 120;    // vertical gap between rows
+    const NODE_W    = 110;    // compact — fits ≤6 nodes across a 800px card
+    const NODE_H    = 54;     // 2-line content: tactic pill + detection label
+    const H_GAP     = 28;     // tight arrow gap
+    const MAX_ROW   = 6;      // more nodes per row before wrapping
+    const ROW_GAP   = 68;     // tighter vertical gap between rows
 
     const rows   = [];
     for (let i = 0; i < stages.length; i += MAX_ROW) rows.push(stages.slice(i, i + MAX_ROW));
@@ -14912,76 +14911,47 @@ return {
            onclick="RAYKAN_UI._toggleStageDetail('${incId}', ${globalIdx})"
            style="cursor:pointer;animation-delay:${delay}s;" opacity="${nodeOpacity}">
 
-          <!-- Outer pulse ring (critical/high nodes only) -->
-          ${(!isInferred && (stage.severity === 'critical' || stage.severity === 'high')) ? `
-          <rect class="pulse-ring-${incId}" x="${x-6}" y="${y-6}"
-            width="${NODE_W+12}" height="${NODE_H+12}" rx="14"
-            fill="none" stroke="${sevColor}" stroke-width="1.5" opacity="0.45"/>` : ''}
-
-          <!-- Node drop shadow -->
-          <rect x="${x+2}" y="${y+3}" width="${NODE_W}" height="${NODE_H}" rx="12"
-            fill="rgba(0,0,0,0.55)"/>
-
-          <!-- Node main body -->
-          <rect class="node-rect" x="${x}" y="${y}" width="${NODE_W}" height="${NODE_H}" rx="12"
-            fill="${nodeColor}18" stroke="${nodeColor}" stroke-width="${isInferred ? '1.2' : '2'}"
+          <!-- Node main body (compact: 110×54) -->
+          <rect class="node-rect" x="${x}" y="${y}" width="${NODE_W}" height="${NODE_H}" rx="4"
+            fill="${nodeColor}14" stroke="${nodeColor}" stroke-width="${isInferred ? '1' : '1.5'}"
             ${borderStyle}/>
 
-          <!-- Inner top sheen -->
-          <rect x="${x+2}" y="${y+2}" width="${NODE_W-4}" height="${Math.round(NODE_H*0.4)}" rx="11"
-            fill="rgba(255,255,255,0.035)"/>
+          <!-- Severity accent bar (top edge) -->
+          <rect x="${x}" y="${y}" width="${NODE_W}" height="2.5" rx="2"
+            fill="${sevColor}" opacity="0.9"/>
 
-          <!-- Severity accent bar (top edge, full width) -->
-          <rect x="${x+4}" y="${y+1}" width="${NODE_W-8}" height="3.5" rx="2"
-            fill="${sevColor}" opacity="0.95"/>
-          <rect x="${x+4}" y="${y+1}" width="${NODE_W-8}" height="3.5" rx="2"
-            fill="${sevColor}" opacity="0.35" filter="url(#glow-${incId})"/>
+          <!-- Stage number badge -->
+          <circle cx="${x+10}" cy="${y+13}" r="7" fill="${nodeColor}33"
+            stroke="${nodeColor}88" stroke-width="0.8"/>
+          <text x="${x+10}" y="${y+16.5}" text-anchor="middle" font-size="8"
+            fill="${nodeColor}" font-weight="800" font-family="'JetBrains Mono',monospace">${globalIdx + 1}</text>
 
-          <!-- Stage number badge (left of tactic row) -->
-          <circle cx="${x+16}" cy="${y+20}" r="11" fill="${nodeColor}cc"/>
-          <circle cx="${x+16}" cy="${y+20}" r="11" fill="rgba(255,255,255,0.07)"/>
-          <text x="${x+16}" y="${y+24.5}" text-anchor="middle" font-size="11"
-            fill="white" font-weight="900" font-family="'JetBrains Mono',monospace">${globalIdx + 1}</text>
-
-          <!-- Tactic pill (right of stage number) -->
-          <rect x="${x+32}" y="${y+11}" width="${Math.min(NODE_W-38,88)}" height="18" rx="4"
-            fill="${nodeColor}28" stroke="${nodeColor}55" stroke-width="0.8"/>
-          <text x="${x+36}" y="${y+23}" font-size="8" fill="${nodeColor}"
+          <!-- Tactic label (right of badge) -->
+          <text x="${x+21}" y="${y+17}" font-size="7" fill="${nodeColor}"
             font-family="'JetBrains Mono',monospace" font-weight="700"
-            text-decoration="none" opacity="0.95">${tacticUpper.slice(0,13)}</text>
+            opacity="0.9">${tacticUpper.slice(0,11)}</text>
 
-          <!-- Inferred indicator (top-right corner) -->
+          <!-- Inferred marker -->
           ${isInferred ? `
-          <rect x="${x+NODE_W-46}" y="${y+7}" width="42" height="13" rx="4"
-            fill="rgba(107,114,128,0.22)" stroke="rgba(107,114,128,0.35)" stroke-width="0.8"/>
-          <text x="${x+NODE_W-25}" y="${y+17}" text-anchor="middle" font-size="7.5"
-            fill="#9ca3af" font-style="italic" font-family="'Inter',sans-serif">⚙ inferred</text>` : ''}
+          <text x="${x+NODE_W-4}" y="${y+12}" text-anchor="end" font-size="6.5"
+            fill="#6b7280" font-style="italic">~inf</text>` : ''}
 
-          <!-- Main label — line 1 -->
-          <text x="${cx}" y="${y+48}" text-anchor="middle" font-size="11"
-            fill="#f0f6ff" font-weight="700"
+          <!-- Main detection label — line 1 -->
+          <text x="${cx}" y="${y+31}" text-anchor="middle" font-size="9"
+            fill="#e6edf3" font-weight="600"
             font-family="'Inter','Segoe UI',sans-serif">${line1}</text>
 
-          <!-- Main label — line 2 (if needed) -->
+          <!-- Main label — line 2 -->
           ${line2 ? `
-          <text x="${cx}" y="${y+62}" text-anchor="middle" font-size="10.5"
-            fill="#dde4ee" font-weight="600"
+          <text x="${cx}" y="${y+42}" text-anchor="middle" font-size="8.5"
+            fill="#c9d1d9" font-weight="500"
             font-family="'Inter','Segoe UI',sans-serif">${line2}</text>` : ''}
 
-          <!-- Technique badge (monospace, below label) -->
-          ${techLabel ? `
-          <text x="${x+NODE_W-8}" y="${y+NODE_H-14}" text-anchor="end" font-size="8.5"
-            fill="${nodeColor}" font-family="'JetBrains Mono',monospace" font-weight="700"
-            opacity="0.9">${techLabel}</text>` : ''}
-
-          <!-- Confidence progress bar (bottom strip) -->
-          <rect x="${x+8}" y="${y+NODE_H-7}" width="${NODE_W-16}" height="3" rx="1.5"
-            fill="rgba(255,255,255,0.07)"/>
-          ${confW > 0 ? `
-          <rect x="${x+8}" y="${y+NODE_H-7}" width="${Math.round((NODE_W-16)*conf/100)}" height="3" rx="1.5"
-            fill="${nodeColor}" opacity="0.8"/>` : ''}
-          <text x="${x+10}" y="${y+NODE_H-11}" font-size="7.5"
-            fill="${nodeColor}" opacity="0.65" font-family="'JetBrains Mono',monospace">${conf}%</text>
+          <!-- Technique + confidence (bottom row) -->
+          <text x="${x+4}" y="${y+NODE_H-4}" font-size="7"
+            fill="${nodeColor}" font-family="'JetBrains Mono',monospace" opacity="0.8">${techLabel.slice(0,10)}</text>
+          ${conf ? `<text x="${x+NODE_W-4}" y="${y+NODE_H-4}" text-anchor="end" font-size="7"
+            fill="#6b7280" font-family="'JetBrains Mono',monospace">${conf}%</text>` : ''}
 
         </g>`;
 
@@ -15100,12 +15070,12 @@ return {
     const nodeColor= TACTIC_NODE_COLOR[tactic] || '#374151';
     const isInf = stage.inferred;
     return `<div id="rk-stage-${incId}-${si}"
-      style="display:none;padding:10px 14px;background:rgba(13,18,25,0.92);
-             border-radius:10px;border:1px solid ${nodeColor}${isInf ? '33' : '55'};margin-bottom:6px;
-             ${isInf ? 'border-style:dashed;opacity:0.88;' : ''}">
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+      style="display:none;padding:6px 10px;background:rgba(13,18,25,0.92);
+             border-radius:3px;border:1px solid ${nodeColor}${isInf ? '22' : '44'};margin-bottom:3px;
+             ${isInf ? 'border-style:dashed;opacity:0.85;' : ''}">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px;">
         ${_sevBadge(stage.severity||'medium')}
-        <span style="font-size:12px;color:#e6edf3;font-weight:600;">${stage.ruleName||stage.technique||`Stage ${si+1}`}</span>
+        <span style="font-size:11px;color:#e6edf3;font-weight:600;">${stage.ruleName||stage.technique||`Stage ${si+1}`}</span>
         ${stage.ruleId ? `<span style="font-size:10px;font-family:monospace;color:#4b5563;">${stage.ruleId}</span>` : ''}
         ${isInf ? `<span class="rk-badge-inferred">⚙ Inferred · ${stage.inferredConfidence||stage.confidence}% conf</span>` : `<span class="rk-badge-confirmed">✓ Observed</span>`}
       </div>
@@ -15347,23 +15317,22 @@ return {
       return `
 <div style="display:flex;gap:0;margin-bottom:${isLast ? 0 : 6}px;">
   <!-- Step indicator column -->
-  <div style="display:flex;flex-direction:column;align-items:center;width:32px;flex-shrink:0;padding-top:10px;">
-    <div style="width:22px;height:22px;border-radius:50%;background:${cSevColor}22;
-         border:2px solid ${cSevColor}55;display:flex;align-items:center;justify-content:center;
-         font-size:10px;font-weight:800;color:${cSevColor};font-family:'JetBrains Mono',monospace;
+  <div style="display:flex;flex-direction:column;align-items:center;width:22px;flex-shrink:0;padding-top:6px;">
+    <div style="width:16px;height:16px;border-radius:50%;background:${cSevColor}18;
+         border:1px solid ${cSevColor}44;display:flex;align-items:center;justify-content:center;
+         font-size:9px;font-weight:700;color:${cSevColor};font-family:'JetBrains Mono',monospace;
          flex-shrink:0;">${stepNum}</div>
-    ${!isLast ? `<div style="width:1.5px;flex:1;min-height:12px;background:linear-gradient(to bottom,${cSevColor}44,transparent);margin-top:3px;"></div>` : ''}
+    ${!isLast ? `<div style="width:1px;flex:1;min-height:8px;background:${cSevColor}33;margin-top:2px;"></div>` : ''}
   </div>
   <!-- Detection card -->
-  <div style="flex:1;padding:9px 12px;background:rgba(10,16,26,0.8);
-       border-radius:8px;border:1px solid #1c2128;margin-left:4px;
-       border-left:2px solid ${cSevColor}44;min-width:0;">
+  <div style="flex:1;padding:5px 8px;background:rgba(10,16,26,0.6);
+       border-radius:3px;border:1px solid #1c2128;margin-left:3px;
+       border-left:2px solid ${cSevColor}33;min-width:0;">
     <div style="display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap;">
       <div style="flex:1;min-width:0;">
         <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-bottom:3px;">
           ${_sevBadge(cs)}
-          <span style="font-size:11.5px;color:#e6edf3;font-weight:700;
-            font-family:'Inter','Segoe UI',sans-serif;">
+          <span style="font-size:10px;color:#e6edf3;font-weight:600;">
             ${c.detection_name || c.ruleName || c.title || 'Alert'}
           </span>
           ${c.ruleId ? `<span style="font-size:9.5px;font-family:'JetBrains Mono',monospace;color:#374151;padding:1px 5px;background:rgba(30,41,59,0.5);border-radius:3px;">${c.ruleId}</span>` : ''}
@@ -15379,7 +15348,7 @@ return {
         ${c.narrative ? `<div style="font-size:10.5px;color:#8b949e;line-height:1.45;margin-top:2px;">${_safeNarrative(c.narrative).slice(0,160)}${_safeNarrative(c.narrative).length>160?'…':''}</div>` : ''}
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;">
-        <span style="font-size:13px;font-weight:800;color:${_riskColor(c.riskScore||0)};font-family:'JetBrains Mono',monospace;">${c.riskScore||'?'}<span style="font-size:8px;color:#4b5563;">/100</span></span>
+        <span style="font-size:11px;font-weight:700;color:${_riskColor(c.riskScore||0)};font-family:'JetBrains Mono',monospace;">${c.riskScore||'?'}</span>
         <button class="rk-entity-btn" onclick="RAYKAN_UI._showDetDetail('${c.id||''}')"
           style="font-size:9.5px;padding:2px 8px;border-radius:5px;">Detail</button>
       </div>
@@ -15441,51 +15410,29 @@ return {
 
   <!-- ── Root Cause / Intent Summary Banner ─────────────────────── -->
   ${(inc.narrative || behavior.description) ? `
-  <div style="padding:10px 20px;background:rgba(96,165,250,0.03);border-top:1px solid #21262d;">
-    <div style="font-size:10px;color:#4b5563;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;font-weight:600;">🧠 Root Cause / Intent Summary</div>
-    <div style="font-size:12px;color:#c9d1d9;line-height:1.6;">${_safeNarrative(inc.narrative) || behavior.description || ''}</div>
+  <div style="padding:5px 12px;background:rgba(96,165,250,0.03);border-top:1px solid #21262d;display:flex;gap:6px;align-items:flex-start;">
+    <span style="font-size:10px;color:#4b5563;flex-shrink:0;padding-top:1px;">🧠</span>
+    <div style="font-size:11px;color:#8b949e;line-height:1.45;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">${_safeNarrative(inc.narrative) || behavior.description || ''}</div>
   </div>` : ''}
 
   <!-- ══ BCE v10: Attack Chain Flow — Chronological Sequence ══════ -->
   ${chainFlowSVG ? `
   <div style="padding:0;border-top:1px solid #21262d;">
-    <!-- Section header -->
+    <!-- Section header — compact single row -->
     <div style="display:flex;justify-content:space-between;align-items:center;
-         padding:10px 16px 8px 16px;background:rgba(8,14,24,0.55);
-         border-bottom:1px solid rgba(0,212,255,0.08);">
-      <div style="display:flex;align-items:center;gap:10px;">
-        <span style="font-size:12px;font-weight:700;color:#e6edf3;letter-spacing:.02em;">
-          ⛓ Attack Chain Flow
-        </span>
-        <!-- Sequence direction label -->
-        <span style="font-size:9px;padding:2px 8px;background:rgba(0,212,255,0.07);
-          color:#00d4ff;border-radius:10px;border:1px solid rgba(0,212,255,0.15);
-          font-family:'JetBrains Mono',monospace;letter-spacing:.5px;">
-          CHRONOLOGICAL ➔
-        </span>
-        <span style="font-size:9.5px;color:#4b5563;">
-          ${observedCount} observed${inferredCount > 0 ? ` · ${inferredCount} inferred` : ''}
-          · ${vizStages.length} stage${vizStages.length !== 1 ? 's' : ''}
-        </span>
+         padding:5px 12px;background:rgba(8,14,24,0.55);
+         border-bottom:1px solid rgba(0,212,255,0.06);">
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span style="font-size:10px;font-weight:600;color:#8b949e;letter-spacing:.03em;">⛓ Attack Chain</span>
+        <span style="font-size:9px;color:#4b5563;">${vizStages.length} stage${vizStages.length !== 1 ? 's' : ''} · ${observedCount} observed${inferredCount > 0 ? ` · ${inferredCount} inferred` : ''}</span>
       </div>
-      <div style="display:flex;align-items:center;gap:8px;">
-        <!-- Legend pills -->
-        <span style="font-size:8.5px;color:#6b7280;display:flex;align-items:center;gap:3px;">
-          <span style="display:inline-block;width:18px;height:2px;background:#60a5fa;border-radius:1px;"></span>observed
-        </span>
-        <span style="font-size:8.5px;color:#6b7280;display:flex;align-items:center;gap:3px;">
-          <span style="display:inline-block;width:18px;height:2px;background:#374151;border-radius:1px;border-top:1px dashed #6b7280;"></span>inferred
-        </span>
-        <button data-chain-toggle="${incId}"
-          style="background:rgba(96,165,250,0.07);border:1px solid rgba(96,165,250,0.15);
-                 color:#60a5fa;font-size:10px;cursor:pointer;font-weight:600;padding:3px 10px;
-                 border-radius:6px;">▼ hide</button>
-      </div>
+      <button data-chain-toggle="${incId}"
+        style="background:none;border:none;color:#484F58;font-size:10px;cursor:pointer;padding:0;">▼ hide</button>
     </div>
     <!-- Chain flow SVG canvas (horizontally scrollable) -->
     <div id="rk-chain-flow-${incId}"
-         style="overflow-x:auto;overflow-y:visible;padding:16px 16px 8px 16px;
-                background:rgba(4,9,18,0.6);min-height:120px;
+         style="overflow-x:auto;overflow-y:visible;padding:8px 12px 6px;
+                background:rgba(4,9,18,0.6);
                 scrollbar-width:thin;scrollbar-color:#21262d #0d1117;">
       ${chainFlowSVG}
     </div>
@@ -15495,36 +15442,22 @@ return {
     </div>
   </div>` : ''}
 
-  <!-- ── Risk Evolution Bar ─────────────────────────────────────── -->
-  ${riskEvolutionBar}
+  <!-- Risk evolution + ACE factors: collapsed into detail drawer only -->
 
-  <!-- ── ACE Scoring Factors ────────────────────────────────────── -->
-  <div style="padding:10px 20px;background:rgba(13,17,23,0.5);border-top:1px solid #21262d;">
-    <div style="font-size:10px;color:#4b5563;text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:4px;">ACE Confidence Factors:</div>
-    <ul style="margin:0;padding-left:18px;list-style:disc;font-size:11px;color:#8b949e;">
-      ${confReasons}
-    </ul>
-  </div>
-
-  <!-- ══ Attack Phase Timeline (chronological text view) ═════════ -->
+  <!-- Phase timeline: collapsed by default — expand via toggle -->
   ${phaseTimeline.length > 0 ? `
   <div style="padding:0;border-top:1px solid #21262d;">
-    <div style="padding:8px 16px;background:rgba(8,14,24,0.45);
-         display:flex;justify-content:space-between;align-items:center;">
+    <div style="padding:4px 12px;background:rgba(8,14,24,0.45);display:flex;justify-content:space-between;align-items:center;">
       <button data-phase-toggle="${incId}"
-        style="background:none;border:none;color:#a78bfa;font-size:11px;cursor:pointer;
-               padding:0;font-weight:700;display:flex;align-items:center;gap:6px;">
-        <span style="font-size:9px;">▶</span>
-        Attack Phase Timeline
-        <span style="font-size:9px;padding:1px 7px;background:rgba(167,139,250,0.1);
-          color:#a78bfa;border-radius:8px;border:1px solid rgba(167,139,250,0.2);">
-          ${phaseTimeline.length} stage${phaseTimeline.length !== 1 ? 's' : ''}
-        </span>
+        style="background:none;border:none;color:#6b7280;font-size:10px;cursor:pointer;
+               padding:0;display:flex;align-items:center;gap:4px;">
+        <span style="font-size:8px;">▶</span>
+        Phase Timeline
+        <span style="font-size:9px;padding:1px 5px;background:rgba(167,139,250,0.08);
+          color:#6b7280;border-radius:4px;">${phaseTimeline.length}</span>
       </button>
-      <span style="font-size:8.5px;color:#374151;font-family:'JetBrains Mono',monospace;
-            letter-spacing:.5px;">OLDEST → NEWEST</span>
     </div>
-    <div id="rk-phase-${incId}" style="display:none;padding:8px 16px 12px 16px;">
+    <div id="rk-phase-${incId}" style="display:none;padding:6px 12px 10px;">
       ${phaseRows}
     </div>
   </div>` : ''}
