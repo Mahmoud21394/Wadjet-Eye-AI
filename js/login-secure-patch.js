@@ -359,6 +359,11 @@ async function _finalizeLogin(data) {
   }
 
   // ── STEP 6: Dispatch DOM events ──────────────────────────────────
+  // FIX v7.6: Stamp the login time so auth-validator.js can suppress the
+  // "session expired" banner if auth:expired fires within 5 s of a fresh login
+  // (race condition: stale token detected before new token is fully propagated).
+  window._wadjetLastLoginAt = Date.now();
+
   window.dispatchEvent(new CustomEvent('auth:login',    { detail: window.CURRENT_USER }));
   // Also dispatch auth:restored so _onAuthReady() in ai-orchestrator fires
   // (it listens to BOTH auth:login AND auth:restored)

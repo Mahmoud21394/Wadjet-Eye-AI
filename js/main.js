@@ -218,40 +218,64 @@ async function doLogin() {
 /* ════════════════════════════════════════════
    LOGOUT — revoke tokens and clear session
 ════════════════════════════════════════════ */
-async function doLogout() {
-  // Revoke backend refresh token
-  try {
-    if (typeof API !== 'undefined') {
-      await API.auth.logout();
-    }
-  } catch { /* non-fatal */ }
+// FIX v7.6: Dedup guard — prevents multiple concurrent logout calls that arrive
+// when auth:expired fires from several modules simultaneously (api-client,
+// auth-interceptor, auth-validator each dispatch it independently).
+let _logoutInProgress = false;
 
-  CURRENT_USER = null;
-  if (typeof TokenStore !== 'undefined') TokenStore.clear();
-  // Clear persistent session
-  if (typeof window.PersistentAuth_onLogout === 'function') window.PersistentAuth_onLogout();
-
-  // Clear timers
-  if (window._dashboardRefreshTimer) {
-    clearInterval(window._dashboardRefreshTimer);
-    window._dashboardRefreshTimer = null;
+async function doLogout(opts = {}) {
+  // ── Dedup: skip if logout already running ────────────────────────────
+  if (_logoutInProgress) {
+    console.warn('[Auth] doLogout() called while logout already in progress — skipping duplicate');
+    return;
   }
-  // Clear notification timer
-  if (_notifTimer) { clearInterval(_notifTimer); _notifTimer = null; }
-  // Clear live update timer
-  if (_liveUpdateTimer) { clearInterval(_liveUpdateTimer); _liveUpdateTimer = null; }
+  _logoutInProgress = true;
 
-  // Disconnect WebSocket
-  if (typeof WS !== 'undefined' && WS.disconnect) WS.disconnect();
+  try {
+    // FIX v7.6: skipBackendCall — set by auth-interceptor when tokens are already
+    // cleared (session expired).  Skips the POST /api/auth/logout that would
+    // inevitably get a 401 or 429 because the refresh token is gone.
+    const skipBackend = opts && opts.skipBackendCall;
 
-  // Show login screen
-  const mainApp     = document.getElementById('mainApp');
-  const loginScreen = document.getElementById('loginScreen');
-  if (mainApp)     mainApp.style.display = 'none';
-  if (loginScreen) { loginScreen.style.display = 'flex'; loginScreen.style.opacity = '1'; }
+    // Revoke backend refresh token (only when session was voluntarily ended)
+    if (!skipBackend) {
+      try {
+        if (typeof API !== 'undefined') {
+          await API.auth.logout();
+        }
+      } catch { /* non-fatal */ }
+    }
 
-  if (typeof showToast === 'function') showToast('Logged out securely', 'info');
-  console.info('[Auth] Session ended');
+    CURRENT_USER = null;
+    if (typeof TokenStore !== 'undefined') TokenStore.clear();
+    // Clear persistent session
+    if (typeof window.PersistentAuth_onLogout === 'function') window.PersistentAuth_onLogout();
+
+    // Clear timers
+    if (window._dashboardRefreshTimer) {
+      clearInterval(window._dashboardRefreshTimer);
+      window._dashboardRefreshTimer = null;
+    }
+    // Clear notification timer
+    if (_notifTimer) { clearInterval(_notifTimer); _notifTimer = null; }
+    // Clear live update timer
+    if (_liveUpdateTimer) { clearInterval(_liveUpdateTimer); _liveUpdateTimer = null; }
+
+    // Disconnect WebSocket
+    if (typeof WS !== 'undefined' && WS.disconnect) WS.disconnect();
+
+    // Show login screen
+    const mainApp     = document.getElementById('mainApp');
+    const loginScreen = document.getElementById('loginScreen');
+    if (mainApp)     mainApp.style.display = 'none';
+    if (loginScreen) { loginScreen.style.display = 'flex'; loginScreen.style.opacity = '1'; }
+
+    if (!skipBackend && typeof showToast === 'function') showToast('Logged out securely', 'info');
+    console.info('[Auth] Session ended' + (skipBackend ? ' (tokens were already cleared)' : ''));
+  } finally {
+    // Reset dedup flag after a short delay so a re-login → logout cycle works
+    setTimeout(() => { _logoutInProgress = false; }, 2_000);
+  }
 }
 
 /* ────────────────── PAGE REGISTRY ────────────────── */
