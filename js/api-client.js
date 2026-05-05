@@ -385,10 +385,24 @@ const API = {
       // v7.4 FIX: POST now throws with structured err.code + err._retryIn on error
       // responses (401, 503, etc.). Those fields are used by login-secure-patch.js
       // for UX decisions (retry delay, error message selection).
+      //
+      // ROOT-CAUSE FIX v9.0: REMOVED premature TokenStore.set() here.
+      // PROBLEM: API.auth.login() was writing tokens via api-client's own
+      // TokenStore (we_access_token / we_token_expires keys) BEFORE
+      // login-secure-patch._finalizeLogin() ran its full multi-key write via
+      // UnifiedTokenStore.  This caused a transient window where some storage
+      // keys had the token and others didn't, breaking modules that check the
+      // unified keys (wadjet_access_token, tp_access_token) before the write
+      // completed.  It also wrote the legacy 'we_token_expires' as an ISO
+      // string rather than a ms-timestamp, causing TokenStore.isValid() to
+      // return false even with a fresh token (expiresIn passed as an integer
+      // was stored as-is, confusing parseInt in getExpiry()).
+      //
+      // FIX: Return raw data only. All storage writes are the sole
+      // responsibility of _finalizeLogin() in login-secure-patch.js.
       const data = await POST('/auth/login', { email, password, tenant_id });
       if (!data?.token) throw new Error('No token in login response');
-      TokenStore.set(data.token, data.refreshToken, data.expiresAt || data.expiresIn);
-      if (data.user) TokenStore.setUser(data.user);
+      // NOTE: do NOT call TokenStore.set() here — _finalizeLogin() owns storage.
       return data;
     },
 

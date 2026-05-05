@@ -349,9 +349,12 @@ async function _finalizeLogin(data) {
     });
   }
   if (refreshToken) {
-    localStorage.setItem('wadjet_refresh_token',   refreshToken);
-    localStorage.setItem('we_refresh_token',        refreshToken);
-    localStorage.setItem('wadjet_unified_refresh',  refreshToken); // UNIFIED_KEYS.REFRESH
+    localStorage.setItem('wadjet_refresh_token',   refreshToken);  // UNIFIED_KEYS.REFRESH
+    localStorage.setItem('we_refresh_token',        refreshToken);  // UNIFIED_KEYS.LEGACY_REFRESH
+    // ROOT-CAUSE FIX v9.0: Removed stale key 'wadjet_unified_refresh' — that key
+    // does not exist in UNIFIED_KEYS; the correct primary key is 'wadjet_refresh_token'.
+    // Writing an unknown key meant UnifiedTokenStore.getRefresh() could not find the
+    // token on the next page load, causing needless cookie-probe → 400 NO_COOKIE storms.
   }
   if (accessToken) {
     // Compute and persist expiry so isExpired() works immediately
@@ -430,6 +433,42 @@ async function _finalizeLogin(data) {
     });
   }
 
+  // ── STEP 5b: Token readback verification ─────────────────────────────────
+  // ROOT-CAUSE FIX v9.0: Verify that the access token is actually readable from
+  // localStorage before entering the app.  On some browsers (private mode / quota
+  // exceeded / Safari ITP), localStorage.setItem() silently fails.  Without this
+  // check the user sees the main app but every API call returns 401 because all
+  // getToken() implementations return null — an extremely confusing UX failure.
+  //
+  // If the token is NOT readable we abort here (re-show error, don't enter app),
+  // giving the user a clear message rather than a flood of 401 errors.
+  if (accessToken) {
+    const stored = localStorage.getItem('wadjet_access_token')
+                || localStorage.getItem('we_access_token')
+                || sessionStorage.getItem('we_access_token');
+    if (!stored) {
+      console.error('[SecureLogin] ❌ Token write to localStorage FAILED — storage may be full or blocked.');
+      // Surface to the user
+      const errEl2 = document.getElementById('loginError');
+      _showLoginError(errEl2,
+        '⚠️ Your browser blocked token storage (private/incognito mode or full storage). ' +
+        'Please allow localStorage or switch to a regular browser window.'
+      );
+      // Re-show login screen so the user can act
+      const loginScreen = document.getElementById('loginScreen');
+      if (loginScreen) {
+        loginScreen.style.display  = 'flex';
+        loginScreen.style.opacity  = '1';
+      }
+      // Reset the button so the user can retry
+      const btn2 = document.getElementById('loginBtn') ||
+                   document.querySelector('.lv20-btn') ||
+                   document.querySelector('.login-btn');
+      _setBtnLoading(btn2, false);
+      return; // abort — do NOT enter app with a missing token
+    }
+  }
+
   // ── STEP 6 (P2 — PRIORITY FIX): Gate all post-login init behind authReady ──
   // Problem: auth:login / auth:restored listeners (ioc-intelligence, campaign-
   // correlation, auth-validator) fire synchronously inside dispatchEvent() and
@@ -442,23 +481,48 @@ async function _finalizeLogin(data) {
   window._wadjetLastLoginAt  = Date.now();
   window._wadjetAuthReadyAt  = Date.now();  // P2 gate — modules check this
 
-  window.dispatchEvent(new CustomEvent('auth:login',    { detail: window.CURRENT_USER }));
-  // Also dispatch auth:restored so _onAuthReady() in ai-orchestrator fires
-  // (it listens to BOTH auth:login AND auth:restored)
-  window.dispatchEvent(new CustomEvent('auth:restored', { detail: window.CURRENT_USER }));
-
-  if (typeof showToast === 'function') {
-    showToast(`✅ Welcome, ${window.CURRENT_USER.name}`, 'success');
-  }
-
-  // ── STEP 7: Animate into app ──────────────────────────────────────
-  _enterApp();
+  // ROOT-CAUSE FIX v9.0: DEFER auth:login / auth:restored until AFTER the app
+  // UI is visible (i.e. after _enterApp + initApp() complete).
+  //
+  // PROBLEM (observed as wave of 401s immediately after login):
+  //   window.dispatchEvent('auth:login') fires synchronously, which means every
+  //   listener (ioc-intelligence, campaign-correlation, live-detections, etc.)
+  //   executes INSIDE this dispatchEvent() call — before _enterApp() has run,
+  //   before the DOM panels are rendered, and before initApp() has initialised
+  //   any data-loading state machines.
+  //   Those listeners fire authFetch() calls; some of them complete before the
+  //   first proactive-refresh timer fires and, if the token expiry window is
+  //   tight, they get 401 → silentRefresh storm.
+  //
+  // FIX: Move both dispatches to a deferred callback passed into _enterApp().
+  //   _enterApp() calls initApp() inside its 400ms opacity transition; we
+  //   dispatch AFTER that settles (via setTimeout 0 inside the callback).
+  //   This ensures:
+  //     1. The Bearer token is firmly committed to localStorage (STEP 1 ✓)
+  //     2. StateSync.authReady is resolved (STEP 5 via PersistentAuth_onLogin ✓)
+  //     3. The proactive-refresh timer is scheduled (STEP 5 ✓)
+  //     4. initApp() DOM setup is done before any module tries to render
+  //     5. All listeners see a stable, ready application
+  //
+  // Welcome toast is also deferred by the same tick so it appears after the
+  // UI transition rather than on the login screen.
+  _enterApp(function _postInitDispatch() {
+    // Dispatch events in next tick so any synchronous code in _enterApp / initApp
+    // completes before listeners fire their first API requests.
+    setTimeout(function() {
+      window.dispatchEvent(new CustomEvent('auth:login',    { detail: window.CURRENT_USER }));
+      window.dispatchEvent(new CustomEvent('auth:restored', { detail: window.CURRENT_USER }));
+      if (typeof showToast === 'function') {
+        showToast(`✅ Welcome, ${window.CURRENT_USER.name}`, 'success');
+      }
+    }, 0);
+  });
 }
 
 /* ══════════════════════════════════════════════════════════════════
    UI Helpers
 ════════════════════════════════════════════════════════════════ */
-function _enterApp() {
+function _enterApp(onReady) {
   const loginScreen = document.getElementById('loginScreen');
   if (loginScreen) {
     loginScreen.style.opacity    = '0';
@@ -468,7 +532,16 @@ function _enterApp() {
       const mainApp = document.getElementById('mainApp');
       if (mainApp) mainApp.style.display = 'flex';
       if (typeof initApp === 'function') initApp();
+      // ROOT-CAUSE FIX v9.0: invoke the optional post-init callback AFTER initApp()
+      // so that auth:login / auth:restored are dispatched once the app is ready.
+      if (typeof onReady === 'function') onReady();
     }, 400);
+  } else {
+    // Fallback: no loginScreen element (unit tests / minimal pages)
+    const mainApp = document.getElementById('mainApp');
+    if (mainApp) mainApp.style.display = 'flex';
+    if (typeof initApp === 'function') initApp();
+    if (typeof onReady === 'function') onReady();
   }
 }
 

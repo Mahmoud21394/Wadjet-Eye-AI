@@ -240,16 +240,25 @@ async function authFetch(pathOrUrl, opts = {}) {
 
 /* ── API Health Check — runs once on app init ───────────────────*/
 async function checkAPIHealth() {
+  // ROOT-CAUSE FIX v9.0: Replace the invalid { timeout: 8000 } fetch option
+  // (fetch API does not accept a 'timeout' key — it was silently ignored,
+  // meaning health checks could hang indefinitely on a cold Render start).
+  // Fix: use AbortController with an 8 s hard deadline.
+  const controller = new AbortController();
+  const timeoutId  = setTimeout(() => controller.abort(), 8000);
   try {
     const url = `${API_BASE()}/health`;
-    const resp = await fetch(url, { timeout: 8000 });
+    const resp = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
     console.info('[AuthValidator] ✅ Backend health OK:', data.status || 'healthy');
     global._WADJET_BACKEND_HEALTHY = true;
     return true;
   } catch (err) {
-    console.warn('[AuthValidator] ⚠️ Backend health check failed:', err.message);
+    clearTimeout(timeoutId);
+    const reason = err.name === 'AbortError' ? 'timed out after 8s' : err.message;
+    console.warn('[AuthValidator] ⚠️ Backend health check failed:', reason);
     console.warn('[AuthValidator]    This may be normal on cold start (Render sleeps after 15min).');
     global._WADJET_BACKEND_HEALTHY = false;
     return false;
