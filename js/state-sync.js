@@ -43,6 +43,16 @@ window.StateSync = window.StateSync || {
     this.authReady = false;
     this._authState = null;
     console.warn('[StateSync] Auth expired:', reason);
+    // FIX v8.1: Dispatch auth:expired to window so the auth-interceptor's
+    // dedup + clear + doLogout handler actually runs.
+    // Previously this function only reset internal state — no window event
+    // was ever fired, so the login screen never appeared and every module
+    // kept retrying API calls with a dead token indefinitely.
+    try {
+      window.dispatchEvent(new CustomEvent('auth:expired', {
+        detail: typeof reason === 'object' ? reason : { reason },
+      }));
+    } catch (_) {}
   },
   onAuthReady(fn) {
     if (typeof fn !== 'function') return;

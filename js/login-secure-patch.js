@@ -321,8 +321,18 @@ async function _finalizeLogin(data) {
       (expiresIn ? new Date(Date.now() + Number(expiresIn) * 1000).toISOString()
                  : new Date(Date.now() + 900_000).toISOString());
     localStorage.setItem('wadjet_token_expires_at', expIso);  // UNIFIED_KEYS.EXPIRES
-    localStorage.setItem('we_token_expires_at',
+    // ROOT-CAUSE FIX v8.2: UNIFIED_KEYS.LEGACY_EXP = 'we_token_expires' (no _at suffix).
+    // api-client.js TokenStore._EXP_KEY = 'we_token_expires'.
+    // Previous code wrote 'we_token_expires_at' which neither reader looked up,
+    // so TokenStore.isValid() always saw expiry=0 and api-client.js called
+    // refreshAccessToken() on every request → 429 storm.
+    localStorage.setItem('we_token_expires',
       String(new Date(expIso).getTime()));                     // UNIFIED_KEYS.LEGACY_EXP
+    sessionStorage.setItem('we_token_expires',
+      String(new Date(expIso).getTime()));
+    // Also write the _at variant for any module that may still read it
+    localStorage.setItem('we_token_expires_at',
+      String(new Date(expIso).getTime()));
     sessionStorage.setItem('we_token_expires_at',
       String(new Date(expIso).getTime()));
   }
