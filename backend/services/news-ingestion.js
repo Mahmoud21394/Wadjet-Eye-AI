@@ -292,10 +292,29 @@ async function storeArticles(articles, tenantId) {
         .select('id, created_at');
 
       if (error) {
-        // FIX: If image_url column doesn't exist yet (schema drift), retry without it.
-        if (error.message && error.message.toLowerCase().includes('image_url')) {
+        const errMsg = error.message || '';
+        const noConstraint = errMsg.toLowerCase().includes('no unique or exclusion constraint') ||
+                             errMsg.toLowerCase().includes('there is no unique or exclusion constraint');
+        const missingImg   = errMsg.toLowerCase().includes('image_url');
+
+        if (noConstraint) {
+          // FIX: The news_articles table lacks a unique constraint on (tenant_id, external_guid).
+          // Fall back to ignoreDuplicates upsert (INSERT ... ON CONFLICT DO NOTHING) which
+          // works without a named unique index, then also try without image_url if needed.
+          console.warn('[News] Missing unique constraint on tenant_id,external_guid — switching to ignoreDuplicates mode');
+          const chunkNoImg = chunk.map(r => { const { image_url, ...rest } = r; return rest; });
+          const { error: err2 } = await supabaseClient
+            .from('news_articles')
+            .upsert(chunkNoImg, { ignoreDuplicates: true });
+          if (err2) {
+            console.warn('[News] DB upsert (ignoreDuplicates) error:', err2.message);
+          }
+          updatedCount += chunk.length; // conservative count — we can't distinguish new vs updated
+        } else if (missingImg) {
+          // FIX: If image_url column doesn't exist yet (schema drift), retry without it.
           console.warn('[News] image_url column missing — retrying without image_url field');
           const chunkNoImg = chunk.map(r => { const { image_url, ...rest } = r; return rest; });
+          // Try with constraint first, then without if constraint also missing
           const { data: data2, error: err2 } = await supabaseClient
             .from('news_articles')
             .upsert(chunkNoImg, { onConflict: 'tenant_id,external_guid', ignoreDuplicates: false })
@@ -306,12 +325,16 @@ async function storeArticles(articles, tenantId) {
               if (new Date(row.created_at).getTime() > cutoff) newCount++;
               else updatedCount++;
             }
-          } else {
-            console.warn('[News] DB upsert retry error:', err2?.message);
+          } else if (err2) {
+            // Also missing constraint? Fall back to ignoreDuplicates
+            const { error: err3 } = await supabaseClient
+              .from('news_articles')
+              .upsert(chunkNoImg, { ignoreDuplicates: true });
+            if (err3) console.warn('[News] DB upsert retry (no img+no constraint) error:', err3.message);
             updatedCount += chunk.length;
           }
         } else {
-          console.warn('[News] DB upsert error:', error.message);
+          console.warn('[News] DB upsert error:', errMsg);
           updatedCount += chunk.length;
         }
       } else if (data) {
