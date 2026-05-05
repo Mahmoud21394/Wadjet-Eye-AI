@@ -278,19 +278,30 @@ async function _finalizeLogin(data) {
   const expiresAt      = data.expiresAt || data.expires_at      || null;
   const expiresIn      = data.expiresIn || data.expires_in      || null;
 
-  // ── STEP 1: Token storage — handled via PersistentAuth_onLogin in STEP 5 ──
+  // ── P3: Warn if backend did not return a refresh token ─────────────
+  // Root cause of Issue 3: /api/auth/login response body doesn't include
+  // refreshToken / refresh_token, so storage is empty and /api/auth/refresh
+  // later returns 401 "Invalid or expired refresh token".
+  if (!refreshToken) {
+    console.warn(
+      '[SecureLogin] ⚠️ Backend login response did NOT include a refresh token. ' +
+      'Silent refresh will fail. Check that /api/auth/login returns ' +
+      '{ token, refreshToken, expiresIn } and that CORS allows credentials.',
+    );
+  }
+
+  // ── STEP 1 (P1 — PRIORITY FIX): Write tokens to ALL storage layers ──
+  // ROOT-CAUSE FIX v8.0: Tokens MUST be committed to localStorage before
+  // ANY async post-login code runs.  Previously this was deferred to STEP 5
+  // (PersistentAuth_onLogin), but event listeners on 'auth:login' / 'auth:restored'
+  // (ioc-intelligence.js, campaign-correlation.js, etc.) fire SYNCHRONOUSLY
+  // during window.dispatchEvent(), which is still inside _finalizeLogin.
+  // Those listeners immediately call authFetch() / renderIOCDatabase() / etc.
+  // The token had not yet been written → every request arrived with no Bearer.
   //
-  // ROOT-CAUSE FIX v6.2: PersistentAuth_onLogin (auth-interceptor.js) is now
-  // the SINGLE point of truth for all token storage + StateSync coordination.
-  // It calls UnifiedTokenStore.save() internally, schedules proactive refresh,
-  // and calls StateSync.markAuthReady(). We do NOT call UnifiedTokenStore.save()
-  // directly here anymore to avoid bypassing the StateSync coordination step.
-  //
-  // Absolute fallback: only write direct if BOTH PersistentAuth_onLogin AND
-  // UnifiedTokenStore are unavailable (e.g., interceptor script failed to load).
-  if (typeof window.PersistentAuth_onLogin !== 'function' &&
-      typeof window.UnifiedTokenStore?.save !== 'function' &&
-      accessToken) {
+  // Fix: write tokens eagerly here (STEP 1) AND keep the PersistentAuth_onLogin
+  // call in STEP 5 for StateSync coordination and proactive-refresh scheduling.
+  if (accessToken) {
     const TOKEN_KEYS = [
       'wadjet_access_token', 'we_access_token', 'tp_access_token',
     ];
@@ -298,19 +309,28 @@ async function _finalizeLogin(data) {
       localStorage.setItem(k, accessToken);
       sessionStorage.setItem(k, accessToken);
     });
-    if (refreshToken) {
-      localStorage.setItem('wadjet_refresh_token', refreshToken);
-      localStorage.setItem('we_refresh_token', refreshToken);
-    }
-    const exp = expiresAt ||
+  }
+  if (refreshToken) {
+    localStorage.setItem('wadjet_refresh_token',   refreshToken);
+    localStorage.setItem('we_refresh_token',        refreshToken);
+    localStorage.setItem('wadjet_unified_refresh',  refreshToken); // UNIFIED_KEYS.REFRESH
+  }
+  if (accessToken) {
+    // Compute and persist expiry so isExpired() works immediately
+    const expIso = expiresAt ||
       (expiresIn ? new Date(Date.now() + Number(expiresIn) * 1000).toISOString()
-                 : new Date(Date.now() + 900 * 1000).toISOString());
-    localStorage.setItem('wadjet_token_expires_at', exp);
-    if (displayUser) {
-      const userJson = JSON.stringify(displayUser);
-      localStorage.setItem('wadjet_user_profile', userJson);
-      localStorage.setItem('we_user', userJson);
-    }
+                 : new Date(Date.now() + 900_000).toISOString());
+    localStorage.setItem('wadjet_token_expires_at', expIso);  // UNIFIED_KEYS.EXPIRES
+    localStorage.setItem('we_token_expires_at',
+      String(new Date(expIso).getTime()));                     // UNIFIED_KEYS.LEGACY_EXP
+    sessionStorage.setItem('we_token_expires_at',
+      String(new Date(expIso).getTime()));
+  }
+  if (displayUser) {
+    const userJson = JSON.stringify(displayUser);
+    localStorage.setItem('wadjet_user_profile', userJson);  // UNIFIED_KEYS.USER
+    localStorage.setItem('we_user',             userJson);  // UNIFIED_KEYS.LEGACY_USER
+    sessionStorage.setItem('we_user',           userJson);
   }
 
   // ── STEP 2: Sync with legacy TokenStore (api-client.js) ──────────
@@ -341,13 +361,11 @@ async function _finalizeLogin(data) {
     _offline:    false,
   };
 
-  // ── STEP 5: Notify auth-interceptor (handles StateSync + proactive refresh) ──
-  // ROOT-CAUSE FIX v6.2: _finalizeLogin MUST call PersistentAuth_onLogin so that
-  //  1. auth-interceptor schedules the proactive refresh
-  //  2. StateSync.markAuthReady() is called (unblocks orchestrator + WS + RAKAY)
-  //  3. Window.isAuthenticated() returns true immediately after login
-  // Previously UnifiedTokenStore.save() was called directly — this bypassed the
-  // StateSync coordination step, leaving all awaiting modules blocked.
+  // ── STEP 5: Notify auth-interceptor (StateSync + proactive refresh) ──
+  // This must come AFTER the eager writes in STEP 1 (above) so that
+  // PersistentAuth_onLogin finds the tokens already in localStorage when it
+  // calls UnifiedTokenStore.save() — preventing a double-write that would
+  // be harmless but could race with an in-flight silent refresh.
   if (typeof window.PersistentAuth_onLogin === 'function') {
     window.PersistentAuth_onLogin(
       displayUser,
@@ -356,13 +374,25 @@ async function _finalizeLogin(data) {
       expiresAt || expiresIn,
       false,
     );
+  } else if (typeof window.UnifiedTokenStore?.save === 'function') {
+    // auth-interceptor not loaded — call UnifiedTokenStore directly
+    window.UnifiedTokenStore.save({
+      token: accessToken, refreshToken,
+      expiresAt: expiresAt || expiresIn, user: displayUser,
+    });
   }
 
-  // ── STEP 6: Dispatch DOM events ──────────────────────────────────
-  // FIX v7.6: Stamp the login time so auth-validator.js can suppress the
-  // "session expired" banner if auth:expired fires within 5 s of a fresh login
-  // (race condition: stale token detected before new token is fully propagated).
-  window._wadjetLastLoginAt = Date.now();
+  // ── STEP 6 (P2 — PRIORITY FIX): Gate all post-login init behind authReady ──
+  // Problem: auth:login / auth:restored listeners (ioc-intelligence, campaign-
+  // correlation, auth-validator) fire synchronously inside dispatchEvent() and
+  // immediately call API endpoints.  StateSync.authReady is marked true by
+  // PersistentAuth_onLogin in STEP 5, but every module that reads tokens via
+  // getToken() / authFetch() now gets them from localStorage (STEP 1 above).
+  // The remaining race is for modules that call their own async init chains
+  // before StateSync settles.  We stamp _wadjetAuthReadyAt here so any module
+  // can check window._wadjetAuthReadyAt > 0 instead of racing.
+  window._wadjetLastLoginAt  = Date.now();
+  window._wadjetAuthReadyAt  = Date.now();  // P2 gate — modules check this
 
   window.dispatchEvent(new CustomEvent('auth:login',    { detail: window.CURRENT_USER }));
   // Also dispatch auth:restored so _onAuthReady() in ai-orchestrator fires
