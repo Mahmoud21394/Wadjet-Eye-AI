@@ -35,11 +35,24 @@
  */
 'use strict';
 
-// Override doLogin with the secure version when this script loads
-window.addEventListener('DOMContentLoaded', function () {
-  // Replace the potentially vulnerable doLogin with the secure version
-  window.doLogin = secureDoLogin;
-});
+// ROOT-CAUSE FIX v8.3: Override doLogin IMMEDIATELY at script-parse time.
+// Previously, the override ran inside DOMContentLoaded which fires ONCE and
+// only if the listener is registered BEFORE the event fires.  When this script
+// is loaded late (after DOMContentLoaded has already fired), the listener never
+// ran and window.doLogin remained the insecure main.js version.
+// Also: login-v20.js _patchLoginBtn() wraps window.doLogin in a setInterval —
+// if it captures the old doLogin before our DOMContentLoaded runs, the v20
+// wrapper calls the wrong function forever.
+// Fix: assign immediately so both early and late callers always get secureDoLogin.
+window.doLogin = secureDoLogin;
+
+// Also assign on DOMContentLoaded in case a very early assignment was overwritten
+// by a subsequent script (belt + suspenders).
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', function () {
+    window.doLogin = secureDoLogin;
+  });
+}
 
 /* ══════════════════════════════════════════════════════════════════
    SECURE LOGIN — server-only authentication
@@ -56,7 +69,11 @@ async function secureDoLogin() {
   const passEl   = document.getElementById('loginPassword');
   const tenantEl = document.getElementById('loginTenant');
   const errEl    = document.getElementById('loginError');
-  const btn      = document.querySelector('.login-btn');
+  // ROOT-CAUSE FIX v8.4: login-v20.js replaces the DOM with a new button id=loginBtn.
+  // Fall back through multiple selectors so we always find the visible button.
+  const btn      = document.getElementById('loginBtn') ||
+                   document.querySelector('.lv20-btn') ||
+                   document.querySelector('.login-btn');
 
   const email    = emailEl?.value?.trim()?.toLowerCase();
   const password = passEl?.value;
@@ -435,15 +452,29 @@ function _enterApp() {
 }
 
 function _showLoginError(el, msg) {
-  if (!el) return;
-  el.textContent  = msg;
-  el.style.display = 'block';
+  // Always update the legacy loginError div (hidden but observed by v20 MutationObserver)
+  if (el) {
+    el.textContent   = msg;
+    el.style.display = 'block';
+  }
+  // ROOT-CAUSE FIX v8.4: Also write directly to the v20 error box so the error
+  // is visible even when the MutationObserver hasn't fired yet.
+  const lv20Err  = document.getElementById('lv20Error');
+  const lv20Tx   = document.getElementById('lv20ErrorText');
+  if (lv20Err && lv20Tx) {
+    lv20Tx.textContent  = msg.replace(/^[⚠️❌⏳🔌⏱]\s*/u, '');
+    lv20Err.style.display = 'flex';
+  }
 }
 
 function _clearLoginError(el) {
-  if (!el) return;
-  el.textContent  = '';
-  el.style.display = 'none';
+  if (el) {
+    el.textContent   = '';
+    el.style.display = 'none';
+  }
+  // Also clear the v20 error box
+  const lv20Err = document.getElementById('lv20Error');
+  if (lv20Err) lv20Err.style.display = 'none';
 }
 
 function _setBtnLoading(btn, loading) {
@@ -452,9 +483,16 @@ function _setBtnLoading(btn, loading) {
     btn._originalText = btn.innerHTML;
     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Signing in…';
     btn.disabled  = true;
+    btn.classList.add('loading');
   } else {
-    btn.innerHTML = btn._originalText || 'Sign In';
+    // ROOT-CAUSE FIX v8.4: Restore the correct label for both login-v20 and
+    // the legacy login button.  login-v20 uses "Authenticate Securely" while
+    // the original uses "Sign In".  Prefer the stored original if available.
+    const isV20 = btn.classList.contains('lv20-btn') || btn.id === 'loginBtn';
+    btn.innerHTML = btn._originalText ||
+      (isV20 ? '<i class="fas fa-eye"></i> Authenticate Securely' : 'Sign In');
     btn.disabled  = false;
+    btn.classList.remove('loading');
   }
 }
 

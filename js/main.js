@@ -159,22 +159,77 @@ async function doLogin() {
       sessionId:   data.sessionId,
       _offline:    false,
     };
+    window.CURRENT_USER = CURRENT_USER;
 
-    // Persist to PersistentTokenStore so session survives page refresh
+    // ── STEP 2b (ROOT-CAUSE FIX v8.4): Eagerly write tokens to ALL storage
+    // keys BEFORE any async call so that every module reading getToken() /
+    // authFetch() immediately after auth:login gets a valid Bearer token.
+    const _accessToken  = data.token || data.access_token || null;
+    const _refreshToken = data.refreshToken || data.refresh_token || null;
+    const _expiresAt    = data.expiresAt || data.expires_at || null;
+    const _expiresIn    = data.expiresIn || data.expires_in || null;
+
+    if (_accessToken) {
+      ['wadjet_access_token', 'we_access_token', 'tp_access_token'].forEach(k => {
+        localStorage.setItem(k, _accessToken);
+        sessionStorage.setItem(k, _accessToken);
+      });
+    }
+    if (_refreshToken) {
+      localStorage.setItem('wadjet_refresh_token',  _refreshToken);
+      localStorage.setItem('we_refresh_token',       _refreshToken);
+      localStorage.setItem('wadjet_unified_refresh', _refreshToken);
+    }
+    if (_accessToken) {
+      const expIso = _expiresAt ||
+        (_expiresIn ? new Date(Date.now() + Number(_expiresIn) * 1000).toISOString()
+                    : new Date(Date.now() + 900_000).toISOString());
+      const expMs = String(new Date(expIso).getTime());
+      localStorage.setItem('wadjet_token_expires_at', expIso);
+      localStorage.setItem('we_token_expires', expMs);
+      sessionStorage.setItem('we_token_expires', expMs);
+      localStorage.setItem('we_token_expires_at', expMs);
+      sessionStorage.setItem('we_token_expires_at', expMs);
+    }
+    if (data.user) {
+      const userJson = JSON.stringify(data.user);
+      localStorage.setItem('wadjet_user_profile', userJson);
+      localStorage.setItem('we_user', userJson);
+      sessionStorage.setItem('we_user', userJson);
+    }
+
+    // ── STEP 3: Sync with legacy TokenStore (api-client.js) ──────────
+    if (typeof TokenStore !== 'undefined' && _accessToken) {
+      TokenStore.set(_accessToken, _refreshToken, _expiresAt || _expiresIn);
+      TokenStore.setUser(data.user);
+    }
+
+    // ── STEP 4: Notify auth-interceptor (StateSync + proactive refresh) ──
     if (typeof window.PersistentAuth_onLogin === 'function') {
       window.PersistentAuth_onLogin(
         CURRENT_USER,
-        data.token || data.access_token,
-        data.refreshToken || data.refresh_token,
-        data.expiresAt || data.expiresIn,
+        _accessToken,
+        _refreshToken,
+        _expiresAt || _expiresIn,
         false
       );
+    } else if (typeof window.UnifiedTokenStore?.save === 'function') {
+      window.UnifiedTokenStore.save({
+        token: _accessToken, refreshToken: _refreshToken,
+        expiresAt: _expiresAt || _expiresIn, user: data.user,
+      });
     }
+
+    window._wadjetLastLoginAt = Date.now();
+    window._wadjetAuthReadyAt = Date.now();
 
     console.info('[Wadjet-Eye AI] ✅ Authenticated via real backend as', CURRENT_USER.role, '/', CURRENT_USER.email);
 
     if (typeof showToast === 'function')
       showToast(`✅ Welcome, ${CURRENT_USER.name}`, 'success');
+
+    window.dispatchEvent(new CustomEvent('auth:login',    { detail: CURRENT_USER }));
+    window.dispatchEvent(new CustomEvent('auth:restored', { detail: CURRENT_USER }));
 
     _enterApp();
 
@@ -182,20 +237,12 @@ async function doLogin() {
     const msg = err.message || 'Login failed';
     console.warn('[Login] Failed:', msg);
 
-    // ── FINAL SAFETY NET: if backend failed for any reason and this is a known admin account ──
-    const msgLow = msg.toLowerCase();
-    const isKnownAccount = _getEmergencyProfile(email.toLowerCase());
-    const isSoftError = msgLow.includes('profile') || msgLow.includes('not found') ||
-                        msgLow.includes('network') || msgLow.includes('unreachable') ||
-                        msgLow.includes('failed to fetch') || msgLow.includes('timeout') ||
-                        msgLow.includes('no rows') || msgLow.includes('does not exist') ||
-                        msgLow.includes('user not') || msgLow.includes('cannot reach');
-
-    if (isKnownAccount && password.length >= 6 && isSoftError) {
-      _doEmergencyLogin(isKnownAccount, 'profile');
-      return;
-    }
-
+    // ROOT-CAUSE FIX v8.4: Emergency bypass DISABLED in the catch block.
+    // login-secure-patch.js overrides window.doLogin at parse time so this
+    // function should never run during a normal login flow.  If it does run
+    // (e.g., direct call in tests), we still surface the real error to the user
+    // rather than silently granting offline access with a fake token, which
+    // would produce 401s on every subsequent API call.
     if (btn) { btn.innerHTML = originalBtnText; btn.disabled = false; }
 
     const display =

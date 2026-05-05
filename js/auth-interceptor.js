@@ -1003,6 +1003,10 @@ window.addEventListener('online', () => {
 window.UnifiedTokenStore = UnifiedTokenStore;
 window.authFetch         = authFetch;
 window.silentRefresh     = silentRefresh;
+// ROOT-CAUSE FIX v8.3: Signal to auth-validator.js that the superior
+// authFetch (with pre-flight refresh + full 401 handling) is installed.
+// auth-validator.js checks this flag before overwriting window.authFetch.
+window.__wadjetAuthInterceptorLoaded = true;
 
 function _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
