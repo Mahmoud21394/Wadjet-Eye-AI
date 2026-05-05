@@ -189,7 +189,10 @@ const UnifiedTokenStore = {
       try { localStorage.removeItem(k);   } catch {}
       try { sessionStorage.removeItem(k); } catch {}
     });
-    ['tp_token', 'tp_refresh', 'tp_user', 'accessToken', 'refreshToken'].forEach(k => {
+    // ROOT-CAUSE FIX v8.2: also clear the _at-suffix variant written by
+    // older versions of login-secure-patch.js so stale expiry never lingers.
+    ['tp_token', 'tp_refresh', 'tp_user', 'accessToken', 'refreshToken',
+     'we_token_expires_at', 'wadjet_token_expires_at'].forEach(k => {
       try { localStorage.removeItem(k);   } catch {}
       try { sessionStorage.removeItem(k); } catch {}
     });
@@ -230,8 +233,22 @@ let _proactiveTimer = null;
 //   (sessionStorage is cleared on tab close, so the user can try again
 //   after a fresh open, e.g. if they logged in on a different device.)
 const _COOKIE_FAIL_KEY = 'wadjet_cookie_refresh_blocked_until';
-let _cookieRefreshFailedAt   = parseInt(sessionStorage.getItem('wadjet_cookie_refresh_failed_at') || '0', 10);
-let _cookieRefreshBackoffMs  = parseInt(sessionStorage.getItem('wadjet_cookie_refresh_backoff') || '0', 10);
+// FIX v8.1: Read persisted backoff values from sessionStorage but ONLY if the
+// stored timestamp is still in the future — a stale timestamp from a prior page
+// load that has already elapsed must not resurrect a dead backoff.
+// Root cause of "Cookie refresh in backoff — 244s remaining" after fresh login:
+// the 400 NO_COOKIE from a previous _syncStoresOnLoad attempt wrote a 300 s
+// backoff into sessionStorage, and on the NEXT page load (after the user logs in)
+// line 233 re-read that timestamp from sessionStorage with the full 300 s still
+// remaining — so even though PersistentAuth_onLogin cleared the in-memory vars,
+// the INITIAL read had already poisoned them.
+const _storedFailedAt   = parseInt(sessionStorage.getItem('wadjet_cookie_refresh_failed_at') || '0', 10);
+const _storedBackoffMs  = parseInt(sessionStorage.getItem('wadjet_cookie_refresh_backoff') || '0', 10);
+// Only honour the stored backoff if the deadline is still in the future (prevents
+// stale backoffs from surviving a page reload where the user re-logged in).
+const _storedDeadline   = _storedFailedAt + _storedBackoffMs;
+let _cookieRefreshFailedAt   = (_storedDeadline > Date.now()) ? _storedFailedAt  : 0;
+let _cookieRefreshBackoffMs  = (_storedDeadline > Date.now()) ? _storedBackoffMs : 0;
 const COOKIE_REFRESH_MIN_INTERVAL_MS = 30_000;   // 30 s minimum between attempts
 const COOKIE_REFRESH_MAX_BACKOFF_MS  = 300_000;  // 5 min maximum backoff
 
@@ -336,6 +353,11 @@ async function _doTokenRefresh(attempt = 0) {
         const cookieOk = await _refreshFromCookie();
         if (cookieOk) return true;
       }
+      // FIX v8.1: auth:session-expired was dispatched but had NO listener → doLogout
+      // was never called → app looped forever retrying API calls with a dead token.
+      // Solution: alias the event to auth:expired which IS handled by the listener
+      // at the bottom of this file (with dedup, clear, and doLogout).
+      _dispatchAuthEvent('auth:expired',         { reason: body.error || errCode });
       _dispatchAuthEvent('auth:session-expired', { reason: body.error || errCode });
       window.StateSync?.handleAuthExpiry({ reason: errCode });
       return false;
@@ -381,6 +403,8 @@ async function _doTokenRefresh(attempt = 0) {
     // In this case a re-login is needed. Dispatch auth:expired and return false.
     if (data.requires_reauth) {
       console.warn('[AuthInterceptor] Backend requires re-authentication — triggering re-login');
+      // FIX v8.1: same alias fix — must dispatch auth:expired for the logout handler
+      _dispatchAuthEvent('auth:expired',         { reason: 'requires_reauth' });
       _dispatchAuthEvent('auth:session-expired', { reason: 'requires_reauth' });
       window.StateSync?.handleAuthExpiry({ reason: 'requires_reauth' });
       return false;
@@ -832,7 +856,16 @@ window.PersistentAuth_onLogin = function(user, token, refreshToken, expiresAt, i
   // immediately after login ("Refresh requested too soon — skipping"),
   // meaning the very first 401 on a post-login API call cannot be healed.
   _lastRefreshAttemptAt = 0;   // reset main-refresh rate-limit guard
-  _clearCookieRefreshState();  // reset cookie-refresh backoff (was already here)
+  _clearCookieRefreshState();  // reset cookie-refresh backoff + sessionStorage keys
+
+  // ROOT-CAUSE FIX v8.2: also clear any stale in-flight refresh lock so the
+  // first post-login silentRefresh() is never blocked by a lock that was set
+  // during the page-load _syncStoresOnLoad() attempt (which may have timed out
+  // or failed before releasing the lock).
+  _refreshLock               = false;
+  window.__wadjetRefreshLock = false;
+  _refreshPromise            = null;
+  _expiredHandled            = false; // allow auth:expired to fire again in new session
 
   UnifiedTokenStore.save({
     token,

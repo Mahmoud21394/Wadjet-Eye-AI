@@ -12,16 +12,43 @@
 /* ═══════════════════════════════════════════════════════
    STATE
 ═══════════════════════════════════════════════════════ */
-// Pre-load provided API keys into localStorage on first load
+// FIX v8.1: PRESET block previously wrote hardcoded expired API keys to
+// localStorage on every first load.  The `if (!localStorage.getItem(k))`
+// guard only skips writing if the key already exists — but because these
+// keys were already written by a prior page load they were permanently
+// stuck in localStorage.  When OpenAI/Claude rejected them (401) the app
+// had no way to recover without the user manually clearing localStorage.
+//
+// Fix: remove the hardcoded key values entirely.  The PRESET block now
+// only sets the ai_provider preference (a harmless default).  API keys
+// must be entered by the user via the Settings → API Keys panel, which
+// writes them to the wadjet_openai_key / wadjet_claude_key localStorage
+// slots.  The Vercel proxy (api/proxy/openai.js, api/proxy/claude.js)
+// injects keys server-side from environment variables — the frontend
+// key is only used as a FALLBACK for direct (non-proxy) calls.
 (function _preloadApiKeys() {
-  const PRESET = {
-    wadjet_openai_key: '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',
-    wadjet_claude_key: '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',
-    wadjet_ai_provider: 'openai',
-  };
-  Object.entries(PRESET).forEach(([k, v]) => {
-    if (!localStorage.getItem(k)) localStorage.setItem(k, v);
-  });
+  // Only set the provider preference if not already chosen by the user.
+  // Never write API key values here — keys come from:
+  //   1. Vercel env vars (server-side injection in /proxy/* routes)
+  //   2. User-entered keys via Settings → API Keys UI
+  if (!localStorage.getItem('wadjet_ai_provider')) {
+    localStorage.setItem('wadjet_ai_provider', 'openai');
+  }
+
+  // MIGRATION: if the stale hardcoded keys from a prior version are still
+  // present in localStorage, clear them now so the proxy path is used.
+  const STALE_OPENAI_PREFIX = 'sk-proj-RYqB4T';
+  const STALE_CLAUDE_PREFIX = 'sk-ant-api03-BJaJ';
+  const storedOpenAI = localStorage.getItem('wadjet_openai_key') || '';
+  const storedClaude = localStorage.getItem('wadjet_claude_key') || '';
+  if (storedOpenAI.startsWith(STALE_OPENAI_PREFIX)) {
+    localStorage.removeItem('wadjet_openai_key');
+    console.info('[AIOrch] Cleared stale/invalid OpenAI key from localStorage — proxy will use env var.');
+  }
+  if (storedClaude.startsWith(STALE_CLAUDE_PREFIX)) {
+    localStorage.removeItem('wadjet_claude_key');
+    console.info('[AIOrch] Cleared stale/invalid Claude key from localStorage — proxy will use env var.');
+  }
 })();
 
 const AIORCH = {
