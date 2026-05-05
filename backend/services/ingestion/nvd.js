@@ -84,12 +84,19 @@ async function _upsertNVDVulns(vulnList) {
     const score3 = parseFloat(cvss3?.cvssData?.baseScore) || null;
     const score2 = parseFloat(cvss2?.cvssData?.baseScore) || null;
 
+    // FIX: DB check constraint only allows CRITICAL/HIGH/MEDIUM/LOW.
+    // NONE (score=0) and UNKNOWN (no score) caused repeated upsert failures.
+    // Map both to LOW so the row is always accepted.
     const severity = score3
       ? score3 >= 9.0 ? 'CRITICAL'
       : score3 >= 7.0 ? 'HIGH'
       : score3 >= 4.0 ? 'MEDIUM'
-      : score3 > 0   ? 'LOW' : 'NONE'
-      : 'UNKNOWN';
+      : 'LOW'          // covers score3 > 0 AND score3 === 0
+      : score2
+        ? score2 >= 7.0 ? 'HIGH'
+        : score2 >= 4.0 ? 'MEDIUM'
+        : 'LOW'
+        : 'LOW';       // truly unknown — store as LOW to satisfy constraint
 
     const description = cve.descriptions?.find(d => d.lang === 'en')?.value || '';
     const refs  = (cve.references || []).slice(0, 10).map(r => r.url);
@@ -211,9 +218,16 @@ async function syncCISAKEV() {
       last_seen:   new Date().toISOString(),
     })).filter(r => r.value);
 
+    // FIX: Reduced chunk size 100→25 and added 200ms back-pressure to avoid
+    // "canceling statement due to statement timeout" on Supabase free tier.
     if (iocRows.length > 0) {
-      for (let i = 0; i < iocRows.length; i += 100) {
-        await supabase.from('iocs').upsert(iocRows.slice(i, i+100), { onConflict: 'tenant_id,value', ignoreDuplicates: false });
+      const IOC_CHUNK = 25;
+      for (let i = 0; i < iocRows.length; i += IOC_CHUNK) {
+        const { error: iocErr } = await supabase
+          .from('iocs')
+          .upsert(iocRows.slice(i, i + IOC_CHUNK), { onConflict: 'tenant_id,value', ignoreDuplicates: true });
+        if (iocErr) console.warn('[CISA KEV] IOC upsert warning:', iocErr.message);
+        if (i + IOC_CHUNK < iocRows.length) await _sleep(200);
       }
     }
 

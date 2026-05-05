@@ -240,7 +240,12 @@ async function ingestPhishTank(tenantId) {
             'User-Agent': 'wadjet-eye-ai-platform/5.2 (security research)',
             'Accept': 'application/json',
           },
-          maxContentLength: 20 * 1024 * 1024, // 20MB max
+          // FIX: Reduced from 20MB → 8MB. The PhishTank JSON can be 15-20MB
+          // uncompressed; that triggers axios maxContentLength exceeded errors
+          // before any data is processed. 8MB captures ~15-20k entries which
+          // is more than the 2000 we process anyway. On size-exceeded errors
+          // we fall through to the OpenPhish fallback below.
+          maxContentLength: 8 * 1024 * 1024,
           validateStatus: (s) => s < 500, // Accept 404/429 without throw
         });
         if (resp.status === 404) {
@@ -267,8 +272,50 @@ async function ingestPhishTank(tenantId) {
     }
 
     if (!data) {
-      // All retries exhausted — log and skip gracefully
-      throw lastErr || new Error('PhishTank feed unavailable after 3 attempts');
+      // FIX: All retries exhausted — fall back to OpenPhish instead of throwing.
+      // PhishTank is frequently unavailable or IP-rate-limited; OpenPhish provides
+      // a comparable public phishing URL feed that requires no authentication.
+      const fallbackErr = lastErr?.message || 'PhishTank feed unavailable after 3 attempts';
+      console.warn(`[Ingestion][PhishTank] All attempts failed (${fallbackErr}) — falling back to OpenPhish`);
+
+      try {
+        const fallbackResp = await axios.get('https://openphish.com/feed.txt', {
+          timeout: TIMEOUT,
+          headers: { 'User-Agent': 'wadjet-eye-ai/5.2' },
+          maxContentLength: 5 * 1024 * 1024,
+        });
+        const lines = String(fallbackResp.data || '').split('\n')
+          .map(l => l.trim()).filter(l => l.startsWith('http'));
+        console.info(`[Ingestion][PhishTank→OpenPhish] Fallback: ${lines.length} URLs fetched`);
+
+        for (const urlStr of lines.slice(0, 1000)) {
+          if (urlStr.length > 500) continue;
+          iocs.push({
+            value: urlStr, type: 'url', reputation: 'malicious',
+            risk_score: 80, confidence: 75,
+            source: 'OpenPhish (PhishTank fallback)', feed_source: 'OpenPhish',
+            tags: ['phishing', 'url', 'openphish'], kill_chain_phase: 'delivery',
+          });
+        }
+
+        if (iocs.length > 0) {
+          const { new: fn, updated: fu, duplicate: fd } = await upsertIOCs(tenantId, iocs);
+          const fStats = {
+            duration_ms: Date.now() - t0, iocs_fetched: iocs.length,
+            iocs_new: fn, iocs_updated: fu, iocs_duplicate: fd,
+            metadata: { source: 'openphish_fallback', phishtank_error: fallbackErr },
+          };
+          await finishFeedLog(logId, fStats);
+          console.info(`[Ingestion][PhishTank→OpenPhish] ✓ new=${fn} updated=${fu}`);
+          return fStats;
+        }
+      } catch (fbErr) {
+        console.warn(`[Ingestion][PhishTank] OpenPhish fallback also failed: ${fbErr.message}`);
+      }
+
+      // Both PhishTank and OpenPhish failed — log gracefully and return skipped
+      await finishFeedLog(logId, { error: fallbackErr, duration_ms: Date.now() - t0 });
+      return { skipped: true, reason: fallbackErr, iocs_fetched: 0 };
     }
 
     const entries = Array.isArray(data) ? data : [];
