@@ -233,15 +233,38 @@ let _proactiveTimer = null;
 //   (sessionStorage is cleared on tab close, so the user can try again
 //   after a fresh open, e.g. if they logged in on a different device.)
 const _COOKIE_FAIL_KEY = 'wadjet_cookie_refresh_blocked_until';
-// FIX v8.1: Read persisted backoff values from sessionStorage but ONLY if the
-// stored timestamp is still in the future — a stale timestamp from a prior page
-// load that has already elapsed must not resurrect a dead backoff.
-// Root cause of "Cookie refresh in backoff — 244s remaining" after fresh login:
-// the 400 NO_COOKIE from a previous _syncStoresOnLoad attempt wrote a 300 s
-// backoff into sessionStorage, and on the NEXT page load (after the user logs in)
-// line 233 re-read that timestamp from sessionStorage with the full 300 s still
-// remaining — so even though PersistentAuth_onLogin cleared the in-memory vars,
-// the INITIAL read had already poisoned them.
+// ROOT-CAUSE FIX v8.5: Cookie-backoff sessionStorage state poisoning after login.
+//
+// PROBLEM (observed in video — "Cookie refresh in backoff — Xs remaining" immediately
+// after a fresh successful login):
+//   1. Page loads with NO valid tokens → _syncStoresOnLoad → _refreshFromCookie → 400 NO_COOKIE
+//      → writes 5-min backoff to sessionStorage AND in-memory vars.
+//   2. User logs in successfully → PersistentAuth_onLogin clears in-memory vars AND
+//      sessionStorage keys via _clearCookieRefreshState().
+//   3. User navigates / page reloads → auth-interceptor.js is re-evaluated.
+//   4. The module-init code (this block) reads from sessionStorage BEFORE PersistentAuth_onLogin
+//      can run — so it re-poisons in-memory vars from the stale sessionStorage values.
+//
+// FIX: At module init time, also check whether we have VALID tokens in localStorage.
+//   If the user has a real access+refresh token, they have logged in successfully and
+//   the cookie-backoff state is stale — clear it immediately.  Only restore the backoff
+//   if the user is genuinely unauthenticated (no tokens at all).
+(function _initCookieBackoff() {
+  const hasRealToken = !!(
+    localStorage.getItem('wadjet_access_token') ||
+    localStorage.getItem('we_access_token')     ||
+    localStorage.getItem('tp_access_token')
+  );
+  if (hasRealToken) {
+    // User has logged in — any stored cookie-backoff is from a PRE-LOGIN page load and
+    // is now stale.  Wipe it so post-login page reloads don't re-enter backoff.
+    try {
+      sessionStorage.removeItem('wadjet_cookie_refresh_failed_at');
+      sessionStorage.removeItem('wadjet_cookie_refresh_backoff');
+      sessionStorage.removeItem('wadjet_cookie_refresh_blocked_until');
+    } catch (_) {}
+  }
+})();
 const _storedFailedAt   = parseInt(sessionStorage.getItem('wadjet_cookie_refresh_failed_at') || '0', 10);
 const _storedBackoffMs  = parseInt(sessionStorage.getItem('wadjet_cookie_refresh_backoff') || '0', 10);
 // Only honour the stored backoff if the deadline is still in the future (prevents
@@ -781,6 +804,11 @@ async function _syncStoresOnLoad() {
 
   // ── Step 4: Token valid — schedule refresh and mark ready ────────
   if (hasToken && !isExpired) {
+    // ROOT-CAUSE FIX v8.5: Clear any cookie-backoff state left over from a
+    // previous page-load silent-refresh attempt that got 400 NO_COOKIE.
+    // Now that we have a real valid token, the backoff is stale and must be
+    // wiped so that a future genuine-expiry can use cookie-refresh if needed.
+    _clearCookieRefreshState();
     _scheduleProactiveRefresh();
 
     // Sync with legacy TokenStore
@@ -803,6 +831,11 @@ async function _syncStoresOnLoad() {
 
   // ── Step 5: Token expired but refresh exists → silent refresh ────
   if (isExpired && hasRefresh) {
+    // ROOT-CAUSE FIX v8.5: Clear cookie-backoff before attempting — we have a
+    // real refresh token so this is a genuine session restore, not an anonymous
+    // cookie-probe. Any stale backoff from a previous unauthenticated page load
+    // must not block the /api/auth/refresh call.
+    _clearCookieRefreshState();
     const ok = await silentRefresh();
 
     if (ok) {

@@ -60,6 +60,27 @@ if (document.readyState === 'loading') {
    If the server is down, the user cannot log in. Full stop.
 ════════════════════════════════════════════════════════════════ */
 async function secureDoLogin() {
+  // ROOT-CAUSE FIX v8.5: Reset ALL backoff/lock state BEFORE clearing tokens.
+  // Order matters: if PersistentAuth_onLogin is called after a successful login it
+  // resets the rate-limit guards — but here, at login START, we also need to clear
+  // those guards so the very first silentRefresh() attempt after login isn't blocked
+  // by backoff state left from the pre-login _syncStoresOnLoad() cookie-probe.
+  if (typeof window.PersistentAuth_onLogin === 'function') {
+    // Temporarily reset guards by calling with empty args won't work, so we call
+    // the interceptor's public clear helpers directly if available.
+    if (window.__wadjetAuthInterceptorLoaded) {
+      // These session-storage keys cause the "Cookie refresh in backoff — Xs remaining"
+      // log that blocks /api/auth/refresh-from-cookie after a fresh login on a new page load.
+      try {
+        sessionStorage.removeItem('wadjet_cookie_refresh_failed_at');
+        sessionStorage.removeItem('wadjet_cookie_refresh_backoff');
+        sessionStorage.removeItem('wadjet_cookie_refresh_blocked_until');
+      } catch (_) {}
+      // Also clear the global refresh lock in case it was left set by a timed-out
+      // pre-login _syncStoresOnLoad attempt.
+      window.__wadjetRefreshLock = false;
+    }
+  }
   // Clear any stale tokens before attempting login.
   // Guard prevents ReferenceError when auth-interceptor.js is not yet loaded.
   if (typeof window.UnifiedTokenStore !== 'undefined') {
