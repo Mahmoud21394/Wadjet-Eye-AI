@@ -824,8 +824,15 @@ var _expiredHandled = false;  // eslint-disable-line no-var
 
 /** Called by main.js / login handler after successful login */
 window.PersistentAuth_onLogin = function(user, token, refreshToken, expiresAt, isOffline) {
-  // Clear any cookie-refresh backoff so the new session can use cookie if available
-  _clearCookieRefreshState();
+  // P5 FIX v8.0: Reset ALL refresh-rate guards so a fresh login session is
+  // never locked out by a stale backoff timer that accumulated during the
+  // page-load silent-refresh attempt (which failed because the old refresh
+  // token was already expired or missing).
+  // Without this reset the 15 s REFRESH_MIN_INTERVAL_MS guard fires
+  // immediately after login ("Refresh requested too soon — skipping"),
+  // meaning the very first 401 on a post-login API call cannot be healed.
+  _lastRefreshAttemptAt = 0;   // reset main-refresh rate-limit guard
+  _clearCookieRefreshState();  // reset cookie-refresh backoff (was already here)
 
   UnifiedTokenStore.save({
     token,
