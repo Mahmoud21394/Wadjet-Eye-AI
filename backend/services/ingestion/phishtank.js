@@ -19,51 +19,123 @@ const { supabase } = require('../../config/supabase');
 const DEFAULT_TENANT = process.env.DEFAULT_TENANT_ID || '00000000-0000-0000-0000-000000000001';
 const TIMEOUT = 25000;
 
+// ── Re-use the canonical upsertIOCs from ingestion/index.js ─────
+// This eliminates the duplicate implementation that existed in this file.
+// The parent module's version has circuit-breaker, backpressure, and
+// dedup logic that is kept in sync.
+let _upsertIOCsFromIndex = null;
+function getUpsertFn() {
+  if (!_upsertIOCsFromIndex) {
+    try {
+      // Lazy-load to avoid circular require — phishtank.js ← scheduler ← index
+      const idx = require('./index');
+      _upsertIOCsFromIndex = idx.upsertIOCs || null;
+    } catch (_) {}
+  }
+  return _upsertIOCsFromIndex;
+}
+
 // ── Feed log helpers (same pattern as main ingestion/index.js) ──
+// FIX: Write feed-run records to BOTH tables so every consumer sees them:
+//   feed_logs     — queried by services/ingestion/index.js workers and dashboard
+//   cti_feed_logs — queried by routes/ioc-ingestion.js and /api/cti/stats
+// Previously only feed_logs was written, causing /api/cti/stats and the
+// dashboard KPIs to show 0 active feeds for PhishTank/MISP/Botvrij/SSLBL.
+
+// _pendingLogs maps logId → { feedName, tenantId, started_at }
+// so finishFeedLog can mirror to cti_feed_logs without needing extra args.
+const _pendingLogs = new Map();
+
 async function startFeedLog(feedName, feedType, tenantId) {
+  const tid = tenantId || DEFAULT_TENANT;
+  const started_at = new Date().toISOString();
+  const row = {
+    feed_name:  feedName,
+    feed_type:  feedType,
+    tenant_id:  tid,
+    status:     'running',
+    started_at,
+  };
   try {
     const { data } = await supabase
       .from('feed_logs')
-      .insert({
-        feed_name:  feedName,
-        feed_type:  feedType,
-        tenant_id:  tenantId || DEFAULT_TENANT,
-        status:     'running',
-        started_at: new Date().toISOString(),
-      })
+      .insert(row)
       .select('id')
       .single();
-    return data?.id;
+    const logId = data?.id || null;
+    if (logId) _pendingLogs.set(logId, { feedName, tenantId: tid, started_at });
+    return logId;
   } catch (_) { return null; }
 }
 
 async function finishFeedLog(logId, stats) {
-  if (!logId) return;
-  try {
-    await supabase.from('feed_logs').update({
-      status:         stats.error ? 'error' : 'success',
-      finished_at:    new Date().toISOString(),
-      duration_ms:    stats.duration_ms || 0,
-      iocs_fetched:   stats.iocs_fetched  || 0,
-      iocs_new:       stats.iocs_new      || 0,
-      iocs_updated:   stats.iocs_updated  || 0,
-      iocs_duplicate: stats.iocs_duplicate|| 0,
-      errors_count:   stats.errors_count  || 0,
-      error_message:  stats.error         || null,
-      metadata:       stats.metadata      || {},
-    }).eq('id', logId);
-  } catch (_) {}
+  const meta   = logId ? (_pendingLogs.get(logId) || {}) : {};
+  if (logId) _pendingLogs.delete(logId);
+
+  const update = {
+    status:         stats.error ? 'error' : 'success',
+    finished_at:    new Date().toISOString(),
+    duration_ms:    stats.duration_ms    || 0,
+    iocs_fetched:   stats.iocs_fetched   || 0,
+    iocs_new:       stats.iocs_new       || 0,
+    iocs_updated:   stats.iocs_updated   || 0,
+    iocs_duplicate: stats.iocs_duplicate || 0,
+    errors_count:   stats.errors_count   || 0,
+    error_message:  stats.error          || null,
+    metadata:       stats.metadata       || {},
+  };
+
+  // ── 1. Update primary feed_logs row ──────────────────────────
+  if (logId) {
+    try {
+      await supabase.from('feed_logs').update(update).eq('id', logId);
+    } catch (_) {}
+  }
+
+  // ── 2. Mirror to cti_feed_logs (best-effort, non-blocking) ───
+  // cti_feed_logs is queried by /api/cti/stats, /api/cti/feed-logs,
+  // and the dashboard KPI endpoint. Without this mirror those
+  // endpoints show 0 active feeds for PhishTank/MISP/Botvrij/SSLBL.
+  if (meta.feedName) {
+    const ctiRow = {
+      tenant_id:    meta.tenantId   || DEFAULT_TENANT,
+      feed_name:    meta.feedName,
+      action:       stats.error ? 'ingest_error' : 'ingest_complete',
+      started_at:   meta.started_at || update.finished_at,
+      ...update,
+    };
+    // Fire-and-forget — do NOT await so we never block the worker
+    supabase.from('cti_feed_logs')
+      .upsert(ctiRow, { ignoreDuplicates: false })
+      .then(() => {})
+      .catch(() => {});
+  }
 }
 
-// ── Shared upsert (reuse or reimport from main ingestion) ──────
+// ── Shared upsert — delegates to ingestion/index.js canonical impl ─
+// Falls back to a minimal local implementation if the lazy-load fails
+// (e.g. during circular-require resolution at startup).
 async function upsertIOCs(tenantId, iocs) {
   if (!iocs || iocs.length === 0) return { new: 0, updated: 0, duplicate: 0 };
 
+  // Try the canonical implementation first (avoids code duplication)
+  const fn = getUpsertFn();
+  if (fn) {
+    try {
+      const result = await fn(tenantId, iocs);
+      // Normalise return shape: index uses { new, updated, duplicate }
+      return result;
+    } catch (_) {
+      // Fall through to local implementation below
+    }
+  }
+
+  // ── Local fallback implementation ───────────────────────────
+  // Used when ingestion/index.js isn't loadable (circular require on startup).
   const validTypes = new Set([
     'ip','domain','url','hash_md5','hash_sha1','hash_sha256',
     'email','filename','registry','mutex','asn','cve'
   ]);
-
   const now = new Date().toISOString();
   const tid = tenantId || DEFAULT_TENANT;
   let newCount = 0, updatedCount = 0, dupCount = 0;
@@ -74,49 +146,41 @@ async function upsertIOCs(tenantId, iocs) {
       tenant_id:        tid,
       value:            String(ioc.value).trim().toLowerCase().slice(0, 500),
       type:             ioc.type,
-      reputation:       ioc.reputation   || 'malicious',
+      reputation:       ioc.reputation        || 'malicious',
       risk_score:       Math.min(100, Math.max(0, Math.round(ioc.risk_score || 70))),
       confidence:       Math.min(100, Math.max(0, Math.round(ioc.confidence || 75))),
-      source:           ioc.source       || 'phishtank',
-      feed_source:      ioc.feed_source  || ioc.source || 'phishtank',
-      country:          ioc.country      || null,
-      asn:              ioc.asn          || null,
-      threat_actor:     ioc.threat_actor || null,
-      malware_family:   ioc.malware_family || null,
+      source:           ioc.source            || 'phishtank',
+      feed_source:      ioc.feed_source       || ioc.source || 'phishtank',
+      country:          ioc.country           || null,
+      asn:              ioc.asn               || null,
+      threat_actor:     ioc.threat_actor      || null,
+      malware_family:   ioc.malware_family    || null,
       tags:             Array.isArray(ioc.tags) ? ioc.tags.slice(0, 10) : [],
-      notes:            ioc.notes        || null,
-      kill_chain_phase: ioc.kill_chain_phase || null,
+      notes:            ioc.notes             || null,
+      kill_chain_phase: ioc.kill_chain_phase  || null,
       status:           'active',
       last_seen:        now,
-      enrichment_data:  ioc.enrichment_data || {},
+      enrichment_data:  ioc.enrichment_data   || {},
     }));
 
-  // Dedup within batch
   const seen = new Map();
   for (const row of normalized) {
     const existing = seen.get(row.value);
-    if (!existing || row.risk_score > existing.risk_score) {
-      seen.set(row.value, row);
-    } else {
-      dupCount++;
-    }
+    if (!existing || row.risk_score > existing.risk_score) seen.set(row.value, row);
+    else dupCount++;
   }
   const deduped = [...seen.values()];
   if (deduped.length === 0) return { new: 0, updated: 0, duplicate: dupCount };
 
-  // Chunk size: 50 rows (was 100) — smaller batches reduce per-statement time
-  // and avoid Supabase free-tier 15s statement timeout on large upserts.
   const CHUNK = 50;
   let consecutiveErrors = 0;
-  const MAX_CONSECUTIVE_ERRORS = 3; // circuit-breaker: stop if DB is overloaded
+  const MAX_CONSECUTIVE_ERRORS = 3;
 
   for (let i = 0; i < deduped.length; i += CHUNK) {
-    // Circuit-breaker: if 3+ consecutive DB errors, stop upsert loop
     if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-      console.warn(`[PhishTank] Circuit-breaker tripped after ${consecutiveErrors} consecutive DB errors — skipping remaining ${deduped.length - i} IOCs`);
+      console.warn(`[PhishTank/local] Circuit-breaker tripped — skipping remaining ${deduped.length - i} IOCs`);
       break;
     }
-
     const chunk = deduped.slice(i, i + CHUNK);
     const { data, error } = await supabase
       .from('iocs')
@@ -125,11 +189,8 @@ async function upsertIOCs(tenantId, iocs) {
 
     if (error) {
       consecutiveErrors++;
-      // Only log first error and every 10th after — suppress repeated spam
-      if (consecutiveErrors === 1 || consecutiveErrors % 10 === 0) {
-        console.error(`[PhishTank] upsert error (attempt ${consecutiveErrors}):`, error.message);
-      }
-      // Fallback: silent ignoreDuplicates upsert
+      if (consecutiveErrors === 1 || consecutiveErrors % 10 === 0)
+        console.error(`[PhishTank/local] upsert error (${consecutiveErrors}):`, error.message);
       const { error: e2 } = await supabase
         .from('iocs')
         .upsert(chunk, { onConflict: 'tenant_id,value', ignoreDuplicates: true });
@@ -144,14 +205,8 @@ async function upsertIOCs(tenantId, iocs) {
         }
       }
     }
-
-    // Backpressure: 200ms sleep between chunks to avoid saturating
-    // Supabase free-tier connection pool and statement scheduler.
-    if (i + CHUNK < deduped.length) {
-      await new Promise(r => setTimeout(r, 200));
-    }
+    if (i + CHUNK < deduped.length) await new Promise(r => setTimeout(r, 200));
   }
-
   return { new: newCount, updated: updatedCount, duplicate: dupCount };
 }
 

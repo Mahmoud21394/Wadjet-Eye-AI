@@ -113,10 +113,15 @@ detectKeyFormat(SUPABASE_ANON_KEY, 'SUPABASE_ANON_KEY   ');
 // ══════════════════════════════════════════════════════════════════
 // TIMEOUT CONSTANTS
 // ══════════════════════════════════════════════════════════════════
-const DB_FETCH_TIMEOUT_MS        = 15_000; // 15s for database queries
+// v7.5 FREE-TIER FIX: Supabase free-tier PgBouncer pools are shared across
+// all projects. During peak hours the pool takes 8-20s to assign a connection
+// slot.  15s was insufficient for complex dashboard queries (multiple joins).
+// Increased to 25s so that legitimate slow queries aren't prematurely aborted,
+// which caused the AbortError / statement-timeout cascade in the logs.
+const DB_FETCH_TIMEOUT_MS        = 25_000; // 25s for database queries (was 15s — too short for free tier)
 const AUTH_FETCH_TIMEOUT_MS      = 35_000; // 35s for auth — accounts for Render cold-start + DNS + TLS
 const LOGIN_FETCH_TIMEOUT_MS     = 35_000; // 35s for per-request login client
-const INGESTION_FETCH_TIMEOUT_MS = 30_000; // 30s for ingestion workers
+const INGESTION_FETCH_TIMEOUT_MS = 45_000; // 45s for ingestion workers (was 30s — large upserts need more)
 
 // Export for use in route handlers
 module.exports.AUTH_FETCH_TIMEOUT_MS  = AUTH_FETCH_TIMEOUT_MS;
