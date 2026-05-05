@@ -53,6 +53,13 @@ const _feedRunLog = [];
 async function upsertIOCs(iocs, tenantId, feedName) {
   if (!iocs || iocs.length === 0) return { inserted: 0, errors: 0 };
 
+  // Guard: supabaseAdmin is null when SUPABASE_URL/SERVICE_KEY are not configured.
+  // Without this guard the function crashes with "Cannot read properties of null".
+  if (!supabaseAdmin) {
+    console.warn(`[Ingest][${feedName}] upsertIOCs skipped — supabaseAdmin is null (SUPABASE_URL/SERVICE_KEY not set)`);
+    return { inserted: 0, errors: iocs.length };
+  }
+
   const VALID_TYPES = new Set([
     'ip','domain','url','md5','sha1','sha256','sha512',
     'email','filename','cve','hostname','cidr','hash_md5','hash_sha1','hash_sha256'
@@ -632,6 +639,15 @@ router.get('/stats', verifyToken, asyncHandler(async (req, res) => {
 
   console.log(`[Ingest/Stats] user=${req.user?.email} tenant=${scopeTenant} role=${userRole}`);
 
+  // Guard: supabaseAdmin is null when SUPABASE_URL/SERVICE_KEY are not configured
+  if (!supabaseAdmin) {
+    return res.json({
+      total_iocs: 0, malicious_iocs: 0, high_risk_iocs: 0,
+      by_type: {}, by_feed: [], available_feeds: [],
+      note: 'Supabase not configured — set SUPABASE_URL and SUPABASE_SERVICE_KEY',
+    });
+  }
+
   try {
     // Use parallel COUNT queries (efficient — no row fetches)
     const [
@@ -762,6 +778,25 @@ router.post('/correlate', verifyToken, asyncHandler(async (req, res) => {
     }
 
     iocTotal = (iocs || []).length;
+
+    // FIX: Resolved correlation-engine "no IOCs found" warning.
+    // For a fresh tenant (no ingestion yet) this is perfectly normal.
+    // Log at INFO level so it doesn't pollute error monitors.
+    if (iocTotal === 0) {
+      console.info('[Correlate] No active IOCs found for this tenant — ' +
+        'correlation skipped (normal on first run; trigger ingestion to populate)');
+      return res.json({
+        status:             'skipped',
+        iocs_analyzed:      0,
+        campaigns_created:  0,
+        campaigns_updated:  0,
+        cluster_threshold:  min_cluster_size,
+        mode:               auto ? 'auto' : 'manual',
+        reason:             'no_iocs',
+        hint:               'Trigger an ingestion job first: POST /api/cti/ingest/all',
+        correlated_at:      new Date().toISOString(),
+      });
+    }
 
     if (iocTotal >= min_cluster_size) {
       // Group IOCs by threat_actor (simple clustering strategy)

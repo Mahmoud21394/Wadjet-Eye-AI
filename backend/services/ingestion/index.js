@@ -159,9 +159,24 @@ async function upsertIOCs(tenantId, iocs) {
 
   if (deduped.length === 0) return { new: 0, updated: 0, duplicate: dupCount };
 
-  // ── Step 3: batch upsert in chunks of 100 ───────────────────
-  const CHUNK = 100;
+  // ── Step 3: batch upsert in chunks of 50 ────────────────────
+  // FIX: Reduced from 100 → 50 rows per chunk to stay well within
+  // Supabase free-tier 15 s statement-timeout. Each chunk takes ~1–3 s.
+  const CHUNK = 50;
+  // Circuit-breaker: stop after 3 consecutive DB errors to avoid
+  // hammering a stalled Supabase connection and burning statement time.
+  let consecutiveErrors = 0;
+  const MAX_CONSECUTIVE_ERRORS = 3;
+
   for (let i = 0; i < deduped.length; i += CHUNK) {
+    if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+      console.warn(
+        `[Ingestion] Circuit-breaker tripped after ${consecutiveErrors} errors — ` +
+        `skipping remaining ${deduped.length - i} IOCs`
+      );
+      break;
+    }
+
     const chunk = deduped.slice(i, i + CHUNK);
 
     // FIX 2: Supabase JS v2 — do NOT chain .catch() on a Builder.
@@ -175,22 +190,38 @@ async function upsertIOCs(tenantId, iocs) {
       .select('id, created_at');
 
     if (error) {
-      console.error('[Ingestion] upsert error:', error.message);
+      consecutiveErrors++;
+      if (consecutiveErrors === 1 || consecutiveErrors % 5 === 0) {
+        console.error(`[Ingestion] upsert error (${consecutiveErrors}):`, error.message);
+      }
       // If still a conflict error, retry with ignoreDuplicates: true
       if (error.message?.includes('cannot affect row')) {
         const { error: e2 } = await supabase
           .from('iocs')
           .upsert(chunk, { onConflict: 'tenant_id,value', ignoreDuplicates: true });
-        if (e2) console.error('[Ingestion] retry upsert error:', e2.message);
-        else updatedCount += chunk.length;
+        if (e2) {
+          console.error('[Ingestion] retry upsert error:', e2.message);
+        } else {
+          updatedCount += chunk.length;
+          consecutiveErrors = 0; // reset on successful retry
+        }
       }
-    } else if (data) {
-      const freshCutoff = Date.now() - 10000; // 10s window = "new"
-      for (const row of data) {
-        const createdMs = new Date(row.created_at).getTime();
-        if (createdMs > freshCutoff) newCount++;
-        else updatedCount++;
+    } else {
+      consecutiveErrors = 0; // reset on success
+      if (data) {
+        const freshCutoff = Date.now() - 10000; // 10s window = "new"
+        for (const row of data) {
+          const createdMs = new Date(row.created_at).getTime();
+          if (createdMs > freshCutoff) newCount++;
+          else updatedCount++;
+        }
       }
+    }
+
+    // Back-pressure: 150 ms between chunks prevents saturating the
+    // Supabase free-tier connection pool and avoids AbortError cascades.
+    if (i + CHUNK < deduped.length) {
+      await new Promise(r => setTimeout(r, 150));
     }
   }
 
@@ -344,10 +375,19 @@ async function ingestAbuseIPDB(tenantId) {
           validateStatus: s => s < 500,
         });
         if (resp.status === 429) {
-          const retryAfter = parseInt(resp.headers['retry-after'] || '120', 10);
-          const wait = Math.min(retryAfter, 300) * 1000;
-          console.warn(`[Ingestion][AbuseIPDB] 429 rate limited — waiting ${wait/1000}s (attempt ${attempt})`);
-          lastErr = new Error('AbuseIPDB rate limited (429)');
+          // AbuseIPDB free tier can return Retry-After: 86400 (24 h) or even longer.
+          // Hard-cap at 60s — if the real window is longer, bail out and let the
+          // scheduler retry on the next normal interval instead of blocking.
+          const rawRetryAfter = parseInt(resp.headers['retry-after'] || '60', 10);
+          const MAX_WAIT_S    = 60;
+          const wait          = Math.min(rawRetryAfter, MAX_WAIT_S) * 1000;
+          console.warn(`[Ingestion][AbuseIPDB] 429 rate limited — Retry-After=${rawRetryAfter}s (capped at ${wait/1000}s) attempt=${attempt}`);
+          lastErr = new Error(`AbuseIPDB rate limited (429) — Retry-After=${rawRetryAfter}s`);
+          if (rawRetryAfter > MAX_WAIT_S) {
+            // Don't wait — bail out entirely for this scheduled run
+            await finishFeedLog(logId, { error: lastErr.message, duration_ms: Date.now() - t0 });
+            return { source: 'abuseipdb', skipped: true, reason: `rate_limited_${rawRetryAfter}s` };
+          }
           await _sleep(wait);
           continue;
         }
@@ -429,21 +469,69 @@ async function ingestURLhaus(tenantId) {
   try {
     console.info('[Ingestion][URLhaus] Starting...');
 
-    // URLhaus CSV feed — online/recent malicious URLs
-    const { data: csv } = await axios.get('https://urlhaus.abuse.ch/downloads/csv_recent/', {
-      timeout: 30000,
-      responseType: 'text',
-    });
+    // URLhaus JSON API — use the official JSON endpoint instead of the CSV feed.
+    // The CSV feed at /downloads/csv_recent/ frequently returns 404 or stale data;
+    // the JSON API at https://urlhaus-api.abuse.ch/v1/urls/recent/ is the current
+    // recommended endpoint per abuse.ch docs and always returns structured JSON.
+    const urlhausResp = await axios.post(
+      'https://urlhaus-api.abuse.ch/v1/urls/recent/',
+      '',   // empty body — API expects POST but no payload
+      {
+        timeout: 30000,
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent':   'Wadjet-Eye-AI/3.1 CTI-Collector',
+        },
+        validateStatus: s => s < 500,
+      }
+    );
 
+    if (urlhausResp.status === 429) {
+      const wait = Math.min(parseInt(urlhausResp.headers['retry-after'] || '60', 10), 60) * 1000;
+      console.warn(`[Ingestion][URLhaus] 429 rate limited — waiting ${wait/1000}s`);
+      await _sleep(wait);
+    }
+
+    // Fallback: if JSON API fails, use CSV feed
+    let urlhausEntries = [];
+    if (urlhausResp.status === 200 && urlhausResp.data?.urls) {
+      urlhausEntries = urlhausResp.data.urls || [];
+      console.info(`[Ingestion][URLhaus] JSON API: ${urlhausEntries.length} URLs fetched`);
+    } else {
+      // Fallback to CSV
+      console.warn(`[Ingestion][URLhaus] JSON API failed (${urlhausResp.status}) — trying CSV fallback`);
+      try {
+        const { data: csv } = await axios.get('https://urlhaus.abuse.ch/downloads/csv_recent/', {
+          timeout: 30000, responseType: 'text',
+        });
+        const lines = csv.split('\n').filter(l => l && !l.startsWith('#'));
+        for (const line of lines.slice(0, 500)) {
+          const parts = line.split(',').map(p => p.replace(/"/g, '').trim());
+          if (parts.length < 5) continue;
+          const [,, url, urlStatus, threat, tags] = parts;
+          if (url && urlStatus !== 'offline') {
+            urlhausEntries.push({ url, url_status: urlStatus, threat, tags });
+          }
+        }
+      } catch (_csvErr) {
+        console.warn('[Ingestion][URLhaus] CSV fallback also failed');
+      }
+    }
+
+    const csv = null; // suppress unused-var warning — using urlhausEntries below
+
+    // Parse the URLhaus response (JSON API or CSV fallback entries)
     // FIX-5: Track seen values to avoid duplicate IOC entries within the
-    //   same CSV batch (same domain extracted from multiple URLs).
+    //   same batch (same domain extracted from multiple URLs).
     const seenValues = new Set();
 
-    const lines = csv.split('\n').filter(l => l && !l.startsWith('#'));
-    for (const line of lines.slice(0, 500)) {
-      const parts = line.split(',').map(p => p.replace(/"/g, '').trim());
-      if (parts.length < 5) continue;
-      const [id, dateAdded, url, urlStatus, threat, tags] = parts;
+    for (const entry of urlhausEntries.slice(0, 500)) {
+      // JSON API entry shape: { url, url_status, threat, tags: [], host, ... }
+      // CSV fallback shape:   { url, url_status, threat, tags: string }
+      const url       = entry.url       || entry.urlhaus_url;
+      const urlStatus = entry.url_status || 'online';
+      const threat    = entry.threat     || entry.threat_type || 'malware';
+      const id        = entry.id         || entry.urlhaus_id  || '';
 
       if (!url || url === 'url' || urlStatus === 'offline') continue;
 
@@ -453,18 +541,22 @@ async function ingestURLhaus(tenantId) {
         domain = new URL(url.startsWith('http') ? url : `http://${url}`).hostname?.toLowerCase();
       } catch { /* skip */ }
 
-      // Add domain IOC (dedup within batch)
-      if (domain && !seenValues.has(domain)) {
-        seenValues.add(domain);
+      // Also prefer the 'host' field from JSON API when available
+      const hostField = entry.host || domain;
+
+      // Add domain/IP IOC (dedup within batch)
+      if (hostField && !seenValues.has(hostField)) {
+        seenValues.add(hostField);
+        const isIP = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostField);
         iocs.push({
-          value:       domain,
-          type:        'domain',
+          value:       hostField,
+          type:        isIP ? 'ip' : 'domain',
           reputation:  'malicious',
           risk_score:  85,
           confidence:  80,
           source:      'URLhaus',
           feed_source: 'urlhaus',
-          tags:        ['URLhaus', threat || 'malware', ...(tags ? tags.split(' ').slice(0, 3) : [])].filter(Boolean),
+          tags:        ['URLhaus', threat, ...(Array.isArray(entry.tags) ? entry.tags.slice(0,3) : [])].filter(Boolean),
           notes:       `URL: ${url.slice(0, 100)} | Status: ${urlStatus}`,
           enrichment_data: { urlhaus_id: id, url_status: urlStatus, threat, original_url: url.slice(0, 200) },
         });
@@ -482,7 +574,7 @@ async function ingestURLhaus(tenantId) {
           confidence:  82,
           source:      'URLhaus',
           feed_source: 'urlhaus',
-          tags:        ['URLhaus', threat || 'malware'].filter(Boolean),
+          tags:        ['URLhaus', threat].filter(Boolean),
           enrichment_data: { urlhaus_id: id, url_status: urlStatus, threat },
         });
       }
@@ -1141,6 +1233,7 @@ async function runIngestion(feedName, tenantId) {
 }
 
 module.exports = {
+  upsertIOCs,           // ← exported so phishtank.js can reuse canonical impl
   ingestOTX,
   ingestAbuseIPDB,
   ingestURLhaus,

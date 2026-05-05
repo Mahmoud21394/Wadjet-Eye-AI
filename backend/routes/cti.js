@@ -21,6 +21,14 @@
 const express    = require('express');
 const router     = express.Router();
 const { supabase } = require('../config/supabase');
+const { verifyToken } = require('../middleware/auth');
+
+// ── Apply authentication to ALL /api/cti/* routes ────────
+// FIX: Without this guard req.tenantId was undefined on every handler,
+// causing all Supabase queries to silently return 0 rows (404-like).
+// Every CTI endpoint requires a valid JWT — unauthenticated requests
+// get a structured 401 before any DB query is attempted.
+router.use(verifyToken);
 
 // ── Helpers ──────────────────────────────────────────────
 const asyncHandler = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -785,9 +793,16 @@ router.post('/ingest/:feed', asyncHandler(async (req, res) => {
   const { feed } = req.params;
   const tid = req.tenantId;
 
-  const VALID_FEEDS = ['otx', 'abuseipdb', 'urlhaus', 'threatfox', 'nvd', 'circl', 'feodo', 'cisa_kev', 'cisa', 'openphish', 'malwarebazaar', 'bazaar', 'ransomware', 'all'];
-  if (!VALID_FEEDS.includes(feed)) {
-    throw createError(400, `Unknown feed. Valid: ${VALID_FEEDS.join(', ')}`);
+  // Main ingestion feeds (services/ingestion/index.js)
+  const MAIN_FEEDS = ['otx', 'abuseipdb', 'urlhaus', 'threatfox', 'nvd', 'circl',
+    'feodo', 'cisa_kev', 'cisa', 'openphish', 'malwarebazaar', 'bazaar',
+    'ransomware', 'emerging_threats', 'emerging', 'all'];
+  // Phishtank module feeds (services/ingestion/phishtank.js)
+  const PHISH_FEEDS = ['phishtank', 'misp', 'misp_circl', 'botvrij', 'sslbl'];
+
+  const allValid = [...MAIN_FEEDS, ...PHISH_FEEDS];
+  if (!allValid.includes(feed)) {
+    throw createError(400, `Unknown feed. Valid: ${allValid.join(', ')}`);
   }
 
   // Return immediately; run ingestion asynchronously
@@ -802,8 +817,22 @@ router.post('/ingest/:feed', asyncHandler(async (req, res) => {
   // Fire ingestion asynchronously (don't await)
   setImmediate(async () => {
     try {
-      const { runIngestion } = require('../services/ingestion');
-      await runIngestion(feed, tid);
+      if (PHISH_FEEDS.includes(feed)) {
+        // Route phishtank-module feeds to their dedicated module
+        const phishModule = require('../services/ingestion/phishtank');
+        const phishMap = {
+          phishtank:  phishModule.ingestPhishTank,
+          misp:       phishModule.ingestMISPCircl,
+          misp_circl: phishModule.ingestMISPCircl,
+          botvrij:    phishModule.ingestBotvrij,
+          sslbl:      phishModule.ingestSSLBlacklist,
+        };
+        const fn = phishMap[feed];
+        if (fn) await fn(tid);
+      } else {
+        const { runIngestion } = require('../services/ingestion');
+        await runIngestion(feed, tid);
+      }
     } catch (err) {
       console.error(`[CTI] Ingestion failed for ${feed}:`, err.message);
     }
