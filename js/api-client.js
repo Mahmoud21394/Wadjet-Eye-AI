@@ -47,7 +47,17 @@ const TokenStore = {
   /** Get refresh token (persisted in localStorage) */
   getRefresh()    { return localStorage.getItem(this._REFRESH_KEY); },
   /** Get token expiry timestamp (ms) */
-  getExpiry()     { const e = sessionStorage.getItem(this._EXP_KEY); return e ? parseInt(e) : 0; },
+  /** Get token expiry timestamp (ms) — reads sessionStorage first, falls back to localStorage.
+   *  ROOT-CAUSE FIX v8.3: Previously only sessionStorage was checked. On page reload
+   *  sessionStorage is cleared but localStorage persists — so getExpiry() returned 0,
+   *  isValid() returned false even with a valid token, and refreshAccessToken() fired
+   *  on every single API call, saturating /api/auth/refresh (429 storm).
+   */
+  getExpiry() {
+    const e = sessionStorage.getItem(this._EXP_KEY)
+           || localStorage.getItem(this._EXP_KEY);
+    return e ? parseInt(e) : 0;
+  },
 
   /** Store tokens after login/refresh */
   set(accessToken, refreshToken, expiresAt) {
@@ -62,7 +72,13 @@ const TokenStore = {
       const ms = typeof expiresAt === 'string'
         ? new Date(expiresAt).getTime()
         : Date.now() + (expiresAt * 1000);
+      // ROOT-CAUSE FIX v8.4: Write expiry to BOTH storages.
+      // Previously only sessionStorage was written here; on page reload
+      // sessionStorage is cleared so getExpiry() returned 0, isValid()
+      // returned false on every call, and refreshAccessToken() fired on
+      // every single API request → 429 storm on /api/auth/refresh.
       sessionStorage.setItem(this._EXP_KEY, String(ms));
+      localStorage.setItem(this._EXP_KEY, String(ms));
     }
   },
 

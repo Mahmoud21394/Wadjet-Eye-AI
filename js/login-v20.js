@@ -536,9 +536,23 @@
      Patches the existing doLogin() to use v20 UI
   ──────────────────────────────────────────────── */
   function _patchLoginBtn() {
-    // Override the loginBtn loading state visuals
-    const origDoLogin = window.doLogin;
-    if (!origDoLogin) return;
+    // ROOT-CAUSE FIX v8.4: Do NOT capture window.doLogin into origDoLogin.
+    // login-secure-patch.js assigns window.doLogin = secureDoLogin at parse
+    // time, but if the setInterval below fires before that assignment settles
+    // (race on slow devices), we would capture the old main.js doLogin and
+    // call it forever — bypassing the secure patch.
+    // Fix: always call window.doLogin dynamically via a live lookup so that
+    // whatever is in window.doLogin at call time is what gets invoked.
+    // This means the v20 UI wrapper calls the current (latest) doLogin, which
+    // is always secureDoLogin after login-secure-patch.js runs.
+    if (typeof window.doLogin !== 'function') return;
+
+    // Store a reference to the pre-patch wrapper guard so we can avoid
+    // double-wrapping if _patchLoginBtn is called more than once.
+    if (window._lv20LoginPatched) return;
+    window._lv20LoginPatched = true;
+
+    const _lv20DoLogin = window.doLogin; // snapshot at patch time (secureDoLogin)
 
     window.doLogin = async function () {
       const btn   = document.getElementById('loginBtn');
@@ -546,7 +560,7 @@
       const errTx = document.getElementById('lv20ErrorText');
       const card  = document.getElementById('lv20LoginCard');
 
-      // Clear old error
+      // Clear old v20 error
       if (errEl) errEl.style.display = 'none';
 
       // Loading state
@@ -556,15 +570,15 @@
         btn.classList.add('loading');
       }
 
-      // Intercept showError to use lv20 error box
+      // Mirror loginError (hidden legacy div) into the visible lv20 error box
       const origErrEl = document.getElementById('loginError');
+      let obs = null;
       if (origErrEl) {
-        origErrEl.style.display = 'none'; // hide old error box
-        // Mirror text into v20 error box
-        const obs = new MutationObserver(() => {
+        origErrEl.style.display = 'none'; // keep the old div hidden
+        obs = new MutationObserver(() => {
           if (origErrEl.style.display !== 'none' && origErrEl.textContent) {
             if (errEl && errTx) {
-              errTx.textContent = origErrEl.textContent.replace(/^⚠️\s*/, '');
+              errTx.textContent = origErrEl.textContent.replace(/^[⚠️❌⏳🔌⏱]\s*/u, '');
               errEl.style.display = 'flex';
               errEl.style.animation = 'none';
               void errEl.offsetWidth;
@@ -573,12 +587,16 @@
             origErrEl.style.display = 'none';
           }
         });
-        obs.observe(origErrEl, { attributes: true, childList: true });
-        setTimeout(() => obs.disconnect(), 10000);
+        obs.observe(origErrEl, { attributes: true, childList: true, subtree: true });
+        setTimeout(() => obs && obs.disconnect(), 15000);
       }
 
       try {
-        await origDoLogin.call(this);
+        // ROOT-CAUSE FIX v8.4: Always invoke the snapshotted secureDoLogin
+        // (_lv20DoLogin) which is the real secure implementation.
+        // We use the snapshot rather than window.doLogin to avoid infinite
+        // recursion (this wrapper IS window.doLogin after _patchLoginBtn runs).
+        await _lv20DoLogin.call(this);
 
         // On success — add success state
         if (card) {
@@ -587,8 +605,9 @@
       } catch (err) {
         console.error('[LoginV20] doLogin error:', err);
       } finally {
-        // Restore button if still visible
-        if (btn && document.getElementById('loginScreen')) {
+        if (obs) { obs.disconnect(); obs = null; }
+        // Restore button if login screen is still visible
+        if (btn && document.getElementById('loginScreen')?.style.display !== 'none') {
           btn.innerHTML = '<i class="fas fa-eye"></i> Authenticate Securely';
           btn.disabled = false;
           btn.classList.remove('loading');

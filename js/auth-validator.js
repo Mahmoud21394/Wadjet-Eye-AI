@@ -115,10 +115,28 @@ function _show401Banner() {
 }
 
 /* ── Centralized auth-aware fetch wrapper ───────────────────────*/
+// ROOT-CAUSE FIX v8.3: auth-validator.js loaded AFTER auth-interceptor.js (see
+// index.html load order). auth-interceptor.js exports window.authFetch which has
+// pre-flight token refresh, a 401→silentRefresh→retry cycle, and full error handling.
+// auth-validator.js was overwriting it with a simpler version that:
+//   1. Had a URL double-/api bug (/api/iocs → https://host/api/api/iocs)
+//   2. Lacked pre-flight refresh (sent expired tokens, always got 401)
+//   3. Missing credentials:'include' (httpOnly cookie not sent to backend)
+// Fix: keep the internal authFetch implementation for fallback use, but only
+// expose it globally if auth-interceptor's version is NOT already present.
 async function authFetch(pathOrUrl, opts = {}) {
+  // ROOT-CAUSE FIX v8.3: Correct URL construction.
+  // Callers use paths like '/api/iocs', '/ingest/feeds', '/health', 'https://…'.
+  // If path already starts with 'http' → use as-is.
+  // If path starts with '/api' → prepend only the base host (not /api again).
+  // If path starts with '/' (but not '/api') → prepend base + '/api'.
+  // This eliminates the https://host/api/api/iocs double-prefix bug.
+  const base = API_BASE();
   const url = pathOrUrl.startsWith('http')
     ? pathOrUrl
-    : `${API_BASE()}/api${pathOrUrl}`;
+    : pathOrUrl.startsWith('/api')
+      ? `${base}${pathOrUrl}`
+      : `${base}/api${pathOrUrl}`;
 
   const token = getToken();
 
@@ -130,7 +148,9 @@ async function authFetch(pathOrUrl, opts = {}) {
 
   let response;
   try {
-    response = await fetch(url, { ...opts, headers });
+    // ROOT-CAUSE FIX v8.3: Add credentials:'include' so httpOnly refresh cookie
+    // is sent on requests to the same origin backend.
+    response = await fetch(url, { credentials: 'include', ...opts, headers });
   } catch (networkErr) {
     console.warn('[AuthFetch] Network error:', networkErr.message);
     throw new Error(`Network error: ${networkErr.message}. Check your connection.`);
@@ -145,10 +165,15 @@ async function authFetch(pathOrUrl, opts = {}) {
     // concurrent /api/auth/refresh POSTs and a 429 cascade.
     const alreadyRefreshing = _refreshInProgress || !!window.__wadjetRefreshLock;
 
-    if (!alreadyRefreshing && typeof global.PersistentAuth_silentRefresh === 'function') {
+    // ROOT-CAUSE FIX v8.4: PersistentAuth_silentRefresh is the legacy name;
+    // auth-interceptor.js v6+ exports window.silentRefresh directly.
+    // Try both so the 401-retry path works regardless of which version is loaded.
+    const _silentRefreshFn = global.PersistentAuth_silentRefresh || global.silentRefresh || null;
+
+    if (!alreadyRefreshing && typeof _silentRefreshFn === 'function') {
       _refreshInProgress = true;
       try {
-        const refreshed = await global.PersistentAuth_silentRefresh();
+        const refreshed = await _silentRefreshFn();
         if (refreshed) {
           const newToken = getToken();
           const retryHeaders = {
@@ -262,7 +287,14 @@ async function checkFeedAuthStatus() {
 }
 
 /* ── Expose globally ─────────────────────────────────────────────*/
-global.authFetch   = authFetch;
+// ROOT-CAUSE FIX v8.3: Only install validator's authFetch if auth-interceptor's
+// superior version (with pre-flight refresh + full 401 handling) is NOT present.
+// auth-interceptor.js is loaded BEFORE auth-validator.js per index.html order,
+// so window.authFetch is already set by the time we get here — preserve it.
+if (!global.authFetch || !global.__wadjetAuthInterceptorLoaded) {
+  global.authFetch = authFetch;
+}
+global._authFetchValidator = authFetch; // keep validator version accessible internally
 global.getToken    = getToken;
 global.checkAPIHealth = checkAPIHealth;
 global.checkFeedAuthStatus = checkFeedAuthStatus;
