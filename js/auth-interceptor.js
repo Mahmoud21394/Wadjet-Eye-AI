@@ -252,8 +252,16 @@ function _clearCookieRefreshState() {
 }
 
 // ── Refresh-from-main guard — prevent 429 storms on /api/auth/refresh
+// FIX v7.6: Increased minimum interval from 3s → 15s.
+// Root cause: api-client.js, auth-interceptor.js AND auth-validator.js all
+// independently detect a 401 and each call silentRefresh() within milliseconds
+// of each other.  The 3 s window was too narrow to catch concurrent callers
+// that arrive at the same tick, causing 3–5 refresh requests to hit the backend
+// in quick succession → backend returns 429 → logout called 3× → logout POST
+// itself hits 429.  15 s is wide enough to deduplicate all concurrent module
+// refresh attempts within a single 401-storm cycle.
 let _lastRefreshAttemptAt = 0;
-const REFRESH_MIN_INTERVAL_MS = 3_000; // 3 s minimum between refresh attempts
+const REFRESH_MIN_INTERVAL_MS = 15_000; // 15 s minimum between refresh attempts (was 3 s)
 
 const BACKEND_URL = () =>
   (window.THREATPILOT_API_URL || 'https://wadjet-eye-ai.onrender.com').replace(/\/$/, '');
@@ -551,18 +559,31 @@ async function _refreshFromCookie() {
   }
 }
 
-/** Deduplicated, locked silent refresh */
+/** Deduplicated, locked silent refresh
+ *
+ * FIX v7.6: Expose a cross-module global lock via window.__wadjetRefreshLock.
+ * Both auth-interceptor.js AND auth-validator.js call silentRefresh();
+ * without a shared lock they each acquire their own local _refreshLock
+ * simultaneously, resulting in two concurrent /api/auth/refresh POSTs.
+ * window.__wadjetRefreshLock is the single authoritative flag shared by
+ * ALL modules — any module that checks it before attempting a refresh will
+ * serialise correctly.
+ */
 async function silentRefresh() {
-  if (_refreshLock && _refreshPromise) {
-    return _refreshPromise;           // already in progress — return same promise
+  // Check both local lock AND cross-module global lock
+  if ((_refreshLock && _refreshPromise) || window.__wadjetRefreshLock) {
+    // Return the in-flight promise if available, else a resolved false
+    return _refreshPromise || Promise.resolve(false);
   }
-  _refreshLock    = true;
+  _refreshLock              = true;
+  window.__wadjetRefreshLock = true;   // block all other modules
   _refreshPromise = _doTokenRefresh();
   try {
     return await _refreshPromise;
   } finally {
-    _refreshLock    = false;
-    _refreshPromise = null;
+    _refreshLock               = false;
+    window.__wadjetRefreshLock = false;
+    _refreshPromise            = null;
   }
 }
 
@@ -880,24 +901,38 @@ function _dispatchAuthEvent(name, detail = {}) {
 window.addEventListener('auth:expired', () => {
   if (_expiredHandled) return;
   _expiredHandled = true;
-  setTimeout(() => { _expiredHandled = false; }, 15_000);
+  // FIX v7.6: Extended dedup window 15s → 30s.
+  // The old 15 s window expired before doLogout() finished its own 401-retry
+  // cycle, allowing a second auth:expired handler to fire and call doLogout()
+  // again while the first was still executing.  30 s covers the worst-case
+  // Render cold-start + retry latency so only ONE logout ever runs per session.
+  setTimeout(() => { _expiredHandled = false; }, 30_000);
+
+  // FIX v7.6: Clear tokens IMMEDIATELY before any async work so that any
+  // in-flight authFetch() calls that complete after this point will find no
+  // token and skip their own 401 → silentRefresh() → auth:expired re-entry.
+  UnifiedTokenStore.clear();
 
   console.warn('[AuthInterceptor] 🔒 Session expired — showing login');
   if (typeof window.showToast === 'function') {
     window.showToast('Session expired. Please log in again.', 'error', 5000);
   }
 
+  // FIX v7.6: Use a longer delay (1 s instead of 3 s) so the toast is visible
+  // before the screen transition, but the tokens are already cleared above so
+  // no further 401 requests will be attempted in the meantime.
   setTimeout(() => {
     if (typeof window.doLogout === 'function') {
-      window.doLogout();
+      // Pass flag so doLogout() knows tokens are already cleared and can skip
+      // the backend logout POST (which would just get a 401/429 itself).
+      window.doLogout({ skipBackendCall: true });
     } else {
-      UnifiedTokenStore.clear();
       const mainApp     = document.getElementById('mainApp');
       const loginScreen = document.getElementById('loginScreen');
       if (mainApp)     mainApp.style.display     = 'none';
       if (loginScreen) { loginScreen.style.display = 'flex'; loginScreen.style.opacity = '1'; }
     }
-  }, 3000);
+  }, 1_000);
 });
 
 /* ═══════════════════════════════════════════════════════════════

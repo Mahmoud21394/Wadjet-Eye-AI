@@ -111,6 +111,23 @@ let _refreshing     = false;
 let _refreshPromise = null;
 
 async function refreshAccessToken() {
+  // FIX v7.6: Check the cross-module global lock FIRST before acquiring the
+  // local _refreshing flag.  auth-interceptor.js sets window.__wadjetRefreshLock
+  // when it starts a refresh; without this check api-client.js independently
+  // starts its own refresh in parallel, causing two concurrent POSTs to
+  // /api/auth/refresh and a 429 storm.
+  // If the interceptor is already refreshing, delegate to its in-flight promise.
+  if (window.__wadjetRefreshLock) {
+    // auth-interceptor's silentRefresh() is in flight — wait for it
+    console.info('[Auth] Deferring refresh to auth-interceptor (cross-module lock active)');
+    // Spin-wait up to 10 s for the lock to clear then re-check token validity
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 500));
+      if (!window.__wadjetRefreshLock) break;
+    }
+    return TokenStore.isValid();
+  }
+
   if (_refreshing) return _refreshPromise;
 
   _refreshing     = true;
@@ -211,8 +228,32 @@ async function apiRequest(method, path, body = null, opts = {}) {
   }
 
   // ── 2. Handle 401 → auto-refresh → one retry ─────────────
+  // FIX v7.6: Delegate to window.PersistentAuth_silentRefresh() when available
+  // (auth-interceptor.js).  This ensures only ONE refresh attempt fires across
+  // ALL modules — api-client, auth-interceptor and auth-validator previously each
+  // independently attempted refresh on 401, saturating /api/auth/refresh (429).
+  // Also: only dispatch auth:expired if auth-interceptor is NOT loaded — if it
+  // IS loaded, it owns the auth:expired lifecycle via its own auth:expired listener.
   if (response.status === 401) {
-    if (TokenStore.canRefresh()) {
+    const authInterceptorLoaded = typeof window.PersistentAuth_silentRefresh === 'function';
+
+    if (authInterceptorLoaded) {
+      // Delegate entirely to auth-interceptor — it handles refresh + auth:expired
+      console.info('[Auth] 401 received — delegating refresh to auth-interceptor');
+      const refreshed = await window.PersistentAuth_silentRefresh();
+      if (refreshed) {
+        headers['Authorization'] = `Bearer ${TokenStore.get()}`;
+        try {
+          response = await fetch(url, { ...fetchOpts, headers });
+        } catch (retryErr) {
+          throw new Error(`Network error on retry: ${retryErr.message}`);
+        }
+      }
+      // If still 401 after refresh, auth-interceptor will fire auth:expired — just throw
+      if (!response || response.status === 401) {
+        throw new Error('Session expired. Please log in again.');
+      }
+    } else if (TokenStore.canRefresh()) {
       console.info('[Auth] 401 received — attempting token refresh…');
       const refreshed = await refreshAccessToken();
 
@@ -226,7 +267,7 @@ async function apiRequest(method, path, body = null, opts = {}) {
         }
         // If still 401 after refresh, fall through to error handling
       } else {
-        // Refresh failed — session invalid
+        // Refresh failed — session invalid; auth-interceptor not available so fire event here
         TokenStore.clear();
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent('auth:expired'));
@@ -725,12 +766,19 @@ async function initRealtime() {
     window.dispatchEvent(new CustomEvent('data:feedUpdated', { detail: data }));
   });
 
-  // Auth expiry handler
+  // FIX v7.6: auth:expired handler — defer to auth-interceptor's own listener
+  // when it is loaded; it already handles the toast + doLogout({skipBackendCall})
+  // cycle with a 30 s dedup guard.  Calling doLogout() a second time here caused
+  // a concurrent logout POST that returned 429.  Only show toast + logout here
+  // if auth-interceptor is NOT present (fallback for pages that load api-client alone).
   window.addEventListener('auth:expired', () => {
+    // If auth-interceptor is loaded it owns this event — skip to avoid double logout
+    if (typeof window.PersistentAuth_silentRefresh === 'function') return;
+
     if (typeof showToast === 'function')
       showToast('Session expired. Please log in again.', 'error');
     setTimeout(() => {
-      if (typeof doLogout === 'function') doLogout();
+      if (typeof doLogout === 'function') doLogout({ skipBackendCall: true });
     }, 2000);
   });
 }

@@ -57,10 +57,24 @@ function getToken() {
 let _last401Toast = 0;
 let _refreshInProgress = false;
 
+// FIX v7.6: _show401Banner dedup — extend window from 8s → 30s so the banner
+// is not re-created if a second module fires auth:expired within the same cycle.
+let _bannerShownAt = 0;
+
 function _show401Banner() {
   const now = Date.now();
-  if (now - _last401Toast < 8000) return; // Don't spam
+  // FIX v7.6: Use 30s dedup (was 8s) to cover the full 401-storm cycle.
+  if (now - _last401Toast < 30_000) return;
   _last401Toast = now;
+
+  // FIX v7.6: Only show toast if NOT currently in the middle of a new login.
+  // auth:login fires a 'Welcome' toast — if both fire in the same tick we get
+  // the confusing "Welcome" + "Session expired" double-banner.
+  // Guard: if auth:login fired within the last 5 s, suppress the expired banner.
+  if (window._wadjetLastLoginAt && (now - window._wadjetLastLoginAt) < 5_000) {
+    console.warn('[AuthValidator] Suppressing session-expired banner — login just completed');
+    return;
+  }
 
   if (typeof global.showToast === 'function') {
     global.showToast('🔒 Session expired. Please log in again.', 'error', 5000);
@@ -75,27 +89,29 @@ function _show401Banner() {
 
   const div = document.createElement('div');
   div.id = 'session-expired-banner';
-  div.style.cssText = `
-    position:fixed;top:0;left:0;right:0;z-index:9999;
-    background:#dc2626;color:#fff;padding:12px 20px;
-    display:flex;align-items:center;justify-content:space-between;
-    font-size:14px;font-weight:500;box-shadow:0 2px 10px rgba(0,0,0,.3)
-  `;
-  div.innerHTML = `
-    <span>🔒 Your session has expired. Please log in again to continue.</span>
-    <div style="display:flex;gap:10px">
-      <button onclick="window.doLogout?.()" style="background:#fff;color:#dc2626;border:none;padding:5px 14px;border-radius:4px;cursor:pointer;font-size:13px;font-weight:600">
-        Log In
-      </button>
-      <button onclick="this.closest('#session-expired-banner').remove()" style="background:transparent;border:1px solid #ffffff80;color:#fff;padding:5px 10px;border-radius:4px;cursor:pointer;font-size:13px">
-        Dismiss
-      </button>
-    </div>
-  `;
+  div.style.cssText = [
+    'position:fixed;top:0;left:0;right:0;z-index:9999;',
+    'background:#dc2626;color:#fff;padding:12px 20px;',
+    'display:flex;align-items:center;justify-content:space-between;',
+    'font-size:14px;font-weight:500;box-shadow:0 2px 10px rgba(0,0,0,.3)',
+  ].join('');
+  div.innerHTML = [
+    '<span>\u{1F512} Your session has expired. Please log in again to continue.</span>',
+    '<div style="display:flex;gap:10px">',
+    // FIX v7.6: Pass skipBackendCall so doLogout() does NOT POST /api/auth/logout
+    // when tokens are already cleared — that POST was the source of the 429.
+    '  <button onclick="window.doLogout?.({skipBackendCall:true})"',
+    '    style="background:#fff;color:#dc2626;border:none;padding:5px 14px;',
+    '    border-radius:4px;cursor:pointer;font-size:13px;font-weight:600">Log In</button>',
+    '  <button onclick="this.closest(\'#session-expired-banner\').remove()"',
+    '    style="background:transparent;border:1px solid #ffffff80;color:#fff;',
+    '    padding:5px 10px;border-radius:4px;cursor:pointer;font-size:13px">Dismiss</button>',
+    '</div>',
+  ].join('');
   document.body.prepend(div);
 
-  // Auto-remove after 15s
-  setTimeout(() => div.remove(), 15000);
+  // Auto-remove after 30s
+  setTimeout(() => { try { div.remove(); } catch (_) {} }, 30_000);
 }
 
 /* ── Centralized auth-aware fetch wrapper ───────────────────────*/
@@ -122,8 +138,14 @@ async function authFetch(pathOrUrl, opts = {}) {
 
   // ── 401 Handler ──────────────────────────────────────────────
   if (response.status === 401) {
-    // Attempt silent refresh once
-    if (!_refreshInProgress && typeof global.PersistentAuth_silentRefresh === 'function') {
+    // FIX v7.6: Check both local _refreshInProgress AND the cross-module global
+    // lock window.__wadjetRefreshLock before attempting a refresh.  Without this
+    // check, auth-validator and auth-interceptor each hold their own local flag
+    // and both think they are the first to attempt a refresh, causing two
+    // concurrent /api/auth/refresh POSTs and a 429 cascade.
+    const alreadyRefreshing = _refreshInProgress || !!window.__wadjetRefreshLock;
+
+    if (!alreadyRefreshing && typeof global.PersistentAuth_silentRefresh === 'function') {
       _refreshInProgress = true;
       try {
         const refreshed = await global.PersistentAuth_silentRefresh();
@@ -135,7 +157,8 @@ async function authFetch(pathOrUrl, opts = {}) {
           };
           const retryResp = await fetch(url, { ...opts, headers: retryHeaders });
           if (retryResp.ok) {
-            return retryResp.json();
+            const ct = retryResp.headers.get('content-type') || '';
+            return ct.includes('application/json') ? retryResp.json() : retryResp.text();
           }
           if (retryResp.status === 401) {
             _show401Banner();
