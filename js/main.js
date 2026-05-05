@@ -54,92 +54,31 @@ async function doLogin() {
     }
   }
 
-  /* ── Emergency fallback accounts (used when backend is unreachable OR profile not found) ── */
-  const _EMERGENCY_ACCOUNTS = {
-    'mahmoud.osman@wadjet.ai': { id:'super-admin-mo', name:'Mahmoud Osman', role:'super_admin', tenant_slug:'mssp-global', tenant_name:'MSSP Global Operations', permissions:['read','write','admin','super_admin','manage_tenants','manage_users','manage_billing','manage_integrations','view_audit_logs','delete_records','export_data','configure_platform'] },
-    'mahmoud@mssp.com':        { id:'super-admin-mo', name:'Mahmoud Osman', role:'super_admin', tenant_slug:'mssp-global', tenant_name:'MSSP Global Operations', permissions:['read','write','admin','super_admin','manage_tenants','manage_users','manage_billing','manage_integrations','view_audit_logs','delete_records','export_data','configure_platform'] },
-    'admin@mssp.com':          { id:'admin-001',      name:'Admin User',    role:'admin',       tenant_slug:'mssp-global', tenant_name:'MSSP Global Operations', permissions:['read','write','admin','manage_users','view_audit_logs','export_data'] },
-    'analyst@mssp.com':        { id:'analyst-001',    name:'SOC Analyst',   role:'analyst',     tenant_slug:'mssp-global', tenant_name:'MSSP Global Operations', permissions:['read','write'] },
-  };
-
-  function _doEmergencyLogin(profile, reason) {
-    const offlineToken = 'offline_emergency_' + Date.now().toString(36);
-    CURRENT_USER = {
-      id:          profile.id,       email,
-      name:        profile.name,     role:        profile.role,
-      tenant:      profile.tenant_slug,           tenant_name: profile.tenant_name,
-      tenant_id:   profile.tenant_slug,           avatar:      profile.name.split(' ').map(n=>n[0]).join('').toUpperCase().slice(0,2),
-      permissions: profile.permissions,           mfa_enabled: false,
-      _offline:    true,             is_super_admin: profile.role === 'super_admin',
-    };
-    // Store in PersistentTokenStore (survives page refresh)
-    if (typeof window.PersistentAuth_onLogin === 'function') {
-      window.PersistentAuth_onLogin(CURRENT_USER, offlineToken, null, null, true);
-    } else if (typeof TokenStore !== 'undefined') {
-      TokenStore.set(offlineToken, null, null);
-      TokenStore.setUser(CURRENT_USER);
-    }
-    // Also notify PersistentAuth hook if available
-    if (typeof window.PersistentAuth_onEmergencyLogin === 'function') {
-      window.PersistentAuth_onEmergencyLogin(CURRENT_USER, offlineToken);
-    }
-    const reasonLabel = reason === 'profile' ? '(offline — profile not seeded in DB)' : '(offline — backend unreachable)';
-    if (typeof showToast === 'function')
-      showToast(`⭐ Welcome, ${profile.name} ${reasonLabel}`, 'warning', 5000);
-    console.warn('[Login] ⚠️ Emergency offline session for', email, '—', reason);
-    _enterApp();
-  }
-
-  /* ── Helper: is this a "known admin" that should always be able to login? ── */
-  function _getEmergencyProfile(emailLower) {
-    return _EMERGENCY_ACCOUNTS[emailLower] || null;
-  }
+  // ROOT-CAUSE FIX v8.5: Emergency offline bypass REMOVED from main.js doLogin().
+  // The bypass was the primary cause of the persistent 401 storm seen in the video:
+  //
+  //   1. User enters correct credentials.
+  //   2. Backend returns a real auth error (wrong password, "user not found", etc.)
+  //   3. isProfileMissing / isAuthUserMissing triggers for "not found" → emergency login.
+  //   4. An offline_emergency_* token (NOT a real JWT) is written to localStorage.
+  //   5. After _enterApp(), every API call sends "Bearer offline_emergency_xxxx".
+  //   6. Backend returns 401 on every request → AUTH_EXPIRED storm → doLogout().
+  //   7. User is immediately logged back out to the login screen.
+  //
+  // login-secure-patch.js (loaded before main.js) overrides window.doLogin with
+  // secureDoLogin which has NO emergency bypass.  This main.js doLogin() only runs
+  // if the patch failed to load (network error during script fetch), in which case
+  // showing an honest error is the correct behaviour — NOT granting fake access.
+  //
+  // Break-glass / admin access must be handled server-side via /api/auth/break-glass.
 
   try {
     if (typeof API === 'undefined') {
-      // API client not loaded — try emergency fallback immediately
-      const emergencyProfile = _getEmergencyProfile(email.toLowerCase());
-      if (emergencyProfile && password.length >= 6) {
-        _doEmergencyLogin(emergencyProfile, 'network');
-        return;
-      }
-      throw new Error('API client not loaded — check network connection.');
+      throw new Error('API client not loaded. Check your network connection and refresh the page.');
     }
 
     // ── STEP 1: Try real backend authentication ────────────
-    let data;
-    try {
-      data = await API.auth.login(email, password, tenant);
-    } catch (apiErr) {
-      const msg = (apiErr.message || '').toLowerCase();
-
-      // Network / connectivity failure → emergency fallback for known admins
-      const isNetworkError = msg.includes('network') || msg.includes('cannot reach') ||
-                             msg.includes('failed to fetch') || msg.includes('err_connection') ||
-                             msg.includes('timeout') || msg.includes('load failed');
-
-      // Profile not found in DB → emergency fallback for known admins (DB not seeded yet)
-      const isProfileMissing = msg.includes('profile') || msg.includes('user not found') ||
-                               msg.includes('not found') || msg.includes('no rows') ||
-                               msg.includes('does not exist');
-
-      // Account not in Supabase auth yet → emergency fallback for known admins
-      const isAuthUserMissing = msg.includes('invalid login') || msg.includes('email not confirmed') ||
-                                msg.includes('user not registered') || msg.includes('invalid credentials') && isProfileMissing;
-
-      const needsFallback = isNetworkError || isProfileMissing || isAuthUserMissing;
-
-      if (needsFallback) {
-        const emergencyProfile = _getEmergencyProfile(email.toLowerCase());
-        if (emergencyProfile && password.length >= 6) {
-          _doEmergencyLogin(emergencyProfile, isNetworkError ? 'network' : 'profile');
-          return;
-        }
-      }
-
-      // For other real auth errors (wrong password, suspended, etc.) — surface the error
-      throw apiErr;
-    }
+    const data = await API.auth.login(email, password, tenant);
 
     if (!data?.user) throw new Error('Invalid response from authentication server.');
 
@@ -234,15 +173,16 @@ async function doLogin() {
     _enterApp();
 
   } catch (err) {
-    const msg = err.message || 'Login failed';
+    const msg    = err.message || 'Login failed';
+    // ROOT-CAUSE FIX v8.5: `msgLow` was referenced but never declared — caused
+    // a ReferenceError that swallowed the real error message and left the button
+    // in a disabled/spinning state with no feedback to the user.
+    const msgLow = msg.toLowerCase();
     console.warn('[Login] Failed:', msg);
 
-    // ROOT-CAUSE FIX v8.4: Emergency bypass DISABLED in the catch block.
-    // login-secure-patch.js overrides window.doLogin at parse time so this
+    // NOTE: login-secure-patch.js overrides window.doLogin at parse time so this
     // function should never run during a normal login flow.  If it does run
-    // (e.g., direct call in tests), we still surface the real error to the user
-    // rather than silently granting offline access with a fake token, which
-    // would produce 401s on every subsequent API call.
+    // (e.g., direct call from console or tests), surface the real error.
     if (btn) { btn.innerHTML = originalBtnText; btn.disabled = false; }
 
     const display =
