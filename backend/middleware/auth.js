@@ -29,6 +29,36 @@
 const jwt = require('jsonwebtoken');
 const { supabase, supabaseAuth, isAbortError, isTimeoutError } = require('../config/supabase'); // v7.0
 
+// ── FIX v12.0: In-memory profile cache — eliminates the DB round-trip on EVERY
+// authenticated request (the #1 cause of platform slowness on free-tier Supabase).
+// Cache key: auth_id (from JWT sub claim).  TTL: 60 seconds.
+// On cache miss: DB fetch as normal, result stored.
+// On user status change (suspend/delete): the record is evicted on next miss after TTL.
+// Size capped at 500 entries to prevent memory leak on long-running servers.
+const _PROFILE_CACHE_TTL_MS = 60_000; // 60 seconds
+const _profileCache = new Map(); // auth_id → { profile, expiresAt }
+const _PROFILE_CACHE_MAX = 500;
+
+function _cacheGetProfile(authId) {
+  const entry = _profileCache.get(authId);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) { _profileCache.delete(authId); return null; }
+  return entry.profile;
+}
+
+function _cacheSetProfile(authId, profile) {
+  // Evict oldest entry when cache is full
+  if (_profileCache.size >= _PROFILE_CACHE_MAX) {
+    _profileCache.delete(_profileCache.keys().next().value);
+  }
+  _profileCache.set(authId, { profile, expiresAt: Date.now() + _PROFILE_CACHE_TTL_MS });
+}
+
+// Exported so routes can invalidate on profile update / role change
+function _cacheEvictProfile(authId) {
+  if (authId) _profileCache.delete(authId);
+}
+
 // ── JWT_SECRET for local fast-path decode ────────────────────────
 // Supabase JWTs are signed with the project's JWT secret.
 // SUPABASE_JWT_SECRET (preferred) or JWT_SECRET (fallback).
@@ -182,6 +212,27 @@ async function verifyToken(req, res, next) {
     const authUserId = localDecoded.sub;
     const userEmail  = localDecoded.email || null;
 
+    // FIX v12.0: Check in-memory profile cache BEFORE hitting the DB.
+    // Every API call previously made a Supabase DB round-trip to fetch
+    // the user profile — this was the primary cause of platform slowness.
+    // Cache TTL is 60 s; evict on logout / profile update.
+    const _cachedProfile = _cacheGetProfile(authUserId);
+    if (_cachedProfile) {
+      if (_cachedProfile.status === 'suspended' || _cachedProfile.status === 'inactive') {
+        _cacheEvictProfile(authUserId); // force re-check next request
+        console.warn(`[Auth] 403 ACCOUNT_INACTIVE (cached) user=${_cachedProfile.email} status=${_cachedProfile.status}`);
+        return res.status(403).json({
+          error:  `Account is ${_cachedProfile.status}. Contact your administrator.`,
+          code:   'ACCOUNT_INACTIVE',
+          status: _cachedProfile.status,
+        });
+      }
+      req.user     = { ..._cachedProfile, authId: authUserId };
+      req.tenantId = _cachedProfile.tenant_id;
+      req.token    = token;
+      return next();
+    }
+
     // Fetch user profile from DB (fast pool connection — not auth network)
     try {
       const { data: profile, error: profileError } = await supabase
@@ -199,6 +250,8 @@ async function verifyToken(req, res, next) {
             status: profile.status,
           });
         }
+        // Cache the profile for subsequent requests
+        _cacheSetProfile(authUserId, profile);
         req.user     = { ...profile, authId: authUserId };
         req.tenantId = profile.tenant_id;
         req.token    = token;
@@ -214,6 +267,7 @@ async function verifyToken(req, res, next) {
           .single();
 
         if (profileByEmail) {
+          _cacheSetProfile(authUserId, profileByEmail);
           req.user     = { ...profileByEmail, authId: authUserId };
           req.tenantId = profileByEmail.tenant_id;
           req.token    = token;
@@ -293,14 +347,32 @@ async function verifyToken(req, res, next) {
       return res.status(401).json({ error: 'Token verification failed', code: 'INVALID_TOKEN' });
     }
 
-    // Fetch user profile
-    const { data: profile, error: profileError } = await supabase
-      .from('users')
-      .select('id, name, email, role, tenant_id, status, permissions, avatar, mfa_enabled')
-      .eq('auth_id', user.id)
-      .single();
+    // Fetch user profile — FIX v15.0: wrap in 8s timeout so a slow DB on the
+    // fallback path doesn't hang the entire request past the outer 12s window.
+    const _fbProfileTimeout = new Promise((_, rej) =>
+      setTimeout(() => rej(new Error('fallback profile fetch timed out')), 8_000)
+    );
+    const { data: profile, error: profileError } = await Promise.race([
+      supabase
+        .from('users')
+        .select('id, name, email, role, tenant_id, status, permissions, avatar, mfa_enabled')
+        .eq('auth_id', user.id)
+        .single(),
+      _fbProfileTimeout,
+    ]).catch(e => ({ data: null, error: e }));
 
     if (profileError || !profile) {
+      // If it was a timeout, return 503 not 401
+      if (profileError?.message?.includes('timed out') || isAbortError(profileError) || isTimeoutError(profileError)) {
+        console.error(`[Auth] 503 DB_ABORT fallback profile fetch reqId=${reqId}: ${profileError?.message}`);
+        clearTimeout(_verifyTimeoutId);
+        return res.status(503).json({
+          error: 'Database temporarily unavailable. Please retry in a moment.',
+          code:  'DB_SERVICE_UNAVAILABLE',
+          retryAfter: 3,
+        });
+      }
+
       const { data: profileByEmail } = await supabase
         .from('users')
         .select('id, name, email, role, tenant_id, status, permissions, avatar')
@@ -365,20 +437,70 @@ async function verifyToken(req, res, next) {
 /**
  * optionalAuth — non-blocking auth middleware
  * Sets req.user if token is valid, continues even if not.
+ *
+ * FIX v15.0: Use local JWT fast-path (same as verifyToken) instead of
+ * supabaseAuth.getUser() which makes a network call on EVERY request that
+ * uses optionalAuth.  On Render cold-start this caused a chain of 503s even
+ * for routes that don't require authentication.
  */
 async function optionalAuth(req, res, next) {
   const { token } = extractToken(req);
-  if (!token || !supabaseAuth) return next();
+  if (!token) return next();
 
   try {
-    const { data: { user } } = await supabaseAuth.auth.getUser(token); // v6.1: use supabaseAuth
+    // Fast-path: local JWT verification — no network call
+    if (_JWT_SECRET) {
+      const _jwtOpts = { algorithms: ['HS256'], clockTolerance: 30 };
+      let localDecoded = null;
+      try {
+        localDecoded = jwt.verify(token, _JWT_SECRET, _jwtOpts);
+      } catch (err1) {
+        if (err1.name !== 'TokenExpiredError' && _ALT_JWT_SECRET) {
+          try { localDecoded = jwt.verify(token, _ALT_JWT_SECRET, _jwtOpts); } catch (_) {}
+        }
+      }
+      if (localDecoded) {
+        const authUserId = localDecoded.sub;
+        // Check profile cache first
+        const cached = _cacheGetProfile(authUserId);
+        if (cached && cached.status === 'active') {
+          req.user     = { ...cached, authId: authUserId };
+          req.tenantId = cached.tenant_id;
+          req.token    = token;
+          return next();
+        }
+        // Cache miss — DB fetch (with 5s timeout so optional auth never hangs)
+        const profileTimeout = new Promise((_, rej) =>
+          setTimeout(() => rej(new Error('optionalAuth profile fetch timed out')), 5_000)
+        );
+        const profilePromise = supabase
+          .from('users')
+          .select('id, name, email, role, tenant_id, status, permissions')
+          .eq('auth_id', authUserId)
+          .single();
+        try {
+          const { data: profile } = await Promise.race([profilePromise, profileTimeout]);
+          if (profile && profile.status === 'active') {
+            _cacheSetProfile(authUserId, profile);
+            req.user     = { ...profile, authId: authUserId };
+            req.tenantId = profile.tenant_id;
+            req.token    = token;
+          }
+        } catch (_) { /* silent — timeout or DB error is non-fatal for optional auth */ }
+      }
+      return next();
+    }
+
+    // Fallback: supabaseAuth path (only when no JWT secret configured)
+    if (!supabaseAuth) return next();
+    const optTimeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8_000));
+    const { data: { user } } = await Promise.race([supabaseAuth.auth.getUser(token), optTimeout]);
     if (user) {
       const { data: profile } = await supabase
         .from('users')
         .select('id, name, email, role, tenant_id, status, permissions')
         .eq('auth_id', user.id)
         .single();
-
       if (profile && profile.status === 'active') {
         req.user     = { ...profile, authId: user.id };
         req.tenantId = profile.tenant_id;
@@ -482,16 +604,52 @@ function requireTenant() {
 
 /**
  * authInfo — extract auth status without blocking (for debug endpoints)
+ *
+ * FIX v15.0: Use local JWT decode instead of supabaseAuth.getUser() to
+ * avoid a cold-start network call in what is supposed to be a lightweight
+ * diagnostic helper.
  */
 async function authInfo(req) {
   const { token, source } = extractToken(req);
   if (!token) return { authenticated: false, source: null };
+
+  // Fast-path: local JWT decode — zero network
+  if (_JWT_SECRET) {
+    try {
+      const _jwtOpts = { algorithms: ['HS256'], clockTolerance: 30 };
+      let decoded = null;
+      try {
+        decoded = jwt.verify(token, _JWT_SECRET, _jwtOpts);
+      } catch (err1) {
+        if (err1.name !== 'TokenExpiredError' && _ALT_JWT_SECRET) {
+          try { decoded = jwt.verify(token, _ALT_JWT_SECRET, _jwtOpts); } catch (_) {}
+        }
+        if (!decoded) {
+          return {
+            authenticated: false,
+            source,
+            error: err1.name === 'TokenExpiredError' ? 'token_expired' : 'invalid_token',
+          };
+        }
+      }
+      return {
+        authenticated: true,
+        source,
+        user_id:   decoded.sub,
+        email:     decoded.email || null,
+        token_exp: decoded.exp ? new Date(decoded.exp * 1000).toISOString() : null,
+      };
+    } catch (_) {
+      return { authenticated: false, error: 'token_decode_failed' };
+    }
+  }
+
+  // Fallback: supabaseAuth path when no JWT secret set
   if (!supabaseAuth) return { authenticated: false, source: null, error: 'Supabase not configured' };
-
   try {
-    const { data: { user }, error } = await supabaseAuth.auth.getUser(token); // v6.1: use supabaseAuth
+    const aiTimeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8_000));
+    const { data: { user }, error } = await Promise.race([supabaseAuth.auth.getUser(token), aiTimeout]);
     if (error || !user) return { authenticated: false, error: error?.message };
-
     return {
       authenticated: true,
       source,
@@ -518,4 +676,5 @@ module.exports = {
   requireTenant,
   authInfo,
   extractToken,
+  evictProfileCache: _cacheEvictProfile, // call after profile update / suspension
 };

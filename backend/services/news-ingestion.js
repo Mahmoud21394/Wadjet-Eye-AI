@@ -363,7 +363,28 @@ async function storeArticles(articles, tenantId) {
         }
       }
     } catch (dbErr) {
-      console.error('[News] DB chunk error:', dbErr.message);
+      // ROOT-CAUSE FIX v14.0: Detect Supabase free-tier statement-timeout.
+      // Previously these silently counted as errors but the chunk was lost.
+      // Now we wait 2 s and retry with smaller payload + ignoreDuplicates.
+      const isStatementTimeout = dbErr.message?.includes('canceling statement due to statement timeout') ||
+                                 dbErr.message?.includes('statement timeout') ||
+                                 dbErr.code === '57014';
+      if (isStatementTimeout) {
+        console.warn('[News] Statement timeout on chunk — waiting 2s then retrying with ignoreDuplicates');
+        await new Promise(r => setTimeout(r, 2_000));
+        try {
+          const chunkNoImg = chunk.map(r => { const { id, image_url, ...rest } = r; return rest; }); // eslint-disable-line no-unused-vars
+          const { error: retryErr } = await supabaseClient
+            .from('news_articles')
+            .upsert(chunkNoImg, { ignoreDuplicates: true });
+          if (retryErr) console.warn('[News] DB chunk timeout-retry error:', retryErr.message);
+          else updatedCount += chunk.length;
+        } catch (retryEx) {
+          console.error('[News] DB chunk timeout-retry exception:', retryEx.message);
+        }
+      } else {
+        console.error('[News] DB chunk error:', dbErr.message);
+      }
     }
     // Backpressure: 200 ms between chunks to avoid saturating Supabase free-tier
     if (i + CHUNK_SIZE < records.length) {

@@ -388,6 +388,11 @@ async function _finalizeLogin(data) {
     sessionStorage.setItem('we_user',           userJson);
   }
 
+  // FIX v11.1: Stamp login time in sessionStorage so _doTokenRefresh() can
+  // detect the post-login grace window even when auth-interceptor's module-
+  // scoped _lastLoginAt was 0 (e.g. fresh script context after page load).
+  try { sessionStorage.setItem('_wadjet_last_login_at', String(Date.now())); } catch (_) {}
+
   // ── STEP 2: Sync with legacy TokenStore (api-client.js) ──────────
   if (accessToken && typeof window.TokenStore !== 'undefined') {
     window.TokenStore.set(accessToken, refreshToken, expiresAt || expiresIn);

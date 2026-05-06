@@ -141,13 +141,24 @@ router.get('/status', verifyToken, asyncHandler(async (req, res) => {
 router.get('/stats', verifyToken, asyncHandler(async (req, res) => {
   const tenantId = req.tenantId;
 
-  const [{ count: totalIOCs }, { count: maliciousCount }, { data: recentFeeds }] =
+  // ROOT-CAUSE FIX v14.0: Wrap each query in a per-query 8s timeout.
+  // Without this, a Supabase free-tier cold-start hangs ALL queries
+  // → entire response blocks → client gets 401/timeout cascade.
+  const _t = (p, fb) => Promise.race([
+    p.then(r => r).catch(() => fb),
+    new Promise(resolve => setTimeout(() => resolve(fb), 8_000)),
+  ]);
+
+  const [totalRes, maliciousRes, feedsRes] =
     await Promise.all([
-      supabase.from('iocs').select('id', { count: 'exact', head: true }).eq('tenant_id', tenantId),
-      supabase.from('iocs').select('id', { count: 'exact', head: true }).eq('tenant_id', tenantId).eq('reputation', 'malicious'),
-      supabase.from('threat_feeds').select('feed_type, created_at').eq('tenant_id', tenantId)
-        .order('created_at', { ascending: false }).limit(100),
+      _t(supabase.from('iocs').select('id', { count: 'exact', head: true }).eq('tenant_id', tenantId), { count: 0 }),
+      _t(supabase.from('iocs').select('id', { count: 'exact', head: true }).eq('tenant_id', tenantId).eq('reputation', 'malicious'), { count: 0 }),
+      _t(supabase.from('threat_feeds').select('feed_type, created_at').eq('tenant_id', tenantId)
+        .order('created_at', { ascending: false }).limit(100), { data: [] }),
     ]);
+  const totalIOCs      = totalRes.count     || 0;
+  const maliciousCount = maliciousRes.count || 0;
+  const recentFeeds    = feedsRes.data      || [];
 
   const feedStats = {};
   (recentFeeds || []).forEach(f => {

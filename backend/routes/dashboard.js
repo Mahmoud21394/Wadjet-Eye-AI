@@ -19,10 +19,37 @@ const { asyncHandler, createError } = require('../middleware/errorHandler');
    GET /api/dashboard
    GET /api/dashboard/stats-live
 ────────────────────────────────────────────────────────── */
+
+/**
+ * ROOT-CAUSE FIX v14.0: Wrap a Supabase query in a per-query timeout.
+ * Without this, any single slow query in the Promise.all() stalls the
+ * ENTIRE dashboard response — on Supabase free-tier cold-start (0-8s),
+ * all 6 parallel queries could time out simultaneously, causing a 15-second
+ * hang followed by a 503 cascade that triggers 401 storms on the client.
+ *
+ * Each query now races its own 8-second timeout and returns an empty
+ * fallback on failure, so the dashboard always responds in ≤ 8 seconds
+ * with whatever data is available.
+ */
+function withQueryTimeout(queryPromise, fallback = { data: null, error: null, count: 0 }, timeoutMs = 8_000) {
+  const timeoutPromise = new Promise(resolve =>
+    setTimeout(() => {
+      resolve({ ...fallback, _timedOut: true });
+    }, timeoutMs)
+  );
+  return Promise.race([
+    queryPromise.then(res => res).catch(err => ({ ...fallback, _error: err.message })),
+    timeoutPromise,
+  ]);
+}
+
 const statsLiveHandler = asyncHandler(async (req, res) => {
   const tid      = req.tenantId;
   const since24h = new Date(Date.now() - 24 * 3600000).toISOString();
 
+  // ROOT-CAUSE FIX v14.0: Each query wrapped in withQueryTimeout(8s).
+  // Any query that hangs (free-tier cold-start) returns empty data instead
+  // of blocking the entire Promise.all() for 15+ seconds.
   const [
     alertsRes,
     iocsRes,
@@ -31,37 +58,55 @@ const statsLiveHandler = asyncHandler(async (req, res) => {
     aiSessionsRes,
     actorsRes,
   ] = await Promise.all([
-    supabase.from('alerts')
-      .select('id, severity, status, created_at')
-      .eq('tenant_id', tid)
-      .in('status', ['open', 'in_progress']),
+    withQueryTimeout(
+      supabase.from('alerts')
+        .select('id, severity, status, created_at')
+        .eq('tenant_id', tid)
+        .in('status', ['open', 'in_progress']),
+      { data: [], error: null }
+    ),
 
-    supabase.from('iocs')
-      .select('id, reputation, risk_score')
-      .eq('tenant_id', tid)
-      .eq('status', 'active'),
+    withQueryTimeout(
+      supabase.from('iocs')
+        .select('id, reputation, risk_score')
+        .eq('tenant_id', tid)
+        .eq('status', 'active'),
+      { data: [], error: null }
+    ),
 
-    supabase.from('cases')
-      .select('id, severity, status')
-      .eq('tenant_id', tid)
-      .in('status', ['open', 'in_progress']),
+    withQueryTimeout(
+      supabase.from('cases')
+        .select('id, severity, status')
+        .eq('tenant_id', tid)
+        .in('status', ['open', 'in_progress']),
+      { data: [], error: null }
+    ),
 
     // Try both table names: legacy 'feed_logs' and new 'cti_feed_logs'.
     // ioc-ingestion.js v5.2 writes to 'cti_feed_logs'; older schema used 'feed_logs'.
     // We query both and merge so the dashboard works regardless of migration state.
-    supabase.from('cti_feed_logs')
-      .select('feed_name, status, finished_at, iocs_new, iocs_fetched')
-      .eq('tenant_id', tid)
-      .order('finished_at', { ascending: false })
-      .limit(50),
+    withQueryTimeout(
+      supabase.from('cti_feed_logs')
+        .select('feed_name, status, finished_at, iocs_new, iocs_fetched')
+        .eq('tenant_id', tid)
+        .order('finished_at', { ascending: false })
+        .limit(50),
+      { data: [], error: null }
+    ),
 
-    supabase.from('ai_sessions')
-      .select('id', { count: 'exact', head: true })
-      .eq('tenant_id', tid),
+    withQueryTimeout(
+      supabase.from('ai_sessions')
+        .select('id', { count: 'exact', head: true })
+        .eq('tenant_id', tid),
+      { data: null, error: null, count: 0 }
+    ),
 
-    supabase.from('threat_actors')
-      .select('id', { count: 'exact', head: true })
-      .or(`tenant_id.eq.${tid},tenant_id.is.null`),
+    withQueryTimeout(
+      supabase.from('threat_actors')
+        .select('id', { count: 'exact', head: true })
+        .or(`tenant_id.eq.${tid},tenant_id.is.null`),
+      { data: null, error: null, count: 0 }
+    ),
   ]);
 
   const alerts     = alertsRes.data  || [];
