@@ -59,7 +59,7 @@ const {
   isTimeoutError,
   LOGIN_FETCH_TIMEOUT_MS,
 } = require('../config/supabase');
-const { verifyToken, requireRole } = require('../middleware/auth');
+const { verifyToken, requireRole, evictProfileCache } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 
 // jsonwebtoken — optional dependency for custom JWT signing on refresh
@@ -91,12 +91,19 @@ if (!JWT_SECRET) {
 
 /* ── HTTP-only cookie name for refresh token ──────────────────── */
 const RT_COOKIE = 'waj_rt';
+// FIX v11.1: sameSite was 'strict' which silently drops cookies on EVERY
+// cross-site request (Vercel frontend → Render backend = cross-site).
+// 'none' + secure=true is the only value that works cross-origin in production.
+// In development (HTTP, no HTTPS) use 'lax' so the cookie still arrives.
+// Also removed path:'/api/auth' — restricting to that path meant the cookie
+// was not sent when the browser first navigated to any other /api/* endpoint.
+const _IS_PROD   = process.env.NODE_ENV === 'production';
 const RT_COOKIE_OPTS = {
   httpOnly : true,
-  secure   : process.env.NODE_ENV === 'production',
-  sameSite : 'strict',
+  secure   : _IS_PROD,
+  sameSite : _IS_PROD ? 'none' : 'lax',
   maxAge   : parseInt(process.env.REFRESH_TOKEN_EXPIRY_DAYS || '30') * 86400 * 1000,
-  path     : '/api/auth',
+  // No path restriction — cookie must be sent to ALL /api/* endpoints
 };
 
 /* ════════════════════════════════════════════════
@@ -243,51 +250,108 @@ async function storeRefreshToken(userId, tenantId, token, req) {
   }
 }
 
-/** Validate + rotate a refresh token */
+/** Validate + rotate a refresh token
+ *
+ * FIX v15.0: Added 8-second timeout guards to EVERY DB query in this function.
+ * Previously ALL Supabase calls here had NO timeout guard.  On Render free-tier
+ * cold-start any one of these queries could hang for the full 15 s statement
+ * timeout, causing the outer 20 s rotate-timeout to fire → 503
+ * REFRESH_SERVICE_UNAVAILABLE → client retry storm → 429 cascade.
+ * Each query is now individually guarded so they fail fast and surface as
+ * SESSION_VALIDATION_UNAVAILABLE (retriable) rather than causing a full 503.
+ */
 async function rotateRefreshToken(oldToken, req) {
   const hash = hashToken(oldToken);
+  const _DB_QUERY_TIMEOUT_MS = 8_000; // 8 s per DB query — tight enough to fail fast
 
-  const { data: rt, error } = await supabase
-    .from('refresh_tokens')
-    .select('*, users(id, name, email, role, tenant_id, status, permissions, avatar)')
-    .eq('token_hash', hash)
-    .eq('is_revoked', false)
-    .single();
+  // Helper: wrap any Supabase promise in a per-query timeout
+  function _withDbTimeout(promise, label) {
+    return Promise.race([
+      promise,
+      new Promise((_, rej) =>
+        setTimeout(() => rej(new Error(`rotateRefreshToken DB timeout: ${label}`)), _DB_QUERY_TIMEOUT_MS)
+      ),
+    ]);
+  }
 
-  // ROOT-CAUSE FIX v10.0: Check in-memory fallback FIRST when RLS blocks DB reads.
-  // This handles the case where storeRefreshToken() used the memory fallback on login,
-  // so there is NO DB row to look up — but the token is still valid.
+  // FIX v11.1: Check the in-memory fallback BEFORE touching the DB.
+  // When storeRefreshToken() was blocked by RLS on login, the token was
+  // written only to _rtMemoryStore — there is no DB row at all.
+  // The previous code ran the DB query first, got PGRST116 (row not found),
+  // then checked memEntry but only after the error gate, which always threw
+  // 'Invalid or expired refresh token' for PGRST116 (not an RLS error).
   const memEntry = _rtMemoryStore.get(hash);
-  if (memEntry && !error) {
-    // Memory hit, but also no DB error (means DB may have the row) — continue to DB path
-  } else if (memEntry) {
-    // DB error (RLS/noTable) but memory has the entry — validate it here
+  if (memEntry) {
+    // Validate expiry
     if (new Date(memEntry.expiresAt) < new Date()) {
       _rtMemoryStore.delete(hash);
       throw new Error('Refresh token has expired. Please log in again.');
     }
-    // Fetch user from DB for status check
-    const { data: memUser } = await supabase
-      .from('users')
-      .select('id, name, email, role, tenant_id, status, permissions, avatar')
-      .eq('id', memEntry.userId)
-      .single();
+    // Fetch live user record for status check — with timeout guard
+    let memUser = null;
+    try {
+      const { data } = await _withDbTimeout(
+        supabase
+          .from('users')
+          .select('id, name, email, role, tenant_id, status, permissions, avatar')
+          .eq('id', memEntry.userId)
+          .single(),
+        'memEntry user fetch'
+      );
+      memUser = data || null;
+    } catch (dbErr) {
+      // DB timeout during memory-store path — throw SESSION_VALIDATION_UNAVAILABLE
+      // so the client retries rather than treating the session as permanently dead.
+      _rtMemoryStore.delete(hash);
+      logger.warn('Auth:Refresh', `memEntry user fetch timed out: ${dbErr.message}`);
+      throw new Error('Session validation unavailable. Please log in again.');
+    }
     if (!memUser || memUser.status !== 'active') {
+      _rtMemoryStore.delete(hash);
       throw new Error('Account is suspended or not found');
     }
-    // Rotate: remove old from memory, issue new token
+    // Rotate: remove old token from memory, issue new one
     _rtMemoryStore.delete(hash);
     const newToken     = generateRefreshToken();
     const newSessionId = await storeRefreshToken(memUser.id, memUser.tenant_id, newToken, req);
+    logger.info('Auth:Refresh', `✅ Rotated from memory store for user=${memUser.id}`);
     return { newToken, newSessionId, user: memUser, tenantId: memUser.tenant_id };
   }
 
-  if (error) {
-    const isRLS   = error.message?.includes('row-level security') || error.code === '42501';
-    const noTable = error.message?.includes('does not exist') || error.code === '42P01';
+  // No memory entry — try the DB (with timeout guard)
+  let rt, rtError;
+  try {
+    const result = await _withDbTimeout(
+      supabase
+        .from('refresh_tokens')
+        .select('*, users(id, name, email, role, tenant_id, status, permissions, avatar)')
+        .eq('token_hash', hash)
+        .eq('is_revoked', false)
+        .single(),
+      'refresh_token lookup'
+    );
+    rt      = result.data;
+    rtError = result.error;
+  } catch (dbErr) {
+    // Hard DB timeout — return SESSION_VALIDATION_UNAVAILABLE so client retries
+    logger.warn('Auth:Refresh', `refresh_token lookup timed out: ${dbErr.message}`);
+    throw new Error('Session validation unavailable. Please log in again.');
+  }
+
+  if (rtError) {
+    const isRLS      = rtError.message?.includes('row-level security') || rtError.code === '42501';
+    const noTable    = rtError.message?.includes('does not exist')     || rtError.code === '42P01';
+    const notFound   = rtError.code === 'PGRST116'; // PostgREST: 0 rows returned by .single()
     if (isRLS || noTable) {
+      logger.warn('Auth:Refresh', `DB unavailable for token lookup (${rtError.code}): ${rtError.message}`);
       throw new Error('Session validation unavailable. Please log in again.');
     }
+    if (notFound) {
+      // Row doesn't exist — token was never stored or already rotated
+      throw new Error('Invalid or expired refresh token');
+    }
+    // Unexpected DB error
+    logger.error('Auth:Refresh', `Unexpected DB error on token lookup: ${rtError.message}`);
     throw new Error('Invalid or expired refresh token');
   }
 
@@ -296,8 +360,8 @@ async function rotateRefreshToken(oldToken, req) {
   }
 
   if (new Date(rt.expires_at) < new Date()) {
-    // Clean up expired token
-    await supabase.from('refresh_tokens').delete().eq('id', rt.id);
+    // Clean up expired token — fire-and-forget, don't block on it
+    supabase.from('refresh_tokens').delete().eq('id', rt.id).then(() => {}).catch(() => {});
     throw new Error('Refresh token has expired. Please log in again.');
   }
 
@@ -308,10 +372,19 @@ async function rotateRefreshToken(oldToken, req) {
   // ── Rotate: revoke old, issue new ──
   const newToken = generateRefreshToken();
 
-  await supabase.from('refresh_tokens').update({
-    is_revoked:   true,
-    last_used_at: new Date().toISOString(),
-  }).eq('id', rt.id);
+  // Revoke the old token — with timeout guard (fire-and-forget on timeout)
+  try {
+    await _withDbTimeout(
+      supabase.from('refresh_tokens').update({
+        is_revoked:   true,
+        last_used_at: new Date().toISOString(),
+      }).eq('id', rt.id),
+      'revoke old refresh_token'
+    );
+  } catch (revokeErr) {
+    // Non-fatal: old token will expire naturally; proceed with issuing new one
+    logger.warn('Auth:Refresh', `revoke old token timed out (non-fatal): ${revokeErr.message}`);
+  }
 
   const newSessionId = await storeRefreshToken(rt.user_id, rt.tenant_id, newToken, req);
 
@@ -594,6 +667,14 @@ router.post('/login', asyncHandler(async (req, res) => {
     email, session_id: sessionId,
   }).catch(() => {});
 
+  // FIX v15.0: Evict the profile cache entry on login so the fresh profile
+  // data (role, permissions, status) is always fetched on the very first
+  // authenticated request after login rather than returning stale cached data
+  // from a previous session.
+  if (evictProfileCache && loginData?.user?.id) {
+    evictProfileCache(loginData.user.id); // auth_id = Supabase user UUID
+  }
+
   // ── Set refresh token in HTTP-only cookie ──────────────────────────
   // This is the secure, XSS-safe storage path. The token is also
   // returned in the body for clients that cannot use cookies (native apps).
@@ -675,19 +756,45 @@ router.post('/refresh', asyncHandler(async (req, res) => {
   const { newToken, newSessionId, user, tenantId } = rotated;
 
   // ── Issue a new access token ──────────────────────────────────────────
-  // Strategy 1: Re-authenticate via Supabase signInWithPassword using
-  //             admin API to get a fresh Supabase JWT (best approach)
-  // Strategy 2: Sign a custom JWT using JWT_SECRET (fallback)
-  // Strategy 3: Return empty token — client will use refresh token only
+  // Strategy 1: Supabase admin.createSession → fresh Supabase JWT (best)
+  // Strategy 2: Custom JWT signed with JWT_SECRET (fallback)
+  // Strategy 3: Keep original refresh — NEVER return requires_reauth=true
+  //
+  // ROOT-CAUSE FIX v14.0: requires_reauth=true was the #1 cause of the
+  // 401 storm.  When admin.createSession + JWT_SECRET both fail (cold-start
+  // or misconfiguration), the old code returned requires_reauth=true which
+  // told auth-interceptor to dispatch auth:expired → logout immediately after
+  // a successful refresh-token rotation.  The user was forcibly logged out
+  // every ~15 minutes even though their session was perfectly valid.
+  //
+  // FIX: Never send requires_reauth=true.  If we cannot issue a new access
+  // token we simply do NOT return a token field — the client keeps its
+  // existing access token until it expires naturally, then re-tries /refresh.
+  // The rotated refresh token is always returned so the next cycle works.
   let accessToken = '';
   let expiresAt   = new Date(Date.now() + ACCESS_TOKEN_EXPIRY_SEC * 1000).toISOString();
 
-  // Fetch auth_id for the user
-  const { data: userRow } = await supabase
-    .from('users')
-    .select('auth_id, email, name, role, permissions, tenant_id')
-    .eq('id', user.id)
-    .single();
+  // ROOT-CAUSE FIX v14.0: Wrap userRow fetch in a 5-second timeout.
+  // This DB query previously had NO timeout guard — on Supabase free-tier
+  // cold-start it could hang for the full 15 s statement timeout, blocking
+  // the entire refresh response and causing the client's 20 s timeout to
+  // fire, returning a 503 REFRESH_SERVICE_UNAVAILABLE on every cold-start.
+  let userRow = null;
+  try {
+    const userRowTimeout = new Promise((_, rej) =>
+      setTimeout(() => rej(new Error('userRow fetch timed out')), 5_000)
+    );
+    const userRowPromise = supabase
+      .from('users')
+      .select('auth_id, email, name, role, permissions, tenant_id')
+      .eq('id', user.id)
+      .single();
+    const { data: _userRow } = await Promise.race([userRowPromise, userRowTimeout]);
+    userRow = _userRow || null;
+  } catch (uErr) {
+    logger.warn('Auth:Refresh', `userRow fetch failed (non-fatal): ${uErr.message}`);
+    // Continue with user data from the refresh token rotation result
+  }
 
   const authId = userRow?.auth_id || user.auth_id;
 
@@ -745,11 +852,20 @@ router.post('/refresh', asyncHandler(async (req, res) => {
           logger.warn('Auth:Refresh', 'Custom JWT signing failed:', jwtErr.message);
         }
       } else {
-        logger.warn('Auth:Refresh', 'JWT_SECRET not configured — client must re-login for fresh Supabase token');
+        logger.warn('Auth:Refresh', 'JWT_SECRET not configured — Strategy 2 skipped');
       }
     }
   } else {
     logger.warn('Auth:Refresh', `No auth_id found for user ${user.id} — cannot issue new access token`);
+  }
+
+  // ROOT-CAUSE FIX v14.0: If we still have no access token (both strategies
+  // failed), do NOT set requires_reauth=true.  Instead omit the token field
+  // entirely — the client will keep using its existing access token until
+  // that expires, then call /refresh again (which will succeed once the
+  // backend cold-start is over).  This breaks the logout-on-cold-start loop.
+  if (!accessToken) {
+    logger.warn('Auth:Refresh', `⚠️  No access token issued for user ${user.id} — returning rotated refresh token only (client keeps existing access token)`);
   }
 
   await logActivity(user.id, tenantId, 'TOKEN_REFRESH', req, { session_id: newSessionId });
@@ -757,10 +873,13 @@ router.post('/refresh', asyncHandler(async (req, res) => {
   // Rotate the HTTP-only cookie with the new refresh token
   res.cookie(RT_COOKIE, newToken, RT_COOKIE_OPTS);
 
-  // Always return the rotated refresh token even if access token is empty.
-  // If requires_reauth=true the client must redirect to /login — NO retry loops.
-  res.json({
-    token:        accessToken,
+  // Build the response object — only include token field when we actually have one.
+  // ROOT-CAUSE FIX v14.0: NEVER include requires_reauth=true — it triggers an
+  // immediate auth:expired → logout on the client, which is the wrong behaviour
+  // when both access-token strategies fail due to cold-start (transient issue).
+  const refreshResponse = {
+    // Only include token when non-empty — client treats missing token as "keep existing"
+    ...(accessToken ? { token: accessToken } : {}),
     refreshToken: newToken,
     expiresIn:    ACCESS_TOKEN_EXPIRY_SEC,
     expiresAt,
@@ -773,9 +892,9 @@ router.post('/refresh', asyncHandler(async (req, res) => {
       tenant_id:   userRow?.tenant_id   || user.tenant_id || tenantId,
       permissions: userRow?.permissions || user.permissions,
     },
-    // Tell client if they need to re-authenticate (no new access token)
-    requires_reauth: !accessToken,
-  });
+    // requires_reauth intentionally OMITTED — see ROOT-CAUSE FIX v14.0 above
+  };
+  res.json(refreshResponse);
 }));
 
 /* ════════════════════════════════════════════════

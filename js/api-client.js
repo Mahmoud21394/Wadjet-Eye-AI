@@ -176,9 +176,11 @@ async function _doRefresh() {
 
   try {
     const res = await fetch(`${CONFIG.BACKEND_URL}/api/auth/refresh`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ refresh_token: rt }),
+      method:      'POST',
+      headers:     { 'Content-Type': 'application/json' },
+      body:        JSON.stringify({ refresh_token: rt }),
+      credentials: 'include',  // ROOT-CAUSE FIX v14.0: send httpOnly cookie so backend
+                                // can fall back to cookie-based session when rt is stale
     });
 
     if (!res.ok) {
@@ -187,35 +189,50 @@ async function _doRefresh() {
     }
 
     const body = await res.json();
-    if (body.token || body.access_token) {
-      TokenStore.set(
-        body.token || body.access_token,
-        body.refreshToken || body.refresh_token,
-        body.expiresAt || body.expiresIn,
-      );
-      // Update CURRENT_USER if user info returned
-      if (body.user && typeof window !== 'undefined') {
-        TokenStore.setUser(body.user);
-        if (window.CURRENT_USER) {
-          Object.assign(window.CURRENT_USER, body.user);
-        }
+    const newToken = body.token || body.access_token;
+
+    // ROOT-CAUSE FIX v14.0: Backend may omit the token field on cold-start
+    // (admin.createSession + JWT_SECRET both unavailable).  In that case, keep
+    // the existing access token and only update the refresh token.
+    // Previously: `if (!newToken) return false` → caused the 401 storm by
+    // making api-client think auth failed and dispatching auth:expired.
+    if (!newToken) {
+      const existingToken = TokenStore.get();
+      if (existingToken && (body.refreshToken || body.refresh_token)) {
+        // Only refresh token rotated — update it and keep existing access token
+        TokenStore.set(existingToken, body.refreshToken || body.refresh_token, null);
+        console.info('[Auth] Refresh: no new access token — keeping existing (cold-start fallback)');
+        return true;
       }
-      console.info('[Auth] Token refreshed successfully');
-
-      // Push new token to any active WebSocket connection so it stays authenticated
-      if (typeof WS !== 'undefined' && WS.updateAuth) WS.updateAuth();
-
-      // Dispatch event so other modules (live-detections-soc, etc.) can react
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('auth:token_refreshed', {
-          detail: { token: body.token || body.access_token },
-        }));
-      }
-
-      return true;
+      console.warn('[Auth] Refresh response missing token and no existing token');
+      return false;
     }
 
-    return false;
+    TokenStore.set(
+      newToken,
+      body.refreshToken || body.refresh_token,
+      body.expiresAt || body.expiresIn,
+    );
+    // Update CURRENT_USER if user info returned
+    if (body.user && typeof window !== 'undefined') {
+      TokenStore.setUser(body.user);
+      if (window.CURRENT_USER) {
+        Object.assign(window.CURRENT_USER, body.user);
+      }
+    }
+    console.info('[Auth] Token refreshed successfully');
+
+    // Push new token to any active WebSocket connection so it stays authenticated
+    if (typeof WS !== 'undefined' && WS.updateAuth) WS.updateAuth();
+
+    // Dispatch event so other modules (live-detections-soc, etc.) can react
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('auth:token_refreshed', {
+        detail: { token: newToken },
+      }));
+    }
+
+    return true;
   } catch (err) {
     console.warn('[Auth] Refresh error:', err.message);
     return false;

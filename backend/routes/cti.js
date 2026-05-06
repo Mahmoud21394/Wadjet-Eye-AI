@@ -847,20 +847,29 @@ router.post('/ingest/:feed', asyncHandler(async (req, res) => {
 router.get('/stats', asyncHandler(async (req, res) => {
   const tid = req.tenantId;
 
+  // ROOT-CAUSE FIX v14.0: Wrap each query in a per-query 8s timeout.
+  // On Supabase free-tier cold-start any single query can hang 8-15s,
+  // blocking the entire Promise.all and causing 401/timeout cascades.
+  const _ct = (p, fb = { data: null, count: 0 }) =>
+    Promise.race([
+      p.then(r => r).catch(() => fb),
+      new Promise(resolve => setTimeout(() => resolve(fb), 8_000)),
+    ]);
+
   // Query feed logs from both tables (see /feed-logs route comment for explanation)
   const [actors, campaigns, vulns, iocs, feedLogsNew, feedLogsLegacy] = await Promise.all([
-    supabase.from('threat_actors').select('id', { count: 'exact', head: true })
-      .or(`tenant_id.eq.${tid},tenant_id.is.null`),
-    supabase.from('campaigns').select('id', { count: 'exact', head: true })
-      .or(`tenant_id.eq.${tid},tenant_id.is.null`),
-    supabase.from('vulnerabilities').select('id', { count: 'exact', head: true })
-      .or(`tenant_id.eq.${tid},tenant_id.is.null`),
-    supabase.from('iocs').select('id, risk_score, reputation', { count: 'exact' })
-      .eq('tenant_id', tid).eq('status', 'active').limit(1000),
-    supabase.from('cti_feed_logs').select('feed_name, status, finished_at, iocs_new')
-      .eq('tenant_id', tid).order('finished_at', { ascending: false }).limit(20),
-    supabase.from('feed_logs').select('feed_name, status, finished_at, iocs_new')
-      .eq('tenant_id', tid).order('finished_at', { ascending: false }).limit(20),
+    _ct(supabase.from('threat_actors').select('id', { count: 'exact', head: true })
+      .or(`tenant_id.eq.${tid},tenant_id.is.null`), { count: 0 }),
+    _ct(supabase.from('campaigns').select('id', { count: 'exact', head: true })
+      .or(`tenant_id.eq.${tid},tenant_id.is.null`), { count: 0 }),
+    _ct(supabase.from('vulnerabilities').select('id', { count: 'exact', head: true })
+      .or(`tenant_id.eq.${tid},tenant_id.is.null`), { count: 0 }),
+    _ct(supabase.from('iocs').select('id, risk_score, reputation', { count: 'exact' })
+      .eq('tenant_id', tid).eq('status', 'active').limit(1000), { data: [], count: 0 }),
+    _ct(supabase.from('cti_feed_logs').select('feed_name, status, finished_at, iocs_new')
+      .eq('tenant_id', tid).order('finished_at', { ascending: false }).limit(20), { data: [] }),
+    _ct(supabase.from('feed_logs').select('feed_name, status, finished_at, iocs_new')
+      .eq('tenant_id', tid).order('finished_at', { ascending: false }).limit(20), { data: [] }),
   ]);
   // Merge both feed-log result sets
   const allFeedLogs = [

@@ -307,7 +307,9 @@ const BACKEND_URL = () =>
   (window.THREATPILOT_API_URL || 'https://wadjet-eye-ai.onrender.com').replace(/\/$/, '');
 
 async function _doTokenRefresh(attempt = 0) {
-  const MAX_ATTEMPTS = 5;   // 5 retries with backoff handles cold-starts (2,4,8,16,30s)
+  // FIX v11.1: 3 attempts is enough for cold-start recovery (2s, 4s backoff).
+  // 5 retries produced a visible 401 storm lasting ~30s in the console.
+  const MAX_ATTEMPTS = 3;
   const refreshToken = UnifiedTokenStore.getRefresh();
 
   // ── Offline mode: extend token locally ──────────────────────────────
@@ -371,29 +373,42 @@ async function _doTokenRefresh(attempt = 0) {
         return false;
       }
 
-      // ROOT-CAUSE FIX v10.0: Grace window — if user just logged in (<60s ago)
-      // and refresh is already returning 401, this is almost certainly an RLS
-      // or DB issue (token hash not stored), NOT a truly expired token.
-      // Retry with backoff instead of firing auth:expired immediately.
-      const msSinceLoginOnReject = Date.now() - _lastLoginAt;
-      if (_lastLoginAt > 0 && msSinceLoginOnReject < 60_000 && attempt < MAX_ATTEMPTS - 1) {
+      // FIX v11.1: Distinguish transient DB errors from genuine token rejection.
+      // INVALID_REFRESH_TOKEN / REFRESH_TOKEN_EXPIRED with code = hard failure
+      // → do NOT retry; the token is gone.  Only retry on SESSION_VALIDATION_UNAVAILABLE
+      // (already handled above) or within the post-login grace window.
+      const isHardFailure = (
+        errCode === 'REFRESH_TOKEN_EXPIRED' ||
+        errCode === 'INVALID_REFRESH_TOKEN' ||
+        errCode === 'ACCOUNT_SUSPENDED'
+      );
+
+      // ROOT-CAUSE FIX v10.0 (kept): Grace window — if user just logged in (<90s ago)
+      // and refresh is already returning 401, this can be the RLS / memory-store path
+      // that failed; retry with short backoff.
+      // FIX v11.1: Read _lastLoginAt from sessionStorage too, in case the variable
+      // wasn't set in this module instance (e.g. if login was handled by a different
+      // script instance on the same tab).
+      const _storedLoginAt = parseInt(sessionStorage.getItem('_wadjet_last_login_at') || '0', 10);
+      const _effectiveLoginAt = Math.max(_lastLoginAt, _storedLoginAt);
+      const msSinceLoginOnReject = Date.now() - _effectiveLoginAt;
+      const isWithinGrace = _effectiveLoginAt > 0 && msSinceLoginOnReject < 90_000;
+
+      if (!isHardFailure && isWithinGrace && attempt < MAX_ATTEMPTS - 1) {
         console.warn(
           `[AuthInterceptor] Refresh 401 within ${Math.round(msSinceLoginOnReject/1000)}s of login (${errCode}) — ` +
           `retrying (attempt ${attempt + 1}/${MAX_ATTEMPTS})`,
         );
-        await _sleep(Math.min(Math.pow(2, attempt) * 2_000, 15_000));
+        await _sleep(Math.min(Math.pow(2, attempt) * 2_000, 10_000));
         return _doTokenRefresh(attempt + 1);
       }
 
-      // Try cookie as last resort before giving up (only once)
-      if (attempt === 0) {
+      // Try cookie as last resort before giving up (only once, only if not a hard failure)
+      if (attempt === 0 && !isHardFailure) {
         const cookieOk = await _refreshFromCookie();
         if (cookieOk) return true;
       }
-      // FIX v8.1: auth:session-expired was dispatched but had NO listener → doLogout
-      // was never called → app looped forever retrying API calls with a dead token.
-      // Solution: alias the event to auth:expired which IS handled by the listener
-      // at the bottom of this file (with dedup, clear, and doLogout).
+      // FIX v8.1: alias auth:session-expired → auth:expired so the logout handler fires.
       _dispatchAuthEvent('auth:expired',         { reason: body.error || errCode });
       _dispatchAuthEvent('auth:session-expired', { reason: body.error || errCode });
       window.StateSync?.handleAuthExpiry({ reason: errCode });
@@ -436,47 +451,85 @@ async function _doTokenRefresh(attempt = 0) {
     const data      = await res.json();
 
     // ── requires_reauth: backend couldn't issue a new access token ────────
-    // (e.g. admin.createSession unavailable + no JWT_SECRET configured)
-    // ROOT-CAUSE FIX v10.0: Do NOT dispatch auth:expired if the user just
-    // logged in within the last 60 s.  requires_reauth immediately after login
-    // means the backend cold-start prevented admin.createSession — the user
-    // still has a valid session (their original token is in localStorage).
-    // Dispatching auth:expired here would log them out immediately after login.
+    // ROOT-CAUSE FIX v14.0: Backend v14+ no longer sends requires_reauth=true.
+    // This block is kept as a safety net for old backend deployments still in
+    // service during rolling upgrades, but is now ALWAYS treated as non-fatal:
+    // keep the existing access token and only update the refresh token.
+    // The old behaviour of dispatching auth:expired → forced logout when
+    // requires_reauth=true was the primary cause of the 401 storm — users
+    // were logged out every ~15 minutes on cold-start, even with a valid session.
     if (data.requires_reauth) {
-      const msSinceLogin = Date.now() - _lastLoginAt;
-      if (_lastLoginAt > 0 && msSinceLogin < 60_000) {
-        // Fresh login grace window — keep the existing access token from login,
-        // just update the new refresh token so future refresh attempts work.
-        console.warn(
-          `[AuthInterceptor] requires_reauth suppressed (${Math.round(msSinceLogin/1000)}s since login).` +
-          ' Keeping original login token; updating refresh token.',
-        );
+      const existingToken = UnifiedTokenStore.getToken();
+      console.warn('[AuthInterceptor] requires_reauth received — keeping existing token (never force logout on cold-start)');
+      if (data.refreshToken || data.refresh_token) {
+        UnifiedTokenStore.updateTokens({
+          token:        existingToken || undefined,
+          refreshToken: data.refreshToken || data.refresh_token,
+          sessionId:    data.sessionId    || data.session_id,
+          // Preserve existing expiry — don't reset the countdown
+          expiresAt:    UnifiedTokenStore.getExpiry()?.toISOString(),
+          user:         data.user,
+        });
+        if (typeof window.TokenStore !== 'undefined') {
+          window.TokenStore.set(
+            existingToken,
+            data.refreshToken || data.refresh_token,
+            UnifiedTokenStore.getExpiry()?.toISOString(),
+          );
+        }
+      }
+      if (existingToken) {
+        _scheduleProactiveRefresh();
+        window.StateSync?.updateAuthState({ isAuthenticated: true, user: data.user });
+        return true; // session is still alive — don't trigger auth:expired
+      }
+      // Truly no token anywhere — session is dead
+      console.warn('[AuthInterceptor] requires_reauth and no existing token — session is dead');
+      _dispatchAuthEvent('auth:expired',         { reason: 'requires_reauth_no_token' });
+      _dispatchAuthEvent('auth:session-expired', { reason: 'requires_reauth_no_token' });
+      window.StateSync?.handleAuthExpiry({ reason: 'requires_reauth_no_token' });
+      return false;
+    }
+
+    // ROOT-CAUSE FIX v14.0: Backend now omits the token field when both
+    // admin.createSession and JWT_SECRET signing fail (Render cold-start).
+    // Previously we returned false here which caused the 401-storm:
+    //   silentRefresh() → false → authFetch throws AUTH_EXPIRED → auth:expired
+    //   → logout — immediately after a perfectly valid refresh-token rotation.
+    //
+    // New behaviour: if token is absent, keep the existing access token and
+    // only update the refresh token + user data.  The existing access token
+    // (from login) is still valid; it will expire naturally and the next
+    // /refresh call will succeed once the cold-start is over.
+    const newToken = data.token || data.access_token;
+    if (!newToken) {
+      const existingToken = UnifiedTokenStore.getToken();
+      if (existingToken) {
+        console.warn('[AuthInterceptor] Refresh response has no new access token — keeping existing token (cold-start fallback)');
+        // Update only the refresh token and user data; preserve existing access token + expiry
         if (data.refreshToken || data.refresh_token) {
           UnifiedTokenStore.updateTokens({
+            token:        existingToken,  // keep existing
             refreshToken: data.refreshToken || data.refresh_token,
-            sessionId:    data.sessionId    || data.session_id,
+            // Preserve existing expiry — don't reset the clock
+            expiresAt:    UnifiedTokenStore.getExpiry()?.toISOString(),
+            user:         data.user,
+            sessionId:    data.sessionId || data.session_id,
           });
+          // Sync legacy TokenStore
           if (typeof window.TokenStore !== 'undefined') {
             window.TokenStore.set(
-              UnifiedTokenStore.getToken(),
+              existingToken,
               data.refreshToken || data.refresh_token,
               UnifiedTokenStore.getExpiry()?.toISOString(),
             );
           }
+          _scheduleProactiveRefresh();
+          window.StateSync?.updateAuthState({ isAuthenticated: true, user: data.user });
         }
-        return true; // treat as success — original token is still valid
+        return true; // session still alive — don't trigger auth:expired
       }
-      console.warn('[AuthInterceptor] Backend requires re-authentication — triggering re-login');
-      // FIX v8.1: same alias fix — must dispatch auth:expired for the logout handler
-      _dispatchAuthEvent('auth:expired',         { reason: 'requires_reauth' });
-      _dispatchAuthEvent('auth:session-expired', { reason: 'requires_reauth' });
-      window.StateSync?.handleAuthExpiry({ reason: 'requires_reauth' });
-      return false;
-    }
-
-    const newToken  = data.token || data.access_token;
-    if (!newToken) {
-      console.warn('[AuthInterceptor] Refresh response missing token field');
+      console.warn('[AuthInterceptor] Refresh response missing token field and no existing token');
       return false;
     }
 
@@ -601,7 +654,31 @@ async function _refreshFromCookie() {
 
     const data     = await res.json();
     const newToken = data.token || data.access_token;
-    if (!newToken) return false;
+
+    // FIX v15.0: Backend may omit the token field on cold-start
+    // (admin.createSession + JWT_SECRET both unavailable).  Keep the existing
+    // access token and only update the refresh token, same as _doTokenRefresh().
+    if (!newToken) {
+      const existingToken = UnifiedTokenStore.getToken();
+      if (existingToken && (data.refreshToken || data.refresh_token)) {
+        _clearCookieRefreshState();
+        UnifiedTokenStore.updateTokens({
+          token:        existingToken, // keep existing
+          refreshToken: data.refreshToken || data.refresh_token,
+          expiresAt:    UnifiedTokenStore.getExpiry()?.toISOString(),
+          user:         data.user,
+          sessionId:    data.sessionId || data.session_id,
+        });
+        if (typeof window.TokenStore !== 'undefined') {
+          window.TokenStore.set(existingToken, data.refreshToken || data.refresh_token, null);
+        }
+        _scheduleProactiveRefresh();
+        window.StateSync?.updateAuthState({ isAuthenticated: true, user: data.user });
+        console.warn('[AuthInterceptor] Cookie refresh: no new token — keeping existing (cold-start fallback)');
+        return true;
+      }
+      return false;
+    }
 
     // ── Success: reset backoff ──────────────────────────────────────────
     _clearCookieRefreshState();
@@ -946,6 +1023,10 @@ window.PersistentAuth_onLogin = function(user, token, refreshToken, expiresAt, i
   _refreshPromise            = null;
   _expiredHandled            = false; // allow auth:expired to fire again in new session
   _lastLoginAt               = Date.now(); // ROOT-CAUSE FIX v10.0: stamp login time
+  // FIX v11.1: also persist to sessionStorage so _doTokenRefresh can read it
+  // even if this module instance was not the one that called PersistentAuth_onLogin
+  // (e.g. login was finalised by login-secure-patch.js on a different code path).
+  try { sessionStorage.setItem('_wadjet_last_login_at', String(_lastLoginAt)); } catch (_) {}
 
   UnifiedTokenStore.save({
     token,

@@ -655,15 +655,25 @@ router.get('/stats', verifyToken, asyncHandler(async (req, res) => {
   }
 
   try {
+    // ROOT-CAUSE FIX v14.0: Wrap each COUNT query in a per-query timeout.
+    // On Supabase free-tier cold-start these can hang for 8-15s, causing the
+    // client's /api/ingest/stats request to hit its own timeout and return 401.
+    // Each query now times out after 8s and returns a fallback of {count: 0}.
+    const _statsTimeout = (promise, fallback = { count: 0 }) =>
+      Promise.race([
+        promise.then(r => r).catch(e => ({ count: 0, _err: e.message })),
+        new Promise(resolve => setTimeout(() => resolve(fallback), 8_000)),
+      ]);
+
     // Use parallel COUNT queries (efficient — no row fetches)
     const [
       totalResult,
       maliciousResult,
       highRiskResult,
     ] = await Promise.all([
-      supabaseAdmin.from('iocs').select('*', { count: 'exact', head: true }).eq('tenant_id', scopeTenant),
-      supabaseAdmin.from('iocs').select('*', { count: 'exact', head: true }).eq('tenant_id', scopeTenant).eq('reputation', 'malicious'),
-      supabaseAdmin.from('iocs').select('*', { count: 'exact', head: true }).eq('tenant_id', scopeTenant).gte('risk_score', 70),
+      _statsTimeout(supabaseAdmin.from('iocs').select('*', { count: 'exact', head: true }).eq('tenant_id', scopeTenant)),
+      _statsTimeout(supabaseAdmin.from('iocs').select('*', { count: 'exact', head: true }).eq('tenant_id', scopeTenant).eq('reputation', 'malicious')),
+      _statsTimeout(supabaseAdmin.from('iocs').select('*', { count: 'exact', head: true }).eq('tenant_id', scopeTenant).gte('risk_score', 70)),
     ]);
 
     let totalIOCs     = totalResult.count     || 0;
@@ -674,9 +684,9 @@ router.get('/stats', verifyToken, asyncHandler(async (req, res) => {
     if (totalIOCs === 0 && isSuperUser) {
       console.log(`[Ingest/Stats] Tenant ${scopeTenant} has 0 IOCs — querying all tenants for ADMIN`);
       const [allTotal, allMalicious, allHigh] = await Promise.all([
-        supabaseAdmin.from('iocs').select('*', { count: 'exact', head: true }),
-        supabaseAdmin.from('iocs').select('*', { count: 'exact', head: true }).eq('reputation', 'malicious'),
-        supabaseAdmin.from('iocs').select('*', { count: 'exact', head: true }).gte('risk_score', 70),
+        _statsTimeout(supabaseAdmin.from('iocs').select('*', { count: 'exact', head: true })),
+        _statsTimeout(supabaseAdmin.from('iocs').select('*', { count: 'exact', head: true }).eq('reputation', 'malicious')),
+        _statsTimeout(supabaseAdmin.from('iocs').select('*', { count: 'exact', head: true }).gte('risk_score', 70)),
       ]);
       totalIOCs     = allTotal.count     || 0;
       maliciousIOCs = allMalicious.count || 0;

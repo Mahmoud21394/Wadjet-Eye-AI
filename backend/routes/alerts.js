@@ -65,10 +65,18 @@ router.get('/', asyncHandler(async (req, res) => {
    GET /api/alerts/stats — Dashboard KPIs
 ────────────────────────────────────────────── */
 router.get('/stats', asyncHandler(async (req, res) => {
-  const { data, error } = await supabase
+  // ROOT-CAUSE FIX v14.0: Wrap with 8s timeout so free-tier cold-start
+  // never blocks the entire alerts stats response (causes 401 cascades).
+  const queryPromise = supabase
     .from('alerts')
     .select('severity, status')
     .eq('tenant_id', req.tenantId);
+
+  const timeoutPromise = new Promise(resolve =>
+    setTimeout(() => resolve({ data: [], error: null, _timedOut: true }), 8_000)
+  );
+
+  const { data, error } = await Promise.race([queryPromise, timeoutPromise]);
 
   if (error) throw createError(500, error.message);
 
