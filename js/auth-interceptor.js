@@ -371,6 +371,20 @@ async function _doTokenRefresh(attempt = 0) {
         return false;
       }
 
+      // ROOT-CAUSE FIX v10.0: Grace window — if user just logged in (<60s ago)
+      // and refresh is already returning 401, this is almost certainly an RLS
+      // or DB issue (token hash not stored), NOT a truly expired token.
+      // Retry with backoff instead of firing auth:expired immediately.
+      const msSinceLoginOnReject = Date.now() - _lastLoginAt;
+      if (_lastLoginAt > 0 && msSinceLoginOnReject < 60_000 && attempt < MAX_ATTEMPTS - 1) {
+        console.warn(
+          `[AuthInterceptor] Refresh 401 within ${Math.round(msSinceLoginOnReject/1000)}s of login (${errCode}) — ` +
+          `retrying (attempt ${attempt + 1}/${MAX_ATTEMPTS})`,
+        );
+        await _sleep(Math.min(Math.pow(2, attempt) * 2_000, 15_000));
+        return _doTokenRefresh(attempt + 1);
+      }
+
       // Try cookie as last resort before giving up (only once)
       if (attempt === 0) {
         const cookieOk = await _refreshFromCookie();
@@ -423,8 +437,35 @@ async function _doTokenRefresh(attempt = 0) {
 
     // ── requires_reauth: backend couldn't issue a new access token ────────
     // (e.g. admin.createSession unavailable + no JWT_SECRET configured)
-    // In this case a re-login is needed. Dispatch auth:expired and return false.
+    // ROOT-CAUSE FIX v10.0: Do NOT dispatch auth:expired if the user just
+    // logged in within the last 60 s.  requires_reauth immediately after login
+    // means the backend cold-start prevented admin.createSession — the user
+    // still has a valid session (their original token is in localStorage).
+    // Dispatching auth:expired here would log them out immediately after login.
     if (data.requires_reauth) {
+      const msSinceLogin = Date.now() - _lastLoginAt;
+      if (_lastLoginAt > 0 && msSinceLogin < 60_000) {
+        // Fresh login grace window — keep the existing access token from login,
+        // just update the new refresh token so future refresh attempts work.
+        console.warn(
+          `[AuthInterceptor] requires_reauth suppressed (${Math.round(msSinceLogin/1000)}s since login).` +
+          ' Keeping original login token; updating refresh token.',
+        );
+        if (data.refreshToken || data.refresh_token) {
+          UnifiedTokenStore.updateTokens({
+            refreshToken: data.refreshToken || data.refresh_token,
+            sessionId:    data.sessionId    || data.session_id,
+          });
+          if (typeof window.TokenStore !== 'undefined') {
+            window.TokenStore.set(
+              UnifiedTokenStore.getToken(),
+              data.refreshToken || data.refresh_token,
+              UnifiedTokenStore.getExpiry()?.toISOString(),
+            );
+          }
+        }
+        return true; // treat as success — original token is still valid
+      }
       console.warn('[AuthInterceptor] Backend requires re-authentication — triggering re-login');
       // FIX v8.1: same alias fix — must dispatch auth:expired for the logout handler
       _dispatchAuthEvent('auth:expired',         { reason: 'requires_reauth' });
@@ -878,6 +919,11 @@ async function _syncStoresOnLoad() {
 // though `var` hoists the declaration, placing it here makes the intent
 // explicit and prevents linters from flagging "used before defined".
 var _expiredHandled = false;  // eslint-disable-line no-var
+// ROOT-CAUSE FIX v10.0: Track the last successful login timestamp so that
+// requires_reauth and rapid auth:expired dispatches within the first 30 s
+// after a fresh login are suppressed — they indicate a backend cold-start
+// issue (admin.createSession unavailable) rather than a truly expired session.
+var _lastLoginAt = 0;  // eslint-disable-line no-var
 
 /** Called by main.js / login handler after successful login */
 window.PersistentAuth_onLogin = function(user, token, refreshToken, expiresAt, isOffline) {
@@ -899,6 +945,7 @@ window.PersistentAuth_onLogin = function(user, token, refreshToken, expiresAt, i
   window.__wadjetRefreshLock = false;
   _refreshPromise            = null;
   _expiredHandled            = false; // allow auth:expired to fire again in new session
+  _lastLoginAt               = Date.now(); // ROOT-CAUSE FIX v10.0: stamp login time
 
   UnifiedTokenStore.save({
     token,

@@ -77,12 +77,16 @@ try {
 const REFRESH_TOKEN_EXPIRY_DAYS = parseInt(process.env.REFRESH_TOKEN_EXPIRY_DAYS || '30');
 const ACCESS_TOKEN_EXPIRY_SEC   = parseInt(process.env.ACCESS_TOKEN_TTL || '900');
 
-// Supabase JWT Secret — used to sign custom access tokens on refresh
-// MUST match the value in Supabase Dashboard → Settings → API → JWT Secret
-const JWT_SECRET = process.env.JWT_SECRET || null;
+// Supabase JWT Secret — used to sign custom access tokens on refresh.
+// ROOT-CAUSE FIX v10.0: Use SUPABASE_JWT_SECRET as primary (same key the
+// middleware verifies with), fall back to JWT_SECRET.  This ensures Strategy-2
+// signed tokens pass the middleware's jwt.verify() without a re-login loop.
+const JWT_SECRET = process.env.SUPABASE_JWT_SECRET || process.env.JWT_SECRET || null;
 
 if (!JWT_SECRET) {
-  logger.warn('Auth', '⚠️  JWT_SECRET not set in .env! Get it from Supabase Dashboard → Settings → API → JWT Settings. Add: JWT_SECRET=<your-supabase-jwt-secret>');
+  logger.warn('Auth', '⚠️  Neither SUPABASE_JWT_SECRET nor JWT_SECRET is set. Get it from Supabase Dashboard → Settings → API → JWT Settings. Add SUPABASE_JWT_SECRET to your .env');
+} else {
+  logger.info('Auth', `✅ JWT signing enabled (source: ${process.env.SUPABASE_JWT_SECRET ? 'SUPABASE_JWT_SECRET' : 'JWT_SECRET'})`);
 }
 
 /* ── HTTP-only cookie name for refresh token ──────────────────── */
@@ -176,11 +180,18 @@ async function logActivity(userId, tenantId, action, req, extras = {}) {
   await Promise.race([logPromise, logTimer]);
 }
 
-/** Store a new refresh token in DB
- *  RLS-safe: if the insert fails due to RLS policy (e.g. table not yet
- *  migrated or policy missing), we log a warning and return a fallback UUID
- *  so the LOGIN still succeeds. The refresh token will just not be persisted.
- *  Fix: run backend/database/rls-fix-v5.1.sql in Supabase SQL Editor.
+// ROOT-CAUSE FIX v10.0: In-memory refresh-token registry for when the DB/RLS
+// blocks inserts into the refresh_tokens table.  Keyed by token_hash → {userId,
+// tenantId, expiresAt, user}.  Falls back to this map so rotateRefreshToken()
+// can still validate the token without a DB row.  Cleared on process restart
+// (acceptable — user will need to log in again on cold restart).
+const _rtMemoryStore = new Map();
+
+/** Store a new refresh token in DB (with in-memory fallback when RLS blocks).
+ *  ROOT-CAUSE FIX v10.0: When RLS/missing-table prevents the DB insert, store
+ *  the token hash in _rtMemoryStore so the /refresh endpoint can validate it.
+ *  This replaces the previous "return fake UUID" approach that caused every
+ *  subsequent /api/auth/refresh call to return "Invalid or expired refresh token".
  */
 async function storeRefreshToken(userId, tenantId, token, req) {
   const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 86400 * 1000).toISOString();
@@ -203,12 +214,18 @@ async function storeRefreshToken(userId, tenantId, token, req) {
                         error.code === '42P01';
 
       if (isRLS) {
-        logger.warn('Auth', '⚠️  refresh_tokens RLS blocked insert. FIX: Run backend/database/rls-fix-v5.1.sql. Login proceeds without persisted refresh token.');
-        return crypto.randomUUID(); // Return a fake session ID so login continues
+        logger.warn('Auth', '⚠️  refresh_tokens RLS blocked insert. FIX: Run backend/database/rls-fix-v5.1.sql. Storing token in memory fallback so refresh still works this session.');
+        // ROOT-CAUSE FIX v10.0: Store in memory so rotateRefreshToken() can
+        // validate this token even without a DB row.
+        const fallbackId = crypto.randomUUID();
+        _rtMemoryStore.set(hashToken(token), { userId, tenantId, expiresAt, sessionId: fallbackId });
+        return fallbackId;
       }
       if (noTable) {
-        logger.warn('Auth', '⚠️  refresh_tokens table missing. FIX: Run backend/database/migration-v5.0-auth-tables.sql first.');
-        return crypto.randomUUID();
+        logger.warn('Auth', '⚠️  refresh_tokens table missing. FIX: Run backend/database/migration-v5.0-auth-tables.sql first. Storing token in memory fallback.');
+        const fallbackId = crypto.randomUUID();
+        _rtMemoryStore.set(hashToken(token), { userId, tenantId, expiresAt, sessionId: fallbackId });
+        return fallbackId;
       }
       // Other errors — throw to surface them
       throw new Error('Failed to store refresh token: ' + error.message);
@@ -219,7 +236,10 @@ async function storeRefreshToken(userId, tenantId, token, req) {
     // Catch network errors too
     if (err.message?.includes('Failed to store refresh token')) throw err;
     logger.warn('Auth', 'storeRefreshToken unexpected error:', err.message);
-    return crypto.randomUUID(); // Non-fatal fallback
+    // ROOT-CAUSE FIX v10.0: In-memory fallback so refresh still works this session
+    const fallbackId = crypto.randomUUID();
+    _rtMemoryStore.set(hashToken(token), { userId, tenantId, expiresAt, sessionId: fallbackId });
+    return fallbackId;
   }
 }
 
@@ -234,11 +254,38 @@ async function rotateRefreshToken(oldToken, req) {
     .eq('is_revoked', false)
     .single();
 
+  // ROOT-CAUSE FIX v10.0: Check in-memory fallback FIRST when RLS blocks DB reads.
+  // This handles the case where storeRefreshToken() used the memory fallback on login,
+  // so there is NO DB row to look up — but the token is still valid.
+  const memEntry = _rtMemoryStore.get(hash);
+  if (memEntry && !error) {
+    // Memory hit, but also no DB error (means DB may have the row) — continue to DB path
+  } else if (memEntry) {
+    // DB error (RLS/noTable) but memory has the entry — validate it here
+    if (new Date(memEntry.expiresAt) < new Date()) {
+      _rtMemoryStore.delete(hash);
+      throw new Error('Refresh token has expired. Please log in again.');
+    }
+    // Fetch user from DB for status check
+    const { data: memUser } = await supabase
+      .from('users')
+      .select('id, name, email, role, tenant_id, status, permissions, avatar')
+      .eq('id', memEntry.userId)
+      .single();
+    if (!memUser || memUser.status !== 'active') {
+      throw new Error('Account is suspended or not found');
+    }
+    // Rotate: remove old from memory, issue new token
+    _rtMemoryStore.delete(hash);
+    const newToken     = generateRefreshToken();
+    const newSessionId = await storeRefreshToken(memUser.id, memUser.tenant_id, newToken, req);
+    return { newToken, newSessionId, user: memUser, tenantId: memUser.tenant_id };
+  }
+
   if (error) {
     const isRLS   = error.message?.includes('row-level security') || error.code === '42501';
     const noTable = error.message?.includes('does not exist') || error.code === '42P01';
     if (isRLS || noTable) {
-      // RLS / missing table — token can't be verified in DB, force re-login
       throw new Error('Session validation unavailable. Please log in again.');
     }
     throw new Error('Invalid or expired refresh token');

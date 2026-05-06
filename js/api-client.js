@@ -42,10 +42,23 @@ const TokenStore = {
   _USER_KEY:    'we_user',
   _EXP_KEY:     'we_token_expires',
 
-  /** Get access token */
-  get()           { return sessionStorage.getItem(this._ACCESS_KEY) || localStorage.getItem(this._ACCESS_KEY); },
+  /** Get access token — ROOT-CAUSE FIX v10.0: check ALL unified keys so tokens
+   *  written by login-secure-patch._finalizeLogin() (which writes 'wadjet_access_token'
+   *  first) are always visible even before PersistentAuth_onLogin syncs the legacy key. */
+  get() {
+    return sessionStorage.getItem(this._ACCESS_KEY)
+        || localStorage.getItem(this._ACCESS_KEY)
+        || localStorage.getItem('wadjet_access_token')
+        || localStorage.getItem('tp_access_token')
+        || sessionStorage.getItem('wadjet_access_token')
+        || null;
+  },
   /** Get refresh token (persisted in localStorage) */
-  getRefresh()    { return localStorage.getItem(this._REFRESH_KEY); },
+  getRefresh() {
+    return localStorage.getItem(this._REFRESH_KEY)
+        || localStorage.getItem('wadjet_refresh_token')
+        || null;
+  },
   /** Get token expiry timestamp (ms) */
   /** Get token expiry timestamp (ms) — reads sessionStorage first, falls back to localStorage.
    *  ROOT-CAUSE FIX v8.3: Previously only sessionStorage was checked. On page reload
