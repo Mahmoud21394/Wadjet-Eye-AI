@@ -35,6 +35,15 @@ const { supabase, supabaseAuth, isAbortError, isTimeoutError } = require('../con
 // This lets us verify token signature and expiry locally — without a
 // Supabase network round-trip — so cold-start latency never causes 503.
 const _JWT_SECRET = process.env.SUPABASE_JWT_SECRET || process.env.JWT_SECRET || null;
+// ROOT-CAUSE FIX v10.0: Both secrets tracked separately so Strategy-2 refresh
+// tokens (signed with JWT_SECRET) are accepted even when SUPABASE_JWT_SECRET is
+// the primary verification key.  If both are set and differ we try primary first,
+// then alt — so a Supabase-issued token AND a custom-signed refresh token both pass.
+const _SUPABASE_JWT  = process.env.SUPABASE_JWT_SECRET || null;
+const _CUSTOM_JWT    = process.env.JWT_SECRET || null;
+const _ALT_JWT_SECRET = (_SUPABASE_JWT && _CUSTOM_JWT && _SUPABASE_JWT !== _CUSTOM_JWT)
+  ? (_JWT_SECRET === _SUPABASE_JWT ? _CUSTOM_JWT : _SUPABASE_JWT)
+  : null;
 
 // ── Token extraction ───────────────────────────────────────────
 // Priority: httpOnly cookie → Authorization header → X-Access-Token header
@@ -129,10 +138,31 @@ async function verifyToken(req, res, next) {
   if (_JWT_SECRET) {
     let localDecoded;
     try {
-      localDecoded = jwt.verify(token, _JWT_SECRET, { algorithms: ['HS256'] });
+      // ROOT-CAUSE FIX v10.0: Add clockTolerance for minor clock-skew between
+      // Render and Supabase.  Also try the alternate secret so Strategy-2
+      // custom-signed tokens (JWT_SECRET) are accepted alongside Supabase-issued
+      // tokens (SUPABASE_JWT_SECRET) without forcing a re-login.
+      const _jwtOpts = { algorithms: ['HS256'], clockTolerance: 30 };
+      let _jwtVerifyErr = null;
+      try {
+        localDecoded = jwt.verify(token, _JWT_SECRET, _jwtOpts);
+      } catch (err1) {
+        _jwtVerifyErr = err1;
+        if (err1.name !== 'TokenExpiredError' && _ALT_JWT_SECRET) {
+          try {
+            localDecoded = jwt.verify(token, _ALT_JWT_SECRET, _jwtOpts);
+            _jwtVerifyErr = null; // alt-secret succeeded
+          } catch (err2) {
+            // Keep the more specific error (expired beats invalid)
+            _jwtVerifyErr = err2.name === 'TokenExpiredError' ? err2 : err1;
+          }
+        }
+      }
     } catch (jwtErr) {
-      // Local verify failed → token is invalid or expired
-      const isExpired = jwtErr.name === 'TokenExpiredError';
+      _jwtVerifyErr = jwtErr;
+    }
+    if (_jwtVerifyErr) {
+      const isExpired = _jwtVerifyErr.name === 'TokenExpiredError';
       if (isExpired) {
         return res.status(401).json({
           error: 'Token has expired. Please refresh your session.',

@@ -315,6 +315,10 @@ async function _finalizeLogin(data) {
   const refreshToken   = data.refreshToken || data.refresh_token || null;
   const expiresAt      = data.expiresAt || data.expires_at      || null;
   const expiresIn      = data.expiresIn || data.expires_in      || null;
+  // ROOT-CAUSE FIX v10.0: sessionId is returned at the top level of the login
+  // response (not inside the user object).  Previously CURRENT_USER.session_id
+  // was always null because we read displayUser.session_id which is undefined.
+  const sessionId      = data.sessionId || data.session_id || displayUser?.session_id || null;
 
   // ── P3: Warn if backend did not return a refresh token ─────────────
   // Root cause of Issue 3: /api/auth/login response body doesn't include
@@ -407,7 +411,7 @@ async function _finalizeLogin(data) {
     avatar:      displayUser.avatar     || (displayUser.name || 'U').slice(0, 2).toUpperCase(),
     permissions: displayUser.permissions || ['read'],
     mfa_enabled: displayUser.mfa_enabled || false,
-    session_id:  displayUser.session_id  || null,
+    session_id:  sessionId || displayUser.session_id || null,
     is_super_admin: displayUser.role === 'SUPER_ADMIN' || displayUser.role === 'super_admin',
     _offline:    false,
   };
