@@ -137,13 +137,15 @@ async function verifyToken(req, res, next) {
   // keep the old supabaseAuth path as last resort.
   if (_JWT_SECRET) {
     let localDecoded;
+    // FIX v10.1: hoist _jwtVerifyErr outside the try block so the outer catch
+    // and the post-try check can both reference it without a ReferenceError.
+    let _jwtVerifyErr = null;
     try {
       // ROOT-CAUSE FIX v10.0: Add clockTolerance for minor clock-skew between
       // Render and Supabase.  Also try the alternate secret so Strategy-2
       // custom-signed tokens (JWT_SECRET) are accepted alongside Supabase-issued
       // tokens (SUPABASE_JWT_SECRET) without forcing a re-login.
       const _jwtOpts = { algorithms: ['HS256'], clockTolerance: 30 };
-      let _jwtVerifyErr = null;
       try {
         localDecoded = jwt.verify(token, _JWT_SECRET, _jwtOpts);
       } catch (err1) {

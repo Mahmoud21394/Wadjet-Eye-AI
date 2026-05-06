@@ -64,8 +64,9 @@ async function upsertIOCs(iocs, tenantId, feedName) {
     'ip','domain','url','md5','sha1','sha256','sha512',
     'email','filename','cve','hostname','cidr','hash_md5','hash_sha1','hash_sha256'
   ]);
-  // Reduced chunk size: 50 rows — avoids 15s statement-timeout on Supabase free tier
-  const CHUNK = 50;
+  // FIX v11.0: Reduced chunk size from 50 → 25 rows to avoid 15s statement-timeout
+  // on Supabase free tier. Backpressure is already 150ms between chunks.
+  const CHUNK = 25;
   let inserted = 0, errors = 0;
 
   const normalized = iocs
@@ -123,8 +124,12 @@ async function upsertIOCs(iocs, tenantId, feedName) {
       if (consecutiveErrors === 1 || consecutiveErrors % 5 === 0) {
         console.error(`[Ingest][${feedName}] Upsert error (${consecutiveErrors}):`, error.message);
       }
-      // Retry with ignoreDuplicates on conflict error
-      if (error.message?.includes('cannot affect row')) {
+      const isTimeout = error.message?.includes('canceling statement due to statement timeout') ||
+                        error.message?.includes('statement timeout');
+      // Retry with ignoreDuplicates on conflict error OR statement timeout
+      if (error.message?.includes('cannot affect row') || isTimeout) {
+        // On timeout: wait 2s then retry with smaller ignoreDuplicates upsert
+        if (isTimeout) await new Promise(r => setTimeout(r, 2000));
         const { error: e2 } = await supabaseAdmin
           .from('iocs')
           .upsert(chunk, { onConflict: 'tenant_id,value', ignoreDuplicates: true });
@@ -138,9 +143,10 @@ async function upsertIOCs(iocs, tenantId, feedName) {
       inserted += chunk.length;
     }
 
-    // Backpressure: 150ms between chunks — prevents saturating Supabase free-tier
+    // FIX v11.0: Increased backpressure from 150ms → 300ms between chunks to
+    // avoid statement-timeout storms on Supabase free tier (15 s limit).
     if (i + CHUNK < deduped.length) {
-      await new Promise(r => setTimeout(r, 150));
+      await new Promise(r => setTimeout(r, 300));
     }
   }
 

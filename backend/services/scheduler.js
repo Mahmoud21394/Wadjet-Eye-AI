@@ -125,14 +125,22 @@ function startScheduler() {
   const intervals = [];
 
   // ── Helper to create a guarded interval ─────────────────────
+  // FIX v11.0: Each job gets its own stagger slot so startup bursts are
+  // spread across 2-10 minutes instead of all firing within 90s.
+  // This eliminates the Supabase statement-timeout storm on server boot.
+  let _staggerSlot = 0;
+  const STAGGER_BASE_MS  = 2 * 60 * 1000;  // 2 min minimum before first run
+  const STAGGER_STEP_MS  = 20 * 1000;      // 20 s between consecutive jobs
+
   function every(minutes, name, fn) {
     const ms = minutes * MIN;
-    // Run once immediately after a brief startup delay
-    const initial = setTimeout(() => safeRun(name, fn), 30 * 1000 + Math.random() * 60000);
-    // Then repeat
+    // Stagger: each job starts at STAGGER_BASE + slot * STAGGER_STEP
+    const delayMs = STAGGER_BASE_MS + (_staggerSlot++ * STAGGER_STEP_MS);
+    const initial = setTimeout(() => safeRun(name, fn), delayMs);
+    // Then repeat on the full interval
     const timer = setInterval(() => safeRun(name, fn), ms);
     intervals.push(timer, initial);
-    console.log(`[Scheduler] Registered: ${name} every ${minutes}m`);
+    console.log(`[Scheduler] Registered: ${name} every ${minutes}m (first run in ${Math.round(delayMs/1000)}s)`);
   }
 
   // ── Stagger initial runs to avoid hammering APIs ────────────
