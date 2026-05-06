@@ -259,12 +259,38 @@ async function verifyToken(req, res, next) {
       }
 
       // Profile not found by auth_id → try email fallback
+      // FIX v16.0: This query had NO timeout guard.  On Supabase free-tier cold-
+      // start it could hang for the full 15 s statement timeout, blocking the
+      // entire request and causing the outer timeout (if any) to fire first.
+      // Wrap in a 6 s timeout — tight enough to fail fast while still allowing
+      // for a slow pool connection.  Timeout here returns PROFILE_MISSING (401)
+      // rather than 503 because we already confirmed the auth_id lookup failed.
       if (userEmail) {
-        const { data: profileByEmail } = await supabase
-          .from('users')
-          .select('id, name, email, role, tenant_id, status, permissions, avatar')
-          .eq('email', userEmail)
-          .single();
+        const _emailFallbackTimeout = new Promise((_, rej) =>
+          setTimeout(() => rej(new Error('email fallback profile fetch timed out')), 6_000)
+        );
+        let profileByEmail = null;
+        try {
+          const result = await Promise.race([
+            supabase
+              .from('users')
+              .select('id, name, email, role, tenant_id, status, permissions, avatar')
+              .eq('email', userEmail)
+              .single(),
+            _emailFallbackTimeout,
+          ]);
+          profileByEmail = result.data || null;
+        } catch (_emailErr) {
+          if (_emailErr.message?.includes('timed out') || isAbortError(_emailErr) || isTimeoutError(_emailErr)) {
+            console.warn(`[Auth] 503 DB_ABORT email fallback profile fetch reqId=${reqId}: ${_emailErr.message}`);
+            return res.status(503).json({
+              error: 'Database temporarily unavailable. Please retry in a moment.',
+              code:  'DB_SERVICE_UNAVAILABLE',
+              retryAfter: 3,
+            });
+          }
+          // Other error — fall through to PROFILE_MISSING
+        }
 
         if (profileByEmail) {
           _cacheSetProfile(authUserId, profileByEmail);

@@ -489,7 +489,11 @@ const API = {
     addIOC(id, iocId)    { return POST(`/cases/${id}/iocs`, { ioc_id: iocId }); },
     addEvidence(id, fd)  { return apiRequest('POST', `/cases/${id}/evidence`, null, { body: fd, headers: {} }); },
     timeline(id)         { return GET(`/cases/${id}/timeline`); },
-    exportPDF(id)        { return `${CONFIG.BACKEND_URL}/api/cases/${id}/export-pdf?token=${TokenStore.get()}`; },
+    // FIX v16.0: Phase 1 hardening removed query-param token extraction from
+    // backend/middleware/auth.js. Export URLs must not embed ?token= in the URL
+    // (leaked in browser history + server logs). Use a fetch-based download instead.
+    exportPDF(id)        { return `${CONFIG.BACKEND_URL}/api/cases/${id}/export-pdf`; },
+    exportPDFFetch(id)   { return apiRequest('GET', `/cases/${id}/export-pdf`); },
   },
 
   /* ── IOCs ── */
@@ -503,7 +507,9 @@ const API = {
     enrich(id)           { return GET(`/iocs/${id}/enrich`); },
     pivot(field, value)  { return POST('/iocs/pivot', { field, value }); },
     search(q, params)    { return GET('/iocs', { search: q, ...params }); },
-    export(params)       { return `${CONFIG.BACKEND_URL}/api/iocs/export?${new URLSearchParams(params || {})}&token=${TokenStore.get()}`; },
+    // FIX v16.0: No query-param tokens (Phase 1). Use fetch-based export.
+    export(params)       { return `${CONFIG.BACKEND_URL}/api/iocs/export?${new URLSearchParams(params || {})}`; },
+    exportFetch(params)  { return apiRequest('GET', `/iocs/export?${new URLSearchParams(params || {})}`); },
   },
 
   /* ── Threat Intel Enrichment ── */
@@ -581,7 +587,9 @@ const API = {
     list(params)          { return GET('/audit', params); },
     byUser(userId)        { return GET(`/audit/user/${userId}`); },
     loginActivity(params) { return GET('/auth/activity', params); },
-    export()              { return `${CONFIG.BACKEND_URL}/api/audit/export?token=${TokenStore.get()}`; },
+    // FIX v16.0: No query-param tokens (Phase 1).
+    export()              { return `${CONFIG.BACKEND_URL}/api/audit/export`; },
+    exportFetch()         { return apiRequest('GET', '/audit/export'); },
   },
 
   /* ── Playbooks ── */
@@ -615,7 +623,9 @@ const API = {
       }).then(r => r.json());
     },
     rules()               { return GET('/sysmon/rules'); },
-    export(logId)         { return `${CONFIG.BACKEND_URL}/api/sysmon/sessions/${logId}/export?token=${TokenStore.get()}`; },
+    // FIX v16.0: No query-param tokens (Phase 1).
+    export(logId)         { return `${CONFIG.BACKEND_URL}/api/sysmon/sessions/${logId}/export`; },
+    exportFetch(logId)    { return apiRequest('GET', `/sysmon/sessions/${logId}/export`); },
   },
 
   /* ── Executive Reports ── */
@@ -623,7 +633,9 @@ const API = {
     list()                { return GET('/reports'); },
     generate(params)      { return POST('/reports/generate', params); },
     get(id)               { return GET(`/reports/${id}`); },
-    download(id)          { return `${CONFIG.BACKEND_URL}/api/reports/${id}/download?token=${TokenStore.get()}`; },
+    // FIX v16.0: No query-param tokens (Phase 1).
+    download(id)          { return `${CONFIG.BACKEND_URL}/api/reports/${id}/download`; },
+    downloadFetch(id)     { return apiRequest('GET', `/reports/${id}/download`); },
   },
 
   /* ── Detections ── */
@@ -945,34 +957,38 @@ window.loadIOCs          = (p) => API.iocs.list(p).then(r => r?.data || []).catc
 
 /* ════════════════════════════════════════════════════════════
    GLOBAL API CONVENIENCE HELPERS — used by new v25.0 modules
+   FIX v16.0: Previous implementation had THREE critical auth holes:
+   1. No pre-flight token refresh — expired tokens sent on every call.
+   2. No 401 handling — a single expired token caused a hard failure
+      with no retry; auth:expired was never dispatched, leaving the
+      app in a broken state silently.
+   3. Missing `credentials: 'include'` — httpOnly refresh cookie was
+      never sent, preventing cookie-based session recovery.
+   Fix: delegate to the canonical authFetch() from auth-interceptor when
+   available, falling back to apiRequest() (which has full 401 handling
+   via auth-interceptor delegation) when authFetch is not yet loaded.
 ═══════════════════════════════════════════════════════════ */
 (function _installGlobalHelpers() {
-  const BACKEND = (() => {
-    const u = (typeof window !== 'undefined' && window.THREATPILOT_API_URL)
-      ? window.THREATPILOT_API_URL.replace(/\/$/, '')
-      : (window.location.hostname === 'localhost' ? 'http://localhost:3000' : '');
-    return u;
-  })();
-
-  function _authHeaders() {
-    const token = typeof TokenStore !== 'undefined' ? TokenStore.get() : null;
-    const h = { 'Content-Type': 'application/json' };
-    if (token) h['Authorization'] = `Bearer ${token}`;
-    return h;
-  }
-
+  /**
+   * _apiFetch — auth-aware fetch used by all global helpers.
+   *
+   * Delegation chain (first available wins):
+   *   1. window.authFetch    — auth-interceptor (pre-flight + 401 queue)
+   *   2. apiRequest          — api-client internal (401 → silentRefresh)
+   *   3. Raw fetch fallback  — only for auth routes (login/refresh/logout)
+   */
   async function _apiFetch(method, path, body) {
-    const url = BACKEND + (path.startsWith('http') ? path.replace(BACKEND, '') : path);
-    const opts = { method, headers: _authHeaders() };
-    if (body !== undefined) opts.body = JSON.stringify(body);
-    const res = await fetch(url, opts);
-    if (!res.ok) {
-      let errMsg = `HTTP ${res.status}`;
-      try { const j = await res.json(); errMsg = j.error || j.message || errMsg; } catch {}
-      throw new Error(errMsg);
+    // Prefer auth-interceptor's authFetch (loaded after this IIFE runs)
+    if (typeof window.authFetch === 'function') {
+      return window.authFetch(path, {
+        method,
+        body:    body !== undefined ? body : undefined,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
-    if (res.status === 204) return null;
-    return res.json();
+
+    // Fall back to apiRequest (has full 401 + refresh handling)
+    return apiRequest(method, path.replace(/^\/api/, ''), body !== undefined ? body : null);
   }
 
   // Install globally — safe to call from any new module
