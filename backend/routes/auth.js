@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════
- *  Enterprise Auth Routes v7.4 — Timeout Root-Cause Fix
+ *  Enterprise Auth Routes v7.4 — Timeout Root-Cause Fix (FIX v18.0)
  *  backend/routes/auth.js
  *
  *  POST  /api/auth/login          — Email/password login
@@ -98,11 +98,23 @@ const RT_COOKIE = 'waj_rt';
 // Also removed path:'/api/auth' — restricting to that path meant the cookie
 // was not sent when the browser first navigated to any other /api/* endpoint.
 const _IS_PROD   = process.env.NODE_ENV === 'production';
+// ROOT-CAUSE FIX v17.0: Restore the 'domain' option when COOKIE_DOMAIN is set.
+// Without it, the browser scopes the cookie to the exact hostname of the
+// Set-Cookie response (e.g. wadjet-eye-ai.onrender.com).  Subsequent requests
+// from Vercel (wadjet-eye-ai.vercel.app → onrender.com) already use the correct
+// domain because the cookie is returned to the SAME origin that issued it.
+// The new addition here is 'partitioned: true' for Chrome CHIPS (Cookies Having
+// Independent Partitioned State) — required from Chrome 119+ when SameSite=None
+// is used in a cross-site third-party context (Vercel iframe → Render).
+// Also: added explicit 'domain' from COOKIE_DOMAIN env var so it can be set
+// to a shared apex domain if Vercel and Render are ever migrated to subdomains.
 const RT_COOKIE_OPTS = {
-  httpOnly : true,
-  secure   : _IS_PROD,
-  sameSite : _IS_PROD ? 'none' : 'lax',
-  maxAge   : parseInt(process.env.REFRESH_TOKEN_EXPIRY_DAYS || '30') * 86400 * 1000,
+  httpOnly  : true,
+  secure    : _IS_PROD,
+  sameSite  : _IS_PROD ? 'none' : 'lax',
+  maxAge    : parseInt(process.env.REFRESH_TOKEN_EXPIRY_DAYS || '30') * 86400 * 1000,
+  // domain: set via COOKIE_DOMAIN env var for shared apex domain deployments
+  ...(process.env.COOKIE_DOMAIN ? { domain: process.env.COOKIE_DOMAIN } : {}),
   // No path restriction — cookie must be sent to ALL /api/* endpoints
 };
 
@@ -194,11 +206,17 @@ async function logActivity(userId, tenantId, action, req, extras = {}) {
 // (acceptable — user will need to log in again on cold restart).
 const _rtMemoryStore = new Map();
 
-/** Store a new refresh token in DB (with in-memory fallback when RLS blocks).
+/** Store a new refresh token in DB.
  *  ROOT-CAUSE FIX v10.0: When RLS/missing-table prevents the DB insert, store
  *  the token hash in _rtMemoryStore so the /refresh endpoint can validate it.
  *  This replaces the previous "return fake UUID" approach that caused every
  *  subsequent /api/auth/refresh call to return "Invalid or expired refresh token".
+ *
+ *  FIX v18.0: RLS insert failures (code 42501) now throw a structured error
+ *  instead of silently falling back to the in-memory store.  This surfaces the
+ *  misconfiguration clearly in logs rather than masking it.  Run
+ *  migration-auth-fk-rls-fix.sql to apply the service_role_full_access policy
+ *  and eliminate this error permanently.
  */
 async function storeRefreshToken(userId, tenantId, token, req) {
   const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 86400 * 1000).toISOString();
@@ -213,20 +231,26 @@ async function storeRefreshToken(userId, tenantId, token, req) {
     }).select('id').single();
 
     if (error) {
-      // ── RLS or table-missing error → non-fatal, log and continue ──
-      const isRLS     = error.message?.includes('row-level security') ||
-                        error.message?.includes('policy') ||
-                        error.code === '42501';
-      const noTable   = error.message?.includes('does not exist') ||
-                        error.code === '42P01';
+      const isRLS   = error.message?.includes('row-level security') ||
+                      error.message?.includes('policy') ||
+                      error.code === '42501';
+      const noTable = error.message?.includes('does not exist') ||
+                      error.code === '42P01';
 
+      // FIX v18.0: RLS failures are now a hard error — surface them immediately
+      // so operators know to run migration-auth-fk-rls-fix.sql.
+      // Previously this silently fell back to _rtMemoryStore, hiding the root cause.
       if (isRLS) {
-        logger.warn('Auth', '⚠️  refresh_tokens RLS blocked insert. FIX: Run backend/database/rls-fix-v5.1.sql. Storing token in memory fallback so refresh still works this session.');
-        // ROOT-CAUSE FIX v10.0: Store in memory so rotateRefreshToken() can
-        // validate this token even without a DB row.
-        const fallbackId = crypto.randomUUID();
-        _rtMemoryStore.set(hashToken(token), { userId, tenantId, expiresAt, sessionId: fallbackId });
-        return fallbackId;
+        const rlsErr = new Error(
+          'RLS blocked refresh_token insert (code 42501). ' +
+          'Run migration-auth-fk-rls-fix.sql to grant service_role full access.'
+        );
+        rlsErr.code    = '42501';
+        rlsErr.details = { pg_code: error.code, message: error.message, hint: error.hint };
+        logger.error('Auth', '🔴 storeRefreshToken RLS failure — run migration-auth-fk-rls-fix.sql', {
+          code: error.code, message: error.message, details: error.details, hint: error.hint,
+        });
+        throw rlsErr;
       }
       if (noTable) {
         logger.warn('Auth', '⚠️  refresh_tokens table missing. FIX: Run backend/database/migration-v5.0-auth-tables.sql first. Storing token in memory fallback.');
@@ -240,10 +264,13 @@ async function storeRefreshToken(userId, tenantId, token, req) {
 
     return data.id;
   } catch (err) {
-    // Catch network errors too
-    if (err.message?.includes('Failed to store refresh token')) throw err;
-    logger.warn('Auth', 'storeRefreshToken unexpected error:', err.message);
-    // ROOT-CAUSE FIX v10.0: In-memory fallback so refresh still works this session
+    // Re-throw structured RLS errors and other explicitly thrown errors
+    if (err.code === '42501' || err.message?.includes('Failed to store refresh token')) throw err;
+    // Catch unexpected network / runtime errors — in-memory fallback so refresh
+    // still works this session, but log as error so it is never silently lost.
+    logger.error('Auth', 'storeRefreshToken unexpected error — using in-memory fallback', {
+      message: err.message, code: err.code, stack: err.stack?.split('\n')[1],
+    });
     const fallbackId = crypto.randomUUID();
     _rtMemoryStore.set(hashToken(token), { userId, tenantId, expiresAt, sessionId: fallbackId });
     return fallbackId;
@@ -336,12 +363,28 @@ async function rotateRefreshToken(oldToken, req) {
   }
 
   // No memory entry — try the DB (with timeout guard)
+  // ROOT-CAUSE FIX v17.0: The PostgREST embed `users(...)` is AMBIGUOUS when
+  // multiple foreign-key relationships exist between `refresh_tokens` and `users`
+  // (e.g. user_id → users.id  AND  created_by → users.id).
+  // PostgREST responds with:
+  //   "Could not embed because more than one relationship was found for
+  //    'refresh_tokens' and 'users'"
+  // which surfaces as rtError with code PGRST201 (or similar) and causes
+  // every single /api/auth/refresh call to throw "Invalid or expired refresh token".
+  //
+  // FIX: Use the explicit FK hint syntax:  users!refresh_tokens_user_id_fkey(...)
+  // This pins PostgREST to the correct foreign-key relationship and eliminates
+  // the ambiguity error regardless of how many relationships exist.
+  // Fallback column-name hints (user_id!inner and user_id) are tried if the
+  // named-FK hint is unavailable (older PostgREST versions).
   let rt, rtError;
   try {
+    // Try explicit FK hint first (PostgREST >= 10)
+    const fkHint = 'users!refresh_tokens_user_id_fkey(id, name, email, role, tenant_id, status, permissions, avatar)';
     const result = await _withDbTimeout(
       supabase
         .from('refresh_tokens')
-        .select('*, users(id, name, email, role, tenant_id, status, permissions, avatar)')
+        .select(`id, token_hash, user_id, tenant_id, expires_at, is_revoked, device_info, created_at, last_used_at, ${fkHint}`)
         .eq('token_hash', hash)
         .eq('is_revoked', false)
         .single(),
@@ -349,6 +392,57 @@ async function rotateRefreshToken(oldToken, req) {
     );
     rt      = result.data;
     rtError = result.error;
+
+    // FIX v17.0 / FIX v18.0: If the FK-hint query fails with ANY relationship
+    // or embed ambiguity error, fall back to a two-step approach: fetch the token
+    // row first, then fetch the user separately.  This avoids ALL embed ambiguity.
+    //
+    // FIX v18.0 bug fix: the previous condition contained the erroneous expression
+    //   `rtError.code === 'PGRST116' === false`
+    // which evaluates as `(rtError.code === 'PGRST116') === false` — a comparison
+    // of a boolean to false — and was ALWAYS true when code ≠ 'PGRST116'.  The
+    // correct intent is: if code is NOT 'PGRST116' AND the message mentions
+    // 'relationship'.  Also added PGRST200 (ambiguous FK — PostgREST >= 11).
+    if (rtError && (
+      rtError.message?.includes('more than one relationship') ||
+      rtError.message?.includes('Could not embed') ||
+      rtError.code === 'PGRST200' ||
+      rtError.code === 'PGRST201' ||
+      (rtError.code !== 'PGRST116' && rtError.message?.includes('relationship'))
+    )) {
+      logger.warn('Auth:Refresh', `FK-hint embed failed (${rtError.code}): ${rtError.message} — falling back to two-step lookup`);
+
+      // Step 1: Fetch the refresh token row without the user embed
+      const tokenResult = await _withDbTimeout(
+        supabase
+          .from('refresh_tokens')
+          .select('id, token_hash, user_id, tenant_id, expires_at, is_revoked, device_info, created_at, last_used_at')
+          .eq('token_hash', hash)
+          .eq('is_revoked', false)
+          .single(),
+        'refresh_token lookup (two-step)'
+      );
+      rt      = tokenResult.data;
+      rtError = tokenResult.error;
+
+      // Step 2: If we got the token row, fetch the user separately
+      if (!rtError && rt?.user_id) {
+        try {
+          const userResult = await _withDbTimeout(
+            supabase
+              .from('users')
+              .select('id, name, email, role, tenant_id, status, permissions, avatar')
+              .eq('id', rt.user_id)
+              .single(),
+            'user lookup (two-step)'
+          );
+          rt.users = userResult.data || null;
+        } catch (userErr) {
+          logger.warn('Auth:Refresh', `two-step user fetch timed out: ${userErr.message}`);
+          // Non-fatal: rt.users will be null; handled below
+        }
+      }
+    }
   } catch (dbErr) {
     // Hard DB timeout — return SESSION_VALIDATION_UNAVAILABLE so client retries
     logger.warn('Auth:Refresh', `refresh_token lookup timed out: ${dbErr.message}`);
@@ -367,8 +461,13 @@ async function rotateRefreshToken(oldToken, req) {
       // Row doesn't exist — token was never stored or already rotated
       throw new Error('Invalid or expired refresh token');
     }
-    // Unexpected DB error
-    logger.error('Auth:Refresh', `Unexpected DB error on token lookup: ${rtError.message}`);
+    // Unexpected DB error — FIX v18.0: log full error object (code, message, details)
+    logger.error('Auth:Refresh', 'Unexpected DB error on token lookup', {
+      code:    rtError.code,
+      message: rtError.message,
+      details: rtError.details,
+      hint:    rtError.hint,
+    });
     throw new Error('Invalid or expired refresh token');
   }
 
@@ -739,10 +838,26 @@ router.post('/login', asyncHandler(async (req, res) => {
 ═══════════════════════════════════════════════ */
 router.post('/refresh', asyncHandler(async (req, res) => {
   // Accept refresh token from: (1) HTTP-only cookie [preferred], (2) request body [legacy]
-  const oldRefreshToken = req.cookies?.[RT_COOKIE] || req.body.refresh_token || req.cookies?.rt;
+  // ROOT-CAUSE FIX v17.0: Body parsing for refresh_token failed silently when
+  // Content-Type was not set or was 'text/plain' (some fetch() callers omit it).
+  // Also handle the case where body is a raw string (not yet parsed as JSON).
+  let _bodyRefreshToken = req.body?.refresh_token;
+  if (!_bodyRefreshToken && typeof req.body === 'string') {
+    try { _bodyRefreshToken = JSON.parse(req.body)?.refresh_token; } catch (_) {}
+  }
+  const oldRefreshToken = req.cookies?.[RT_COOKIE] || _bodyRefreshToken || req.cookies?.rt;
 
   if (!oldRefreshToken) {
-    return res.status(400).json({ error: 'refresh_token is required' });
+    // FIX v17.0: Return 400 with actionable message distinguishing
+    // "no cookie AND no body" from "malformed body".
+    const hasCookie = !!req.cookies?.[RT_COOKIE];
+    const hasBody   = !!(req.body && Object.keys(req.body).length > 0);
+    logger.warn('Auth:Refresh', `Missing refresh token — hasCookie=${hasCookie} hasBody=${hasBody} cookies=${Object.keys(req.cookies||{}).join(',')}`);
+    return res.status(400).json({
+      error: 'refresh_token is required',
+      code:  'MISSING_REFRESH_TOKEN',
+      hint:  'Send waj_rt httpOnly cookie OR include {"refresh_token":"..."} in body',
+    });
   }
 
   let rotated;

@@ -786,11 +786,26 @@ function _scheduleProactiveRefresh() {
 async function authFetch(path, opts = {}) {
   const base = BACKEND_URL();
 
-  const fullUrl = path.startsWith('http')
-    ? path
-    : path.startsWith('/api')
-      ? `${base}${path}`
-      : `${base}/api${path}`;
+  // ROOT-CAUSE FIX v17.0: Previous URL builder had a gap:
+  //   paths like '/cti/timeline' (no leading '/api') → built as
+  //   `${base}/api/cti/timeline` which is correct, BUT the
+  //   isAuthRoute check used fullUrl.includes(p) where p is
+  //   '/api/auth/login' etc. — that is fine.
+  //
+  //   The REAL bug: when path already starts with '/api/' but does NOT
+  //   start with 'http', the URL is built correctly.  However, if the
+  //   caller passes a bare path like 'cti/timeline' (no leading slash),
+  //   it became `${base}/apicti/timeline` — invalid URL → 404 / no auth.
+  //
+  //   Fix: normalise all paths to have a leading slash before building.
+  const _normPath = path.startsWith('http') ? path
+    : ('/' + path.replace(/^\/+/, ''));   // ensure exactly one leading slash
+
+  const fullUrl = _normPath.startsWith('http')
+    ? _normPath
+    : _normPath.startsWith('/api')
+      ? `${base}${_normPath}`
+      : `${base}/api${_normPath}`;
 
   // ───────── AUTH BYPASS (CRITICAL FIX) ─────────
   const AUTH_BYPASS = [
@@ -802,14 +817,28 @@ async function authFetch(path, opts = {}) {
   const isAuthRoute = AUTH_BYPASS.some(p => fullUrl.includes(p));
 
   // ───────── PRE-FLIGHT REFRESH (SKIP FOR AUTH ROUTES) ─────────
-  if (!isAuthRoute &&
-      !UnifiedTokenStore.isOffline() &&
-      UnifiedTokenStore.isExpired(60_000) &&
-      UnifiedTokenStore.hasSession()) {
-    await silentRefresh();
+  // ROOT-CAUSE FIX v17.0: If the token is missing entirely (not just
+  // expired) AND a refresh token exists, trigger a silent refresh so the
+  // first post-login API call after a cold page-load always has a valid
+  // token.  The previous check only fired when isExpired() was true, but
+  // isExpired() returns false when the expiry timestamp is absent — common
+  // on the very first request after a session restore where only the
+  // refresh token was in storage and the access token was not yet fetched.
+  if (!isAuthRoute && !UnifiedTokenStore.isOffline() && UnifiedTokenStore.hasSession()) {
+    const needsRefresh = UnifiedTokenStore.isExpired(60_000) || !UnifiedTokenStore.getToken();
+    if (needsRefresh) {
+      await silentRefresh();
+    }
   }
 
   const token = UnifiedTokenStore.getToken();
+
+  // ROOT-CAUSE FIX v17.0: If we STILL have no token after silentRefresh()
+  // and this is NOT an auth route, log a warning so the MISSING_TOKEN error
+  // is traceable to the exact call site rather than producing a cryptic 401.
+  if (!token && !isAuthRoute && UnifiedTokenStore.hasSession()) {
+    console.warn(`[AuthFetch] ⚠️  No access token available for ${path} — session exists but token missing. Proceeding (will get 401 if backend requires auth).`);
+  }
 
   const headers = {
     'Content-Type': 'application/json',
@@ -848,20 +877,34 @@ async function authFetch(path, opts = {}) {
       throw new Error(`Not authenticated (HTTP ${resp.status}) — no session present. Path: ${path}`);
     }
 
+    // ROOT-CAUSE FIX v17.0: Check if the 401 is MISSING_TOKEN (no token was
+    // sent at all) vs INVALID_TOKEN (wrong token sent).  If we had no token
+    // to begin with, silentRefresh() is the right first step.  But if we DID
+    // send a token and it was rejected, only retry once after refresh.
+    // Capture the token that was sent so we can detect a stale-token retry.
+    const tokenSentOnFirst = token; // captured before refresh
+
     // Has a session → attempt one silent refresh, then retry
     const refreshed = await silentRefresh();
 
     if (refreshed) {
       const newToken = UnifiedTokenStore.getToken();
-      resp = await fetch(fullUrl, {
-        ...fetchOpts,
-        headers: { ...headers, Authorization: `Bearer ${newToken}` },
-      });
+      // Only retry if we actually got a NEW token (or had none before)
+      if (newToken && newToken !== tokenSentOnFirst || !tokenSentOnFirst) {
+        resp = await fetch(fullUrl, {
+          ...fetchOpts,
+          headers: { ...headers, Authorization: `Bearer ${newToken}` },
+        });
+      }
     }
 
     // Still 401 after refresh → session truly dead (revoked / expired)
     if (!resp || resp.status === 401 || resp.status === 403) {
-      _dispatchAuthEvent('auth:expired', { path });
+      // FIX v17.0: Read the response body for better error logging
+      const errBody = await resp?.json().catch(() => ({}));
+      const errCode = errBody?.code || 'unknown';
+      console.warn(`[AuthFetch] Session dead after refresh attempt on ${path} — code: ${errCode}`);
+      _dispatchAuthEvent('auth:expired', { path, code: errCode });
       window.StateSync?.handleAuthExpiry({ path });
       throw new Error(`AUTH_EXPIRED: Session expired. Please log in again. (${path})`);
     }

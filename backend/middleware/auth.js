@@ -175,7 +175,18 @@ async function verifyToken(req, res, next) {
       // Render and Supabase.  Also try the alternate secret so Strategy-2
       // custom-signed tokens (JWT_SECRET) are accepted alongside Supabase-issued
       // tokens (SUPABASE_JWT_SECRET) without forcing a re-login.
-      const _jwtOpts = { algorithms: ['HS256'], clockTolerance: 30 };
+      //
+      // ROOT-CAUSE FIX v17.0:
+      //  (a) clockTolerance 30→60s: Render cold-start clocks can drift >30s vs
+      //      Supabase, causing perfectly valid tokens to fail with 'jwt not active'
+      //      or 'jwt expired' even when they are within their real validity window.
+      //  (b) audience: 'authenticated' — Supabase JWTs carry aud='authenticated'.
+      //      Without this option jwt.verify() accepts tokens with ANY aud, making
+      //      INVALID_TOKEN errors intermittent and hard to reproduce.  Specifying
+      //      it here ensures our verify logic matches Supabase's own validation.
+      //      NOTE: This must match the aud field in the custom JWT payload signed
+      //      in routes/auth.js Strategy-2 (which already uses aud:'authenticated').
+      const _jwtOpts = { algorithms: ['HS256'], clockTolerance: 60, audience: 'authenticated' };
       try {
         localDecoded = jwt.verify(token, _JWT_SECRET, _jwtOpts);
       } catch (err1) {
@@ -476,7 +487,8 @@ async function optionalAuth(req, res, next) {
   try {
     // Fast-path: local JWT verification — no network call
     if (_JWT_SECRET) {
-      const _jwtOpts = { algorithms: ['HS256'], clockTolerance: 30 };
+      // FIX v17.0: audience + increased clockTolerance (same as verifyToken fast-path)
+      const _jwtOpts = { algorithms: ['HS256'], clockTolerance: 60, audience: 'authenticated' };
       let localDecoded = null;
       try {
         localDecoded = jwt.verify(token, _JWT_SECRET, _jwtOpts);
@@ -642,7 +654,8 @@ async function authInfo(req) {
   // Fast-path: local JWT decode — zero network
   if (_JWT_SECRET) {
     try {
-      const _jwtOpts = { algorithms: ['HS256'], clockTolerance: 30 };
+      // FIX v17.0: audience + increased clockTolerance (same as verifyToken fast-path)
+      const _jwtOpts = { algorithms: ['HS256'], clockTolerance: 60, audience: 'authenticated' };
       let decoded = null;
       try {
         decoded = jwt.verify(token, _JWT_SECRET, _jwtOpts);
