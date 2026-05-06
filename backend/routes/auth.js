@@ -313,7 +313,24 @@ async function rotateRefreshToken(oldToken, req) {
     // Rotate: remove old token from memory, issue new one
     _rtMemoryStore.delete(hash);
     const newToken     = generateRefreshToken();
-    const newSessionId = await storeRefreshToken(memUser.id, memUser.tenant_id, newToken, req);
+    // FIX v16.0: storeRefreshToken() for the new token had no timeout guard.
+    // On free-tier cold-start the DB insert can hang, blocking the entire
+    // rotation result and causing the outer 20s timeout to fire → 503 storm.
+    // Wrap in the same 8s _withDbTimeout used for the lookup above.
+    let newSessionId;
+    try {
+      newSessionId = await _withDbTimeout(
+        (async () => storeRefreshToken(memUser.id, memUser.tenant_id, newToken, req))(),
+        'storeRefreshToken (memory path)'
+      );
+    } catch (storeErr) {
+      // Non-fatal: memory fallback — store directly and continue
+      logger.warn('Auth:Refresh', `storeRefreshToken (memory path) timed out: ${storeErr.message}`);
+      const fbId = crypto.randomUUID();
+      const exp  = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 86400 * 1000).toISOString();
+      _rtMemoryStore.set(hashToken(newToken), { userId: memUser.id, tenantId: memUser.tenant_id, expiresAt: exp, sessionId: fbId });
+      newSessionId = fbId;
+    }
     logger.info('Auth:Refresh', `✅ Rotated from memory store for user=${memUser.id}`);
     return { newToken, newSessionId, user: memUser, tenantId: memUser.tenant_id };
   }
@@ -386,7 +403,22 @@ async function rotateRefreshToken(oldToken, req) {
     logger.warn('Auth:Refresh', `revoke old token timed out (non-fatal): ${revokeErr.message}`);
   }
 
-  const newSessionId = await storeRefreshToken(rt.user_id, rt.tenant_id, newToken, req);
+  // FIX v16.0: storeRefreshToken() for the new token had no timeout guard.
+  // Wrap in the same 8s _withDbTimeout used for all other DB queries here.
+  let newSessionId;
+  try {
+    newSessionId = await _withDbTimeout(
+      (async () => storeRefreshToken(rt.user_id, rt.tenant_id, newToken, req))(),
+      'storeRefreshToken (DB path)'
+    );
+  } catch (storeErr) {
+    // Non-fatal timeout — use in-memory fallback so the rotation still completes
+    logger.warn('Auth:Refresh', `storeRefreshToken (DB path) timed out: ${storeErr.message}`);
+    const fbId = crypto.randomUUID();
+    const exp  = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 86400 * 1000).toISOString();
+    _rtMemoryStore.set(hashToken(newToken), { userId: rt.user_id, tenantId: rt.tenant_id, expiresAt: exp, sessionId: fbId });
+    newSessionId = fbId;
+  }
 
   return { newToken, newSessionId, user: rt.users, tenantId: rt.tenant_id };
 }

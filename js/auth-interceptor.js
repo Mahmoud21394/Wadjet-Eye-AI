@@ -954,6 +954,9 @@ async function _syncStoresOnLoad() {
     // cookie-probe. Any stale backoff from a previous unauthenticated page load
     // must not block the /api/auth/refresh call.
     _clearCookieRefreshState();
+    // FIX v16.0: Reset the rate-limit guard so a page-load session restore is
+    // never blocked by a stale timestamp from the previous page cycle.
+    _lastRefreshAttemptAt = 0;
     const ok = await silentRefresh();
 
     if (ok) {
@@ -972,6 +975,12 @@ async function _syncStoresOnLoad() {
 
   // ── Step 6: Only refresh token (no access token at all) ─────────
   if (!hasToken && hasRefresh) {
+    // FIX v16.0: _syncStoresOnLoad runs at DOMContentLoaded which is typically
+    // within 15s of the previous page load.  The REFRESH_MIN_INTERVAL_MS guard
+    // (15s) can block this refresh if the last attempt timestamp was set during
+    // the previous page's silent-refresh cycle.  Reset the guard so a genuine
+    // session-restore on page-load is never silently skipped.
+    _lastRefreshAttemptAt = 0;
     const ok = await silentRefresh();
     const updatedUser = UnifiedTokenStore.getUser() || user;
     window.StateSync?.markAuthReady({
@@ -1142,8 +1151,14 @@ window.addEventListener('auth:expired', () => {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && UnifiedTokenStore.hasSession()) {
     const msLeft = UnifiedTokenStore.msUntilExpiry();
-    // If less than 3 minutes left when tab becomes visible → refresh now
-    if (msLeft > 0 && msLeft < 180_000) {
+    // If less than 3 minutes left when tab becomes visible → refresh now.
+    // FIX v16.0: Clear the rate-limit guard before attempting.  When the tab
+    // was hidden for > 15s (very common) the guard timer has reset naturally,
+    // but if the tab was hidden for exactly 15s and the user switches back the
+    // guard can still block.  Tab-focus refresh is user-triggered and must
+    // never be blocked by the rate-limit guard.
+    if (msLeft >= 0 && msLeft < 180_000) {
+      _lastRefreshAttemptAt = 0; // allow refresh immediately
       silentRefresh();
     }
   }
@@ -1154,6 +1169,10 @@ document.addEventListener('visibilitychange', () => {
 ═══════════════════════════════════════════════════════════════ */
 window.addEventListener('online', () => {
   if (UnifiedTokenStore.hasSession() && !UnifiedTokenStore.isOffline()) {
+    // FIX v16.0: Network restore is a system event — reset the rate-limit guard
+    // so the refresh always fires immediately after going back online, even if
+    // the previous attempt was less than 15 s ago.
+    _lastRefreshAttemptAt = 0;
     silentRefresh();
   }
 });
