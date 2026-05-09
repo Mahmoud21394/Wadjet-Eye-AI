@@ -325,6 +325,9 @@ const ETIModule = (() => {
       </div>
     </div>
     <div class="eti-header-actions">
+      <button class="eti-btn eti-btn-ghost" onclick="window.ETIModule.exportReport('pdf')" title="Export full DFIR report as PDF">
+        <i class="fas fa-file-pdf"></i> Export Report
+      </button>
       <button class="eti-btn eti-btn-ghost" onclick="window.ETIModule.openIncidents()">
         <i class="fas fa-ticket-alt"></i> Incidents
       </button>
@@ -394,7 +397,9 @@ const ETIModule = (() => {
       <div class="eti-analysis-tabs" id="etiAnalysisTabs">
         <button class="eti-tab-btn active" data-tab="overview">    <i class="fas fa-shield-alt"></i> Overview</button>
         <button class="eti-tab-btn" data-tab="evidence">  <i class="fas fa-link"></i> Evidence Chain</button>
+        <button class="eti-tab-btn" data-tab="timeline">  <i class="fas fa-stream"></i> Timeline</button>
         <button class="eti-tab-btn" data-tab="headers">   <i class="fas fa-route"></i> Headers</button>
+        <button class="eti-tab-btn" data-tab="rawmail">   <i class="fas fa-code"></i> Raw Email</button>
         <button class="eti-tab-btn" data-tab="intelligence"><i class="fas fa-database"></i> Threat Intel</button>
         <button class="eti-tab-btn" data-tab="behavioral"><i class="fas fa-fingerprint"></i> Behavioral</button>
         <button class="eti-tab-btn" data-tab="graph">     <i class="fas fa-project-diagram"></i> Attack Graph</button>
@@ -591,6 +596,34 @@ const ETIModule = (() => {
   }
 
   function processAnalysisResult(data) {
+    // FIX-003: Compute body content score from signals if not already set
+    if (!data.email.body_content_score && data.email.body_signals?.length) {
+      data.email.body_content_score = Math.min(
+        data.email.body_signals.reduce((acc, s) => acc + (s.weight || 0), 0), 100
+      );
+    }
+
+    // FIX-003: Update Evidence Chain Step 4 verdict from body_content_score
+    const chain = data.explanation?.evidence_chain;
+    if (Array.isArray(chain)) {
+      const step4 = chain.find(s => s.step === 4 || s.category === 'Content & Intent');
+      if (step4) {
+        const score = data.email?.body_content_score || 0;
+        step4.verdict = score >= 60 ? 'malicious' : score >= 35 ? 'suspicious' : score > 0 ? 'low' : 'clean';
+        step4.risk_contribution = score >= 60 ? 'HIGH' : score >= 35 ? 'MEDIUM' : score > 0 ? 'LOW' : 'NONE';
+        if (score > 0 && (!step4.evidence || step4.evidence.length === 0)) {
+          step4.evidence = (data.email.body_signals || []).map(s => `${s.signal.replace(/_/g,' ')}: "${s.text}" (+${s.weight}pts)`);
+        }
+      }
+    }
+
+    // ENHANCE-004: Campaign correlation
+    const campaignMatch = _correlateWithCampaigns(data);
+    if (campaignMatch) {
+      data._campaign = campaignMatch;
+      showToast(`Campaign Detected: ${campaignMatch.id}`, `This email matches a known ${campaignMatch.primary_type} campaign (${campaignMatch.count} emails)`, 'critical');
+    }
+
     state.currentAnalysis = data;
     state.analysisHistory.unshift(data);
 
@@ -599,10 +632,10 @@ const ETIModule = (() => {
     renderAnalysisView(data);
     updateRightPanel(data);
 
-    const emptyState   = document.getElementById('etiEmptyState');
-    const tabContent   = document.getElementById('etiTabContent');
-    if (emptyState)  emptyState.style.display  = 'none';
-    if (tabContent)  tabContent.style.display  = '';
+    const emptyState = document.getElementById('etiEmptyState');
+    const tabContent = document.getElementById('etiTabContent');
+    if (emptyState) emptyState.style.display = 'none';
+    if (tabContent) tabContent.style.display = '';
   }
 
   // ── Mock Data (offline / fallback) ─────────────────────────────────────────
@@ -620,14 +653,39 @@ const ETIModule = (() => {
         from: 'admin@m1cr0soft-security.tk',
         from_display: 'Microsoft Security Team',
         subject: 'URGENT: Your Microsoft 365 Account Will Be Suspended',
+        subject_decoded: 'URGENT: Your Microsoft 365 Account Will Be Suspended',
+        subject_analysis: { risk: 'high', flags: ['all_caps', 'suspicious_keywords', 'brand_impersonation'] },
         received_at: now,
         auth: { spf: 'fail', dkim: 'fail', dmarc: 'fail' },
         routing_hops: 3, attachment_count: 0, url_count: 2,
+        recipients: {
+          to:       [{ display_name: 'John Employee',   address: 'victim@company.com',   domain: 'company.com' }],
+          cc:       [],
+          bcc:      [],
+          reply_to: 'support@account-recovery-help.ml',
+          x_original_to: 'victim@company.com'
+        },
+        body_content_score: 78,
+        body_signals: [
+          { id: 'CS-FIN-001', signal: 'financial_urgency',        text: 'account will be suspended',  weight: 15, fp_risk: 'low'    },
+          { id: 'CS-AUTH-002', signal: 'authority_impersonation', text: 'Microsoft Security Team',    weight: 20, fp_risk: 'low'    },
+          { id: 'CS-URG-003', signal: 'deadline_pressure',        text: 'within 24 hours',            weight: 12, fp_risk: 'medium' },
+          { id: 'CS-ACT-004', signal: 'action_demanded',          text: 'click here to verify',       weight: 18, fp_risk: 'low'    }
+        ],
+        mime_parts: [
+          { part: 1, content_type: 'text/html', transfer_encoding: 'quoted-printable', size_bytes: 1842, filename: null },
+        ],
+        raw_headers: 'Authentication-Results: mx.company.com; spf=fail smtp.mailfrom=m1cr0soft-security.tk; dkim=fail; dmarc=fail\r\nReceived: from unknown (185.234.219.123) by mx.company.com\r\nReturn-Path: <bounces@m1cr0soft-security.tk>\r\nReply-To: support@account-recovery-help.ml\r\nX-Mailer: PHPMailer 6.5.0\r\nSubject: URGENT: Your Microsoft 365 Account Will Be Suspended\r\nFrom: Microsoft Security Team <admin@m1cr0soft-security.tk>\r\nTo: John Employee <victim@company.com>',
+        decoded_body: '<p>Dear User,</p><p><strong>URGENT ACTION REQUIRED</strong></p><p>Your Microsoft 365 account has been flagged for unusual activity. Your account will be <strong>SUSPENDED WITHIN 24 HOURS</strong> unless you verify your identity immediately.</p><p><a href="https://m1cr0s0ft-secure-login.xyz/verify?user=victim@company.com&token=abc123">Click Here to Verify Your Account Now</a></p>',
+        forensic_timeline: [
+          { hop: 1, from_server: 'mail.m1cr0soft-security.tk', from_ip: '185.234.219.123', to_server: 'mx.company.com', timestamp: now, delay_ms: 0, suspicious: true },
+          { hop: 2, from_server: 'mx.company.com', from_ip: null, to_server: 'inbox.company.com', timestamp: now, delay_ms: 340, suspicious: false }
+        ],
         indicators: {
           ips: ['185.234.219.123'],
-          domains: ['m1cr0soft-security.tk', 'm1cr0s0ft.xyz'],
+          domains: ['m1cr0soft-security.tk', 'm1cr0s0ft.xyz', 'account-recovery-help.ml'],
           urls: ['http://m1cr0s0ft.xyz/verify'],
-          hashes: [], emails: []
+          hashes: [], emails: ['victim@company.com']
         }
       },
       detection: {
@@ -763,6 +821,30 @@ MITRE Mapping: T1566.002 (Spearphishing Link), T1036.005 (Masquerading), T1056.0
         from: 'ceo.johnson@company-corp.com',
         from_display: 'Robert Johnson (CEO)',
         subject: 'Urgent Wire Transfer Request — Confidential',
+        subject_decoded: 'Urgent Wire Transfer Request — Confidential',
+        subject_analysis: { risk: 'high', flags: ['suspicious_keywords', { flag: 'suspicious_keywords', terms: ['urgent', 'wire'] }] },
+        recipients: {
+          to:       [{ display_name: 'Finance Team', address: 'cfo@company.com', domain: 'company.com' }],
+          cc:       [],
+          bcc:      [],
+          reply_to: 'rjohnson.ceo2024@gmail.com',
+          x_original_to: 'cfo@company.com'
+        },
+        body_content_score: 85,
+        body_signals: [
+          { id: 'CS-FIN-001', signal: 'wire_transfer_request', text: 'wire transfer',           weight: 25, fp_risk: 'low'    },
+          { id: 'CS-SEC-002', signal: 'secrecy_demand',        text: 'keep this confidential',  weight: 20, fp_risk: 'low'    },
+          { id: 'CS-AUTH-003', signal: 'authority_invocation', text: 'CEO',                     weight: 15, fp_risk: 'medium' },
+          { id: 'CS-URG-004', signal: 'deadline_pressure',     text: 'today',                   weight: 10, fp_risk: 'medium' }
+        ],
+        mime_parts: [
+          { part: 1, content_type: 'text/plain', transfer_encoding: '7bit', size_bytes: 512, filename: null }
+        ],
+        raw_headers: 'Authentication-Results: mx.company.com; spf=pass; dkim=pass; dmarc=fail\r\nReceived: from gmail.com by mx.company.com\r\nReply-To: rjohnson.ceo2024@gmail.com\r\nX-Mailer: Gmail\r\nSubject: Urgent Wire Transfer Request — Confidential\r\nFrom: Robert Johnson (CEO) <ceo.johnson@company-corp.com>\r\nTo: Finance Team <cfo@company.com>',
+        decoded_body: 'Hi,\n\nI need you to process an urgent wire transfer today. We are closing a confidential acquisition deal and need to move funds immediately. Please keep this confidential.\n\nWire transfer details:\nAmount: $487,500\nBank: First National Bank\n\nBest regards,\nRobert Johnson\nCEO',
+        forensic_timeline: [
+          { hop: 1, from_server: 'gmail.com', from_ip: '209.85.220.41', to_server: 'mx.company.com', timestamp: now, delay_ms: 0, suspicious: false }
+        ],
         indicators: { ips: [], domains: ['gmail.com', 'company-corp.com'], urls: [], hashes: [], emails: ['rjohnson.ceo2024@gmail.com'] }
       },
       detection: {
@@ -904,7 +986,9 @@ IMMEDIATE ACTION: Verify with CEO via phone. Do NOT reply to this email or proce
     const renderers = {
       overview:     () => renderOverview(data),
       evidence:     () => renderEvidenceChain(data),
+      timeline:     () => renderTimeline(data),
       headers:      () => renderHeaderAnalysis(data),
+      rawmail:      () => renderRawEmail(data),
       intelligence: () => renderThreatIntel(data),
       behavioral:   () => renderBehavioral(data),
       graph:        () => renderAttackGraph(data),
@@ -926,6 +1010,25 @@ IMMEDIATE ACTION: Verify with CEO via phone. Do NOT reply to this email or proce
     const tierColors = { critical: '#FF2D55', high: '#FF6B35', medium: '#FFD60A', low: '#30D158', clean: '#636366' };
     const color = tierColors[tier] || '#636366';
 
+    // FIX-002: subject display
+    const subject      = data.email?.subject_decoded || data.email?.subject || '(no subject)';
+    const subjAnalysis = data.email?.subject_analysis || {};
+    const subjRiskColor = subjAnalysis.risk === 'high' ? 'var(--eti-critical)' : subjAnalysis.risk === 'medium' ? 'var(--eti-medium)' : 'var(--eti-low)';
+    const subjFlags     = (subjAnalysis.flags || []).map(f => {
+      const name = typeof f === 'string' ? f : (f.flag || '');
+      return `<span style="font-size:9px;padding:2px 6px;border-radius:3px;background:rgba(255,107,53,0.15);color:var(--eti-high);margin-left:4px;">${name.replace(/_/g,' ')}</span>`;
+    }).join('');
+
+    // FIX-003: body content score
+    const bodyScore    = data.email?.body_content_score || 0;
+    const bodySignals  = data.email?.body_signals || [];
+    const bodyColor    = bodyScore >= 60 ? 'var(--eti-critical)' : bodyScore >= 35 ? 'var(--eti-high)' : bodyScore > 0 ? 'var(--eti-medium)' : 'var(--eti-low)';
+
+    // FIX-001: recipient display
+    const recipients   = data.email?.recipients || {};
+    const toList       = (recipients.to || []).map(r => r.address || r).filter(Boolean);
+    const toDisplay    = toList.length ? toList[0] : (data.email?.from ? '(unknown)' : '');
+
     const mitreChips = (detection.mitre_techniques || []).map(t => `
       <div class="eti-mitre-chip" title="${t.explanation || ''}">
         <span class="eti-mitre-id">${t.sub_technique_id || t.technique_id}</span>
@@ -942,12 +1045,59 @@ IMMEDIATE ACTION: Verify with CEO via phone. Do NOT reply to this email or proce
         <span class="eti-rule-conf">${r.confidence}%</span>
       </div>`).join('');
 
-    const keyFacts = (data.explanation?.summary?.key_facts || []).map(f =>
+    // FIX-001: add To address to key facts
+    const rawKeyFacts = [...(data.explanation?.summary?.key_facts || [])];
+    if (toDisplay && !rawKeyFacts.some(f => f.includes(toDisplay))) {
+      rawKeyFacts.unshift(`Delivered to: ${toDisplay}`);
+    }
+    const keyFacts = rawKeyFacts.map(f =>
       `<div class="eti-evidence-item"><i class="fas fa-exclamation-triangle" style="color:var(--eti-medium);margin-right:6px;font-size:10px;"></i>${f}</div>`
     ).join('');
 
+    // FIX-003: content signals sub-section
+    const contentSignalsHTML = bodySignals.length ? `
+      <div class="eti-section-card" style="margin-top:8px;">
+        <div class="eti-section-card-header">
+          <div class="eti-section-card-title"><i class="fas fa-brain"></i> Content Signals — Intent Score: <span style="color:${bodyColor};font-weight:800;">${bodyScore}/100</span></div>
+          <i class="fas fa-chevron-down eti-section-card-chevron"></i>
+        </div>
+        <div class="eti-section-card-body">
+          <div style="margin-bottom:10px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+              <div style="flex:1;height:6px;border-radius:3px;background:rgba(255,255,255,0.07);">
+                <div style="height:100%;border-radius:3px;width:${bodyScore}%;background:${bodyColor};transition:width .6s ease;"></div>
+              </div>
+              <span style="font-size:12px;font-weight:700;color:${bodyColor};">${bodyScore}/100</span>
+            </div>
+          </div>
+          ${bodySignals.map(s => `
+            <div style="display:flex;align-items:flex-start;gap:8px;padding:6px 8px;background:rgba(255,255,255,0.02);border-radius:5px;border:1px solid var(--eti-border);margin-bottom:4px;">
+              <div style="font-size:9px;font-family:monospace;color:var(--eti-accent-cyan);white-space:nowrap;padding-top:1px;">${s.id}</div>
+              <div style="flex:1;">
+                <div style="font-size:11px;font-weight:600;color:var(--eti-text-primary);">${s.signal.replace(/_/g,' ')}</div>
+                <div style="font-size:10px;color:var(--eti-text-tertiary);font-style:italic;">"${s.text}"</div>
+              </div>
+              <div style="text-align:right;flex-shrink:0;">
+                <div style="font-size:11px;font-weight:700;color:var(--eti-high);">+${s.weight}pts</div>
+                <div style="font-size:9px;color:var(--eti-text-tertiary);">FP:${s.fp_risk}</div>
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>` : '';
+
     return `
     <div class="eti-animate-in">
+
+      <!-- FIX-002: Subject Banner -->
+      <div style="margin-bottom:10px;padding:10px 14px;background:rgba(255,255,255,0.03);border:1px solid var(--eti-border);border-radius:8px;display:flex;align-items:center;gap:10px;">
+        <i class="fas fa-envelope" style="color:var(--eti-text-tertiary);font-size:14px;flex-shrink:0;"></i>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:10px;color:var(--eti-text-tertiary);font-weight:600;margin-bottom:2px;">SUBJECT</div>
+          <div style="font-size:13px;font-weight:600;color:var(--eti-text-primary);word-break:break-word;">${subject}</div>
+        </div>
+        ${subjAnalysis.risk !== 'low' ? `<div style="flex-shrink:0;font-size:10px;font-weight:700;padding:3px 8px;border-radius:4px;background:rgba(255,107,53,0.15);color:${subjRiskColor};">SUSPICIOUS SUBJECT${subjFlags}</div>` : ''}
+      </div>
+
       <div class="eti-verdict-card ${tier}">
         <div class="eti-verdict-score-ring">
           <svg width="80" height="80" viewBox="0 0 80 80">
@@ -984,6 +1134,8 @@ IMMEDIATE ACTION: Verify with CEO via phone. Do NOT reply to this email or proce
           </div>
           <div class="eti-section-card-body">${keyFacts}</div>
         </div>` : ''}
+
+      ${contentSignalsHTML}
 
       ${rules ? `
         <div class="eti-section-card">
@@ -1133,8 +1285,14 @@ IMMEDIATE ACTION: Verify with CEO via phone. Do NOT reply to this email or proce
   }
 
   function renderHeaderAnalysis(data) {
-    const auth = data.email?.auth || {};
-    const hops = (data.explanation?.evidence_chain?.find(s => s.category === 'Routing Analysis')?.evidence || []);
+    const auth       = data.email?.auth || {};
+    const hops       = (data.explanation?.evidence_chain?.find(s => s.category === 'Routing Analysis')?.evidence || []);
+    const recipients = data.email?.recipients || {};
+    const toList     = recipients.to   || [];
+    const ccList     = recipients.cc   || [];
+    const bccList    = recipients.bcc  || [];
+    const replyTo    = recipients.reply_to || data.email?.reply_to || '';
+    const xOrigTo    = recipients.x_original_to || '';
 
     const authBadge = (result, label) => {
       const c = result === 'pass' ? 'var(--eti-low)' : result === 'fail' ? 'var(--eti-critical)' : 'var(--eti-medium)';
@@ -1146,8 +1304,48 @@ IMMEDIATE ACTION: Verify with CEO via phone. Do NOT reply to this email or proce
       </div>`;
     };
 
+    const addrRow = (label, addr) => {
+      if (!addr) return '';
+      const address = typeof addr === 'string' ? addr : (addr.address || '');
+      const display = typeof addr === 'string' ? '' : (addr.display_name || '');
+      const domain  = address.includes('@') ? address.split('@')[1] : '';
+      const isFree  = ['gmail.com','yahoo.com','hotmail.com','outlook.com','protonmail.com'].includes(domain);
+      const mismatch = replyTo && replyTo !== address && label === 'Reply-To';
+      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;
+        background:${mismatch ? 'rgba(255,45,85,0.07)' : 'rgba(255,255,255,0.02)'};
+        border:1px solid ${mismatch ? 'rgba(255,45,85,0.3)' : 'var(--eti-border)'};border-radius:5px;margin-bottom:3px;">
+        <span style="font-size:10px;color:var(--eti-text-tertiary);font-weight:600;min-width:80px;">${label}</span>
+        <span style="font-size:11px;font-family:monospace;color:var(--eti-accent-cyan);flex:1;word-break:break-all;">${address}</span>
+        ${display ? `<span style="font-size:10px;color:var(--eti-text-tertiary);">"${display}"</span>` : ''}
+        ${isFree ? `<span style="font-size:9px;padding:2px 5px;border-radius:3px;background:rgba(255,214,10,0.15);color:var(--eti-medium);">FREE</span>` : ''}
+        ${mismatch ? `<span style="font-size:9px;padding:2px 5px;border-radius:3px;background:rgba(255,45,85,0.2);color:var(--eti-critical);">⚠ MISMATCH</span>` : ''}
+      </div>`;
+    };
+
+    const addrListRows = (label, list) =>
+      list.map((addr, i) => addrRow(i === 0 ? label : '', addr)).join('');
+
     return `
     <div class="eti-animate-in">
+
+      <!-- FIX-001: Recipient Details card -->
+      <div class="eti-section-card">
+        <div class="eti-section-card-header">
+          <div class="eti-section-card-title"><i class="fas fa-address-book"></i> Recipient Details</div>
+          <i class="fas fa-chevron-down eti-section-card-chevron"></i>
+        </div>
+        <div class="eti-section-card-body">
+          ${addrRow('From', { address: data.email?.from || '', display_name: data.email?.from_display || '' })}
+          ${addrListRows('To', toList.length ? toList : (data.email?.from ? [] : []))}
+          ${!toList.length && data.email?.from ? `<div style="padding:5px 10px;font-size:11px;color:var(--eti-text-tertiary);font-style:italic;">To: not extracted (demo mode)</div>` : ''}
+          ${addrListRows('CC', ccList)}
+          ${addrListRows('BCC', bccList)}
+          ${replyTo ? addrRow('Reply-To', replyTo) : ''}
+          ${xOrigTo ? addrRow('X-Original-To', xOrigTo) : ''}
+          ${!toList.length && !ccList.length && !replyTo ? `<div style="color:var(--eti-text-tertiary);font-size:11px;padding:8px;">No recipient headers extracted.</div>` : ''}
+        </div>
+      </div>
+
       <div class="eti-section-card">
         <div class="eti-section-card-header">
           <div class="eti-section-card-title"><i class="fas fa-shield-alt"></i> Email Authentication (SPF / DKIM / DMARC)</div>
@@ -1263,11 +1461,11 @@ IMMEDIATE ACTION: Verify with CEO via phone. Do NOT reply to this email or proce
 
   function renderIOCList(indicators) {
     const groups = [
-      { type: 'ips',     label: 'IP Addresses',  icon: 'server'      },
-      { type: 'domains', label: 'Domains',        icon: 'globe'       },
-      { type: 'urls',    label: 'URLs',           icon: 'link'        },
-      { type: 'hashes',  label: 'File Hashes',    icon: 'fingerprint' },
-      { type: 'emails',  label: 'Email Addresses',icon: 'at'          }
+      { type: 'ips',     label: 'IP Addresses',   icon: 'server'      },
+      { type: 'domains', label: 'Domains',         icon: 'globe'       },
+      { type: 'urls',    label: 'URLs',            icon: 'link'        },
+      { type: 'hashes',  label: 'File Hashes',     icon: 'fingerprint' },
+      { type: 'emails',  label: 'Email Addresses', icon: 'at'          }
     ];
 
     let html = '';
@@ -1278,17 +1476,596 @@ IMMEDIATE ACTION: Verify with CEO via phone. Do NOT reply to this email or proce
         <div style="font-size:11px;font-weight:600;color:var(--eti-text-tertiary);margin-bottom:5px;">
           <i class="fas fa-${g.icon}" style="margin-right:5px;"></i>${g.label} (${items.length})
         </div>
-        ${items.map(item => `
-          <div style="display:flex;align-items:center;gap:8px;padding:4px 8px;background:rgba(255,255,255,0.03);
-            border-radius:4px;border:1px solid var(--eti-border);margin-bottom:2px;">
-            <span style="font-size:10px;font-family:monospace;color:var(--eti-accent-cyan);flex:1;word-break:break-all;">
-              ${item.length > 60 ? item.substring(0, 57) + '…' : item}
-            </span>
-          </div>`).join('')}
+        ${items.map(item => {
+          const cached  = _enrichmentCache[item];
+          const feed    = _feedCache[`${g.type}:${item}`];
+          const isFound = feed?.found;
+          return `
+          <div style="padding:5px 8px;background:rgba(255,255,255,0.03);border-radius:5px;
+            border:1px solid ${isFound ? 'rgba(255,45,85,0.3)' : 'var(--eti-border)'};margin-bottom:3px;">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              <span style="font-size:10px;font-family:monospace;color:var(--eti-accent-cyan);flex:1;min-width:0;word-break:break-all;">
+                ${item.length > 55 ? item.substring(0, 52) + '…' : item}
+              </span>
+              ${isFound ? `<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(255,45,85,0.2);color:var(--eti-critical);font-weight:700;">⚠ ${feed.feeds.join('/')}</span>` : ''}
+              ${(g.type === 'ips' || g.type === 'domains') ? `
+                <button onclick="window.ETIModule.enrichIOC('${g.type === 'ips' ? 'ip' : 'domain'}','${item}')"
+                  style="font-size:9px;padding:2px 5px;border:1px solid var(--eti-border);border-radius:3px;
+                  background:transparent;color:var(--eti-text-tertiary);cursor:pointer;flex-shrink:0;">
+                  <i class="fas fa-search-plus"></i>
+                </button>` : ''}
+            </div>
+            <!-- UX-004: IOC Pivot Links -->
+            <div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:4px;">
+              ${_iocPivotLinks(g.type, item)}
+            </div>
+            <!-- Enrichment results -->
+            ${cached && !cached._error ? _renderEnrichedBadge(cached) : ''}
+          </div>`;
+        }).join('')}
       </div>`;
     }
 
     return html || '<div style="color:var(--eti-text-tertiary);font-size:11px;">No indicators extracted</div>';
+  }
+
+  // ── ENHANCE-002: Timeline Tab ──────────────────────────────────────────────
+  function renderTimeline(data) {
+    const timeline = data.email?.forensic_timeline || [];
+    const hopsEvidence = data.explanation?.evidence_chain?.find(s => s.category === 'Routing Analysis')?.evidence || [];
+
+    if (!timeline.length && !hopsEvidence.length) {
+      return `<div class="eti-animate-in"><div class="eti-empty-state" style="padding:40px;">
+        <i class="fas fa-stream" style="font-size:48px;color:var(--eti-text-tertiary);margin-bottom:12px;display:block;"></i>
+        <div style="color:var(--eti-text-secondary);">No forensic timeline data — Received headers not parsed in demo mode</div>
+      </div></div>`;
+    }
+
+    const hops = timeline.length ? timeline : hopsEvidence.map((e, i) => ({
+      hop: i + 1, from_server: e.replace(/^Suspicious hop: /, ''),
+      timestamp: data.email?.received_at || new Date().toISOString(),
+      suspicious: e.toLowerCase().includes('suspicious')
+    }));
+
+    const totalDelay = hops.reduce((acc, h) => acc + (h.delay_ms || 0), 0);
+
+    return `
+    <div class="eti-animate-in">
+      <div class="eti-section-card">
+        <div class="eti-section-card-header">
+          <div class="eti-section-card-title"><i class="fas fa-stream"></i> Email Delivery Timeline — ${hops.length} hops, ${totalDelay}ms total delay</div>
+          <i class="fas fa-chevron-down eti-section-card-chevron"></i>
+        </div>
+        <div class="eti-section-card-body">
+          <div style="position:relative;padding-left:28px;">
+            <!-- Vertical timeline line -->
+            <div style="position:absolute;left:11px;top:8px;bottom:8px;width:2px;background:var(--eti-border);border-radius:1px;"></div>
+            ${hops.map((hop, i) => {
+              const suspicious = hop.suspicious || false;
+              const delay      = hop.delay_ms || 0;
+              const delayHigh  = delay > 300000; // >5 min
+              const dotColor   = suspicious ? 'var(--eti-critical)' : delayHigh ? 'var(--eti-medium)' : 'var(--eti-low)';
+              const ts         = hop.timestamp ? new Date(hop.timestamp).toLocaleTimeString() : '—';
+              return `
+              <div style="position:relative;margin-bottom:${i < hops.length - 1 ? '20px' : '0'};padding-left:14px;">
+                <!-- Timeline dot -->
+                <div style="position:absolute;left:-17px;top:6px;width:12px;height:12px;border-radius:50%;
+                  background:${dotColor};border:2px solid var(--eti-bg-primary);box-shadow:0 0 0 2px ${dotColor}33;"></div>
+                <div style="padding:10px 12px;background:${suspicious ? 'rgba(255,45,85,0.06)' : 'rgba(255,255,255,0.02)'};
+                  border:1px solid ${suspicious ? 'rgba(255,45,85,0.25)' : 'var(--eti-border)'};border-radius:7px;">
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+                    <span style="font-size:11px;font-weight:700;color:var(--eti-text-tertiary);font-family:monospace;">HOP ${hop.hop || i+1}</span>
+                    <span style="font-size:10px;color:var(--eti-text-tertiary);">${ts}</span>
+                    ${delay > 0 ? `<span style="font-size:10px;padding:1px 6px;border-radius:3px;
+                      background:${delayHigh ? 'rgba(255,214,10,0.15)' : 'rgba(255,255,255,0.05)'};
+                      color:${delayHigh ? 'var(--eti-medium)' : 'var(--eti-text-tertiary)'};">
+                      +${delay < 1000 ? delay+'ms' : (delay/1000).toFixed(1)+'s'} ${delayHigh ? '⚠ HIGH DELAY' : ''}
+                    </span>` : ''}
+                    ${suspicious ? `<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;background:rgba(255,45,85,0.2);color:var(--eti-critical);">⚠ SUSPICIOUS</span>` : ''}
+                  </div>
+                  <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px;margin-top:4px;">
+                    <div style="font-size:11px;font-family:monospace;color:var(--eti-accent-cyan);word-break:break-all;">
+                      ${hop.from_server || '(unknown)'}
+                      ${hop.from_ip ? `<br><span style="color:var(--eti-text-tertiary);font-size:10px;">${hop.from_ip}</span>` : ''}
+                    </div>
+                    <div style="font-size:18px;color:var(--eti-text-tertiary);">→</div>
+                    <div style="font-size:11px;font-family:monospace;color:var(--eti-text-secondary);word-break:break-all;">
+                      ${hop.to_server || '(destination)'}
+                    </div>
+                  </div>
+                  ${hop.from_ip && _enrichmentCache[hop.from_ip] ? _renderEnrichedBadge(_enrichmentCache[hop.from_ip]) : `
+                    <button onclick="window.ETIModule.enrichIOC('ip','${hop.from_ip || ''}')" 
+                      style="margin-top:6px;font-size:10px;padding:3px 8px;border:1px solid var(--eti-border);
+                      border-radius:4px;background:transparent;color:var(--eti-text-tertiary);cursor:pointer;">
+                      <i class="fas fa-search-plus"></i> Enrich IP
+                    </button>`}
+                </div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ── FIX-004: Raw Email Tab ─────────────────────────────────────────────────
+  function renderRawEmail(data) {
+    const rawHeaders   = data.email?.raw_headers    || '(no raw headers available)';
+    const decodedBody  = data.email?.decoded_body   || data.email?.body_plain || '(no body content)';
+    const mimeParts    = data.email?.mime_parts      || [];
+
+    // State for sub-tab selection — use closure var scoped per render
+    const panelId = 'etiRawMailPanel';
+
+    const mimeTree = mimeParts.length ? mimeParts.map((p, i) => `
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;
+        background:rgba(255,255,255,0.02);border-radius:5px;border:1px solid var(--eti-border);margin-bottom:4px;">
+        <div style="font-size:10px;font-family:monospace;color:var(--eti-accent-cyan);width:20px;text-align:center;
+          background:rgba(0,122,255,0.1);border-radius:3px;padding:2px 4px;">P${p.part || i+1}</div>
+        <div style="flex:1;">
+          <div style="font-size:11px;font-weight:600;color:var(--eti-text-primary);">${p.content_type || 'unknown'}</div>
+          <div style="font-size:10px;color:var(--eti-text-tertiary);">
+            ${p.transfer_encoding ? `enc:${p.transfer_encoding}` : ''} 
+            ${p.size_bytes ? `· ${p.size_bytes} bytes` : ''}
+            ${p.filename ? `· 📎 ${p.filename}` : ''}
+          </div>
+        </div>
+        ${p.filename ? `<span style="font-size:9px;padding:2px 6px;border-radius:3px;background:rgba(255,45,85,0.15);color:var(--eti-critical);">ATTACHMENT</span>` : ''}
+      </div>`).join('') : '<div style="color:var(--eti-text-tertiary);font-size:11px;">Single-part email — no MIME tree</div>';
+
+    const rawHeaderEscaped = rawHeaders.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const decodedBodyEscaped = typeof decodedBody === 'string'
+      ? decodedBody.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')
+      : '(binary content)';
+
+    // Build iframe srcdoc for sandboxed body preview
+    const isHtml = (data.email?.decoded_body || '').trim().startsWith('<');
+    const bodyPreview = isHtml
+      ? `<iframe srcdoc="${(data.email?.decoded_body || '').replace(/"/g,'&quot;').replace(/\n/g,'')}"
+          sandbox="allow-same-origin"
+          style="width:100%;height:300px;border:none;border-radius:6px;background:#fff;"
+          title="Email body preview (sandboxed)"></iframe>`
+      : `<pre style="font-size:11px;color:var(--eti-text-secondary);white-space:pre-wrap;word-break:break-word;
+          background:rgba(0,0,0,0.2);padding:12px;border-radius:6px;max-height:300px;overflow-y:auto;">${decodedBodyEscaped}</pre>`;
+
+    const copyRaw = () => {
+      navigator.clipboard?.writeText(rawHeaders + '\r\n\r\n' + (data.email?.decoded_body || ''));
+    };
+
+    const downloadEml = () => {
+      const blob = new Blob([rawHeaders + '\r\n\r\n' + (data.email?.decoded_body || '')], { type: 'message/rfc822' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = `email-${(data.analysis_id || 'export').replace(/[^a-z0-9]/gi,'_')}.eml`;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+    // Expose to window for onclick handlers
+    window._etiCopyRaw     = copyRaw;
+    window._etiDownloadEml = downloadEml;
+
+    return `
+    <div class="eti-animate-in">
+      <div class="eti-section-card">
+        <div class="eti-section-card-header">
+          <div class="eti-section-card-title"><i class="fas fa-code"></i> Raw Email</div>
+          <div style="display:flex;gap:6px;margin-left:auto;">
+            <button onclick="window._etiCopyRaw()" style="font-size:10px;padding:4px 10px;border:1px solid var(--eti-border);
+              border-radius:4px;background:transparent;color:var(--eti-text-secondary);cursor:pointer;">
+              <i class="fas fa-copy"></i> Copy Raw
+            </button>
+            <button onclick="window._etiDownloadEml()" style="font-size:10px;padding:4px 10px;border:1px solid var(--eti-border);
+              border-radius:4px;background:transparent;color:var(--eti-text-secondary);cursor:pointer;">
+              <i class="fas fa-download"></i> Download .eml
+            </button>
+          </div>
+          <i class="fas fa-chevron-down eti-section-card-chevron"></i>
+        </div>
+        <div class="eti-section-card-body">
+          <!-- Sub-panel tabs -->
+          <div id="${panelId}-tabs" style="display:flex;gap:4px;margin-bottom:12px;border-bottom:1px solid var(--eti-border);padding-bottom:8px;">
+            ${[['body','Decoded Body','file-alt'],['mime','MIME Tree','sitemap'],['headers','Raw Headers','code']].map(([id,label,icon]) => `
+              <button data-rawpanel="${id}" onclick="window.ETIModule._switchRawPanel('${id}')"
+                style="font-size:11px;padding:5px 12px;border-radius:5px;border:none;cursor:pointer;font-weight:600;
+                  background:${id==='body'?'rgba(0,122,255,0.15)':'transparent'};
+                  color:${id==='body'?'var(--eti-accent-blue)':'var(--eti-text-tertiary)'};">
+                <i class="fas fa-${icon}" style="margin-right:4px;"></i>${label}
+              </button>`).join('')}
+          </div>
+          <!-- Sub-panel content -->
+          <div id="${panelId}-body" data-rawcontent="body">
+            <div style="font-size:11px;color:var(--eti-text-tertiary);margin-bottom:8px;">
+              <i class="fas fa-shield-alt"></i> Rendered in sandboxed iframe — scripts/forms disabled
+            </div>
+            ${bodyPreview}
+          </div>
+          <div id="${panelId}-mime" data-rawcontent="mime" style="display:none;">
+            ${mimeTree}
+          </div>
+          <div id="${panelId}-headers" data-rawcontent="headers" style="display:none;">
+            <pre style="font-size:10px;font-family:monospace;color:var(--eti-accent-cyan);white-space:pre-wrap;
+              word-break:break-all;background:rgba(0,0,0,0.2);padding:12px;border-radius:6px;
+              max-height:400px;overflow-y:auto;line-height:1.6;">${rawHeaderEscaped}</pre>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ── ENHANCE-001: IOC Enrichment Engine ─────────────────────────────────────
+  // sessionStorage cache keyed by IOC value, 1-hour TTL
+  const _enrichmentCache = {};
+  const _ENRICH_CACHE_TTL = 3600_000;
+
+  function _loadEnrichCache() {
+    try {
+      const raw = sessionStorage.getItem('eti_enrich_cache');
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      const now = Date.now();
+      for (const [k, v] of Object.entries(parsed)) {
+        if (now - v._ts < _ENRICH_CACHE_TTL) _enrichmentCache[k] = v;
+      }
+    } catch {}
+  }
+  _loadEnrichCache();
+
+  function _saveEnrichCache() {
+    try {
+      sessionStorage.setItem('eti_enrich_cache', JSON.stringify(_enrichmentCache));
+    } catch {}
+  }
+
+  function _renderEnrichedBadge(result) {
+    if (!result || result._error) return '';
+    const { country, abuse_score, isp, is_malicious } = result;
+    const color = is_malicious ? 'var(--eti-critical)' : abuse_score > 20 ? 'var(--eti-high)' : 'var(--eti-low)';
+    return `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;">
+      ${country ? `<span style="font-size:9px;padding:2px 6px;border-radius:3px;background:rgba(255,255,255,0.07);color:var(--eti-text-tertiary);">🌍 ${country}</span>` : ''}
+      ${isp     ? `<span style="font-size:9px;padding:2px 6px;border-radius:3px;background:rgba(255,255,255,0.07);color:var(--eti-text-tertiary);">🏢 ${isp.substring(0,30)}</span>` : ''}
+      ${abuse_score != null ? `<span style="font-size:9px;padding:2px 6px;border-radius:3px;background:rgba(255,255,255,0.07);color:${color};">Abuse: ${abuse_score}%</span>` : ''}
+      ${is_malicious ? `<span style="font-size:9px;padding:2px 6px;border-radius:3px;background:rgba(255,45,85,0.2);color:var(--eti-critical);">⚠ MALICIOUS</span>` : ''}
+    </div>`;
+  }
+
+  async function enrichIOC(type, value) {
+    if (!value) return;
+    if (_enrichmentCache[value]) {
+      showToast('Enrichment', `${value} already enriched`, 'info');
+      return _enrichmentCache[value];
+    }
+    showToast('Enriching…', `Looking up ${value}`, 'info');
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      let result = null;
+
+      if (type === 'ip') {
+        // Free GeoIP lookup (no key required)
+        const res = await fetch(`https://ip-api.com/json/${encodeURIComponent(value)}?fields=country,regionName,city,isp,org,as,query`, {
+          signal: controller.signal
+        });
+        clearTimeout(timeout);
+        if (res.ok) {
+          const d = await res.json();
+          result = {
+            country: d.country || '',
+            region: d.regionName || '',
+            city: d.city || '',
+            isp: d.isp || d.org || '',
+            abuse_score: null,
+            is_malicious: false,
+            _ts: Date.now()
+          };
+        }
+      } else if (type === 'domain' || type === 'url') {
+        // Basic DNS/WHOIS info via free API
+        const res = await fetch(`https://ip-api.com/json/${encodeURIComponent(value)}?fields=country,isp,org`, {
+          signal: controller.signal
+        });
+        clearTimeout(timeout);
+        if (res.ok) {
+          const d = await res.json();
+          result = {
+            country: d.country || '',
+            isp: d.isp || d.org || '',
+            abuse_score: null,
+            is_malicious: false,
+            _ts: Date.now()
+          };
+        }
+      }
+
+      if (result) {
+        _enrichmentCache[value] = result;
+        _saveEnrichCache();
+        // Refresh the IOC list if visible
+        if (state.currentAnalysis) {
+          const rightPanel = document.getElementById('etiIndicatorsList');
+          if (rightPanel) rightPanel.innerHTML = renderIOCList(state.currentAnalysis.email?.indicators || {});
+        }
+        showToast('Enriched', `${value}: ${result.country || 'enriched'}`, 'success');
+      }
+      return result;
+    } catch (err) {
+      const errResult = { _error: true, _ts: Date.now() };
+      _enrichmentCache[value] = errResult;
+      if (err.name !== 'AbortError') showToast('Enrichment Error', err.message, 'error');
+      return errResult;
+    }
+  }
+
+  // ── ENHANCE-003: Export & Reporting ───────────────────────────────────────
+  function exportReport(format) {
+    const data = state.currentAnalysis;
+    if (!data) { showToast('No Analysis', 'Run an analysis first', 'error'); return; }
+
+    if (format === 'json') {
+      // STIX 2.1-inspired JSON export
+      const stix = {
+        type: 'bundle',
+        id: `bundle--${data.analysis_id}`,
+        spec_version: '2.1',
+        objects: [{
+          type: 'indicator',
+          id: `indicator--${data.analysis_id}`,
+          created: data.analyzed_at || new Date().toISOString(),
+          name: `[${(data.risk?.tier || 'unknown').toUpperCase()}] ${data.email?.subject || 'Email Threat'}`,
+          description: data.explanation?.summary?.in_one_sentence || '',
+          pattern_type: 'stix',
+          labels: [data.detection?.final_verdict?.primary_type || 'malicious-activity'],
+          confidence: data.risk?.confidence || 0,
+          extensions: {
+            'extension-definition--eti-aare': {
+              risk_score: data.risk?.final_score,
+              tier: data.risk?.tier,
+              from: data.email?.from,
+              subject: data.email?.subject_decoded || data.email?.subject,
+              recipients: data.email?.recipients,
+              body_content_score: data.email?.body_content_score,
+              body_signals: data.email?.body_signals,
+              mitre_techniques: data.detection?.mitre_techniques,
+              indicators: data.email?.indicators,
+              forensic_timeline: data.email?.forensic_timeline
+            }
+          }
+        }]
+      };
+      const blob = new Blob([JSON.stringify(stix, null, 2)], { type: 'application/json' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = `eti-stix-${data.analysis_id || 'export'}.json`;
+      a.click(); URL.revokeObjectURL(url);
+      showToast('Exported', 'STIX 2.1 JSON downloaded', 'success');
+
+    } else if (format === 'csv') {
+      const inds = data.email?.indicators || {};
+      const rows = [['Type','Indicator','Analysis_ID','Risk_Score','Tier']];
+      (inds.ips     || []).forEach(v => rows.push(['IP',     v, data.analysis_id, data.risk?.final_score, data.risk?.tier]));
+      (inds.domains || []).forEach(v => rows.push(['Domain', v, data.analysis_id, data.risk?.final_score, data.risk?.tier]));
+      (inds.urls    || []).forEach(v => rows.push(['URL',    v, data.analysis_id, data.risk?.final_score, data.risk?.tier]));
+      (inds.hashes  || []).forEach(v => rows.push(['Hash',   v, data.analysis_id, data.risk?.final_score, data.risk?.tier]));
+      (inds.emails  || []).forEach(v => rows.push(['Email',  v, data.analysis_id, data.risk?.final_score, data.risk?.tier]));
+      const csv  = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = `eti-iocs-${data.analysis_id || 'export'}.csv`;
+      a.click(); URL.revokeObjectURL(url);
+      showToast('Exported', 'IOC CSV downloaded', 'success');
+
+    } else {
+      // PDF — build a printable HTML report and open in new window
+      const d    = data;
+      const risk = d.risk || {};
+      const det  = d.detection || {};
+      const inds = d.email?.indicators || {};
+      const now  = new Date().toLocaleString();
+      const html = `<!DOCTYPE html><html><head>
+        <meta charset="utf-8">
+        <title>ETI-AARE DFIR Report — ${d.analysis_id}</title>
+        <style>
+          body{font-family:'Segoe UI',Arial,sans-serif;margin:0;padding:32px;color:#1a1a2e;background:#fff;}
+          h1{color:#c0392b;font-size:22px;border-bottom:3px solid #c0392b;padding-bottom:8px;}
+          h2{color:#2c3e50;font-size:15px;border-bottom:1px solid #eee;padding-bottom:4px;margin-top:24px;}
+          .badge{display:inline-block;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:700;}
+          .critical{background:#ffe4e4;color:#c0392b;} .high{background:#fff3e4;color:#e67e22;}
+          .medium{background:#fff9e4;color:#f39c12;} .clean{background:#e4ffe4;color:#27ae60;}
+          table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;}
+          td,th{border:1px solid #ddd;padding:6px 10px;text-align:left;}
+          th{background:#f5f5f5;font-weight:600;}
+          pre{background:#f8f8f8;padding:10px;border-radius:4px;font-size:10px;overflow-x:auto;}
+          .meta{font-size:11px;color:#666;margin-bottom:16px;}
+          @media print{body{margin:0;padding:16px;}}
+        </style>
+      </head><body>
+        <h1>🛡 ETI-AARE DFIR Report</h1>
+        <div class="meta">Generated: ${now} | Analysis ID: ${d.analysis_id} | Module: ETI-AARE v2.0</div>
+        <h2>Executive Summary</h2>
+        <p><span class="badge ${risk.tier}">${(risk.tier || 'unknown').toUpperCase()} RISK — ${risk.final_score}/100</span></p>
+        <p>${d.explanation?.summary?.in_one_sentence || ''}</p>
+        <h2>Email Metadata</h2>
+        <table>
+          <tr><th>Field</th><th>Value</th></tr>
+          <tr><td>From</td><td>${d.email?.from || ''} (${d.email?.from_display || ''})</td></tr>
+          <tr><td>Subject</td><td>${d.email?.subject_decoded || d.email?.subject || ''}</td></tr>
+          <tr><td>To</td><td>${(d.email?.recipients?.to || []).map(r => r.address || r).join(', ') || 'N/A'}</td></tr>
+          <tr><td>Reply-To</td><td>${d.email?.recipients?.reply_to || 'N/A'}</td></tr>
+          <tr><td>SPF/DKIM/DMARC</td><td>${d.email?.auth?.spf || '?'} / ${d.email?.auth?.dkim || '?'} / ${d.email?.auth?.dmarc || '?'}</td></tr>
+          <tr><td>Risk Score</td><td>${risk.final_score}/100 — ${(risk.tier || '').toUpperCase()}</td></tr>
+          <tr><td>Recommended Action</td><td>${risk.recommended_action || ''}</td></tr>
+        </table>
+        <h2>Key Findings</h2>
+        <ul>${(d.explanation?.summary?.key_facts || []).map(f => `<li>${f}</li>`).join('')}</ul>
+        <h2>Detection Rules Triggered (${det.rules_triggered?.length || 0})</h2>
+        <table><tr><th>Rule ID</th><th>Name</th><th>Severity</th><th>Confidence</th></tr>
+          ${(det.rules_triggered || []).map(r => `<tr><td>${r.rule_id}</td><td>${r.name}</td><td class="${r.severity}">${r.severity}</td><td>${r.confidence}%</td></tr>`).join('')}
+        </table>
+        <h2>MITRE ATT&amp;CK Techniques</h2>
+        <table><tr><th>Technique</th><th>Name</th><th>Tactic</th><th>Confidence</th></tr>
+          ${(det.mitre_techniques || []).map(t => `<tr><td>${t.sub_technique_id || t.technique_id}</td><td>${t.name}</td><td>${t.tactic}</td><td>${t.confidence}%</td></tr>`).join('')}
+        </table>
+        <h2>Indicators of Compromise</h2>
+        <table><tr><th>Type</th><th>Indicator</th></tr>
+          ${(inds.ips||[]).map(v=>`<tr><td>IP</td><td>${v}</td></tr>`).join('')}
+          ${(inds.domains||[]).map(v=>`<tr><td>Domain</td><td>${v}</td></tr>`).join('')}
+          ${(inds.urls||[]).map(v=>`<tr><td>URL</td><td>${v}</td></tr>`).join('')}
+          ${(inds.emails||[]).map(v=>`<tr><td>Email</td><td>${v}</td></tr>`).join('')}
+        </table>
+        <h2>Content &amp; Intent Analysis</h2>
+        <p>Content Intent Score: <strong>${d.email?.body_content_score || 0}/100</strong></p>
+        <table><tr><th>Signal ID</th><th>Signal</th><th>Matched Text</th><th>Weight</th></tr>
+          ${(d.email?.body_signals||[]).map(s=>`<tr><td>${s.id}</td><td>${s.signal}</td><td>"${s.text}"</td><td>+${s.weight}</td></tr>`).join('')}
+        </table>
+        <h2>AI Narrative</h2>
+        <pre>${d.explanation?.attack_narrative || 'N/A'}</pre>
+      </body></html>`;
+      const win = window.open('', '_blank');
+      if (win) { win.document.write(html); win.document.close(); win.print(); }
+      showToast('Report Ready', 'Print dialog opened for PDF export', 'success');
+    }
+  }
+
+  // ── ENHANCE-004: Campaign Fingerprinting ──────────────────────────────────
+  const _campaignStore = [];
+
+  function _computeFingerprint(data) {
+    const senderDomain = data.email?.from?.split('@')[1] || '';
+    const replyDomain  = (data.email?.recipients?.reply_to || '').split('@')[1] || '';
+    const subjectCluster = (data.email?.subject || '').toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '').split(/\s+/).slice(0, 4).join('_');
+    const ruleIds = (data.detection?.rules_triggered || []).map(r => r.rule_id).sort().join(',');
+    return `${senderDomain}|${replyDomain}|${subjectCluster}|${ruleIds}`;
+  }
+
+  function _correlateWithCampaigns(data) {
+    const fp = _computeFingerprint(data);
+    let match = _campaignStore.find(c => c.fingerprint === fp);
+    if (!match) {
+      // Fuzzy match: same sender domain + at least 2 same rules
+      const senderDomain = data.email?.from?.split('@')[1] || '';
+      const ruleIds = new Set((data.detection?.rules_triggered || []).map(r => r.rule_id));
+      match = _campaignStore.find(c => {
+        const cDomain = c.fingerprint.split('|')[0];
+        const cRules  = new Set(c.rules || []);
+        const shared  = [...ruleIds].filter(r => cRules.has(r)).length;
+        return cDomain === senderDomain && shared >= 2;
+      });
+    }
+    if (match) {
+      match.count = (match.count || 1) + 1;
+      match.last_seen = data.analyzed_at || new Date().toISOString();
+      return match;
+    }
+    // New campaign
+    const newCampaign = {
+      id: `CAMP-${Date.now().toString(36).toUpperCase()}`,
+      fingerprint: fp,
+      rules: (data.detection?.rules_triggered || []).map(r => r.rule_id),
+      tier: data.risk?.tier,
+      first_seen: data.analyzed_at || new Date().toISOString(),
+      last_seen:  data.analyzed_at || new Date().toISOString(),
+      count: 1,
+      primary_type: data.detection?.final_verdict?.primary_type || 'unknown'
+    };
+    _campaignStore.push(newCampaign);
+    return null; // no existing match — first of this campaign
+  }
+
+  // ── ENHANCE-005: Live Threat Intel Feed Integration ────────────────────────
+  // sessionStorage-cached feed checks with 1-hour TTL and 5s AbortSignal timeout
+  const _feedCache = {};
+  const _FEED_CACHE_TTL = 3600_000;
+
+  function _loadFeedCache() {
+    try {
+      const raw = sessionStorage.getItem('eti_feed_cache');
+      if (raw) { Object.assign(_feedCache, JSON.parse(raw)); }
+    } catch {}
+  }
+  _loadFeedCache();
+
+  function _saveFeedCache() {
+    try { sessionStorage.setItem('eti_feed_cache', JSON.stringify(_feedCache)); } catch {}
+  }
+
+  async function _checkFeedForIOC(type, value) {
+    const key = `${type}:${value}`;
+    if (_feedCache[key] && (Date.now() - _feedCache[key]._ts) < _FEED_CACHE_TTL) {
+      return _feedCache[key];
+    }
+    try {
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 5000);
+      let result = { found: false, feeds: [], _ts: Date.now() };
+
+      if (type === 'ip') {
+        // AbuseIPDB public check (no key needed for basic info via embed)
+        // URLhaus IP check
+        const uh = await fetch(`https://urlhaus-api.abuse.ch/v1/host/`, {
+          method: 'POST',
+          body: `host=${encodeURIComponent(value)}`,
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          signal: controller.signal
+        }).catch(() => null);
+        if (uh?.ok) {
+          const d = await uh.json().catch(() => ({}));
+          if (d.query_status === 'is_host') {
+            result = { found: true, feeds: ['URLhaus'], url_count: d.urls?.length || 0, _ts: Date.now() };
+          }
+        }
+      } else if (type === 'url' || type === 'domain') {
+        const uh = await fetch(`https://urlhaus-api.abuse.ch/v1/url/`, {
+          method: 'POST',
+          body: `url=${encodeURIComponent(value)}`,
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          signal: controller.signal
+        }).catch(() => null);
+        if (uh?.ok) {
+          const d = await uh.json().catch(() => ({}));
+          if (d.query_status === 'is_available') {
+            result = { found: true, feeds: ['URLhaus'], threat_type: d.threat, _ts: Date.now() };
+          }
+        }
+      }
+
+      clearTimeout(tid);
+      _feedCache[key] = result;
+      _saveFeedCache();
+      return result;
+    } catch {
+      const r = { found: false, feeds: [], _error: true, _ts: Date.now() };
+      _feedCache[key] = r;
+      return r;
+    }
+  }
+
+  // ── IOC Pivot Links (UX-004) ───────────────────────────────────────────────
+  function _iocPivotLinks(type, value) {
+    const enc = encodeURIComponent(value);
+    const links = [];
+    if (type === 'ip' || type === 'ips') {
+      links.push(['VT',        `https://www.virustotal.com/gui/ip-address/${enc}`,   'var(--eti-accent-blue)']);
+      links.push(['AbuseIPDB', `https://www.abuseipdb.com/check/${enc}`,             '#e74c3c']);
+      links.push(['Shodan',    `https://www.shodan.io/host/${enc}`,                  '#e67e22']);
+      links.push(['Censys',    `https://search.censys.io/hosts/${enc}`,              '#9b59b6']);
+    } else if (type === 'domain' || type === 'domains') {
+      links.push(['VT',        `https://www.virustotal.com/gui/domain/${enc}`,       'var(--eti-accent-blue)']);
+      links.push(['MXToolbox', `https://mxtoolbox.com/SuperTool.aspx?action=dns:${enc}`, '#27ae60']);
+      links.push(['Shodan',    `https://www.shodan.io/search?query=hostname:${enc}`, '#e67e22']);
+    } else if (type === 'url' || type === 'urls') {
+      links.push(['VT',        `https://www.virustotal.com/gui/url/${btoa(value).replace(/=/g,'').slice(0,32)}`, 'var(--eti-accent-blue)']);
+      links.push(['URLScan',   `https://urlscan.io/search/#page.url:${enc}`,        '#2ecc71']);
+    } else if (type === 'hash' || type === 'hashes') {
+      links.push(['VT',        `https://www.virustotal.com/gui/file/${enc}`,         'var(--eti-accent-blue)']);
+      links.push(['MalwareBazaar',`https://bazaar.abuse.ch/browse/?search=sha256:${enc}`, '#e74c3c']);
+    }
+    return links.map(([label, url, color]) =>
+      `<a href="${url}" target="_blank" rel="noopener noreferrer"
+        style="font-size:9px;padding:2px 5px;border-radius:3px;text-decoration:none;font-weight:700;
+          background:rgba(255,255,255,0.07);color:${color};border:1px solid rgba(255,255,255,0.1);">${label}</a>`
+    ).join('');
   }
 
   function renderBehavioral(data) {
@@ -1567,8 +2344,13 @@ IMMEDIATE ACTION: Verify with CEO via phone. Do NOT reply to this email or proce
 
     const tierColors = { critical: 'var(--eti-critical)', high: 'var(--eti-high)', medium: 'var(--eti-medium)', low: 'var(--eti-low)', clean: 'var(--eti-low)' };
     container.innerHTML = state.analysisHistory.slice(0, 20).map((d, i) => {
-      const tier  = d.risk?.tier  || 'unknown';
-      const score = d.risk?.final_score || 0;
+      const tier    = d.risk?.tier  || 'unknown';
+      const score   = d.risk?.final_score || 0;
+      // FIX-002: decoded subject, truncate at 50 chars
+      const subject = (d.email?.subject_decoded || d.email?.subject || '(no subject)');
+      const subjTrunc = subject.length > 50 ? subject.substring(0, 47) + '…' : subject;
+      const subjFlag  = d.email?.subject_analysis?.risk === 'high'   ? `<span style="font-size:8px;padding:1px 4px;border-radius:2px;background:rgba(255,45,85,0.2);color:var(--eti-critical);margin-left:3px;">⚠</span>` :
+                        d.email?.subject_analysis?.risk === 'medium' ? `<span style="font-size:8px;padding:1px 4px;border-radius:2px;background:rgba(255,214,10,0.2);color:var(--eti-medium);margin-left:3px;">!</span>` : '';
       return `<div class="eti-email-item risk-${tier} ${i === 0 ? 'selected' : ''}"
           onclick="window.ETIModule.selectAnalysis(${i})">
         <div class="eti-email-item-left"></div>
@@ -1576,10 +2358,11 @@ IMMEDIATE ACTION: Verify with CEO via phone. Do NOT reply to this email or proce
           <div class="eti-email-from">${d.email?.from || 'unknown'}</div>
           <div class="eti-email-tier-badge ${tier}">${tier}</div>
         </div>
-        <div class="eti-email-subject">${d.email?.subject || '(no subject)'}</div>
+        <div class="eti-email-subject">${subjTrunc}${subjFlag}</div>
         <div class="eti-email-meta">
           <div class="eti-email-meta-chip">${d.detection?.rules_triggered?.length || 0} rules</div>
           ${d.email?.attachment_count > 0 ? `<div class="eti-email-meta-chip"><i class="fas fa-paperclip"></i> ${d.email.attachment_count}</div>` : ''}
+          ${d.email?.body_content_score > 0 ? `<div class="eti-email-meta-chip" title="Content Intent Score"><i class="fas fa-brain"></i> ${d.email.body_content_score}</div>` : ''}
           <div class="eti-email-score-mini" style="color:${tierColors[tier] || 'var(--eti-text-tertiary)'}">${score}</div>
         </div>
       </div>`;
@@ -1697,6 +2480,26 @@ IMMEDIATE ACTION: Verify with CEO via phone. Do NOT reply to this email or proce
       if (typeof window.navigateTo === 'function') {
         setTimeout(() => window.navigateTo('ioc-database'), 800);
       }
+    },
+
+    // ENHANCE-001: IOC enrichment
+    enrichIOC,
+
+    // ENHANCE-003: Export
+    exportReport,
+
+    // FIX-004: Raw email sub-panel switching
+    _switchRawPanel(panelId) {
+      const tabs    = document.querySelectorAll('[data-rawpanel]');
+      const panels  = document.querySelectorAll('[data-rawcontent]');
+      tabs.forEach(t => {
+        const active = t.dataset.rawpanel === panelId;
+        t.style.background = active ? 'rgba(0,122,255,0.15)' : 'transparent';
+        t.style.color      = active ? 'var(--eti-accent-blue)' : 'var(--eti-text-tertiary)';
+      });
+      panels.forEach(p => {
+        p.style.display = p.dataset.rawcontent === panelId ? '' : 'none';
+      });
     }
   };
 
