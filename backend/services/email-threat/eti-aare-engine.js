@@ -99,20 +99,65 @@ class ETIAAREngine extends EventEmitter {
       const soarResponse = await this.soar.respond(parsedEmail, detectionResult, riskScore, enrichmentResult);
 
       // ═══ ASSEMBLE RESULT ═══
+      // ── RFC 2047 subject decode (pure function, unit-testable) ──
+      const subjectDecoded = _decodeRfc2047(parsedEmail.subject || '');
+
+      // ── Body content score from social engineering signals ──
+      const bodySignals   = _extractBodySignals(parsedEmail);
+      const bodyScore     = Math.min(bodySignals.reduce((a, s) => a + s.weight, 0), 100);
+
+      // ── Forensic timeline from routing hops ──
+      const forensicTimeline = (parsedEmail.routing?.hops || []).map((h, i) => ({
+        hop:         i + 1,
+        from_server: h.from_host || h.by_host || '(unknown)',
+        from_ip:     h.from_ip || null,
+        to_server:   h.by_host || '(destination)',
+        timestamp:   h.timestamp || parsedEmail.received_at,
+        delay_ms:    h.delay_seconds ? h.delay_seconds * 1000 : 0,
+        suspicious:  h.is_suspicious || false
+      }));
+
       const result = {
         analysis_id: analysisId,
         source,
         email: {
-          message_id: parsedEmail.message_id,
-          from: parsedEmail.sender?.address,
-          from_display: parsedEmail.sender?.display_name,
-          subject: parsedEmail.subject,
-          received_at: parsedEmail.received_at,
-          auth: parsedEmail.auth,
-          routing_hops: parsedEmail.routing?.hop_count,
-          attachment_count: parsedEmail.attachments?.length,
-          url_count: parsedEmail.body?.urls?.length,
-          indicators: parsedEmail.indicators
+          message_id:        parsedEmail.message_id,
+          from:              parsedEmail.sender?.address,
+          from_display:      parsedEmail.sender?.display_name,
+          subject:           parsedEmail.subject,
+          subject_decoded:   subjectDecoded,
+          subject_analysis:  parsedEmail.subject_analysis,
+          received_at:       parsedEmail.received_at,
+          auth:              parsedEmail.auth,
+          routing_hops:      parsedEmail.routing?.hop_count,
+          attachment_count:  parsedEmail.attachments?.length,
+          url_count:         parsedEmail.body?.urls?.length,
+          indicators:        parsedEmail.indicators,
+          // FIX-001: recipients
+          recipients: {
+            to:            parsedEmail.recipients?.to   || [],
+            cc:            parsedEmail.recipients?.cc   || [],
+            bcc:           parsedEmail.recipients?.bcc  || [],
+            reply_to:      parsedEmail.sender?.reply_to || '',
+            x_original_to: parsedEmail.headers?.['x-original-to'] || ''
+          },
+          // FIX-003: body content analysis
+          body_content_score: bodyScore,
+          body_signals:       bodySignals,
+          body_plain:         parsedEmail.body?.text || '',
+          decoded_body:       parsedEmail.body?.html || parsedEmail.body?.text || '',
+          // FIX-004: MIME tree
+          mime_parts: (parsedEmail.attachments || []).map((a, i) => ({
+            part:              i + 2,
+            content_type:      a.content_type || 'application/octet-stream',
+            transfer_encoding: a.encoding     || 'base64',
+            size_bytes:        a.size         || 0,
+            filename:          a.filename     || null
+          })),
+          // ENHANCE-002: Forensic timeline
+          forensic_timeline: forensicTimeline,
+          // Raw headers string
+          raw_headers: _buildRawHeaders(parsedEmail)
         },
         detection: {
           rules_triggered: detectionResult.detections,
@@ -222,4 +267,111 @@ function getInstance(config) {
   return _instance;
 }
 
-module.exports = { ETIAAREngine, getInstance };
+// ── Pure Helper Functions (unit-testable) ────────────────────────────────────
+
+/**
+ * RFC 2047 encoded-word decoder
+ * Handles =?charset?B?base64?= and =?charset?Q?quoted-printable?=
+ * @param {string} str - Raw header value
+ * @returns {string} Decoded string
+ */
+function _decodeRfc2047(str) {
+  if (!str || !str.includes('=?')) return str;
+  return str.replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, (match, charset, encoding, encoded) => {
+    try {
+      if (encoding.toUpperCase() === 'B') {
+        // Base64
+        return Buffer.from(encoded, 'base64').toString('utf8');
+      } else {
+        // Quoted-Printable
+        const qp = encoded.replace(/_/g, ' ').replace(/=([0-9A-Fa-f]{2})/g, (_, hex) =>
+          String.fromCharCode(parseInt(hex, 16)));
+        return qp;
+      }
+    } catch {
+      return match; // leave as-is on decode error
+    }
+  });
+}
+
+/**
+ * Extract body content signals for Content Intent Score
+ * Signal IDs follow CS-{CATEGORY}-{SEQ} convention
+ * @param {Object} parsedEmail - Parsed email from EmailParser
+ * @returns {Array<{id, signal, text, weight, fp_risk}>}
+ */
+function _extractBodySignals(parsedEmail) {
+  const signals = [];
+  const text = (parsedEmail.body?.text || parsedEmail.body?.html || '').toLowerCase();
+  if (!text) return signals;
+
+  // Financial urgency signals — weight 15, low FP risk
+  const financialPatterns = [
+    { pattern: /wire transfer|bank transfer|western union|money gram/,  id: 'CS-FIN-001', signal: 'wire_transfer_request',    weight: 25, fp_risk: 'low'    },
+    { pattern: /invoice|payment (due|required|overdue)/,               id: 'CS-FIN-002', signal: 'invoice_payment_demand',   weight: 15, fp_risk: 'medium' },
+    { pattern: /gift card|itunes card|amazon card/,                    id: 'CS-FIN-003', signal: 'gift_card_scam',           weight: 20, fp_risk: 'low'    },
+    { pattern: /account (will be|has been) (suspended|terminated|locked)/, id: 'CS-FIN-004', signal: 'account_suspension_threat', weight: 15, fp_risk: 'low' }
+  ];
+
+  // Authority impersonation — weight 20, low FP risk
+  const authPatterns = [
+    { pattern: /ceo|chief executive|president|director/,               id: 'CS-AUTH-001', signal: 'authority_invocation',   weight: 15, fp_risk: 'medium' },
+    { pattern: /microsoft|google|apple|paypal|amazon security/,        id: 'CS-AUTH-002', signal: 'brand_impersonation',    weight: 20, fp_risk: 'low'    },
+    { pattern: /it (department|support|helpdesk)|security team/,       id: 'CS-AUTH-003', signal: 'it_authority_claim',     weight: 12, fp_risk: 'medium' }
+  ];
+
+  // Secrecy/urgency — weight 10-15
+  const urgencyPatterns = [
+    { pattern: /confidential|do not (share|discuss|tell)/,             id: 'CS-SEC-001', signal: 'secrecy_demand',          weight: 20, fp_risk: 'low'    },
+    { pattern: /urgent|immediately|as soon as possible|asap/,          id: 'CS-URG-001', signal: 'urgency_keywords',        weight: 10, fp_risk: 'medium' },
+    { pattern: /within (24|48|72) hours|deadline|expire/,              id: 'CS-URG-002', signal: 'deadline_pressure',       weight: 12, fp_risk: 'medium' },
+    { pattern: /click (here|the link|below)|verify (your|account)/,    id: 'CS-ACT-001', signal: 'action_demanded',         weight: 18, fp_risk: 'low'    },
+    { pattern: /confirm (your|account|identity|details)/,              id: 'CS-ACT-002', signal: 'identity_confirmation',   weight: 15, fp_risk: 'low'    }
+  ];
+
+  const allPatterns = [...financialPatterns, ...authPatterns, ...urgencyPatterns];
+  for (const p of allPatterns) {
+    const m = text.match(p.pattern);
+    if (m) {
+      // Extract the matched text snippet (up to 60 chars)
+      const idx   = text.indexOf(m[0]);
+      const snip  = text.substring(Math.max(0, idx - 5), Math.min(text.length, idx + m[0].length + 5)).trim();
+      signals.push({ id: p.id, signal: p.signal, text: snip.substring(0, 60), weight: p.weight, fp_risk: p.fp_risk });
+    }
+  }
+
+  // Also include social engineering flags from parser
+  (parsedEmail.body?.social_engineering_flags || []).forEach((f, i) => {
+    const name = typeof f === 'string' ? f : (f.flag || 'social_engineering');
+    if (!signals.some(s => s.signal === name)) {
+      signals.push({ id: `CS-SE-${String(i+1).padStart(3,'0')}`, signal: name, text: '', weight: 10, fp_risk: 'medium' });
+    }
+  });
+
+  return signals;
+}
+
+/**
+ * Reconstruct a simplified raw headers string from parsedEmail
+ * @param {Object} parsedEmail
+ * @returns {string}
+ */
+function _buildRawHeaders(parsedEmail) {
+  const lines = [];
+  const h = parsedEmail.headers || {};
+  const push = (name, val) => { if (val) lines.push(`${name}: ${val}`); };
+  push('From',                   parsedEmail.sender?.raw || parsedEmail.sender?.address);
+  push('To',                     (parsedEmail.recipients?.to || []).map(r => r.raw || r.address).join(', '));
+  push('Reply-To',               parsedEmail.sender?.reply_to);
+  push('Subject',                parsedEmail.subject);
+  push('Date',                   parsedEmail.received_at);
+  push('Message-ID',             parsedEmail.message_id);
+  push('Authentication-Results', h['authentication-results']);
+  push('Received',               h['received']);
+  push('Return-Path',            h['return-path']);
+  push('X-Mailer',               parsedEmail.sender?.x_mailer);
+  push('X-Originating-IP',       parsedEmail.sender?.x_originating_ip);
+  return lines.join('\r\n');
+}
+
+module.exports = { ETIAAREngine, getInstance, _decodeRfc2047, _extractBodySignals };
