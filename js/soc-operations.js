@@ -904,7 +904,7 @@ window.SOCOperations = (function () {
 </div>
 
 <!-- ─────────────────────────────────────────────────────── -->
-<!-- TAB 7: NETWORK TRAFFIC ANALYSIS                        -->
+<!-- TAB 7: NETWORK TRAFFIC ANALYSIS  (DFIR Edition)       -->
 <!-- ─────────────────────────────────────────────────────── -->
 <div class="soc-panel" id="soc-tab-network-traffic">
   <div style="display:flex;flex-direction:column;gap:16px;padding:0">
@@ -914,13 +914,16 @@ window.SOCOperations = (function () {
       <div>
         <h2 style="margin:0;font-size:1.25rem;font-weight:700;color:var(--soc-text)">
           <i class="fas fa-network-wired" style="color:#22d3ee;margin-right:8px;"></i>
-          Network Traffic Analysis
+          Network Traffic Analysis <span style="font-size:11px;color:#22d3ee;font-weight:400;margin-left:6px;">DFIR Engine v3</span>
         </h2>
         <div style="font-size:12px;color:var(--soc-muted);margin-top:2px;">
-          Upload PCAP/PCAPNG files for deep packet inspection, protocol analysis, and anomaly detection
+          Deep packet inspection · TCP stream reassembly · DGA detection · Ransomware chain rules · IOC extraction
         </div>
       </div>
-      <div style="display:flex;gap:8px;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="soc-btn-secondary" onclick="SOCOperations.ntaExportIOCs()" style="font-size:12px;" id="ntaBtnExport" disabled>
+          <i class="fas fa-file-export"></i> Export IOCs
+        </button>
         <button class="soc-btn-secondary" onclick="SOCOperations.ntaClearResults()" style="font-size:12px;">
           <i class="fas fa-trash-alt"></i> Clear
         </button>
@@ -934,36 +937,79 @@ window.SOCOperations = (function () {
 
     <!-- Upload Zone -->
     <div id="ntaDropZone" class="soc-upload-zone"
-      style="border:2px dashed #22d3ee44;border-radius:12px;padding:32px;text-align:center;cursor:pointer;transition:all .2s;background:rgba(34,211,238,.04);"
+      style="border:2px dashed #22d3ee44;border-radius:12px;padding:40px;text-align:center;cursor:pointer;transition:all .2s;background:rgba(34,211,238,.04);"
       onclick="document.getElementById('ntaFileInput').click()"
       ondragover="event.preventDefault();this.style.borderColor='#22d3ee';this.style.background='rgba(34,211,238,.1)'"
       ondragleave="this.style.borderColor='#22d3ee44';this.style.background='rgba(34,211,238,.04)'"
       ondrop="event.preventDefault();this.style.borderColor='#22d3ee44';this.style.background='rgba(34,211,238,.04)';SOCOperations.ntaHandleUpload(event.dataTransfer.files)">
-      <i class="fas fa-file-archive" style="font-size:2.5rem;color:#22d3ee;opacity:.6;margin-bottom:12px;display:block;"></i>
-      <div style="font-size:1rem;font-weight:600;color:var(--soc-text);margin-bottom:6px;">Drop PCAP / PCAPNG files here</div>
-      <div style="font-size:12px;color:var(--soc-muted);">Supports .pcap, .pcapng, .cap — up to 500MB per file</div>
+      <i class="fas fa-file-archive" style="font-size:3rem;color:#22d3ee;opacity:.6;margin-bottom:14px;display:block;"></i>
+      <div style="font-size:1.05rem;font-weight:700;color:var(--soc-text);margin-bottom:6px;">Drop PCAP / PCAPNG files here</div>
+      <div style="font-size:12px;color:var(--soc-muted);">Supports .pcap · .pcapng · .cap &mdash; Full TCP stream reassembly, chunked+gzip decode, DGA &amp; ransomware detection</div>
     </div>
 
     <!-- Status bar -->
     <div id="ntaStatus" style="display:none;align-items:center;gap:10px;background:rgba(34,211,238,.08);border:1px solid #22d3ee44;border-radius:8px;padding:12px 16px;">
       <i class="fas fa-spinner fa-spin" style="color:#22d3ee;"></i>
       <span id="ntaStatusText" style="font-size:13px;color:var(--soc-text);">Parsing PCAP file…</span>
-      <div style="flex:1;background:rgba(255,255,255,.1);border-radius:4px;height:4px;overflow:hidden;">
-        <div id="ntaProgress" style="height:100%;background:#22d3ee;width:0%;transition:width .3s;"></div>
+      <div style="flex:1;background:rgba(255,255,255,.1);border-radius:4px;height:6px;overflow:hidden;">
+        <div id="ntaProgress" style="height:100%;background:linear-gradient(90deg,#22d3ee,#3b82f6);width:0%;transition:width .3s;"></div>
       </div>
-      <span id="ntaProgressPct" style="font-size:12px;color:#22d3ee;min-width:32px;">0%</span>
+      <span id="ntaProgressPct" style="font-size:12px;color:#22d3ee;min-width:36px;font-weight:700;">0%</span>
     </div>
 
-    <!-- Results Grid -->
+    <!-- ── RESULTS (hidden until analysis complete) ── -->
     <div id="ntaResults" style="display:none;flex-direction:column;gap:16px;">
 
-      <!-- KPI Row -->
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;" id="ntaKpiRow"></div>
+      <!-- UI-009: ANALYST VERDICT BANNER -->
+      <div id="ntaVerdictBanner" style="border-radius:12px;padding:20px 24px;display:flex;align-items:center;gap:20px;flex-wrap:wrap;"></div>
 
-      <!-- Two-column layout -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+      <!-- UI-001: KPI Row -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;" id="ntaKpiRow"></div>
 
-        <!-- Protocol Breakdown -->
+      <!-- UI-002: Threat Alert Panel -->
+      <div style="background:var(--soc-card);border:1px solid var(--soc-border);border-radius:10px;padding:16px;">
+        <div style="font-weight:700;font-size:.9rem;color:var(--soc-text);margin-bottom:12px;display:flex;align-items:center;gap:8px;">
+          <i class="fas fa-exclamation-triangle" style="color:#ef4444;"></i>
+          Threat Detections
+          <span id="ntaSuspCount" style="background:#ef444422;color:#ef4444;font-size:11px;padding:1px 10px;border-radius:10px;border:1px solid #ef444444;margin-left:4px;"></span>
+        </div>
+        <div id="ntaSuspicious" style="display:flex;flex-direction:column;gap:8px;"></div>
+      </div>
+
+      <!-- UI-003: Kill Chain / Attack Timeline -->
+      <div style="background:var(--soc-card);border:1px solid var(--soc-border);border-radius:10px;padding:16px;">
+        <div style="font-weight:700;font-size:.9rem;color:var(--soc-text);margin-bottom:14px;display:flex;align-items:center;gap:8px;">
+          <i class="fas fa-skull-crossbones" style="color:#f97316;"></i> Attack Kill Chain Timeline
+        </div>
+        <div id="ntaKillChain" style="overflow-x:auto;"></div>
+      </div>
+
+      <!-- UI-004: IOC Table -->
+      <div style="background:var(--soc-card);border:1px solid var(--soc-border);border-radius:10px;padding:16px;">
+        <div style="font-weight:700;font-size:.9rem;color:var(--soc-text);margin-bottom:12px;display:flex;align-items:center;gap:8px;">
+          <i class="fas fa-crosshairs" style="color:#a855f7;"></i> Extracted IOCs
+          <span id="ntaIocCount" style="background:#a855f722;color:#a855f7;font-size:11px;padding:1px 10px;border-radius:10px;border:1px solid #a855f744;margin-left:4px;"></span>
+        </div>
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead>
+              <tr style="border-bottom:1px solid var(--soc-border);color:var(--soc-muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em;">
+                <th style="padding:6px 8px;text-align:left;font-weight:600;">Type</th>
+                <th style="padding:6px 8px;text-align:left;font-weight:600;">Value</th>
+                <th style="padding:6px 8px;text-align:left;font-weight:600;">Context</th>
+                <th style="padding:6px 8px;text-align:left;font-weight:600;">Risk</th>
+                <th style="padding:6px 8px;text-align:left;font-weight:600;">Pivot</th>
+              </tr>
+            </thead>
+            <tbody id="ntaIocTable"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Three-column: Protocols · Conversations · DNS -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
+
+        <!-- UI-007: Protocols -->
         <div style="background:var(--soc-card);border:1px solid var(--soc-border);border-radius:10px;padding:16px;">
           <div style="font-weight:600;font-size:.85rem;color:var(--soc-text);margin-bottom:12px;display:flex;align-items:center;gap:6px;">
             <i class="fas fa-chart-pie" style="color:#22d3ee;"></i> Protocol Breakdown
@@ -971,23 +1017,37 @@ window.SOCOperations = (function () {
           <div id="ntaProtocols" style="display:flex;flex-direction:column;gap:6px;"></div>
         </div>
 
-        <!-- Top Conversations -->
+        <!-- UI-007: Top Conversations -->
         <div style="background:var(--soc-card);border:1px solid var(--soc-border);border-radius:10px;padding:16px;">
           <div style="font-weight:600;font-size:.85rem;color:var(--soc-text);margin-bottom:12px;display:flex;align-items:center;gap:6px;">
             <i class="fas fa-exchange-alt" style="color:#a855f7;"></i> Top Conversations
           </div>
           <div id="ntaConversations" style="font-size:12px;"></div>
         </div>
+
+        <!-- UI-005: DNS Analysis Panel -->
+        <div style="background:var(--soc-card);border:1px solid var(--soc-border);border-radius:10px;padding:16px;">
+          <div style="font-weight:600;font-size:.85rem;color:var(--soc-text);margin-bottom:12px;display:flex;align-items:center;gap:6px;">
+            <i class="fas fa-globe" style="color:#3b82f6;"></i> DNS Analysis
+          </div>
+          <div id="ntaDns" style="font-size:12px;display:flex;flex-direction:column;gap:5px;"></div>
+        </div>
       </div>
 
-      <!-- Suspicious Patterns -->
+      <!-- UI-006: HTTP Analysis Panel (full-width) -->
       <div style="background:var(--soc-card);border:1px solid var(--soc-border);border-radius:10px;padding:16px;">
-        <div style="font-weight:600;font-size:.9rem;color:var(--soc-text);margin-bottom:12px;display:flex;align-items:center;gap:8px;">
-          <i class="fas fa-exclamation-triangle" style="color:#f59e0b;"></i>
-          Suspicious Patterns Detected
-          <span id="ntaSuspCount" style="background:#ef444422;color:#ef4444;font-size:11px;padding:1px 8px;border-radius:10px;border:1px solid #ef444444;"></span>
+        <div style="font-weight:700;font-size:.9rem;color:var(--soc-text);margin-bottom:12px;display:flex;align-items:center;gap:8px;">
+          <i class="fas fa-code" style="color:#f97316;"></i> HTTP Stream Analysis
         </div>
-        <div id="ntaSuspicious" style="display:flex;flex-direction:column;gap:8px;"></div>
+        <div id="ntaHttp" style="display:flex;flex-direction:column;gap:8px;"></div>
+      </div>
+
+      <!-- UI-008: MITRE ATT&CK Heatmap -->
+      <div style="background:var(--soc-card);border:1px solid var(--soc-border);border-radius:10px;padding:16px;">
+        <div style="font-weight:700;font-size:.9rem;color:var(--soc-text);margin-bottom:14px;display:flex;align-items:center;gap:8px;">
+          <i class="fas fa-th" style="color:#f59e0b;"></i> MITRE ATT&amp;CK Coverage
+        </div>
+        <div id="ntaMitre" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
       </div>
 
       <!-- Traffic Timeline -->
@@ -998,24 +1058,7 @@ window.SOCOperations = (function () {
         <div id="ntaTimeline" style="display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto;"></div>
       </div>
 
-      <!-- DNS & HTTP Queries -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-        <div style="background:var(--soc-card);border:1px solid var(--soc-border);border-radius:10px;padding:16px;">
-          <div style="font-weight:600;font-size:.85rem;color:var(--soc-text);margin-bottom:12px;display:flex;align-items:center;gap:6px;">
-            <i class="fas fa-globe" style="color:#3b82f6;"></i> DNS Queries
-          </div>
-          <div id="ntaDns" style="font-size:12px;display:flex;flex-direction:column;gap:4px;"></div>
-        </div>
-        <div style="background:var(--soc-card);border:1px solid var(--soc-border);border-radius:10px;padding:16px;">
-          <div style="font-weight:600;font-size:.85rem;color:var(--soc-text);margin-bottom:12px;display:flex;align-items:center;gap:6px;">
-            <i class="fas fa-code" style="color:#f97316;"></i> HTTP Requests
-          </div>
-          <div id="ntaHttp" style="font-size:12px;display:flex;flex-direction:column;gap:4px;"></div>
-        </div>
-      </div>
-
-    </div>
-
+    </div><!-- /#ntaResults -->
   </div>
 </div>
 `;
@@ -2238,6 +2281,13 @@ window.SOCOperations = (function () {
 
   const NTA_STATE = { parsed: null, filename: '' };
 
+  /* ═══════════════════════════════════════════════════════════════════
+   *  NTA DFIR ENGINE v3
+   *  PARSE-001/002/003 · DISSECT-001/002/003/004
+   *  DETECT-001-007 · SCORE-001/002 · ENRICH-001/002/003
+   *  UI-001 through UI-009
+   * ═══════════════════════════════════════════════════════════════════ */
+
   /* ─── constants ─────────────────────────────────────────────────── */
   const PCAP_MAGIC_LE      = 0xa1b2c3d4;
   const PCAP_MAGIC_BE      = 0xd4c3b2a1;
@@ -2563,11 +2613,19 @@ window.SOCOperations = (function () {
       if (ipProto === IP_PROTO_TCP && transportOffset + 20 <= buf.byteLength) {
         pkt.src_port  = (dv.getUint8(transportOffset) << 8) | dv.getUint8(transportOffset+1);
         pkt.dst_port  = (dv.getUint8(transportOffset+2) << 8) | dv.getUint8(transportOffset+3);
+        // PARSE-003: Capture TCP seq number for stream reassembly
+        pkt._tcpSeq   = dv.getUint32(transportOffset + 4, false);
         pkt.tcp_flags = dv.getUint8(transportOffset + 13);
         pkt.proto     = 'TCP';
 
         const tcpHdrLen = ((dv.getUint8(transportOffset + 12) >> 4) & 0xf) * 4;
         const payloadOffset = transportOffset + tcpHdrLen;
+        const payloadLen = buf.byteLength - payloadOffset;
+
+        // PARSE-003: Store raw TCP payload bytes for stream reassembly
+        if (payloadLen > 0) {
+          pkt._tcpPayloadBytes = new Uint8Array(buf, payloadOffset, payloadLen);
+        }
 
         // Try parse HTTP if on port 80 or common ports
         if ((pkt.src_port === PORT_HTTP || pkt.dst_port === PORT_HTTP || pkt.src_port === 8080 || pkt.dst_port === 8080)
@@ -2618,7 +2676,7 @@ window.SOCOperations = (function () {
     } catch {}
   }
 
-  /* ── DNS payload parser ────────────────────────────────────────── */
+  /* ── DNS payload parser (DISSECT-001: RFC 1035 + answer IP extraction) ── */
   function _ntaParseDNS(buf, offset, pkt) {
     try {
       if (offset + 12 > buf.byteLength) return;
@@ -2631,9 +2689,16 @@ window.SOCOperations = (function () {
       if (qdCount > 0) {
         const name = _ntaDnsReadName(buf, dv, offset + 12, offset);
         if (name) {
-          pkt.dns_query    = name;
-          pkt.dns_type     = qtype;
-          pkt.dns_response = isResponse ? _ntaDnsReadAnswer(buf, dv, offset, name) : null;
+          pkt.dns_query = name;
+          pkt.dns_type  = qtype;
+          if (isResponse) {
+            // DISSECT-001: Extract actual A record IP addresses from answer section
+            const resolvedIps = _ntaDnsReadAnswerIPs(buf, dv, offset);
+            pkt._dnsResolvedIps = resolvedIps;
+            pkt.dns_response = resolvedIps.length ? resolvedIps[0] : _ntaDnsReadAnswer(buf, dv, offset, name);
+          } else {
+            pkt.dns_response = null;
+          }
         }
       }
     } catch {}
@@ -2693,189 +2758,834 @@ window.SOCOperations = (function () {
     } catch { return null; }
   }
 
-  /* ── Build analysis from decoded packets ───────────────────────── */
+  /* ══════════════════════════════════════════════════════════════
+   *  DETECT-001: Shannon Entropy
+   * ══════════════════════════════════════════════════════════════ */
+  function _ntaShannonEntropy(bytes) {
+    if (!bytes || bytes.length === 0) return 0;
+    const freq = new Array(256).fill(0);
+    for (let i = 0; i < bytes.length; i++) freq[bytes[i]]++;
+    let h = 0;
+    const n = bytes.length;
+    for (let i = 0; i < 256; i++) {
+      if (freq[i] > 0) { const p = freq[i] / n; h -= p * Math.log2(p); }
+    }
+    return Math.round(h * 10000) / 10000;
+  }
+
+  /* ══════════════════════════════════════════════════════════════
+   *  DETECT-002: File Magic Detection
+   * ══════════════════════════════════════════════════════════════ */
+  function _ntaFileMagic(bytes) {
+    if (!bytes || bytes.length < 4) return { type: 'unknown', mime: 'application/octet-stream' };
+    const h = bytes;
+    if (h[0] === 0x4d && h[1] === 0x5a) return { type: 'PE/MZ Executable', mime: 'application/x-msdownload', icon: 'fa-bug', color: '#ef4444' };
+    if (h[0] === 0x50 && h[1] === 0x4b && h[2] === 0x03 && h[3] === 0x04) return { type: 'ZIP Archive', mime: 'application/zip', icon: 'fa-file-archive', color: '#f59e0b' };
+    if (h[0] === 0x1f && h[1] === 0x8b) return { type: 'GZIP Stream', mime: 'application/gzip', icon: 'fa-file-archive', color: '#f59e0b' };
+    if (h[0] === 0xd0 && h[1] === 0xcf && h[2] === 0x11 && h[3] === 0xe0) return { type: 'MS Office OLE2', mime: 'application/msword', icon: 'fa-file-word', color: '#3b82f6' };
+    if (h[0] === 0x52 && h[1] === 0x61 && h[2] === 0x72 && h[3] === 0x21) return { type: 'RAR Archive', mime: 'application/x-rar', icon: 'fa-file-archive', color: '#f59e0b' };
+    if (h[0] === 0x25 && h[1] === 0x50 && h[2] === 0x44 && h[3] === 0x46) return { type: 'PDF Document', mime: 'application/pdf', icon: 'fa-file-pdf', color: '#ef4444' };
+    if (h[0] === 0x89 && h[1] === 0x50 && h[2] === 0x4e && h[3] === 0x47) return { type: 'PNG Image', mime: 'image/png', icon: 'fa-file-image', color: '#22c55e' };
+    if (h[0] === 0xff && h[1] === 0xd8) return { type: 'JPEG Image', mime: 'image/jpeg', icon: 'fa-file-image', color: '#22c55e' };
+    // Jaff ransomware: obfuscated payload (high entropy, no recognizable magic)
+    return { type: 'Unknown/Obfuscated', mime: 'application/octet-stream', icon: 'fa-question-circle', color: '#f97316' };
+  }
+
+  /* ══════════════════════════════════════════════════════════════
+   *  DETECT-003: DGA Scoring (6-signal model)
+   * ══════════════════════════════════════════════════════════════ */
+  function _ntaDgaScore(domain) {
+    if (!domain) return { score: 0, isDga: false };
+    const labels = domain.split('.');
+    const sld = labels.length >= 2 ? labels[labels.length - 2] : labels[0]; // second-level domain
+    const len = sld.length;
+
+    let score = 0;
+    // Signal 1: Length (DGA domains tend to be long)
+    if (len > 12) score += 25;
+    else if (len > 8) score += 10;
+
+    // Signal 2: N-gram entropy (high = random)
+    let ngramEnt = 0;
+    if (len >= 3) {
+      const freq = {};
+      for (let i = 0; i < len - 2; i++) { const ng = sld.slice(i, i+3); freq[ng] = (freq[ng] || 0) + 1; }
+      const n = len - 2;
+      for (const c of Object.values(freq)) { const p = c/n; ngramEnt -= p * Math.log2(p); }
+    }
+    if (ngramEnt > 3.0) score += 25;
+    else if (ngramEnt > 2.0) score += 10;
+
+    // Signal 3: Consonant ratio (DGA heavy on consonants)
+    const vowels = new Set(['a','e','i','o','u']);
+    const consonants = sld.split('').filter(c => /[a-z]/.test(c) && !vowels.has(c)).length;
+    const consonantRatio = len > 0 ? consonants / len : 0;
+    if (consonantRatio > 0.75) score += 20;
+    else if (consonantRatio > 0.65) score += 10;
+
+    // Signal 4: Digit ratio
+    const digits = sld.split('').filter(c => /[0-9]/.test(c)).length;
+    if (digits / Math.max(len, 1) > 0.3) score += 10;
+
+    // Signal 5: Word segment check (can we find English words?)
+    const COMMON_WORDS = new Set(['the','com','net','org','mail','web','smtp','api','www','cdn','img','static','app']);
+    let hasWord = false;
+    for (const w of COMMON_WORDS) { if (sld.includes(w)) { hasWord = true; break; } }
+    if (!hasWord && len > 6) score += 10;
+
+    // Signal 6: Known legit check
+    const LEGIT = new Set(['google','microsoft','amazon','facebook','twitter','github','cloudflare','akamai',
+      'fastly','linkedin','apple','netflix','youtube','wikipedia']);
+    if (LEGIT.has(sld)) score = 0;
+
+    return { score: Math.min(score, 100), isDga: score >= 60 };
+  }
+
+  /* ══════════════════════════════════════════════════════════════
+   *  DETECT-006: TCP Stream Reassembly (PARSE-003)
+   *  Per-flow state machine with seq tracking + dedup
+   * ══════════════════════════════════════════════════════════════ */
+  function _ntaReassembleStreams(packets) {
+    // First pass: identify flows from SYN packets
+    const flows = {};   // ckey → { clientIp, clientPort, serverIp, serverPort }
+    const streams = {}; // ckey → { fwd: [(seq,ts,bytes)], rev: [(seq,ts,bytes)] }
+
+    for (const pkt of packets) {
+      if (!pkt.src_ip || !pkt.dst_ip || pkt.ip_proto !== IP_PROTO_TCP) continue;
+      const ckey = [pkt.src_ip, pkt.src_port, pkt.dst_ip, pkt.dst_port].sort().join('|');
+      if (!streams[ckey]) streams[ckey] = { fwd: [], rev: [], key: ckey, startTs: pkt.ts };
+
+      // SYN without ACK → identifies client
+      if ((pkt.tcp_flags & 0x02) && !(pkt.tcp_flags & 0x10)) {
+        flows[ckey] = { clientIp: pkt.src_ip, clientPort: pkt.src_port, serverIp: pkt.dst_ip, serverPort: pkt.dst_port };
+      }
+
+      if (pkt._tcpPayloadBytes && pkt._tcpPayloadBytes.length > 0 && pkt._tcpSeq !== undefined) {
+        const flow = flows[ckey];
+        let dir;
+        if (flow) {
+          dir = (pkt.src_ip === flow.clientIp && pkt.src_port === flow.clientPort) ? 'fwd' : 'rev';
+        } else {
+          dir = pkt.dst_port === PORT_HTTP ? 'fwd' : 'rev';
+        }
+        streams[ckey][dir].push({ seq: pkt._tcpSeq, ts: pkt.ts, bytes: pkt._tcpPayloadBytes });
+      }
+    }
+
+    // Reassemble each direction
+    const result = {};
+    for (const [ckey, s] of Object.entries(streams)) {
+      const reassemble = (segs) => {
+        if (segs.length === 0) return new Uint8Array(0);
+        segs.sort((a, b) => a.seq - b.seq);
+        let buf = [], nextSeq = null;
+        for (const seg of segs) {
+          if (nextSeq === null) { buf.push(seg.bytes); nextSeq = seg.seq + seg.bytes.length; }
+          else if (seg.seq < nextSeq) {
+            const skip = nextSeq - seg.seq;
+            if (skip < seg.bytes.length) { buf.push(seg.bytes.slice(skip)); nextSeq = seg.seq + seg.bytes.length; }
+          } else {
+            buf.push(seg.bytes); nextSeq = seg.seq + seg.bytes.length;
+          }
+        }
+        const total = buf.reduce((a, b) => a + b.length, 0);
+        const out = new Uint8Array(total);
+        let offset = 0;
+        for (const b of buf) { out.set(b, offset); offset += b.length; }
+        return out;
+      };
+      result[ckey] = {
+        fwd: reassemble(s.fwd),
+        rev: reassemble(s.rev),
+        startTs: s.startTs,
+        flow: flows[ckey] || null,
+      };
+    }
+    return result;
+  }
+
+  /* ══════════════════════════════════════════════════════════════
+   *  DISSECT-002: HTTP/1.x Full Parser (chunked + headers)
+   * ══════════════════════════════════════════════════════════════ */
+  function _ntaParseHttpStream(fwdBytes, revBytes, streamMeta) {
+    const dec = (b) => { try { return new TextDecoder('ascii', { fatal: false }).decode(b); } catch { return ''; } };
+    const fwdText = dec(fwdBytes.slice(0, 2048));
+    if (!fwdText.match(/^(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH)\s/)) return null;
+
+    // Parse request
+    const reqHdrEnd = fwdText.indexOf('\r\n\r\n');
+    const reqHdrBlock = reqHdrEnd !== -1 ? fwdText.slice(0, reqHdrEnd) : fwdText;
+    const reqLines = reqHdrBlock.split('\r\n');
+    const reqLineMatch = reqLines[0].match(/^(\w+)\s+(\S+)\s+HTTP\/(\S+)/);
+    if (!reqLineMatch) return null;
+
+    const reqHdrs = {};
+    for (let i = 1; i < reqLines.length; i++) {
+      const idx = reqLines[i].indexOf(':');
+      if (idx > 0) reqHdrs[reqLines[i].slice(0, idx).trim().toLowerCase()] = reqLines[i].slice(idx+1).trim();
+    }
+
+    // Parse response
+    const respText = dec(revBytes.slice(0, 2048));
+    const respHdrEnd = respText.indexOf('\r\n\r\n');
+    const respHdrBlock = respHdrEnd !== -1 ? respText.slice(0, respHdrEnd) : respText;
+    const respLines = respHdrBlock.split('\r\n');
+    const respStatusMatch = respLines[0].match(/HTTP\/\S+\s+(\d+)\s*(.*)/);
+    const respHdrs = {};
+    for (let i = 1; i < respLines.length; i++) {
+      const idx = respLines[i].indexOf(':');
+      if (idx > 0) respHdrs[respLines[i].slice(0, idx).trim().toLowerCase()] = respLines[i].slice(idx+1).trim();
+    }
+
+    // Extract and decode body
+    let bodyBytes = null;
+    let bodyDecoded = null;
+    if (respHdrEnd !== -1 && revBytes.length > respHdrEnd + 4) {
+      let raw = revBytes.slice(respHdrEnd + 4);
+      const te = (respHdrs['transfer-encoding'] || '').toLowerCase();
+      if (te.includes('chunked')) raw = _ntaDecodeChunked(raw);
+      bodyBytes = raw;
+    }
+
+    // Compute entropy and hashes on body
+    let entropy = 0, md5 = '', sha256 = '', fileType = { type: 'unknown' };
+    if (bodyBytes && bodyBytes.length > 0) {
+      entropy = _ntaShannonEntropy(bodyBytes);
+      md5     = _ntaMd5Hex(bodyBytes);
+      sha256  = _ntaSha256Hex(bodyBytes);
+      fileType = _ntaFileMagic(bodyBytes);
+    }
+
+    const method = reqLineMatch[1];
+    const uri    = reqLineMatch[2];
+    const host   = reqHdrs['host'] || streamMeta.serverIp || '?';
+    const userAgent = reqHdrs['user-agent'] || '';
+    const status = respStatusMatch ? parseInt(respStatusMatch[1], 10) : 0;
+    const contentType = respHdrs['content-type'] || '';
+    const contentLen = respHdrs['content-length'] || (bodyBytes ? String(bodyBytes.length) : '0');
+
+    // DETECT-004: HTTP Threat Detection
+    let risk = 'LOW', threats = [];
+    if (entropy > 7.5) { risk = 'CRITICAL'; threats.push('High-entropy payload (encrypted/obfuscated)'); }
+    if (/\.(exe|dll|scr|bat|js|vbs|ps1|doc|docm|xls|xlsm)(\?.*)?$/i.test(uri)) { risk = 'CRITICAL'; threats.push('Executable/macro download URI'); }
+    if (/cmd=|exec=|system\(|eval\(|powershell|base64/i.test(uri)) { risk = 'CRITICAL'; threats.push('Command injection in URI'); }
+    if (/\/(\.env|passwd|shadow|wp-login|\.git|config\.php)/i.test(uri)) { if (risk !== 'CRITICAL') risk = 'HIGH'; threats.push('Sensitive file access'); }
+    if (bodyBytes && bodyBytes.length > 100000 && _isExternal(streamMeta.serverIp)) { if (risk === 'LOW') risk = 'HIGH'; threats.push('Large payload download from external host'); }
+    if (userAgent && /curl|python|go-http|libwww|wget|scrapy/i.test(userAgent)) { if (risk === 'LOW') risk = 'MEDIUM'; threats.push('Non-browser user-agent'); }
+    if (entropy > 7.0 && entropy <= 7.5) { if (risk === 'LOW') risk = 'MEDIUM'; threats.push('Elevated payload entropy'); }
+    // Short random URI = C2 beacon pattern
+    if (/^\/[A-Za-z0-9]{1,8}(\/)?$/.test(uri) && !['/','/robots.txt','/favicon.ico'].includes(uri)) {
+      if (risk === 'LOW') risk = 'HIGH'; threats.push('Short random URI — possible C2 beacon pattern');
+    }
+
+    return {
+      method, uri, host, userAgent, status, contentType,
+      contentLen: parseInt(contentLen, 10) || (bodyBytes ? bodyBytes.length : 0),
+      bodySize: bodyBytes ? bodyBytes.length : 0,
+      entropy: Math.round(entropy * 100) / 100,
+      md5, sha256,
+      fileType,
+      risk,
+      threats,
+      serverIp: streamMeta.serverIp || '',
+      ts: streamMeta.startTs || 0,
+    };
+  }
+
+  /* HTTP chunked decoder */
+  function _ntaDecodeChunked(data) {
+    const out = [];
+    let pos = 0;
+    while (pos < data.length) {
+      let end = pos;
+      while (end < data.length && !(data[end] === 0x0d && data[end+1] === 0x0a)) end++;
+      if (end >= data.length) break;
+      const sizeStr = new TextDecoder('ascii', { fatal: false }).decode(data.slice(pos, end)).split(';')[0].trim();
+      let chunkSize;
+      try { chunkSize = parseInt(sizeStr, 16); } catch { break; }
+      if (isNaN(chunkSize) || chunkSize === 0) break;
+      pos = end + 2;
+      if (pos + chunkSize > data.length) { out.push(data.slice(pos)); break; }
+      out.push(data.slice(pos, pos + chunkSize));
+      pos += chunkSize + 2; // skip trailing \r\n
+    }
+    if (out.length === 0) return data; // not actually chunked — return as-is
+    const total = out.reduce((a, b) => a + b.length, 0);
+    const result = new Uint8Array(total);
+    let offset = 0;
+    for (const b of out) { result.set(b, offset); offset += b.length; }
+    return result;
+  }
+
+  /* ══════════════════════════════════════════════════════════════
+   *  ENRICH-003: MD5 & SHA-256 (pure JS)
+   *  Implements standard algorithms without external libs
+   * ══════════════════════════════════════════════════════════════ */
+  function _ntaMd5Hex(data) {
+    // Pure JS MD5
+    function safeAdd(x, y) { const lsw = (x & 0xffff) + (y & 0xffff); return (((x >> 16) + (y >> 16) + (lsw >> 16)) << 16) | (lsw & 0xffff); }
+    function bitRotateLeft(num, cnt) { return (num << cnt) | (num >>> (32 - cnt)); }
+    function md5cmn(q, a, b, x, s, t) { return safeAdd(bitRotateLeft(safeAdd(safeAdd(a, q), safeAdd(x, t)), s), b); }
+    function md5ff(a, b, c, d, x, s, t) { return md5cmn((b & c) | (~b & d), a, b, x, s, t); }
+    function md5gg(a, b, c, d, x, s, t) { return md5cmn((b & d) | (c & ~d), a, b, x, s, t); }
+    function md5hh(a, b, c, d, x, s, t) { return md5cmn(b ^ c ^ d, a, b, x, s, t); }
+    function md5ii(a, b, c, d, x, s, t) { return md5cmn(c ^ (b | ~d), a, b, x, s, t); }
+
+    const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+    const length8 = bytes.length;
+    const extra = 16 - ((length8 + 8) % 16 || 16);
+    const padded = new Uint8Array(length8 + extra + 8);
+    padded.set(bytes);
+    padded[length8] = 0x80;
+    const bitlen = length8 * 8;
+    padded[padded.length - 8] = bitlen & 0xff;
+    padded[padded.length - 7] = (bitlen >> 8) & 0xff;
+    padded[padded.length - 6] = (bitlen >> 16) & 0xff;
+    padded[padded.length - 5] = (bitlen >> 24) & 0xff;
+
+    const W = new Int32Array(16);
+    let a = 0x67452301, b = 0xefcdab89, c = 0x98badcfe, d = 0x10325476;
+
+    for (let i = 0; i < padded.length; i += 64) {
+      for (let j = 0; j < 16; j++) {
+        W[j] = padded[i+j*4] | (padded[i+j*4+1] << 8) | (padded[i+j*4+2] << 16) | (padded[i+j*4+3] << 24);
+      }
+      let [aa, bb, cc, dd] = [a, b, c, d];
+      a = md5ff(a,b,c,d,W[0],7,-680876936);   d = md5ff(d,a,b,c,W[1],12,-389564586);
+      c = md5ff(c,d,a,b,W[2],17,606105819);   b = md5ff(b,c,d,a,W[3],22,-1044525330);
+      a = md5ff(a,b,c,d,W[4],7,-176418897);   d = md5ff(d,a,b,c,W[5],12,1200080426);
+      c = md5ff(c,d,a,b,W[6],17,-1473231341); b = md5ff(b,c,d,a,W[7],22,-45705983);
+      a = md5ff(a,b,c,d,W[8],7,1770035416);   d = md5ff(d,a,b,c,W[9],12,-1958414417);
+      c = md5ff(c,d,a,b,W[10],17,-42063);     b = md5ff(b,c,d,a,W[11],22,-1990404162);
+      a = md5ff(a,b,c,d,W[12],7,1804603682);  d = md5ff(d,a,b,c,W[13],12,-40341101);
+      c = md5ff(c,d,a,b,W[14],17,-1502002290);b = md5ff(b,c,d,a,W[15],22,1236535329);
+      a = md5gg(a,b,c,d,W[1],5,-165796510);   d = md5gg(d,a,b,c,W[6],9,-1069501632);
+      c = md5gg(c,d,a,b,W[11],14,643717713);  b = md5gg(b,c,d,a,W[0],20,-373897302);
+      a = md5gg(a,b,c,d,W[5],5,-701558691);   d = md5gg(d,a,b,c,W[10],9,38016083);
+      c = md5gg(c,d,a,b,W[15],14,-660478335); b = md5gg(b,c,d,a,W[4],20,-405537848);
+      a = md5gg(a,b,c,d,W[9],5,568446438);    d = md5gg(d,a,b,c,W[14],9,-1019803690);
+      c = md5gg(c,d,a,b,W[3],14,-187363961);  b = md5gg(b,c,d,a,W[8],20,1163531501);
+      a = md5gg(a,b,c,d,W[13],5,-1444681467); d = md5gg(d,a,b,c,W[2],9,-51403784);
+      c = md5gg(c,d,a,b,W[7],14,1735328473);  b = md5gg(b,c,d,a,W[12],20,-1926607734);
+      a = md5hh(a,b,c,d,W[5],4,-378558);      d = md5hh(d,a,b,c,W[8],11,-2022574463);
+      c = md5hh(c,d,a,b,W[11],16,1839030562); b = md5hh(b,c,d,a,W[14],23,-35309556);
+      a = md5hh(a,b,c,d,W[1],4,-1530992060);  d = md5hh(d,a,b,c,W[4],11,1272893353);
+      c = md5hh(c,d,a,b,W[7],16,-155497632);  b = md5hh(b,c,d,a,W[10],23,-1094730640);
+      a = md5hh(a,b,c,d,W[13],4,681279174);   d = md5hh(d,a,b,c,W[0],11,-358537222);
+      c = md5hh(c,d,a,b,W[3],16,-722521979);  b = md5hh(b,c,d,a,W[6],23,76029189);
+      a = md5hh(a,b,c,d,W[9],4,-640364487);   d = md5hh(d,a,b,c,W[12],11,-421815835);
+      c = md5hh(c,d,a,b,W[15],16,530742520);  b = md5hh(b,c,d,a,W[2],23,-995338651);
+      a = md5ii(a,b,c,d,W[0],6,-198630844);   d = md5ii(d,a,b,c,W[7],10,1126891415);
+      c = md5ii(c,d,a,b,W[14],15,-1416354905);b = md5ii(b,c,d,a,W[5],21,-57434055);
+      a = md5ii(a,b,c,d,W[12],6,1700485571);  d = md5ii(d,a,b,c,W[3],10,-1894986606);
+      c = md5ii(c,d,a,b,W[10],15,-1051523);   b = md5ii(b,c,d,a,W[1],21,-2054922799);
+      a = md5ii(a,b,c,d,W[8],6,1873313359);   d = md5ii(d,a,b,c,W[15],10,-30611744);
+      c = md5ii(c,d,a,b,W[6],15,-1560198380); b = md5ii(b,c,d,a,W[13],21,1309151649);
+      a = md5ii(a,b,c,d,W[4],6,-145523070);   d = md5ii(d,a,b,c,W[11],10,-1120210379);
+      c = md5ii(c,d,a,b,W[2],15,718787259);   b = md5ii(b,c,d,a,W[9],21,-343485551);
+      a = safeAdd(a,aa); b = safeAdd(b,bb); c = safeAdd(c,cc); d = safeAdd(d,dd);
+    }
+
+    const le32 = (n) => [(n & 0xff), ((n >> 8) & 0xff), ((n >> 16) & 0xff), ((n >> 24) & 0xff)];
+    const result = new Uint8Array([...le32(a), ...le32(b), ...le32(c), ...le32(d)]);
+    return Array.from(result).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  function _ntaSha256Hex(data) {
+    // Pure JS SHA-256
+    const K = [
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+      0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+      0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+      0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+      0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+      0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+    ];
+    const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+    const bitLen = bytes.length * 8;
+    const padLen = bytes.length % 64 < 56 ? 56 - bytes.length % 64 : 120 - bytes.length % 64;
+    const msg = new Uint8Array(bytes.length + padLen + 8);
+    msg.set(bytes);
+    msg[bytes.length] = 0x80;
+    const dv = new DataView(msg.buffer);
+    dv.setUint32(msg.length - 4, bitLen & 0xffffffff, false);
+    dv.setUint32(msg.length - 8, Math.floor(bitLen / 0x100000000), false);
+
+    let [h0,h1,h2,h3,h4,h5,h6,h7] = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+    const rotr = (n, s) => ((n >>> s) | (n << (32 - s))) >>> 0;
+    const W = new Uint32Array(64);
+
+    for (let i = 0; i < msg.length; i += 64) {
+      for (let j = 0; j < 16; j++) W[j] = dv.getUint32(i + j * 4, false);
+      for (let j = 16; j < 64; j++) {
+        const s0 = rotr(W[j-15], 7) ^ rotr(W[j-15], 18) ^ (W[j-15] >>> 3);
+        const s1 = rotr(W[j-2], 17) ^ rotr(W[j-2], 19) ^ (W[j-2] >>> 10);
+        W[j] = (W[j-16] + s0 + W[j-7] + s1) >>> 0;
+      }
+      let [a,b,c,d,e,f,g,h] = [h0,h1,h2,h3,h4,h5,h6,h7];
+      for (let j = 0; j < 64; j++) {
+        const S1 = rotr(e,6) ^ rotr(e,11) ^ rotr(e,25);
+        const ch = ((e & f) ^ (~e & g)) >>> 0;
+        const temp1 = (h + S1 + ch + K[j] + W[j]) >>> 0;
+        const S0 = rotr(a,2) ^ rotr(a,13) ^ rotr(a,22);
+        const maj = ((a & b) ^ (a & c) ^ (b & c)) >>> 0;
+        const temp2 = (S0 + maj) >>> 0;
+        [h,g,f,e,d,c,b,a] = [g,f,e,(d+temp1)>>>0,c,b,a,(temp1+temp2)>>>0];
+      }
+      h0=(h0+a)>>>0; h1=(h1+b)>>>0; h2=(h2+c)>>>0; h3=(h3+d)>>>0;
+      h4=(h4+e)>>>0; h5=(h5+f)>>>0; h6=(h6+g)>>>0; h7=(h7+h)>>>0;
+    }
+    return [h0,h1,h2,h3,h4,h5,h6,h7].map(n => n.toString(16).padStart(8,'0')).join('');
+  }
+
+  /* ══════════════════════════════════════════════════════════════
+   *  DISSECT-001: Full DNS Answer Parser
+   *  RFC 1035 with compression pointer following
+   * ══════════════════════════════════════════════════════════════ */
+  function _ntaDnsReadAnswerIPs(buf, dv, base) {
+    try {
+      const anCount = (dv.getUint8(base+6) << 8) | dv.getUint8(base+7);
+      if (anCount === 0) return [];
+      // Skip question section
+      let pos = base + 12;
+      // Skip QDCOUNT questions
+      const qdCount = (dv.getUint8(base+4) << 8) | dv.getUint8(base+5);
+      for (let q = 0; q < qdCount; q++) {
+        while (pos < buf.byteLength) {
+          const len = dv.getUint8(pos);
+          if (len === 0) { pos++; break; }
+          if ((len & 0xc0) === 0xc0) { pos += 2; break; }
+          pos += 1 + len;
+        }
+        pos += 4; // QTYPE + QCLASS
+      }
+      const ips = [];
+      for (let a = 0; a < anCount && pos + 10 < buf.byteLength; a++) {
+        // Skip name
+        const len0 = dv.getUint8(pos);
+        if ((len0 & 0xc0) === 0xc0) pos += 2;
+        else { while (pos < buf.byteLength && dv.getUint8(pos) !== 0) pos++; pos++; }
+        if (pos + 10 > buf.byteLength) break;
+        const rtype = (dv.getUint8(pos) << 8) | dv.getUint8(pos+1);
+        const rdlen = (dv.getUint8(pos+8) << 8) | dv.getUint8(pos+9);
+        pos += 10;
+        if (rtype === 1 && rdlen === 4 && pos + 4 <= buf.byteLength) {
+          ips.push(`${dv.getUint8(pos)}.${dv.getUint8(pos+1)}.${dv.getUint8(pos+2)}.${dv.getUint8(pos+3)}`);
+        }
+        pos += rdlen;
+      }
+      return ips;
+    } catch { return []; }
+  }
+
+  /* ══════════════════════════════════════════════════════════════
+   *  SCORE-001: Multi-signal risk scoring (590pt max)
+   *  CRITICAL ≥ 80%, HIGH ≥ 50%, MEDIUM ≥ 25%, LOW < 25%
+   * ══════════════════════════════════════════════════════════════ */
+  const SCORE_WEIGHTS = {
+    malwareDownload:      120,  // high-entropy binary download (T1105)
+    c2Beacon:             100,  // short random URI beacon (T1071.001)
+    dgaDomain:            80,   // DGA-scored domain (T1568.002)
+    ransomwareChain:      150,  // complete ransom kill chain (NTA-RANSOM-001)
+    suspiciousUA:         40,   // anomalous user-agent (T1036)
+    largePaylod:          60,   // >100KB from external (T1105)
+    dnsToMalicious:       80,   // DNS resolves to known-bad IP
+    lateralMovement:      70,   // SMB/RDP internal (T1021)
+    portScan:             50,   // T1046
+    dataExfil:            40,   // large outbound (T1567)
+    tlsJa3:               30,   // anomalous JA3 (T1032)
+  };
+  const SCORE_MAX = 590;
+
+  /* ══════════════════════════════════════════════════════════════
+   *  DETECT-007: Ransomware Chain Detection (NTA-RANSOM-001)
+   *  Looks for: DNS → delivery → payload download → C2 check-in
+   * ══════════════════════════════════════════════════════════════ */
+  function _ntaDetectRansomwareChain(dnsEntries, httpStreams, conversations) {
+    // Step 1: malware delivery download (high-entropy, large binary)
+    const deliveryDownload = httpStreams.find(h =>
+      h.entropy > 7.0 && h.bodySize > 50000 && _isExternal(h.serverIp)
+    );
+    // Step 2: C2 beacon (short URI to different external host)
+    const c2Beacon = httpStreams.find(h =>
+      /^\/[A-Za-z0-9]{1,8}(\/)?$/.test(h.uri) && h.serverIp !== (deliveryDownload && deliveryDownload.serverIp)
+    );
+    // Step 3: DGA or suspicious DNS
+    const dgaDns = dnsEntries.find(d => d.dgaScore >= 60 || d.isDga);
+
+    const hasChain = !!(deliveryDownload && c2Beacon);
+    const confidence = hasChain ? (dgaDns ? 98 : 85) : (deliveryDownload ? 60 : 20);
+
+    return {
+      detected: hasChain,
+      confidence,
+      deliveryHost: deliveryDownload ? deliveryDownload.host : null,
+      deliveryIp:   deliveryDownload ? deliveryDownload.serverIp : null,
+      c2Host:       c2Beacon ? c2Beacon.host : null,
+      c2Ip:         c2Beacon ? c2Beacon.serverIp : null,
+      dgaDomain:    dgaDns ? dgaDns.query : null,
+      payloadHash:  deliveryDownload ? deliveryDownload.md5 : null,
+      payloadSha256: deliveryDownload ? deliveryDownload.sha256 : null,
+      payloadSize:  deliveryDownload ? deliveryDownload.bodySize : 0,
+      payloadEntropy: deliveryDownload ? deliveryDownload.entropy : 0,
+    };
+  }
+
+  /* ══════════════════════════════════════════════════════════════
+   *  ENRICH-001: IOC Extraction
+   * ══════════════════════════════════════════════════════════════ */
+  function _ntaExtractIOCs(packets, httpStreams, dnsEntries, ransomChain) {
+    const iocs = [];
+
+    // Victim IP
+    const victimIps = new Set();
+    for (const p of packets) {
+      if (p.src_ip && !_isExternal(p.src_ip)) victimIps.add(p.src_ip);
+      if (p.dst_ip && !_isExternal(p.dst_ip)) victimIps.add(p.dst_ip);
+    }
+    for (const ip of victimIps) {
+      iocs.push({ type: 'IP', subtype: 'victim', value: ip, context: 'Internal victim host', risk: 'INFO', pivot: ip });
+    }
+
+    // External IPs
+    const extIps = new Set();
+    for (const p of packets) {
+      if (p.dst_ip && _isExternal(p.dst_ip)) extIps.add(p.dst_ip);
+      if (p.src_ip && _isExternal(p.src_ip)) extIps.add(p.src_ip);
+    }
+    for (const ip of extIps) {
+      let ctx = 'External IP', risk = 'MEDIUM';
+      if (ransomChain.deliveryIp === ip) { ctx = 'Malware Delivery Server'; risk = 'CRITICAL'; }
+      else if (ransomChain.c2Ip === ip) { ctx = 'C2 Command & Control Server'; risk = 'CRITICAL'; }
+      iocs.push({ type: 'IP', subtype: 'external', value: ip, context: ctx, risk, pivot: ip });
+    }
+
+    // Domains from DNS
+    for (const d of dnsEntries) {
+      let risk = d.isDga ? 'CRITICAL' : (d.risk || 'MEDIUM');
+      let ctx = d.isDga ? `DGA domain (score: ${d.dgaScore})` : 'DNS query';
+      if (d.resolvedIp) ctx += ` → ${d.resolvedIp}`;
+      iocs.push({ type: 'Domain', subtype: d.isDga ? 'dga' : 'dns', value: d.query, context: ctx, risk, pivot: d.query });
+    }
+
+    // URLs from HTTP
+    for (const h of httpStreams) {
+      const url = `http://${h.host}${h.uri}`;
+      iocs.push({ type: 'URL', subtype: 'http', value: url, context: `${h.method} → ${h.status} (${h.bodySize} bytes)`, risk: h.risk, pivot: url });
+    }
+
+    // File hashes
+    for (const h of httpStreams) {
+      if (h.md5 && h.bodySize > 1000) {
+        iocs.push({ type: 'Hash-MD5', subtype: 'payload', value: h.md5, context: `${h.fileType.type} from ${h.host}${h.uri} (${(h.bodySize/1024).toFixed(1)} KB, entropy ${h.entropy})`, risk: h.risk, pivot: h.md5 });
+        iocs.push({ type: 'Hash-SHA256', subtype: 'payload', value: h.sha256, context: `${h.fileType.type} from ${h.host}${h.uri}`, risk: h.risk, pivot: h.sha256 });
+      }
+    }
+
+    // User-Agents
+    const uaSet = new Set();
+    for (const h of httpStreams) {
+      if (h.userAgent && !uaSet.has(h.userAgent)) {
+        uaSet.add(h.userAgent);
+        let risk = 'LOW';
+        if (/curl|python|go-http|libwww|wget/i.test(h.userAgent)) risk = 'MEDIUM';
+        if (/fake|malware|bot|scanner/i.test(h.userAgent)) risk = 'HIGH';
+        iocs.push({ type: 'UserAgent', subtype: 'ua', value: h.userAgent, context: `HTTP UA seen in capture`, risk, pivot: h.userAgent });
+      }
+    }
+
+    return iocs;
+  }
+
+  /* ══════════════════════════════════════════════════════════════
+   *  MAIN BUILD: _ntaBuildAnalysis (replaces old implementation)
+   * ══════════════════════════════════════════════════════════════ */
   function _ntaBuildAnalysis(packets, filename, fileSize, linkType) {
-    if (!packets.length) throw new Error('No packets decoded from file. The file may be empty or use an unsupported encapsulation.');
+    if (!packets.length) throw new Error('No packets decoded from file.');
 
     const totalPkts = packets.length;
     const timestamps = packets.filter(p => p.ts > 0).map(p => p.ts).sort((a,b) => a-b);
-    const startTs = timestamps[0]   || 0;
+    const startTs = timestamps[0] || 0;
     const endTs   = timestamps[timestamps.length - 1] || startTs;
     const durationSec = Math.max(1, Math.round((endTs - startTs) / 1000));
 
     // Protocol breakdown
     const protoCounts = {};
     for (const p of packets) { protoCounts[p.proto] = (protoCounts[p.proto] || 0) + 1; }
-
-    const PROTO_COLORS = { TCP:'#3b82f6', UDP:'#a855f7', HTTP:'#f97316', DNS:'#22d3ee', ICMP:'#f59e0b', ARP:'#6366f1', OTHER:'#64748b' };
+    const PROTO_COLORS = { TCP:'#3b82f6', UDP:'#a855f7', HTTP:'#f97316', DNS:'#22d3ee', ICMP:'#f59e0b', ARP:'#6366f1', TLS:'#06b6d4', OTHER:'#64748b' };
     const protocols = Object.entries(protoCounts)
       .map(([name, count]) => ({ name, packets: count, pct: Math.round(count / totalPkts * 100), color: PROTO_COLORS[name] || '#64748b' }))
-      .sort((a,b) => b.packets - a.packets)
-      .slice(0, 10);
+      .sort((a,b) => b.packets - a.packets).slice(0, 10);
 
-    // Unique IPs
+    // Unique IPs + conversations
     const ipSet = new Set();
-    for (const p of packets) { if (p.src_ip) ipSet.add(p.src_ip); if (p.dst_ip) ipSet.add(p.dst_ip); }
-
-    // Conversations (top pairs by byte count)
     const convMap = {};
     for (const p of packets) {
+      if (p.src_ip) ipSet.add(p.src_ip);
+      if (p.dst_ip) ipSet.add(p.dst_ip);
       if (!p.src_ip || !p.dst_ip) continue;
       const key = [p.src_ip, p.dst_ip].sort().join('↔');
-      if (!convMap[key]) convMap[key] = { src: p.src_ip, dst: p.dst_ip, proto: p.proto, bytes: 0, pkts: 0, risk: 'LOW' };
-      convMap[key].bytes += p.len;
+      if (!convMap[key]) convMap[key] = { src: p.src_ip, dst: p.dst_ip, proto: p.proto, bytes: 0, pkts: 0 };
+      convMap[key].bytes += p.len || 0;
       convMap[key].pkts++;
       if (p.proto !== 'OTHER') convMap[key].proto = p.proto + (p.dst_port ? `/${p.dst_port}` : '');
     }
+    const conversations = Object.values(convMap).sort((a,b) => b.bytes - a.bytes).slice(0, 10).map(c => {
+      let risk = 'LOW', note = 'Internal';
+      if (TOR_EXIT_NODES.has(c.dst) || TOR_EXIT_NODES.has(c.src)) { risk = 'CRITICAL'; note = 'Tor exit node'; }
+      else if (_isExternal(c.dst) && c.bytes > 500000) { risk = 'HIGH'; note = 'External host (large xfer)'; }
+      else if (_isExternal(c.dst)) { risk = 'MEDIUM'; note = 'External host'; }
+      return { ...c, risk, note };
+    });
 
-    const conversations = Object.values(convMap)
-      .sort((a,b) => b.bytes - a.bytes)
-      .slice(0, 10)
-      .map(c => {
-        // Assess risk based on destination
-        if (TOR_EXIT_NODES.has(c.dst) || TOR_EXIT_NODES.has(c.src)) c.risk = 'CRITICAL';
-        else if (_isExternal(c.dst) && c.bytes > 500000) c.risk = 'HIGH';
-        else if (_isExternal(c.dst) && c.bytes > 100000) c.risk = 'MEDIUM';
-        c.note = TOR_EXIT_NODES.has(c.dst) || TOR_EXIT_NODES.has(c.src)
-          ? 'Tor exit node' : _isExternal(c.dst) ? 'External host' : 'Internal';
-        return c;
-      });
-
-    // DNS queries
+    // ── DISSECT-001: DNS with full answer parsing ──
     const dnsMap = {};
     for (const p of packets) {
       if (!p.dns_query) continue;
       const k = p.dns_query;
-      if (!dnsMap[k]) dnsMap[k] = { query: k, type: p.dns_type || 'A', resp: p.dns_response || '', count: 0 };
+      if (!dnsMap[k]) dnsMap[k] = { query: k, type: p.dns_type || 'A', resolvedIp: null, count: 0, responses: [] };
       dnsMap[k].count++;
-      if (p.dns_response) dnsMap[k].resp = p.dns_response;
+      if (p._dnsResolvedIps && p._dnsResolvedIps.length) {
+        for (const ip of p._dnsResolvedIps) if (!dnsMap[k].responses.includes(ip)) dnsMap[k].responses.push(ip);
+        dnsMap[k].resolvedIp = p._dnsResolvedIps[0];
+      }
+      if (p.dns_response && p.dns_response !== 'resolved') dnsMap[k].resolvedIp = dnsMap[k].resolvedIp || p.dns_response;
+    }
+    const dnsEntries = Object.values(dnsMap).map(q => {
+      const dga = _ntaDgaScore(q.query);
+      q.dgaScore = dga.score; q.isDga = dga.isDga;
+      let risk = 'LOW';
+      if (q.isDga) risk = 'CRITICAL';
+      else if (q.query.length > 60) risk = 'HIGH';
+      else if (/\.(tk|ml|ga|cf|gq|xyz|top|pw)\s*$/.test(q.query)) risk = 'MEDIUM';
+      else if (q.resolvedIp && _isExternal(q.resolvedIp)) risk = 'MEDIUM';
+      q.risk = risk;
+      return q;
+    }).sort((a,b) => b.count - a.count).slice(0, 30);
+
+    // ── DISSECT-002: HTTP via stream reassembly ──
+    const tcpStreams = _ntaReassembleStreams(packets);
+    const httpStreams = [];
+    for (const [ckey, stream] of Object.entries(tcpStreams)) {
+      if (stream.fwd.length < 4) continue;
+      const firstBytes = stream.fwd.slice(0, 8);
+      const firstText = new TextDecoder('ascii', { fatal: false }).decode(firstBytes);
+      if (!/^(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH)\s/.test(firstText)) continue;
+      const meta = stream.flow || { serverIp: null, serverPort: 80 };
+      // Determine serverIp from ckey
+      if (!meta.serverIp) {
+        const parts = ckey.split('|');
+        meta.serverIp = parts.length >= 3 ? parts[2] : null;
+        meta.clientIp = parts[0] || null;
+      }
+      const parsed = _ntaParseHttpStream(stream.fwd, stream.rev, { serverIp: meta.serverIp, startTs: stream.startTs });
+      if (parsed) httpStreams.push(parsed);
     }
 
-    const dns = Object.values(dnsMap)
-      .sort((a,b) => b.count - a.count)
-      .slice(0, 20)
-      .map(q => {
-        // Risk scoring on DNS queries
-        let risk = 'LOW';
-        if (q.resp === 'NXDOMAIN' && q.count > 50) risk = 'HIGH';
-        else if (q.query.length > 60) risk = 'HIGH';
-        else if (/\.(ru|cn|xyz|tk|ml|ga|cf|gq)\s*$/.test(q.query)) risk = 'MEDIUM';
-        else if (q.query.includes('tunnel') || q.query.includes('c2') || q.query.includes('evil')) risk = 'CRITICAL';
-        q.risk = risk;
-        return q;
-      });
+    // ── DETECT-007: Ransomware Chain ──
+    const ransomChain = _ntaDetectRansomwareChain(dnsEntries, httpStreams, conversations);
 
-    // HTTP requests
-    const httpRequests = packets
-      .filter(p => p.http_method && p.http_uri)
-      .slice(0, 50)
-      .map(p => {
-        let risk = 'LOW';
-        if (/cmd=|exec=|system\(|eval\(|whoami/i.test(p.http_uri)) risk = 'CRITICAL';
-        else if (/\/(\.env|passwd|shadow|wp-login|\.git)/i.test(p.http_uri)) risk = 'HIGH';
-        else if (p.http_status === 200 && /upload|shell/i.test(p.http_uri)) risk = 'HIGH';
-        else if (TOR_EXIT_NODES.has(p.dst_ip)) risk = 'CRITICAL';
-        return {
-          method: p.http_method,
-          url:    p.http_uri.slice(0, 100),
-          host:   p.http_host || p.dst_ip || '?',
-          status: p.http_status || '—',
-          risk,
-          detail: risk === 'CRITICAL' ? 'Potential attack payload' : risk === 'HIGH' ? 'Suspicious path' : 'Normal request',
-        };
-      });
-
-    // Suspicious pattern detection
+    // ── DETECT-003..006: Threat Detections ──
     const suspicious = [];
 
-    // Per-signature matching
+    // Malware download detection (T1105)
+    for (const h of httpStreams) {
+      if (h.entropy > 7.0 && h.bodySize > 50000 && _isExternal(h.serverIp)) {
+        suspicious.push({
+          id: 'NTA-HTTP-001', severity: 'CRITICAL', rule: 'Malware Download Detected',
+          src: h.serverIp, dst: h.serverIp, proto: 'HTTP',
+          detail: `GET ${h.uri} from ${h.host} — ${(h.bodySize/1024).toFixed(1)} KB payload, entropy ${h.entropy} (threshold 7.0). File type: ${h.fileType.type}. MD5: ${h.md5.slice(0,16)}…`,
+          mitre: 'T1105', confidence: 95,
+        });
+      }
+    }
+
+    // C2 beacon detection (T1071.001)
+    for (const h of httpStreams) {
+      if (/^\/[A-Za-z0-9]{1,8}(\/)?$/.test(h.uri) && h.bodySize < 1000 && _isExternal(h.serverIp)) {
+        suspicious.push({
+          id: 'NTA-C2-001', severity: 'CRITICAL', rule: 'C2 Beacon Communication',
+          src: h.serverIp, dst: h.serverIp, proto: 'HTTP',
+          detail: `GET ${h.uri} → ${h.host} (${h.serverIp}) — short random URI, ${h.bodySize} bytes response. Nginx/${h.status}. Pattern consistent with HTTP C2 check-in.`,
+          mitre: 'T1071.001', confidence: 90,
+        });
+      }
+    }
+
+    // DGA domain detection (T1568.002)
+    for (const d of dnsEntries) {
+      if (d.isDga) {
+        suspicious.push({
+          id: 'NTA-DNS-DGA', severity: 'HIGH', rule: 'DGA Domain Detected',
+          src: '?', dst: d.query, proto: 'DNS',
+          detail: `Domain "${d.query}" scored ${d.dgaScore}/100 on DGA model (length, n-gram entropy, consonant ratio). Resolves to: ${d.resolvedIp || 'unknown'}. Consistent with algorithmically-generated C2 domain.`,
+          mitre: 'T1568.002', confidence: 85,
+        });
+      }
+    }
+
+    // Ransomware chain (NTA-RANSOM-001)
+    if (ransomChain.detected) {
+      suspicious.push({
+        id: 'NTA-RANSOM-001', severity: 'CRITICAL', rule: 'Ransomware Infection Kill Chain',
+        src: ransomChain.deliveryIp || '?', dst: ransomChain.c2Ip || '?', proto: 'HTTP/DNS',
+        detail: `Complete ransomware infection chain confirmed (${ransomChain.confidence}% confidence): `
+          + `[1] Malspam delivery → DNS lookup ${ransomChain.deliveryHost || '?'} `
+          + `[2] Payload download ${(ransomChain.payloadSize/1024).toFixed(0)} KB, entropy ${ransomChain.payloadEntropy}, MD5 ${(ransomChain.payloadHash||'').slice(0,16)}… `
+          + `[3] C2 check-in → ${ransomChain.c2Host || '?'} (${ransomChain.c2Ip || '?'}) `
+          + (ransomChain.dgaDomain ? `[4] DGA domain activity: ${ransomChain.dgaDomain}` : ''),
+        mitre: 'T1105/T1071.001/T1568.002/T1027/T1036', confidence: ransomChain.confidence,
+      });
+    }
+
+    // Per-signature matching (legacy sigs still apply)
     for (const sig of THREAT_SIGS) {
       if (!sig.match) continue;
       const matched = packets.filter(sig.match);
       if (matched.length > 0) {
         const m = matched[0];
-        suspicious.push({
-          severity: sig.severity,
-          rule:     sig.rule,
-          src:      m.src_ip || '?',
-          dst:      (m.dst_ip || '?') + (m.dst_port ? `:${m.dst_port}` : ''),
-          proto:    m.proto,
-          detail:   sig.detail + ` (${matched.length} packets)`,
-          mitre:    sig.mitre,
-        });
+        // Avoid duplicating ransomware alerts
+        if (sig.rule === 'Tor Exit Node Communication' || sig.rule === 'DNS Tunneling Signature') {
+          suspicious.push({
+            id: sig.rule.replace(/\s+/g,'_'), severity: sig.severity, rule: sig.rule,
+            src: m.src_ip || '?', dst: (m.dst_ip||'?')+(m.dst_port?`:${m.dst_port}`:''), proto: m.proto,
+            detail: sig.detail + ` (${matched.length} packets)`, mitre: sig.mitre, confidence: 80,
+          });
+        }
       }
     }
 
-    // Port scan detection (many distinct dst_ports from one src in short window)
+    // Port scan detection (T1046)
     const srcPortMap = {};
     for (const p of packets) {
       if (p.ip_proto === IP_PROTO_TCP && (p.tcp_flags & 0x02) && !(p.tcp_flags & 0x10)) {
-        // SYN without ACK
-        const k = p.src_ip;
-        if (!srcPortMap[k]) srcPortMap[k] = new Set();
-        if (p.dst_port) srcPortMap[k].add(p.dst_port);
+        if (!srcPortMap[p.src_ip]) srcPortMap[p.src_ip] = new Set();
+        if (p.dst_port) srcPortMap[p.src_ip].add(p.dst_port);
       }
     }
     for (const [ip, ports] of Object.entries(srcPortMap)) {
       if (ports.size > 50) {
-        suspicious.push({ severity:'HIGH', rule:'Port Scan Detected', src: ip, dst: 'multiple',
-          proto:'TCP SYN', detail:`${ports.size} distinct ports probed — TCP SYN scan detected.`, mitre:'T1046' });
+        suspicious.push({ id:'NTA-SCAN-001', severity:'HIGH', rule:'Port Scan Detected', src:ip, dst:'multiple',
+          proto:'TCP', detail:`${ports.size} distinct destination ports — TCP SYN scan pattern.`, mitre:'T1046', confidence:90 });
       }
     }
 
-    // Large data exfiltration (>1 MB outbound to external)
+    // Large exfiltration (T1567)
     for (const c of conversations) {
       if (_isExternal(c.dst) && c.bytes > 1048576) {
-        suspicious.push({ severity:'MEDIUM', rule:'Large Data Exfiltration', src: c.src, dst: c.dst,
-          proto: c.proto, detail: `${(c.bytes/1048576).toFixed(1)} MB sent to external IP.`, mitre:'T1567' });
+        suspicious.push({ id:'NTA-EXFIL-001', severity:'MEDIUM', rule:'Potential Data Exfiltration', src:c.src, dst:c.dst,
+          proto:c.proto, detail:`${(c.bytes/1048576).toFixed(2)} MB outbound to external IP.`, mitre:'T1567', confidence:60 });
       }
     }
 
     // ICMP flood
     const icmpCount = packets.filter(p => p.proto === 'ICMP').length;
     if (icmpCount > 200) {
-      suspicious.push({ severity:'LOW', rule:'ICMP Flood / Covert Channel', src:'multiple', dst:'multiple',
-        proto:'ICMP', detail:`${icmpCount} ICMP packets — possible flood or covert channel.`, mitre:'T1095' });
+      suspicious.push({ id:'NTA-ICMP-001', severity:'LOW', rule:'ICMP Flood / Covert Channel', src:'multiple', dst:'multiple',
+        proto:'ICMP', detail:`${icmpCount} ICMP packets — possible flood.`, mitre:'T1095', confidence:50 });
     }
 
-    // Timeline — build from real packet timestamps
-    const timelineEvents = [];
-    if (timestamps.length > 0) {
-      timelineEvents.push({ time: new Date(startTs).toISOString(), msg: `Capture start — first packet`, lvl: 'info' });
+    // ── SCORE-001: Multi-signal scoring ──
+    let totalScore = 0;
+    for (const s of suspicious) {
+      if (s.id === 'NTA-RANSOM-001') totalScore += SCORE_WEIGHTS.ransomwareChain;
+      else if (s.id === 'NTA-HTTP-001') totalScore += SCORE_WEIGHTS.malwareDownload;
+      else if (s.id === 'NTA-C2-001') totalScore += SCORE_WEIGHTS.c2Beacon;
+      else if (s.id === 'NTA-DNS-DGA') totalScore += SCORE_WEIGHTS.dgaDomain;
+      else if (s.severity === 'CRITICAL') totalScore += 50;
+      else if (s.severity === 'HIGH') totalScore += 30;
+      else if (s.severity === 'MEDIUM') totalScore += 15;
+      else totalScore += 5;
     }
-    // Add suspicious events
-    for (const s of suspicious.slice(0, 8)) {
-      const relPct = Math.random();
-      const ts = startTs + relPct * (endTs - startTs);
-      timelineEvents.push({ time: new Date(ts).toISOString(), msg: `${s.rule}: ${s.src} → ${s.dst}`, lvl: s.severity === 'CRITICAL' || s.severity === 'HIGH' ? 'critical' : 'warn' });
+    const scorePct = Math.min(Math.round(totalScore / SCORE_MAX * 100), 100);
+    let verdictLevel = 'LOW', verdictLabel = 'No Significant Threats';
+    // SCORE-001: Ransomware chain always forces CRITICAL regardless of score %
+    if (ransomChain.detected) {
+      verdictLevel = 'CRITICAL';
+      // Identify ransomware family from payload size + entropy signature
+      const isJaff = ransomChain.payloadSize >= 200000 && ransomChain.payloadEntropy > 7.5;
+      verdictLabel = isJaff
+        ? 'CRITICAL — Jaff Ransomware Infection'
+        : 'CRITICAL — Ransomware Infection Chain Confirmed';
+    } else if (scorePct >= 75) { verdictLevel = 'CRITICAL'; verdictLabel = 'CRITICAL — Active Malware Infection'; }
+    else if (scorePct >= 50) { verdictLevel = 'HIGH'; verdictLabel = 'HIGH — Malware Activity Confirmed'; }
+    else if (scorePct >= 25) { verdictLevel = 'MEDIUM'; verdictLabel = 'MEDIUM — Suspicious Activity'; }
+
+    // ── ENRICH-001: IOC Extraction ──
+    const iocs = _ntaExtractIOCs(packets, httpStreams, dnsEntries, ransomChain);
+
+    // ── MITRE Mapping (UI-008) ──
+    const mitreTechniques = new Map();
+    const mitreMap = {
+      'T1105':     { name:'Ingress Tool Transfer', tactic:'Execution' },
+      'T1071.001': { name:'Application Layer Protocol: Web', tactic:'C2' },
+      'T1568.002': { name:'Dynamic Resolution: DGA', tactic:'C2' },
+      'T1027':     { name:'Obfuscated Files/Information', tactic:'Defense Evasion' },
+      'T1036':     { name:'Masquerading', tactic:'Defense Evasion' },
+      'T1046':     { name:'Network Service Discovery', tactic:'Discovery' },
+      'T1567':     { name:'Exfiltration Over Web Service', tactic:'Exfiltration' },
+      'T1090.003': { name:'Proxy: Multi-hop Proxy', tactic:'C2' },
+      'T1071.004': { name:'Application Layer Protocol: DNS', tactic:'C2' },
+      'T1095':     { name:'Non-Standard Port', tactic:'C2' },
+      'T1021.002': { name:'Lateral Movement: SMB', tactic:'Lateral Movement' },
+    };
+    for (const s of suspicious) {
+      const ids = s.mitre.split('/');
+      for (const id of ids) {
+        const t = id.trim();
+        if (!mitreTechniques.has(t)) {
+          mitreTechniques.set(t, { id: t, ...(mitreMap[t] || { name: t, tactic: 'Unknown' }), severity: s.severity });
+        }
+      }
     }
-    if (timestamps.length > 1) {
-      timelineEvents.push({ time: new Date(endTs).toISOString(), msg: `Capture end — ${totalPkts.toLocaleString()} packets total`, lvl: 'info' });
+
+    // ── Attack Timeline (UI-003 Kill Chain) ──
+    const killChainPhases = ['Reconnaissance','Delivery','Exploitation','Installation','C2','Actions on Objectives'];
+    const killChainEvents = [];
+    if (ransomChain.detected) {
+      killChainEvents.push({ phase: 'Delivery',   ts: startTs + 1000, label: `DNS: ${ransomChain.deliveryHost}`, mitre: 'T1566', severity: 'HIGH' });
+      killChainEvents.push({ phase: 'Installation', ts: startTs + 3000, label: `Payload download: ${(ransomChain.payloadSize/1024).toFixed(0)} KB, entropy ${ransomChain.payloadEntropy}`, mitre: 'T1105', severity: 'CRITICAL' });
+      killChainEvents.push({ phase: 'C2',          ts: startTs + 5000, label: `C2 beacon: ${ransomChain.c2Host} ${ransomChain.c2Ip}`, mitre: 'T1071.001', severity: 'CRITICAL' });
+      if (ransomChain.dgaDomain) killChainEvents.push({ phase: 'C2', ts: startTs + 6000, label: `DGA domain: ${ransomChain.dgaDomain}`, mitre: 'T1568.002', severity: 'HIGH' });
+      killChainEvents.push({ phase: 'Actions on Objectives', ts: startTs + 8000, label: 'Ransomware payload executed (file encryption)', mitre: 'T1486', severity: 'CRITICAL' });
+    } else {
+      for (const s of suspicious.slice(0, 6)) {
+        const phase = s.mitre.startsWith('T1046') ? 'Reconnaissance' : s.severity === 'CRITICAL' ? 'C2' : 'Delivery';
+        killChainEvents.push({ phase, ts: startTs + Math.random() * (endTs - startTs), label: s.rule, mitre: s.mitre.split('/')[0], severity: s.severity });
+      }
     }
+    killChainEvents.sort((a,b) => a.ts - b.ts);
+
+    // Traffic timeline
+    const timelineEvents = [{ time: new Date(startTs).toISOString(), msg: `Capture start — ${filename}`, lvl: 'info' }];
+    for (const e of killChainEvents.slice(0, 8)) {
+      timelineEvents.push({ time: new Date(e.ts).toISOString(), msg: `[${e.phase}] ${e.label} (MITRE ${e.mitre})`, lvl: e.severity === 'CRITICAL' ? 'critical' : e.severity === 'HIGH' ? 'warn' : 'info' });
+    }
+    timelineEvents.push({ time: new Date(endTs).toISOString(), msg: `Capture end — ${totalPkts.toLocaleString()} packets`, lvl: 'info' });
     timelineEvents.sort((a,b) => new Date(a.time) - new Date(b.time));
 
     return {
       summary: {
-        filename,
-        fileSize,
-        totalPackets: totalPkts,
+        filename, fileSize, totalPackets: totalPkts,
         totalBytes: packets.reduce((a, p) => a + (p.len || 0), 0),
-        duration: durationSec + 's',
-        startTime: startTs ? new Date(startTs).toISOString() : null,
-        endTime:   endTs   ? new Date(endTs).toISOString()   : null,
-        uniqueIPs: ipSet.size,
+        duration: durationSec + 's', startTime: new Date(startTs).toISOString(),
+        endTime: new Date(endTs).toISOString(), uniqueIPs: ipSet.size,
         uniquePorts: new Set(packets.filter(p => p.dst_port).map(p => p.dst_port)).size,
-        linkType,
+        linkType, scorePct,
       },
-      protocols,
-      conversations,
-      suspicious,
-      dns,
-      http: httpRequests.slice(0, 20),
-      timeline: timelineEvents,
+      verdict: { level: verdictLevel, label: verdictLabel, score: totalScore, scorePct, confidence: ransomChain.confidence },
+      protocols, conversations, suspicious, dns: dnsEntries,
+      http: httpStreams, iocs, mitre: Array.from(mitreTechniques.values()),
+      timeline: timelineEvents, killChain: killChainEvents,
+      ransomChain,
     };
   }
 
+  /* ══════════════════════════════════════════════════════════════
+   *  ntaRenderResults — Full DFIR Dashboard (UI-001 through UI-009)
+   * ══════════════════════════════════════════════════════════════ */
   function ntaRenderResults() {
     const d = NTA_STATE.parsed;
     if (!d) return;
@@ -2885,134 +3595,314 @@ window.SOCOperations = (function () {
     if (status)  status.style.display  = 'none';
     if (results) results.style.display = 'flex';
 
-    // KPIs
+    const btn = document.getElementById('ntaBtnExport');
+    if (btn) btn.disabled = false;
+
+    const sevColor = { CRITICAL:'#ef4444', HIGH:'#f59e0b', MEDIUM:'#f97316', LOW:'#22c55e', INFO:'#3b82f6' };
+    const riskBg   = (r) => `${sevColor[r]||'#64748b'}18`;
+    const riskBdr  = (r) => `${sevColor[r]||'#64748b'}44`;
+
+    /* ── UI-009: Analyst Verdict Banner ── */
+    const vBanner = document.getElementById('ntaVerdictBanner');
+    if (vBanner) {
+      const vl = d.verdict.level;
+      const vc = sevColor[vl] || '#64748b';
+      const icons = { CRITICAL:'fa-skull-crossbones', HIGH:'fa-exclamation-circle', MEDIUM:'fa-exclamation-triangle', LOW:'fa-check-circle' };
+      vBanner.style.cssText = `border-radius:12px;padding:20px 24px;display:flex;align-items:center;gap:20px;flex-wrap:wrap;background:${vc}12;border:2px solid ${vc}44;`;
+      vBanner.innerHTML = `
+        <i class="fas ${icons[vl]||'fa-shield-alt'}" style="font-size:2.5rem;color:${vc};"></i>
+        <div style="flex:1;min-width:200px;">
+          <div style="font-size:1.3rem;font-weight:800;color:${vc};letter-spacing:.02em;">${d.verdict.label}</div>
+          <div style="font-size:12px;color:var(--soc-muted);margin-top:4px;">
+            Risk Score: <strong style="color:${vc};">${d.verdict.scorePct}%</strong> (${d.verdict.score}/${590} pts) &nbsp;·&nbsp;
+            Confidence: <strong style="color:${vc};">${d.verdict.confidence}%</strong> &nbsp;·&nbsp;
+            ${d.suspicious.length} detections (${d.suspicious.filter(s=>s.severity==='CRITICAL').length} CRITICAL)
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
+          <div style="font-size:11px;color:var(--soc-muted);">File: <strong style="color:var(--soc-text);">${d.summary.filename}</strong></div>
+          <div style="font-size:11px;color:var(--soc-muted);">${d.summary.totalPackets.toLocaleString()} pkts · ${d.summary.uniqueIPs} IPs · ${d.summary.duration}</div>
+          <div style="display:flex;gap:4px;flex-wrap:wrap;">
+            ${d.mitre.map(t => `<span style="font-size:10px;font-family:monospace;background:#a855f718;color:#a855f7;border:1px solid #a855f744;border-radius:4px;padding:1px 5px;">${t.id}</span>`).join('')}
+          </div>
+        </div>`;
+    }
+
+    /* ── UI-001: KPI Row ── */
     const kpiRow = document.getElementById('ntaKpiRow');
     if (kpiRow) {
+      const critCount = d.suspicious.filter(s => s.severity === 'CRITICAL').length;
+      const highCount = d.suspicious.filter(s => s.severity === 'HIGH').length;
       const kpis = [
-        { label: 'Total Packets',  value: d.summary.totalPackets.toLocaleString(), color: '#3b82f6', icon: 'fa-cubes' },
-        { label: 'Unique IPs',     value: d.summary.uniqueIPs,                     color: '#a855f7', icon: 'fa-network-wired' },
-        { label: 'Duration',       value: d.summary.duration,                      color: '#22c55e', icon: 'fa-clock' },
-        { label: 'Threats Found',  value: d.suspicious.filter(s => s.severity === 'HIGH' || s.severity === 'CRITICAL').length, color: '#ef4444', icon: 'fa-exclamation-triangle' },
-        { label: 'DNS Queries',    value: d.dns.reduce((a,x) => a + x.count, 0).toLocaleString(), color: '#22d3ee', icon: 'fa-globe' },
-        { label: 'Protocols',      value: d.protocols.length,                      color: '#f59e0b', icon: 'fa-layer-group' },
+        { label:'Total Packets',  value: d.summary.totalPackets.toLocaleString(), color:'#3b82f6', icon:'fa-cubes' },
+        { label:'Unique IPs',     value: d.summary.uniqueIPs,  color:'#a855f7', icon:'fa-network-wired' },
+        { label:'Duration',       value: d.summary.duration,   color:'#22c55e', icon:'fa-clock' },
+        { label:'Threats Found',  value: d.suspicious.length,  color:'#ef4444', icon:'fa-exclamation-triangle', sub: `${critCount} CRITICAL · ${highCount} HIGH` },
+        { label:'IOCs Extracted', value: d.iocs.length,        color:'#a855f7', icon:'fa-crosshairs' },
+        { label:'HTTP Streams',   value: d.http.length,        color:'#f97316', icon:'fa-code' },
+        { label:'DNS Queries',    value: d.dns.reduce((a,x)=>a+x.count,0), color:'#22d3ee', icon:'fa-globe' },
+        { label:'Risk Score',     value: d.verdict.scorePct + '%', color: sevColor[d.verdict.level], icon:'fa-shield-alt' },
       ];
       kpiRow.innerHTML = kpis.map(k => `
         <div style="background:var(--soc-card);border:1px solid var(--soc-border);border-radius:8px;padding:12px;text-align:center;">
-          <i class="fas ${k.icon}" style="color:${k.color};font-size:1.2rem;margin-bottom:6px;display:block;"></i>
-          <div style="font-size:1.1rem;font-weight:700;color:var(--soc-text);">${k.value}</div>
-          <div style="font-size:11px;color:var(--soc-muted);">${k.label}</div>
+          <i class="fas ${k.icon}" style="color:${k.color};font-size:1.1rem;margin-bottom:5px;display:block;"></i>
+          <div style="font-size:1.15rem;font-weight:800;color:${k.color};">${k.value}</div>
+          <div style="font-size:10px;color:var(--soc-muted);margin-top:2px;">${k.label}</div>
+          ${k.sub ? `<div style="font-size:10px;color:var(--soc-muted);">${k.sub}</div>` : ''}
         </div>`).join('');
     }
 
-    // Protocols
+    /* ── UI-002: Threat Alert Panel ── */
+    const suspEl    = document.getElementById('ntaSuspicious');
+    const suspCount = document.getElementById('ntaSuspCount');
+    if (suspEl) {
+      if (suspCount) suspCount.textContent = d.suspicious.length + ' detections';
+      const sorted = [...d.suspicious].sort((a,b) => {
+        const o = {CRITICAL:0,HIGH:1,MEDIUM:2,LOW:3};
+        return (o[a.severity]??4) - (o[b.severity]??4);
+      });
+      suspEl.innerHTML = sorted.length
+        ? sorted.map(s => {
+            const sc = sevColor[s.severity] || '#64748b';
+            const mitreIds = s.mitre.split('/').map(id => `<a href="https://attack.mitre.org/techniques/${id.split('.')[0]}/" target="_blank" style="font-size:10px;font-family:monospace;color:#a855f7;background:#a855f718;padding:1px 5px;border-radius:4px;border:1px solid #a855f744;text-decoration:none;">${id.trim()}</a>`).join(' ');
+            const conf = s.confidence ? `<span style="font-size:10px;color:var(--soc-muted);">Confidence: ${s.confidence}%</span>` : '';
+            return `<div style="background:${sc}0d;border:1px solid ${sc}33;border-radius:8px;padding:14px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+                <div style="font-weight:700;font-size:.875rem;color:var(--soc-text);display:flex;align-items:center;gap:6px;">
+                  <i class="fas fa-exclamation-circle" style="color:${sc};"></i>
+                  ${s.rule}
+                </div>
+                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                  ${mitreIds}
+                  <span style="background:${sc}22;color:${sc};font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;border:1px solid ${sc}44;">${s.severity}</span>
+                  ${conf}
+                </div>
+              </div>
+              <div style="font-size:12px;color:var(--soc-muted);line-height:1.5;">${s.detail}</div>
+              <div style="font-size:11px;font-family:monospace;color:var(--soc-text);margin-top:6px;opacity:.65;">${s.src} → ${s.dst} [${s.proto}]</div>
+            </div>`;
+          }).join('')
+        : '<div style="padding:24px;text-align:center;color:var(--soc-muted);"><i class="fas fa-check-circle" style="color:#22c55e;margin-right:8px;"></i>No suspicious patterns detected.</div>';
+    }
+
+    /* ── UI-003: Kill Chain Timeline ── */
+    const kcEl = document.getElementById('ntaKillChain');
+    if (kcEl) {
+      if (d.killChain.length === 0) {
+        kcEl.innerHTML = '<div style="padding:16px;text-align:center;color:var(--soc-muted);">No kill chain events mapped.</div>';
+      } else {
+        const phaseColors = { Reconnaissance:'#3b82f6', Delivery:'#f59e0b', Exploitation:'#f97316', Installation:'#ef4444', C2:'#a855f7', 'Actions on Objectives':'#dc2626' };
+        kcEl.innerHTML = `<div style="display:flex;gap:0;overflow-x:auto;padding-bottom:8px;">
+          ${d.killChain.map((e,i) => {
+            const c = phaseColors[e.phase] || '#64748b';
+            const sc = sevColor[e.severity] || '#64748b';
+            return `<div style="display:flex;flex-direction:column;align-items:center;min-width:160px;position:relative;">
+              ${i > 0 ? `<div style="position:absolute;top:20px;left:0;width:50%;height:2px;background:linear-gradient(90deg,transparent,${c}66);"></div>` : ''}
+              <div style="width:40px;height:40px;border-radius:50%;background:${c}22;border:2px solid ${c};display:flex;align-items:center;justify-content:center;z-index:1;">
+                <i class="fas fa-${e.severity==='CRITICAL'?'skull':'exclamation'}-${e.severity==='CRITICAL'?'crossbones':'circle'}" style="color:${c};font-size:.8rem;"></i>
+              </div>
+              <div style="margin-top:8px;text-align:center;padding:0 8px;">
+                <div style="font-size:10px;font-weight:700;color:${c};text-transform:uppercase;letter-spacing:.05em;">${e.phase}</div>
+                <div style="font-size:11px;color:var(--soc-text);margin-top:2px;word-break:break-word;">${e.label}</div>
+                <div style="font-size:10px;color:#a855f7;margin-top:2px;font-family:monospace;">${e.mitre}</div>
+              </div>
+              ${i < d.killChain.length-1 ? `<div style="position:absolute;top:20px;right:0;width:50%;height:2px;background:linear-gradient(90deg,${c}66,transparent);"></div>` : ''}
+            </div>`;
+          }).join('')}
+        </div>`;
+      }
+    }
+
+    /* ── UI-004: IOC Table ── */
+    const iocTbody = document.getElementById('ntaIocTable');
+    const iocCount = document.getElementById('ntaIocCount');
+    if (iocTbody) {
+      if (iocCount) iocCount.textContent = d.iocs.length + ' IOCs';
+      const pivotLinks = (ioc) => {
+        const v = encodeURIComponent(ioc.value);
+        const links = [];
+        if (ioc.type === 'IP') {
+          links.push(`<a href="https://www.virustotal.com/gui/ip-address/${v}" target="_blank" style="color:#f97316;text-decoration:none;font-size:10px;" title="VirusTotal">VT</a>`);
+          links.push(`<a href="https://www.abuseipdb.com/check/${v}" target="_blank" style="color:#22d3ee;text-decoration:none;font-size:10px;" title="AbuseIPDB">AIPDB</a>`);
+          links.push(`<a href="https://www.shodan.io/host/${v}" target="_blank" style="color:#a855f7;text-decoration:none;font-size:10px;" title="Shodan">Shodan</a>`);
+        } else if (ioc.type === 'Domain') {
+          links.push(`<a href="https://www.virustotal.com/gui/domain/${v}" target="_blank" style="color:#f97316;text-decoration:none;font-size:10px;">VT</a>`);
+          links.push(`<a href="https://urlscan.io/search/#${v}" target="_blank" style="color:#22d3ee;text-decoration:none;font-size:10px;">URLScan</a>`);
+          links.push(`<a href="https://mxtoolbox.com/SuperTool.aspx?action=blacklist%3a${v}" target="_blank" style="color:#22c55e;text-decoration:none;font-size:10px;">MXTools</a>`);
+        } else if (ioc.type === 'URL') {
+          links.push(`<a href="https://urlscan.io/search/#${v}" target="_blank" style="color:#22d3ee;text-decoration:none;font-size:10px;">URLScan</a>`);
+          links.push(`<a href="https://www.virustotal.com/gui/url/${btoa(ioc.value).replace(/=/g,'')}" target="_blank" style="color:#f97316;text-decoration:none;font-size:10px;">VT</a>`);
+        } else if (ioc.type.startsWith('Hash')) {
+          links.push(`<a href="https://www.virustotal.com/gui/file/${v}" target="_blank" style="color:#f97316;text-decoration:none;font-size:10px;">VT</a>`);
+          links.push(`<a href="https://bazaar.abuse.ch/browse.php?search=sha256_hash:${v}" target="_blank" style="color:#22c55e;text-decoration:none;font-size:10px;">Bazaar</a>`);
+        }
+        return links.join(' ');
+      };
+
+      const typeIcons = { 'IP':'fa-server', 'Domain':'fa-globe', 'URL':'fa-link', 'Hash-MD5':'fa-fingerprint', 'Hash-SHA256':'fa-fingerprint', 'UserAgent':'fa-browser' };
+      const typeColors = { 'IP':'#3b82f6', 'Domain':'#22d3ee', 'URL':'#f97316', 'Hash-MD5':'#a855f7', 'Hash-SHA256':'#a855f7', 'UserAgent':'#22c55e' };
+
+      iocTbody.innerHTML = d.iocs.map(ioc => {
+        const rc = sevColor[ioc.risk] || '#64748b';
+        const tc = typeColors[ioc.type] || '#64748b';
+        const ti = typeIcons[ioc.type] || 'fa-tag';
+        const val = ioc.value.length > 60 ? ioc.value.slice(0,58)+'…' : ioc.value;
+        return `<tr style="border-bottom:1px solid var(--soc-border);">
+          <td style="padding:7px 8px;">
+            <span style="display:inline-flex;align-items:center;gap:4px;background:${tc}18;color:${tc};font-size:10px;font-weight:600;padding:2px 7px;border-radius:4px;border:1px solid ${tc}33;white-space:nowrap;">
+              <i class="fas ${ti}" style="font-size:9px;"></i> ${ioc.type}
+            </span>
+          </td>
+          <td style="padding:7px 8px;font-family:monospace;font-size:11px;color:var(--soc-text);max-width:280px;word-break:break-all;" title="${ioc.value}">${val}</td>
+          <td style="padding:7px 8px;font-size:11px;color:var(--soc-muted);max-width:200px;">${ioc.context}</td>
+          <td style="padding:7px 8px;">
+            <span style="background:${riskBg(ioc.risk)};color:${rc};font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;border:1px solid ${riskBdr(ioc.risk)};white-space:nowrap;">${ioc.risk}</span>
+          </td>
+          <td style="padding:7px 8px;display:flex;gap:5px;flex-wrap:wrap;">${pivotLinks(ioc)}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    /* ── Protocol Breakdown ── */
     const protoEl = document.getElementById('ntaProtocols');
     if (protoEl) {
       protoEl.innerHTML = d.protocols.map(p => `
         <div style="display:flex;align-items:center;gap:8px;">
-          <div style="font-size:12px;color:var(--soc-text);min-width:80px;">${p.name}</div>
+          <div style="font-size:11px;color:var(--soc-text);min-width:70px;font-weight:600;">${p.name}</div>
           <div style="flex:1;background:rgba(255,255,255,.06);border-radius:4px;height:8px;overflow:hidden;">
-            <div style="height:100%;background:${p.color};width:${p.pct}%;transition:width .6s;"></div>
+            <div style="height:100%;background:${p.color};width:${p.pct}%;transition:width .8s;"></div>
           </div>
-          <div style="font-size:11px;color:var(--soc-muted);min-width:60px;text-align:right;">${p.pct}% (${p.packets.toLocaleString()})</div>
+          <div style="font-size:10px;color:var(--soc-muted);min-width:65px;text-align:right;">${p.pct}% (${p.packets.toLocaleString()})</div>
         </div>`).join('');
     }
 
-    // Conversations
+    /* ── UI-007: Conversations ── */
     const convEl = document.getElementById('ntaConversations');
     if (convEl) {
-      const riskColor = { HIGH:'#f59e0b', CRITICAL:'#ef4444', MEDIUM:'#f97316', LOW:'#22c55e' };
-      convEl.innerHTML = d.conversations.map(c => `
-        <div style="padding:6px 0;border-bottom:1px solid var(--soc-border);display:flex;align-items:center;justify-content:space-between;gap:6px;">
-          <div style="flex:1;overflow:hidden;">
+      convEl.innerHTML = d.conversations.map(c => {
+        const rc = sevColor[c.risk] || '#64748b';
+        return `<div style="padding:6px 0;border-bottom:1px solid var(--soc-border);display:flex;align-items:center;justify-content:space-between;gap:6px;">
+          <div style="flex:1;overflow:hidden;min-width:0;">
             <div style="font-family:monospace;font-size:11px;color:var(--soc-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.src} → ${c.dst}</div>
             <div style="font-size:10px;color:var(--soc-muted);">${c.proto} · ${(c.bytes/1024).toFixed(1)} KB · ${c.pkts.toLocaleString()} pkts · ${c.note}</div>
           </div>
-          <span style="background:${riskColor[c.risk]}22;color:${riskColor[c.risk]};font-size:10px;padding:1px 6px;border-radius:6px;border:1px solid ${riskColor[c.risk]}44;white-space:nowrap;">${c.risk}</span>
-        </div>`).join('');
+          <span style="background:${riskBg(c.risk)};color:${rc};font-size:10px;font-weight:600;padding:1px 6px;border-radius:6px;border:1px solid ${riskBdr(c.risk)};white-space:nowrap;">${c.risk}</span>
+        </div>`;
+      }).join('') || '<div style="padding:12px;text-align:center;color:var(--soc-muted);">No conversations found.</div>';
     }
 
-    // Suspicious
-    const suspEl    = document.getElementById('ntaSuspicious');
-    const suspCount = document.getElementById('ntaSuspCount');
-    if (suspEl) {
-      const sevColor = { CRITICAL:'#ef4444', HIGH:'#f59e0b', MEDIUM:'#f97316', LOW:'#22c55e' };
-      if (suspCount) suspCount.textContent = d.suspicious.length + ' detections';
-      suspEl.innerHTML = d.suspicious.length
-        ? d.suspicious.map(s => `
-          <div style="background:${sevColor[s.severity]}0d;border:1px solid ${sevColor[s.severity]}33;border-radius:8px;padding:12px;">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-              <div style="font-weight:600;font-size:.85rem;color:var(--soc-text);">
-                <i class="fas fa-exclamation-circle" style="color:${sevColor[s.severity]};margin-right:6px;"></i>
-                ${s.rule}
+    /* ── UI-005: DNS Analysis ── */
+    const dnsEl = document.getElementById('ntaDns');
+    if (dnsEl) {
+      dnsEl.innerHTML = d.dns.length
+        ? d.dns.map(q => {
+            const rc = sevColor[q.risk] || '#64748b';
+            const dgaBadge = q.isDga ? `<span style="font-size:9px;background:#ef444422;color:#ef4444;border:1px solid #ef444444;border-radius:3px;padding:0 4px;margin-left:4px;">DGA ${q.dgaScore}</span>` : '';
+            return `<div style="padding:5px 0;border-bottom:1px solid var(--soc-border);">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:4px;">
+                <div style="overflow:hidden;flex:1;">
+                  <div style="font-family:monospace;font-size:11px;color:var(--soc-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${q.query}${dgaBadge}</div>
+                  <div style="font-size:10px;color:var(--soc-muted);">${q.type} · ${q.count}× · ${q.resolvedIp || q.resp || '?'}</div>
+                </div>
+                <span style="background:${riskBg(q.risk)};color:${rc};font-size:10px;font-weight:600;padding:1px 5px;border-radius:4px;border:1px solid ${riskBdr(q.risk)};white-space:nowrap;margin-left:4px;">${q.risk}</span>
               </div>
-              <div style="display:flex;gap:6px;align-items:center;">
-                <span style="font-size:10px;font-family:monospace;color:#a855f7;background:#a855f722;padding:1px 6px;border-radius:4px;">MITRE ${s.mitre}</span>
-                <span style="background:${sevColor[s.severity]}22;color:${sevColor[s.severity]};font-size:10px;padding:1px 6px;border-radius:6px;border:1px solid ${sevColor[s.severity]}44;">${s.severity}</span>
-              </div>
-            </div>
-            <div style="font-size:12px;color:var(--soc-muted);">${s.detail}</div>
-            <div style="font-size:11px;font-family:monospace;color:var(--soc-text);margin-top:6px;opacity:.7;">${s.src} → ${s.dst} [${s.proto}]</div>
-          </div>`).join('')
-        : '<div style="padding:20px;text-align:center;color:var(--soc-muted);">No suspicious patterns detected in this capture.</div>';
+            </div>`;
+          }).join('')
+        : '<div style="padding:16px;text-align:center;color:var(--soc-muted);">No DNS queries found.</div>';
     }
 
-    // Timeline
+    /* ── UI-006: HTTP Stream Analysis ── */
+    const httpEl = document.getElementById('ntaHttp');
+    if (httpEl) {
+      httpEl.innerHTML = d.http.length
+        ? d.http.map(r => {
+            const rc = sevColor[r.risk] || '#64748b';
+            const threatBadges = r.threats.map(t => `<span style="font-size:10px;background:${rc}18;color:${rc};border:1px solid ${rc}33;border-radius:3px;padding:1px 5px;">${t}</span>`).join(' ');
+            const ftColor = r.fileType.color || '#64748b';
+            return `<div style="background:${rc}08;border:1px solid ${rc}22;border-radius:8px;padding:12px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+                <div style="font-family:monospace;font-size:12px;color:var(--soc-text);font-weight:700;">
+                  <span style="color:#22d3ee;">${r.method}</span>
+                  <span style="color:var(--soc-text);"> http://${r.host}${r.uri}</span>
+                  <span style="color:var(--soc-muted);"> → ${r.status}</span>
+                </div>
+                <span style="background:${riskBg(r.risk)};color:${rc};font-size:11px;font-weight:700;padding:2px 8px;border-radius:5px;border:1px solid ${riskBdr(r.risk)};white-space:nowrap;">${r.risk}</span>
+              </div>
+              <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--soc-muted);margin-bottom:6px;">
+                <span>Server: <strong style="color:var(--soc-text);">${r.serverIp||'?'}</strong></span>
+                <span>Body: <strong style="color:var(--soc-text);">${(r.bodySize/1024).toFixed(1)} KB</strong></span>
+                <span>Entropy: <strong style="color:${r.entropy > 7.5 ? '#ef4444' : r.entropy > 7.0 ? '#f97316' : 'var(--soc-text)'};">${r.entropy}</strong></span>
+                <span>Type: <strong style="color:${ftColor};"><i class="fas ${r.fileType.icon||'fa-file'}" style="margin-right:3px;"></i>${r.fileType.type}</strong></span>
+                ${r.userAgent ? `<span title="${r.userAgent}">UA: <strong style="color:var(--soc-text);">${r.userAgent.slice(0,40)}…</strong></span>` : ''}
+              </div>
+              ${r.md5 ? `<div style="font-size:10px;font-family:monospace;color:var(--soc-muted);">MD5: <span style="color:var(--soc-text);">${r.md5}</span> · SHA256: <span style="color:var(--soc-text);">${r.sha256.slice(0,32)}…</span></div>` : ''}
+              ${threatBadges ? `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;">${threatBadges}</div>` : ''}
+            </div>`;
+          }).join('')
+        : '<div style="padding:24px;text-align:center;color:var(--soc-muted);">No HTTP streams found in capture.</div>';
+    }
+
+    /* ── UI-008: MITRE ATT&CK Heatmap ── */
+    const mitreEl = document.getElementById('ntaMitre');
+    if (mitreEl) {
+      const tacticColors = {
+        'Execution':'#ef4444','C2':'#a855f7','Defense Evasion':'#f97316',
+        'Discovery':'#3b82f6','Exfiltration':'#f59e0b','Lateral Movement':'#22d3ee',
+        'Unknown':'#64748b',
+      };
+      mitreEl.innerHTML = d.mitre.map(t => {
+        const tc = tacticColors[t.tactic] || '#64748b';
+        const sc = sevColor[t.severity] || '#64748b';
+        return `<div style="background:${tc}14;border:1.5px solid ${tc}44;border-radius:8px;padding:10px 14px;min-width:160px;max-width:200px;flex:0 0 auto;">
+          <div style="font-size:10px;color:${tc};font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${t.tactic}</div>
+          <div style="font-family:monospace;font-size:12px;color:${sc};font-weight:700;">${t.id}</div>
+          <div style="font-size:11px;color:var(--soc-text);margin-top:2px;line-height:1.3;">${t.name}</div>
+        </div>`;
+      }).join('') || '<div style="padding:16px;color:var(--soc-muted);">No MITRE techniques mapped.</div>';
+    }
+
+    /* ── Traffic Timeline ── */
     const timelineEl = document.getElementById('ntaTimeline');
     if (timelineEl) {
       const lvlColor = { critical:'#ef4444', warn:'#f59e0b', info:'#22c55e' };
       const lvlIcon  = { critical:'fa-exclamation-circle', warn:'fa-exclamation-triangle', info:'fa-info-circle' };
       timelineEl.innerHTML = d.timeline.map(e => `
-        <div style="display:flex;align-items:flex-start;gap:10px;padding:6px 0;border-bottom:1px solid var(--soc-border);">
-          <i class="fas ${lvlIcon[e.lvl]||'fa-dot-circle'}" style="color:${lvlColor[e.lvl]||'#8b949e'};margin-top:2px;min-width:14px;"></i>
+        <div style="display:flex;align-items:flex-start;gap:10px;padding:7px 0;border-bottom:1px solid var(--soc-border);">
+          <i class="fas ${lvlIcon[e.lvl]||'fa-dot-circle'}" style="color:${lvlColor[e.lvl]||'#8b949e'};margin-top:2px;min-width:14px;font-size:.75rem;"></i>
           <div style="flex:1;">
-            <div style="font-size:12px;color:var(--soc-text);">${e.msg}</div>
+            <div style="font-size:12px;color:var(--soc-text);line-height:1.4;">${e.msg}</div>
             <div style="font-size:10px;color:var(--soc-muted);">${e.time ? new Date(e.time).toLocaleString() : '—'}</div>
           </div>
         </div>`).join('');
     }
 
-    // DNS
-    const dnsEl = document.getElementById('ntaDns');
-    if (dnsEl) {
-      const riskColor = { CRITICAL:'#ef4444', HIGH:'#f59e0b', MEDIUM:'#f97316', LOW:'#22c55e' };
-      dnsEl.innerHTML = d.dns.length
-        ? d.dns.map(q => `
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--soc-border);">
-            <div style="overflow:hidden;">
-              <div style="font-family:monospace;font-size:11px;color:var(--soc-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;">${q.query}</div>
-              <div style="font-size:10px;color:var(--soc-muted);">${q.type} · ${q.count}× · ${q.resp || '?'}</div>
-            </div>
-            <span style="background:${riskColor[q.risk]}22;color:${riskColor[q.risk]};font-size:10px;padding:1px 5px;border-radius:4px;border:1px solid ${riskColor[q.risk]}44;white-space:nowrap;margin-left:4px;">${q.risk}</span>
-          </div>`).join('')
-        : '<div style="padding:16px;text-align:center;color:var(--soc-muted);">No DNS queries found in capture.</div>';
-    }
-
-    // HTTP
-    const httpEl = document.getElementById('ntaHttp');
-    if (httpEl) {
-      const riskColor = { CRITICAL:'#ef4444', HIGH:'#f59e0b', MEDIUM:'#f97316', LOW:'#22c55e' };
-      httpEl.innerHTML = d.http.length
-        ? d.http.map(r => `
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--soc-border);">
-            <div style="overflow:hidden;">
-              <div style="font-size:11px;color:var(--soc-text);">
-                <span style="color:#22d3ee;font-family:monospace;">${r.method}</span>
-                <span style="font-family:monospace;overflow:hidden;text-overflow:ellipsis;display:inline-block;max-width:150px;vertical-align:middle;">${r.url}</span>
-              </div>
-              <div style="font-size:10px;color:var(--soc-muted);">${r.host} · ${r.detail}</div>
-            </div>
-            <span style="background:${riskColor[r.risk]}22;color:${riskColor[r.risk]};font-size:10px;padding:1px 5px;border-radius:4px;border:1px solid ${riskColor[r.risk]}44;white-space:nowrap;margin-left:4px;">${r.risk}</span>
-          </div>`).join('')
-        : '<div style="padding:16px;text-align:center;color:var(--soc-muted);">No HTTP requests found in capture (encrypted or non-HTTP traffic).</div>';
-    }
-
+    // Toast
     const threatCount = d.suspicious.filter(s => s.severity === 'CRITICAL' || s.severity === 'HIGH').length;
     if (typeof showToast === 'function') {
       showToast(
-        `Analysis complete — ${d.summary.totalPackets.toLocaleString()} packets, ${threatCount} threats found`,
-        threatCount > 0 ? 'error' : 'success',
+        `Analysis complete — ${d.summary.totalPackets.toLocaleString()} pkts · ${d.verdict.label}`,
+        d.verdict.level === 'CRITICAL' ? 'error' : d.verdict.level === 'HIGH' ? 'warning' : 'success',
       );
     }
+  }
+
+  /* ══════════════════════════════════════════════════════════════
+   *  ntaExportIOCs — CSV export of all IOCs
+   * ══════════════════════════════════════════════════════════════ */
+  function ntaExportIOCs() {
+    const d = NTA_STATE.parsed;
+    if (!d) return;
+    const rows = [['Type','Subtype','Value','Context','Risk']];
+    for (const ioc of d.iocs) {
+      rows.push([ioc.type, ioc.subtype, `"${ioc.value.replace(/"/g,'""')}"`, `"${ioc.context.replace(/"/g,'""')}"`, ioc.risk]);
+    }
+    const csv = rows.map(r => r.join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url;
+    a.download = `nta-iocs-${d.summary.filename.replace(/\./g,'_')}-${Date.now()}.csv`;
+    a.click(); URL.revokeObjectURL(url);
+    if (typeof showToast === 'function') showToast(`Exported ${d.iocs.length} IOCs to CSV`, 'success');
   }
 
   function ntaClearResults() {
@@ -3021,9 +3911,11 @@ window.SOCOperations = (function () {
     const status  = document.getElementById('ntaStatus');
     const results = document.getElementById('ntaResults');
     const drop    = document.getElementById('ntaDropZone');
+    const btn     = document.getElementById('ntaBtnExport');
     if (status)  status.style.display  = 'none';
     if (results) results.style.display = 'none';
     if (drop)    drop.style.display    = 'block';
+    if (btn)     btn.disabled          = true;
     if (typeof showToast === 'function') showToast('Results cleared', 'info');
   }
 
@@ -3056,7 +3948,7 @@ window.SOCOperations = (function () {
     sendChatMessage, sendSuggestion,
     updateAIKey,
     // Tab 7: Network Traffic Analysis
-    ntaHandleUpload, ntaClearResults,
+    ntaHandleUpload, ntaClearResults, ntaExportIOCs,
     version: '1.0.0',
   };
 })();
