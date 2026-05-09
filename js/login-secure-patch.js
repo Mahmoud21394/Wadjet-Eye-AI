@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Secure Login Patch v6.2 (v7.4 retryIn fix)
+ *  Wadjet-Eye AI — Secure Login Patch v6.3 (R21 tokenReady gate)
  *  js/login-secure-patch.js
  *
  *  v6.1 FIX — Auth Token NOT FOUND after login (root cause):
@@ -531,15 +531,86 @@ async function _finalizeLogin(data) {
 /* ══════════════════════════════════════════════════════════════════
    UI Helpers
 ════════════════════════════════════════════════════════════════ */
+/* ══════════════════════════════════════════════════════════════════
+   tokenReady() — Promise gate (FIX R21)
+
+   PURPOSE:
+   ─────────
+   initApp() calls _loadKPIs() → renderCommandCenterLive() → authFetch()
+   BEFORE the backend has finished its cold-start session write.  Even though
+   the access token is physically in localStorage (written by STEP 1 in
+   _finalizeLogin above), the Render backend's JWT/profile-cache path may
+   return INVALID_TOKEN for up to ~5 s after login because:
+     1. The Supabase session row hasn't been committed yet
+     2. The in-memory profile cache is empty (first request per process)
+     3. The local JWT verify passes but the profile DB fetch times out
+
+   FIX: Gate initApp() behind a short warm-up promise that:
+     a) Confirms the access token is readable from localStorage (synchronous)
+     b) Waits an additional WARM_UP_MS for the backend to accept requests
+
+   WARM_UP_MS is intentionally short (1500 ms) because:
+     • STEP 1 already wrote the token before _enterApp() was called
+     • We just need to let the backend's first keepalive/probe settle
+     • auth-interceptor's pre-flight silentRefresh covers the remaining window
+     • Excessive delay hurts UX more than it helps
+
+   The 400 ms CSS transition for hiding the login screen is included in the
+   overall delay — so the net additional wait is WARM_UP_MS - 400 = ~1.1 s.
+══════════════════════════════════════════════════════════════════ */
+const _ENTER_APP_WARM_UP_MS = 1_500; // extra buffer after token confirmed stored
+
+function _tokenReady() {
+  // Synchronous check — confirm token is actually readable from storage.
+  // If storage was blocked (private mode / quota exceeded), _finalizeLogin
+  // already aborted above, so this check is an extra belt-and-suspenders guard.
+  const _stored = localStorage.getItem('wadjet_access_token')
+               || localStorage.getItem('we_access_token')
+               || sessionStorage.getItem('we_access_token');
+
+  if (_stored) {
+    // Token confirmed in storage.  Return a short warm-up delay so the backend
+    // can process its first authenticated request (profile cache fill, etc.).
+    return new Promise(resolve => setTimeout(resolve, _ENTER_APP_WARM_UP_MS));
+  }
+
+  // No token in storage — resolve immediately (login was just attempted;
+  // if storage was blocked _finalizeLogin already returned).
+  return Promise.resolve();
+}
+
 function _enterApp(onReady) {
   const loginScreen = document.getElementById('loginScreen');
   if (loginScreen) {
     loginScreen.style.opacity    = '0';
     loginScreen.style.transition = 'opacity 0.4s ease';
-    setTimeout(() => {
+
+    // FIX R21: Replace the bare setTimeout() with a two-phase sequence:
+    //   Phase 1 (400 ms): CSS fade-out completes — hide login screen, show mainApp.
+    //   Phase 2 (tokenReady): wait for token confirmation + backend warm-up buffer,
+    //                         THEN call initApp() so the very first API calls have
+    //                         a warm backend waiting for them.
+    //
+    // OLD CODE (race condition):
+    //   setTimeout(() => {
+    //     loginScreen.style.display = 'none';
+    //     initApp();          ← fired immediately, backend still cold
+    //     onReady();
+    //   }, 400);
+    //
+    // NEW CODE (sequenced):
+    //   setTimeout 400ms → hide UI
+    //   await _tokenReady() → confirm token + backend buffer
+    //   initApp() → first API calls now hit a warm backend
+    //   onReady() → auth:login / auth:restored events
+    setTimeout(async () => {
       loginScreen.style.display = 'none';
       const mainApp = document.getElementById('mainApp');
       if (mainApp) mainApp.style.display = 'flex';
+
+      // Wait for token confirmation + backend warm-up before starting API calls
+      await _tokenReady();
+
       if (typeof initApp === 'function') initApp();
       // ROOT-CAUSE FIX v9.0: invoke the optional post-init callback AFTER initApp()
       // so that auth:login / auth:restored are dispatched once the app is ready.
@@ -547,10 +618,13 @@ function _enterApp(onReady) {
     }, 400);
   } else {
     // Fallback: no loginScreen element (unit tests / minimal pages)
+    // Still gate initApp() behind tokenReady for consistency
     const mainApp = document.getElementById('mainApp');
     if (mainApp) mainApp.style.display = 'flex';
-    if (typeof initApp === 'function') initApp();
-    if (typeof onReady === 'function') onReady();
+    _tokenReady().then(() => {
+      if (typeof initApp === 'function') initApp();
+      if (typeof onReady === 'function') onReady();
+    });
   }
 }
 

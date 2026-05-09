@@ -1,7 +1,17 @@
 /**
  * ══════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Global Auth Validator & API Health Monitor v5.3
+ *  Wadjet-Eye AI — Global Auth Validator & API Health Monitor v5.4
  *  js/auth-validator.js
+ *
+ *  Round 21 fixes:
+ *  ────────────────
+ *  FIX R21-A: Banner suppression window 5 s → 90 s (matches grace window)
+ *  FIX R21-B: checkFeedAuthStatus delegates to window.authFetch when available
+ *             (uses auth-interceptor's INVALID_TOKEN grace window path)
+ *  FIX R21-C: auth:login listener delay 3 s → 30 s (cold-start Render warmup)
+ *  FIX R21-D: auth:restored listener delay 5 s → 35 s
+ *  FIX R21-E: Internal authFetch 401 handler — INVALID_TOKEN grace window check
+ *             before unconditionally calling _show401Banner()
  *
  *  PURPOSE:
  *  ─────────
@@ -67,12 +77,27 @@ function _show401Banner() {
   if (now - _last401Toast < 30_000) return;
   _last401Toast = now;
 
-  // FIX v7.6: Only show toast if NOT currently in the middle of a new login.
-  // auth:login fires a 'Welcome' toast — if both fire in the same tick we get
-  // the confusing "Welcome" + "Session expired" double-banner.
-  // Guard: if auth:login fired within the last 5 s, suppress the expired banner.
-  if (window._wadjetLastLoginAt && (now - window._wadjetLastLoginAt) < 5_000) {
-    console.warn('[AuthValidator] Suppressing session-expired banner — login just completed');
+  // FIX R21-A: Extend banner suppression window 5 s → 90 s.
+  // Root cause of Round 21 bug: the suppression only covered 5 s after login,
+  // but Render cold-start session propagation takes up to 90 s.  During that
+  // window INVALID_TOKEN 401s are transient — the session IS valid, the DB just
+  // hasn't committed the row yet.  Showing the "Session expired" banner during
+  // this window was actively misleading and caused users to log out + back in,
+  // restarting the whole cold-start cycle.
+  //
+  // The 90 s window is consistent with:
+  //   • auth-interceptor.js Fix v20.0 INVALID_TOKEN grace window (90 s)
+  //   • login-secure-patch.js _wadjet_last_login_at timestamp
+  //   • checkFeedAuthStatus delay (30 s, see FIX R21-C below)
+  const _graceMs = 90_000;
+  const _loginTimestamp = window._wadjetLastLoginAt
+    || parseInt(sessionStorage.getItem('_wadjet_last_login_at') || '0', 10)
+    || 0;
+  if (_loginTimestamp > 0 && (now - _loginTimestamp) < _graceMs) {
+    console.warn(
+      `[AuthValidator] Suppressing session-expired banner — ${Math.round((now - _loginTimestamp) / 1000)}s` +
+      ' after login (within 90 s cold-start grace window)'
+    );
     return;
   }
 
@@ -158,6 +183,35 @@ async function authFetch(pathOrUrl, opts = {}) {
 
   // ── 401 Handler ──────────────────────────────────────────────
   if (response.status === 401) {
+    // FIX R21-E: Read the 401 response body to get the error code BEFORE
+    // deciding whether to call _show401Banner().  The previous implementation
+    // called _show401Banner() unconditionally on the fallback path (line after
+    // the refresh block), which meant INVALID_TOKEN during cold-start always
+    // showed the banner even when the session was genuinely still valid.
+    let _errBody401 = {};
+    try { _errBody401 = await response.clone().json(); } catch (_) {}
+    const _errCode401 = _errBody401?.code || 'unknown';
+
+    // FIX R21-E: INVALID_TOKEN within 90 s post-login grace window.
+    // Mirrors the same logic in auth-interceptor.js Fix v20.0.
+    // If we're inside the grace window: return a soft placeholder so the
+    // caller's next poll cycle retries naturally — do NOT show the banner.
+    const _now401   = Date.now();
+    const _loginTs401 = window._wadjetLastLoginAt
+      || parseInt(sessionStorage.getItem('_wadjet_last_login_at') || '0', 10)
+      || 0;
+    const _msSinceLogin401 = _now401 - _loginTs401;
+    const _inGrace401 = _loginTs401 > 0 && _msSinceLogin401 < 90_000;
+
+    if (_errCode401 === 'INVALID_TOKEN' && _inGrace401) {
+      console.warn(
+        `[AuthFetch/Validator] INVALID_TOKEN on ${url} — ` +
+        `${Math.round(_msSinceLogin401 / 1000)}s after login (within 90 s grace).` +
+        ' Backend session write still propagating — returning cold-start placeholder.'
+      );
+      return { data: [], total: 0, page: 1, limit: 25, _offline: true, _coldStart: true };
+    }
+
     // FIX v7.6: Check both local _refreshInProgress AND the cross-module global
     // lock window.__wadjetRefreshLock before attempting a refresh.  Without this
     // check, auth-validator and auth-interceptor each hold their own local flag
@@ -270,8 +324,27 @@ async function checkFeedAuthStatus() {
   const token = getToken();
   if (!token) return;
 
+  // FIX R21-B: Delegate to window.authFetch (auth-interceptor) when available.
+  // Root cause of Round 21 three-path 401 problem:
+  //   The internal authFetch (defined above) bypassed ALL of auth-interceptor's
+  //   grace window fixes — Round 20 patched auth-interceptor.js but this call
+  //   site was a completely separate code path that still hit the backend with
+  //   the raw token and got INVALID_TOKEN during cold-start.  By delegating to
+  //   window.authFetch (which IS auth-interceptor's version when loaded), we
+  //   automatically inherit the INVALID_TOKEN 90 s grace window, the no-token
+  //   early-abort, and the silentRefresh retry chain — no duplicate logic.
+  //   Fall back to internal authFetch only when auth-interceptor is absent.
+  const _fetchFn = (global.__wadjetAuthInterceptorLoaded && typeof global.authFetch === 'function')
+    ? global.authFetch
+    : authFetch;
+
   try {
-    const resp = await authFetch('/ingest/feeds');
+    const resp = await _fetchFn('/ingest/feeds');
+    // If the interceptor returned a cold-start placeholder, skip silently
+    if (resp && (resp._coldStart || resp._offline || resp._dbUnavailable)) {
+      console.info('[FeedAuth] Skipping feed auth check — backend cold-start placeholder received');
+      return;
+    }
     const { feeds = {} } = resp;
     const issues = Object.entries(feeds)
       .filter(([, f]) => f.required && !f.key_configured)
@@ -315,13 +388,31 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // Listen for auth:login event to check feed status
+// FIX R21-C: Delay 3 s → 30 s on auth:login.
+// Root cause: the original 3 s delay fired checkFeedAuthStatus well before the
+// Render backend finished its cold-start (10–30 s).  The session write to
+// Supabase is also async — the JWT the frontend has is valid but the backend's
+// profile cache hasn't caught up yet, so every /api/ingest/feeds call returned
+// 401 INVALID_TOKEN.  Even though the Round 20 grace window in auth-interceptor
+// covered this, auth-validator was calling its OWN authFetch (not interceptor's),
+// so it bypassed the grace window entirely.
+//
+// With FIX R21-B in place (delegate to window.authFetch), the grace window IS
+// applied — but a 30 s delay is still the right default because:
+//   1. Feed auth status is informational (not critical path)
+//   2. Waiting 30 s avoids even the first retry attempt during cold-start
+//   3. Matches Render's documented cold-start window (15–30 s)
 window.addEventListener('auth:login', () => {
-  setTimeout(checkFeedAuthStatus, 3000);
+  setTimeout(checkFeedAuthStatus, 30_000);
 });
+// FIX R21-D: Delay 5 s → 35 s on auth:restored (page-reload session restore).
+// auth:restored fires on page-load _syncStoresOnLoad, meaning the backend may
+// still be cold.  35 s gives the same buffer as auth:login but with an extra
+// 5 s offset to avoid colliding with any auth:login-triggered checks.
 window.addEventListener('auth:restored', () => {
-  setTimeout(checkFeedAuthStatus, 5000);
+  setTimeout(checkFeedAuthStatus, 35_000);
 });
 
-console.log('[AuthValidator] ✅ Auth validator loaded — authFetch() available globally');
+console.log('[AuthValidator] ✅ Auth validator loaded v5.4 — authFetch() available globally (R21: grace window + delegated checkFeedAuthStatus)');
 
 })(window);
