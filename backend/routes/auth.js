@@ -289,7 +289,7 @@ async function storeRefreshToken(userId, tenantId, token, req) {
  */
 async function rotateRefreshToken(oldToken, req) {
   const hash = hashToken(oldToken);
-  const _DB_QUERY_TIMEOUT_MS = 8_000; // 8 s per DB query — tight enough to fail fast
+  const _DB_QUERY_TIMEOUT_MS = 15_000; // FIX v19.0: 15 s per DB query — was 8 s, too short for Render cold-start (10-30 s)
 
   // Helper: wrap any Supabase promise in a per-query timeout
   function _withDbTimeout(promise, label) {
@@ -351,8 +351,15 @@ async function rotateRefreshToken(oldToken, req) {
         'storeRefreshToken (memory path)'
       );
     } catch (storeErr) {
-      // Non-fatal: memory fallback — store directly and continue
-      logger.warn('Auth:Refresh', `storeRefreshToken (memory path) timed out: ${storeErr.message}`);
+      // FIX v19.0: explicitly handle RLS (42501) — use in-memory fallback instead of
+      // rethrowing, which previously surfaced as SESSION_VALIDATION_UNAVAILABLE and
+      // caused the entire rotation to fail.  Also handles timeout errors.
+      const isStoreRLS = storeErr.code === '42501' || storeErr.message?.includes('RLS blocked');
+      if (isStoreRLS) {
+        logger.error('Auth:Refresh', `storeRefreshToken (memory path) blocked by RLS — in-memory fallback: ${storeErr.message}`);
+      } else {
+        logger.warn('Auth:Refresh', `storeRefreshToken (memory path) failed/timed out — in-memory fallback: ${storeErr.message}`);
+      }
       const fbId = crypto.randomUUID();
       const exp  = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 86400 * 1000).toISOString();
       _rtMemoryStore.set(hashToken(newToken), { userId: memUser.id, tenantId: memUser.tenant_id, expiresAt: exp, sessionId: fbId });
@@ -511,8 +518,15 @@ async function rotateRefreshToken(oldToken, req) {
       'storeRefreshToken (DB path)'
     );
   } catch (storeErr) {
-    // Non-fatal timeout — use in-memory fallback so the rotation still completes
-    logger.warn('Auth:Refresh', `storeRefreshToken (DB path) timed out: ${storeErr.message}`);
+    // FIX v19.0: handle RLS (42501) explicitly — use in-memory fallback instead of
+    // rethrowing, which previously surfaced as SESSION_VALIDATION_UNAVAILABLE and
+    // caused the whole refresh to fail with 503.  Also handles timeout errors.
+    const isStoreRLS = storeErr.code === '42501' || storeErr.message?.includes('RLS blocked');
+    if (isStoreRLS) {
+      logger.error('Auth:Refresh', `storeRefreshToken (DB path) blocked by RLS — in-memory fallback: ${storeErr.message}`);
+    } else {
+      logger.warn('Auth:Refresh', `storeRefreshToken (DB path) failed/timed out — in-memory fallback: ${storeErr.message}`);
+    }
     const fbId = crypto.randomUUID();
     const exp  = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 86400 * 1000).toISOString();
     _rtMemoryStore.set(hashToken(newToken), { userId: rt.user_id, tenantId: rt.tenant_id, expiresAt: exp, sessionId: fbId });
@@ -863,7 +877,7 @@ router.post('/refresh', asyncHandler(async (req, res) => {
   let rotated;
   try {
     const _rotateTimeout = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('REFRESH_TIMEOUT')), 20_000)
+      setTimeout(() => reject(new Error('REFRESH_TIMEOUT')), 35_000) // FIX v19.0: 35 s was 20 s — outer fence must exceed DB timeout (15 s) + retry overhead
     );
     rotated = await Promise.race([
       rotateRefreshToken(oldRefreshToken, req),
@@ -882,12 +896,24 @@ router.post('/refresh', asyncHandler(async (req, res) => {
     }
     // v7.4 FIX: Return structured 401 with code field so frontend can distinguish
     // refresh-token-expired from invalid-token and show appropriate UX.
+    // FIX v19.0: SESSION_VALIDATION_UNAVAILABLE means the DB is temporarily
+    // unreachable (Render cold-start, 10-30 s).  Returning 401 caused the
+    // client to treat this as a hard token rejection and dispatch auth:expired
+    // → immediate logout.  Return 503 instead so the client's existing 503
+    // retry path (with retryIn hint) handles it gracefully without logging out.
+    if (err.message?.includes('Session validation')) {
+      logger.warn('Auth:Refresh', `DB unavailable during rotate — returning 503 (${err.message})`);
+      return res.status(503).json({
+        error:   'Token refresh service temporarily unavailable. Please try again.',
+        code:    'SESSION_VALIDATION_UNAVAILABLE',
+        retryIn: 15,
+      });
+    }
+
     const refreshErrCode = err.message?.includes('expired')
       ? 'REFRESH_TOKEN_EXPIRED'
       : err.message?.includes('suspended')
       ? 'ACCOUNT_SUSPENDED'
-      : err.message?.includes('Session validation')
-      ? 'SESSION_VALIDATION_UNAVAILABLE'
       : 'INVALID_REFRESH_TOKEN';
 
     await logActivity(null, null, 'TOKEN_REFRESH_FAILED', req, {
