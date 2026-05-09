@@ -362,14 +362,20 @@ async function _doTokenRefresh(attempt = 0) {
       const errCode = body.code || 'refresh_rejected';
       console.warn('[AuthInterceptor] Refresh token rejected:', body.error || errCode);
 
-      // v7.4 FIX: SESSION_VALIDATION_UNAVAILABLE means DB is down, not token invalid.
-      // Retry with backoff rather than expiring the session.
+      // v7.4 / FIX v19.0: SESSION_VALIDATION_UNAVAILABLE means DB is down, not token invalid.
+      // Backend v19+ returns this as 503 (handled below), but keep this 401 path as a
+      // safety net for old backend deployments or edge cases.
+      // Use longer backoff matching Render cold-start duration (5s, 15s, 25s).
       if (errCode === 'SESSION_VALIDATION_UNAVAILABLE') {
-        console.warn('[AuthInterceptor] Session validation DB unavailable — will retry');
+        console.warn('[AuthInterceptor] Session validation DB unavailable (401) — retrying with extended backoff');
         if (attempt < MAX_ATTEMPTS - 1) {
-          await _sleep(Math.min(Math.pow(2, attempt) * 1_000, 30_000));
+          const backoffMs = [5_000, 15_000, 25_000][attempt] ?? 25_000;
+          console.warn(`[AuthInterceptor] SESSION_VALIDATION_UNAVAILABLE: waiting ${backoffMs / 1000}s before retry (attempt ${attempt + 1}/${MAX_ATTEMPTS})`);
+          await _sleep(backoffMs);
           return _doTokenRefresh(attempt + 1);
         }
+        // Exhausted retries — do NOT dispatch auth:expired; session may still be valid once DB warms up.
+        console.warn('[AuthInterceptor] SESSION_VALIDATION_UNAVAILABLE: all retries exhausted — keeping session alive, will retry on next API call');
         return false;
       }
 
@@ -416,17 +422,23 @@ async function _doTokenRefresh(attempt = 0) {
     }
 
     // ── 503: Auth/DB service temporarily unavailable — retry with backoff ──
-    // v7.4 FIX: A 503 on /refresh means the backend is starting up, not that
-    // the token is invalid. Retry with backoff respecting the retryIn hint.
+    // v7.4 / FIX v19.0: A 503 on /refresh (including SESSION_VALIDATION_UNAVAILABLE)
+    // means the backend DB is starting up (Render cold-start), not that the token
+    // is invalid.  Backend v19+ returns SESSION_VALIDATION_UNAVAILABLE as 503.
+    // Use the server’s retryIn hint; fall back to 15s for SESSION_VALIDATION_UNAVAILABLE.
     if (res.status === 503) {
       const body = await res.json().catch(() => ({}));
-      const serverRetryIn = body.retryIn || body.retryAfter || 5;
+      const isSVU = body.code === 'SESSION_VALIDATION_UNAVAILABLE';
+      const serverRetryIn = body.retryIn || body.retryAfter || (isSVU ? 15 : 5);
       console.warn(`[AuthInterceptor] Refresh endpoint 503 (${body.code || 'unavailable'}) — ` +
         `retrying in ${serverRetryIn}s (attempt ${attempt + 1}/${MAX_ATTEMPTS})`);
       if (attempt < MAX_ATTEMPTS - 1) {
         await _sleep(Math.min(serverRetryIn * 1000, 30_000));
         return _doTokenRefresh(attempt + 1);
       }
+      // All retries exhausted on 503 — do NOT dispatch auth:expired; DB may still be warming up.
+      // The session is still valid; the next API call will re-trigger silentRefresh.
+      console.warn('[AuthInterceptor] 503 retries exhausted — keeping session alive for next API call');
       return false;
     }
 
@@ -898,12 +910,22 @@ async function authFetch(path, opts = {}) {
       }
     }
 
-    // Still 401 after refresh → session truly dead (revoked / expired)
+    // Still 401/403 after refresh → check whether it’s a transient DB failure
     if (!resp || resp.status === 401 || resp.status === 403) {
       // FIX v17.0: Read the response body for better error logging
       const errBody = await resp?.json().catch(() => ({}));
       const errCode = errBody?.code || 'unknown';
       console.warn(`[AuthFetch] Session dead after refresh attempt on ${path} — code: ${errCode}`);
+
+      // FIX v19.0: SESSION_VALIDATION_UNAVAILABLE means the DB is temporarily
+      // unavailable (Render cold-start).  Do NOT dispatch auth:expired — that
+      // would log the user out immediately even though their session is valid.
+      // Return a network-error-like object so the caller can handle it gracefully.
+      if (errCode === 'SESSION_VALIDATION_UNAVAILABLE') {
+        console.warn(`[AuthFetch] DB unavailable on ${path} — suppressing auth:expired; returning offline placeholder`);
+        return { data: [], total: 0, page: 1, limit: 25, _offline: true, _dbUnavailable: true };
+      }
+
       _dispatchAuthEvent('auth:expired', { path, code: errCode });
       window.StateSync?.handleAuthExpiry({ path });
       throw new Error(`AUTH_EXPIRED: Session expired. Please log in again. (${path})`);
