@@ -281,6 +281,41 @@ async function apiRequest(method, path, body = null, opts = {}) {
   // Also: only dispatch auth:expired if auth-interceptor is NOT loaded — if it
   // IS loaded, it owns the auth:expired lifecycle via its own auth:expired listener.
   if (response.status === 401) {
+    // FIX R21: Read error body BEFORE any refresh attempt so we can detect
+    // INVALID_TOKEN for the grace-window short-circuit path.
+    // Root cause: api-client.js had NO grace window logic.  When realtime-data.js
+    // fires apiRequest() shortly after login (via _apiFetch -> apiRequest fallback),
+    // the backend returns 401 INVALID_TOKEN during Render cold-start because the
+    // async session write hasn't committed yet.  The previous code went straight to
+    // silentRefresh -> auth:expired -> logout, which was completely wrong.
+    // Fix: mirrors auth-interceptor.js Fix v20.0 and auth-validator.js Fix R21-E.
+    let _errBody = {};
+    try { _errBody = await response.clone().json(); } catch (_) {}
+    const _errCode = _errBody?.code || 'unknown';
+
+    // FIX R21: INVALID_TOKEN within 90 s post-login grace window
+    const _nowAC     = Date.now();
+    const _loginTsAC = (typeof window !== 'undefined')
+      ? (window._wadjetLastLoginAt
+          || parseInt((typeof sessionStorage !== 'undefined'
+            ? sessionStorage.getItem('_wadjet_last_login_at') || '0'
+            : '0'), 10)
+          || 0)
+      : 0;
+    const _msSinceLoginAC = _nowAC - _loginTsAC;
+    const _inGraceAC = _loginTsAC > 0 && _msSinceLoginAC < 90_000;
+
+    if (_errCode === 'INVALID_TOKEN' && _inGraceAC) {
+      console.warn(
+        `[Auth/apiRequest] INVALID_TOKEN on ${path} — ` +
+        `${Math.round(_msSinceLoginAC / 1000)}s after login (within 90 s grace).` +
+        ' Backend session write still propagating — returning cold-start placeholder.'
+      );
+      // Return a safe empty payload so the caller does not crash.
+      // Callers that inspect _coldStart can skip rendering for this cycle.
+      return { data: [], total: 0, page: 1, limit: 25, _offline: true, _coldStart: true };
+    }
+
     const authInterceptorLoaded = typeof window.PersistentAuth_silentRefresh === 'function';
 
     if (authInterceptorLoaded) {
