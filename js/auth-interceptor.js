@@ -848,8 +848,38 @@ async function authFetch(path, opts = {}) {
   // ROOT-CAUSE FIX v17.0: If we STILL have no token after silentRefresh()
   // and this is NOT an auth route, log a warning so the MISSING_TOKEN error
   // is traceable to the exact call site rather than producing a cryptic 401.
+  //
+  // FIX v20.0 (Fix 3): Within the 90 s post-login grace window, abort the
+  // request BEFORE it fires with no Authorization header.  Firing with no
+  // Bearer token guarantees a 401 MISSING_TOKEN from the backend — there is
+  // no point sending it.  Return a soft cold-start placeholder immediately;
+  // the caller's next poll cycle will retry once the backend is warm.
+  // Outside the grace window the old warn-and-proceed path is kept intact
+  // so the subsequent 401 handler can attempt silentRefresh as usual.
   if (!token && !isAuthRoute && UnifiedTokenStore.hasSession()) {
-    console.warn(`[AuthFetch] ⚠️  No access token available for ${path} — session exists but token missing. Proceeding (will get 401 if backend requires auth).`);
+    const _noTokStored  = parseInt(
+      sessionStorage.getItem('_wadjet_last_login_at') || '0', 10
+    );
+    const _noTokLoginAt = Math.max(
+      typeof _lastLoginAt !== 'undefined' ? _lastLoginAt : 0,
+      _noTokStored
+    );
+    const _noTokMs    = Date.now() - _noTokLoginAt;
+    const _noTokGrace = _noTokLoginAt > 0 && _noTokMs < 90_000;
+
+    if (_noTokGrace) {
+      console.warn(
+        `[AuthFetch] ⚠️  No token ${Math.round(_noTokMs / 1000)}s after login on` +
+        ` ${path} — cold-start race (session write still async).` +
+        ' Returning placeholder — will self-heal on next poll.'
+      );
+      return { data: [], total: 0, page: 1, limit: 25, _offline: true, _coldStart: true };
+    }
+
+    console.warn(
+      `[AuthFetch] ⚠️  No access token available for ${path} —` +
+      ' session exists but token missing. Proceeding (will get 401 if backend requires auth).'
+    );
   }
 
   const headers = {
@@ -924,6 +954,43 @@ async function authFetch(path, opts = {}) {
       if (errCode === 'SESSION_VALIDATION_UNAVAILABLE') {
         console.warn(`[AuthFetch] DB unavailable on ${path} — suppressing auth:expired; returning offline placeholder`);
         return { data: [], total: 0, page: 1, limit: 25, _offline: true, _dbUnavailable: true };
+      }
+
+      // FIX v20.0 (Fix 1): INVALID_TOKEN within 90 s post-login grace window.
+      //
+      // Root cause: Render cold-start async session write.
+      // The backend JWT middleware (profile cache / PostgREST auth layer) has
+      // not yet committed the new session when the first API call arrives
+      // milliseconds after login.  silentRefresh() above was either blocked
+      // by the 15 s rate-limit guard or the DB was still warming up, so it
+      // returned false, landing us here with a 401 INVALID_TOKEN that is NOT
+      // a permanent token rejection.
+      //
+      // Within the 90 s grace window: return a soft placeholder so the caller
+      // gets empty-but-valid data and retries on its next poll cycle.
+      // Also reset _lastRefreshAttemptAt so the NEXT silentRefresh fires
+      // immediately without the 15 s rate-limit guard blocking it.
+      // Outside the grace window: genuine hard failure -> dispatch auth:expired.
+      if (errCode === 'INVALID_TOKEN') {
+        const _ivTokStored  = parseInt(
+          sessionStorage.getItem('_wadjet_last_login_at') || '0', 10
+        );
+        const _ivTokLoginAt = Math.max(
+          typeof _lastLoginAt !== 'undefined' ? _lastLoginAt : 0,
+          _ivTokStored
+        );
+        const _ivTokMs    = Date.now() - _ivTokLoginAt;
+        const _ivTokGrace = _ivTokLoginAt > 0 && _ivTokMs < 90_000;
+
+        if (_ivTokGrace) {
+          console.warn(
+            `[AuthFetch] INVALID_TOKEN on ${path} — ${Math.round(_ivTokMs / 1000)}s after login` +
+            ' (within 90 s grace). Backend session write still propagating—returning cold-start placeholder.'
+          );
+          // Reset rate-limit guard so next silentRefresh fires immediately
+          if (typeof _lastRefreshAttemptAt !== 'undefined') _lastRefreshAttemptAt = 0;
+          return { data: [], total: 0, page: 1, limit: 25, _offline: true, _coldStart: true };
+        }
       }
 
       _dispatchAuthEvent('auth:expired', { path, code: errCode });
