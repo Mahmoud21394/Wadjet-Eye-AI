@@ -174,106 +174,14 @@
     }
 
     /* ════════════════════════════════════════════════════════════
-       MALWARE DNA v1.0.0 PAGE PANEL — full-bleed iframe host
+       MALWARE DNA v1.0.0 PAGE PANEL — inline SPA host
     ════════════════════════════════════════════════════════════ */
     #page-malware-dna-v1 {
       height: calc(100vh - 58px);
-      display: flex;
-      flex-direction: column;
-      background: #0a0a0f;
-    }
-    #page-malware-dna-v1 iframe {
-      flex: 1;
-      width: 100%;
-      border: none;
-      display: block;
-    }
-
-    /* Loading shimmer shown before iframe loads */
-    #page-malware-dna-v1 .ti-loader {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 24px;
-      background: #0a0a0f;
-      z-index: 5;
-      animation: ti-loader-in .4s ease;
-    }
-    @keyframes ti-loader-in {
-      from { opacity: 0; transform: translateY(12px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-    .ti-loader-dna {
-      position: relative;
-      width: 64px;
-      height: 64px;
-    }
-    .ti-loader-dna-ring {
-      position: absolute;
-      inset: 0;
-      border-radius: 50%;
-      border: 3px solid transparent;
-    }
-    .ti-loader-dna-ring:nth-child(1) {
-      border-top-color: #8b5cf6;
-      animation: ti-spin 1.2s linear infinite;
-    }
-    .ti-loader-dna-ring:nth-child(2) {
-      inset: 8px;
-      border-right-color: #22d3ee;
-      animation: ti-spin 1.8s linear infinite reverse;
-    }
-    .ti-loader-dna-ring:nth-child(3) {
-      inset: 16px;
-      border-bottom-color: #a855f7;
-      animation: ti-spin 2.4s linear infinite;
-    }
-    .ti-loader-dna-ring:nth-child(4) {
-      inset: 24px;
-      border-left-color: #06b6d4;
-      animation: ti-spin .9s linear infinite reverse;
-    }
-    @keyframes ti-spin { to { transform: rotate(360deg); } }
-    .ti-loader-text {
-      text-align: center;
-    }
-    .ti-loader-title {
-      font-size: 18px;
-      font-weight: 700;
-      background: linear-gradient(135deg,#8b5cf6,#22d3ee);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      letter-spacing: 1px;
-      margin-bottom: 6px;
-    }
-    .ti-loader-sub {
-      font-size: 12px;
-      color: #4b5563;
-      font-family: 'JetBrains Mono', monospace;
-      letter-spacing: .5px;
-    }
-    .ti-loader-bar {
-      width: 220px;
-      height: 2px;
-      background: rgba(255,255,255,.06);
-      border-radius: 2px;
       overflow: hidden;
-    }
-    .ti-loader-bar-fill {
-      height: 100%;
-      background: linear-gradient(90deg,#8b5cf6,#22d3ee,#8b5cf6);
-      background-size: 200% 100%;
-      border-radius: 2px;
-      animation: ti-bar-anim 1.5s ease-in-out infinite;
-    }
-    @keyframes ti-bar-anim {
-      0%   { background-position: 200% 0; width: 30%; }
-      50%  { background-position: 0% 0;   width: 70%; }
-      100% { background-position: -200% 0; width: 30%; }
+      background: #080b14;
+      padding: 0;
+      position: relative;
     }
   </style>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
@@ -1605,7 +1513,8 @@
      settings-v3.js         — Fixed bindings, validation, payload, fallback
 ──────────────────────────────────────────────────────────────────────────── -->
 <script src="js/threat-graph-brain.js"></script>
-<!-- Malware DNA Engine v1.0.0 — Standalone SPA on port 3737 (iframe embedded) -->
+<!-- Malware DNA Engine v1.0.0 — Fully Self-Contained Inline SPA (zero server dependency) -->
+<script src="js/malware-dna-v1-inline.js"></script>
 <script src="js/settings-v3.js"></script>
 <!-- Innovation Modules v1.0 — What-If Simulator, Security Memory Brain, Autonomous Agent -->
 <script src="js/innovation-modules.js"></script>
@@ -1667,41 +1576,11 @@
       if (!el) return;
       if (!el.dataset.loaded) {
         el.dataset.loaded = '1';
-        el.innerHTML = '';
-
-        /* ── Professional neon loader shown while iframe bootstraps ── */
-        const loader = document.createElement('div');
-        loader.className = 'ti-loader';
-        loader.id = 'ti-dna-loader';
-        loader.innerHTML = `
-          <div class="ti-loader-dna">
-            <div class="ti-loader-dna-ring"></div>
-            <div class="ti-loader-dna-ring"></div>
-            <div class="ti-loader-dna-ring"></div>
-            <div class="ti-loader-dna-ring"></div>
-          </div>
-          <div class="ti-loader-text">
-            <div class="ti-loader-title">MALWARE DNA ENGINE</div>
-            <div class="ti-loader-sub">v1.0.0 · Full-Stack Threat Intelligence</div>
-          </div>
-          <div class="ti-loader-bar">
-            <div class="ti-loader-bar-fill"></div>
-          </div>`;
-        el.appendChild(loader);
-
-        /* ── iframe — hidden until loaded ── */
-        const frame = document.createElement('iframe');
-        frame.src = 'http://localhost:3737';
-        frame.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:none;opacity:0;transition:opacity .5s ease;z-index:1;';
-        frame.allow = 'same-origin';
-        frame.onload = () => {
-          frame.style.opacity = '1';
-          /* fade out loader then remove */
-          loader.style.transition = 'opacity .4s ease';
-          loader.style.opacity = '0';
-          setTimeout(() => loader.remove(), 420);
-        };
-        el.appendChild(frame);
+        if (typeof window.renderMalwareDNAv1 === 'function') {
+          window.renderMalwareDNAv1(el);
+        } else {
+          el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#4b5563;font-family:monospace;">⚠ Module not loaded — check js/malware-dna-v1-inline.js</div>';
+        }
       }
     },
     'adversary-sim':     () => {
