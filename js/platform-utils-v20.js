@@ -75,38 +75,172 @@
 
   window.p20Toast = _p20ShowToast;
 
-  /* ══════════════════════════════════════════════
-     MOBILE SIDEBAR TOGGLE
-  ══════════════════════════════════════════════ */
-  function _initMobileSidebar() {
+  /* ══════════════════════════════════════════════════════════════════
+     SIDEBAR COLLAPSE/EXPAND — v2.0
+     Matches Malware DNA Engine v1.0.0 hamburger behavior exactly:
+     · Desktop (≥ 768px): toggle .collapsed class → 68px icon-only strip
+       Main content auto-expands (flex:1; min-width:0 on .main-wrapper)
+     · Mobile (< 768px): fixed-position drawer (.open class, overlay)
+     · Auto-collapse at < 820px on load and on resize
+     · Ctrl+B keyboard shortcut
+     · Animated SVG hamburger (3-line ↔ X) via CSS .collapsed class
+     · Tooltip labels on nav-group icons in collapsed mode
+  ══════════════════════════════════════════════════════════════════ */
+  function _initSidebarCollapse() {
     const toggleBtn = document.getElementById('sidebarToggle');
     const sidebar   = document.getElementById('sidebar');
     const wrapper   = document.getElementById('mainWrapper');
 
     if (!toggleBtn || !sidebar) return;
 
-    // Create overlay
+    /* ── Mobile overlay (display:none default — no blur bleed) ── */
     let overlay = document.getElementById('sidebarOverlay');
     if (!overlay) {
       overlay = document.createElement('div');
       overlay.id = 'sidebarOverlay';
-      overlay.style.cssText = `
-        position: fixed; inset: 0; background: rgba(0,0,0,0.6);
-        z-index: 999; display: none; backdrop-filter: blur(2px);
-      `;
+      // display:none by default — critical to prevent backdrop-filter
+      // blur bleeding at opacity:0 (Chrome/Safari compositing bug)
+      overlay.style.cssText = [
+        'position:fixed',
+        'inset:0',
+        'background:rgba(0,0,0,0.6)',
+        'z-index:150',
+        'display:none',
+        'backdrop-filter:blur(2px)',
+      ].join(';');
       document.body.appendChild(overlay);
     }
 
-    toggleBtn.addEventListener('click', () => {
-      const isOpen = sidebar.classList.contains('open');
-      sidebar.classList.toggle('open', !isOpen);
-      overlay.style.display = isOpen ? 'none' : 'block';
+    /* ── Stamp data-label on each nav-group-header for CSS tooltips ── */
+    function _stampTooltips() {
+      sidebar.querySelectorAll('.nav-group-header').forEach(hdr => {
+        if (hdr.dataset.label) return; // already stamped
+        const lbl = hdr.querySelector('.nav-group-label');
+        if (lbl) hdr.dataset.label = lbl.textContent.trim();
+      });
+    }
+
+    /* ── State helpers ── */
+    const isMobile     = () => window.innerWidth < 768;
+    const isCollapsed  = () => sidebar.classList.contains('collapsed');
+    const isMobileOpen = () => sidebar.classList.contains('mobile-open');
+
+    /* ── Desktop collapse ── */
+    function _collapse() {
+      if (isMobile()) {
+        // Mobile: slide drawer back off-screen (style.css uses .mobile-open)
+        sidebar.classList.remove('mobile-open');
+        overlay.style.display = 'none';
+      } else {
+        // Desktop: icon-only strip
+        sidebar.classList.add('collapsed');
+        sidebar.classList.remove('mobile-open');
+        overlay.style.display = 'none';
+        try { localStorage.setItem('wadjet_sidebar_collapsed', '1'); } catch {}
+      }
+    }
+
+    function _expand() {
+      sidebar.classList.remove('collapsed');
+      if (isMobile()) {
+        // Mobile: slide drawer in, show overlay
+        sidebar.classList.add('mobile-open');
+        overlay.style.display = 'block';
+      } else {
+        overlay.style.display = 'none';
+      }
+      try { localStorage.removeItem('wadjet_sidebar_collapsed'); } catch {}
+    }
+
+    function _toggle() {
+      if (isMobile()) {
+        if (isMobileOpen()) _collapse(); else _expand();
+      } else {
+        if (isCollapsed()) _expand(); else _collapse();
+      }
+    }
+
+    /* ── Wire toggle button ── */
+    toggleBtn.addEventListener('click', _toggle);
+
+    /* ── Overlay click closes mobile drawer ── */
+    overlay.addEventListener('click', _collapse);
+
+    /* ── Ctrl+B shortcut ── */
+    document.addEventListener('keydown', function(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+        e.preventDefault();
+        _toggle();
+      }
     });
 
-    overlay.addEventListener('click', () => {
-      sidebar.classList.remove('open');
-      overlay.style.display = 'none';
-    });
+    /* ── Stamp tooltips now + after a tick (nav may load late) ── */
+    _stampTooltips();
+    setTimeout(_stampTooltips, 500);
+
+    /* ── Initial state ── */
+    const w0 = window.innerWidth;
+    // Restore saved state on desktop
+    let savedCollapsed = false;
+    try { savedCollapsed = !!localStorage.getItem('wadjet_sidebar_collapsed'); } catch {}
+
+    if (w0 < 768) {
+      // Mobile: always start as hidden drawer
+      sidebar.classList.remove('collapsed', 'mobile-open');
+    } else if (w0 < 820 || savedCollapsed) {
+      sidebar.classList.add('collapsed');
+      sidebar.classList.remove('mobile-open');
+    }
+
+    /* ── ResizeObserver: auto-collapse/expand on viewport change ── */
+    let _prevW = w0;
+    if (typeof ResizeObserver !== 'undefined') {
+      const _ro = new ResizeObserver(entries => {
+        const w = (entries[0] && entries[0].contentRect)
+          ? entries[0].contentRect.width
+          : window.innerWidth;
+
+        // Crossing 768px boundary → switch between drawer and desktop mode
+        if (w < 768 && _prevW >= 768) {
+          sidebar.classList.remove('collapsed', 'mobile-open');
+          overlay.style.display = 'none';
+        }
+        if (w >= 768 && _prevW < 768) {
+          sidebar.classList.remove('mobile-open');
+          overlay.style.display = 'none';
+          // Re-apply saved desktop state
+          try {
+            if (localStorage.getItem('wadjet_sidebar_collapsed')) {
+              sidebar.classList.add('collapsed');
+            }
+          } catch {}
+        }
+
+        // Auto-collapse at < 820px on desktop
+        if (w < 820 && _prevW >= 820 && !isCollapsed() && !isMobile()) {
+          sidebar.classList.add('collapsed');
+        }
+        // Auto-expand at ≥ 820px only if we haven't manually collapsed
+        if (w >= 820 && _prevW < 820 && isCollapsed() && !isMobile()) {
+          try {
+            if (!localStorage.getItem('wadjet_sidebar_collapsed')) {
+              sidebar.classList.remove('collapsed');
+            }
+          } catch {
+            sidebar.classList.remove('collapsed');
+          }
+        }
+
+        _prevW = w;
+      });
+      // Observe the body/wrapper so we catch true viewport resize
+      _ro.observe(document.documentElement);
+    }
+
+    /* ── Expose toggle globally for other scripts ── */
+    window.toggleMainSidebar = _toggle;
+    window.collapseMainSidebar = _collapse;
+    window.expandMainSidebar   = _expand;
   }
 
   /* ══════════════════════════════════════════════
@@ -248,7 +382,7 @@
   ══════════════════════════════════════════════ */
   function _init() {
     _ensureToastContainer();
-    _initMobileSidebar();
+    _initSidebarCollapse();
     _initKeyboardShortcuts();
     _initStaggeredAnimations();
 

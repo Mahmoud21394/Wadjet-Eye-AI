@@ -193,7 +193,7 @@ html, body {
   transition:width var(--transition);
   position:relative; z-index:100;
 }
-.sidebar.collapsed { width:56px; }
+.sidebar.collapsed { width:68px; min-width:68px; }
 
 .sidebar-header {
   display:flex; align-items:center; justify-content:space-between;
