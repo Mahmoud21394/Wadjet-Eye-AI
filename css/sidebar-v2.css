@@ -425,7 +425,65 @@
     rgba(var(--group-accent-rgb, 29,106,229), 0.03) 100%);
 }
 
-/* ── Collapsed sidebar overrides ─────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════════════════
+   COLLAPSIBLE SIDEBAR — Icon-Only Mode (68px)
+   Matches Malware DNA Engine v1.0.0 collapse behavior exactly:
+   · Sidebar shrinks to 68px icon-only strip
+   · Main content auto-expands to fill freed space (flex: 1; min-width: 0)
+   · Smooth .38s cubic-bezier transition (spring feel)
+   · Logo text, footer user info, labels, counts all hidden
+   · Group icons stay visible, centred in the 68px strip
+   · Animated SVG hamburger (3-line ↔ X)
+   · Ctrl+B keyboard shortcut
+   · ResizeObserver auto-collapses at < 820px
+   · Mobile overlay (position: fixed drawer) at < 768px
+══════════════════════════════════════════════════════════════════════ */
+
+/* ── Override style.css transition to match DNA engine speed/curve ── */
+.sidebar {
+  transition: width 0.38s cubic-bezier(0.4, 0, 0.2, 1),
+              min-width 0.38s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  overflow: visible !important;   /* allow tooltips to escape */
+}
+
+/* ── Collapsed width: 68px (matches DNA engine --sb-col) ───────────── */
+.sidebar.collapsed {
+  width: 68px !important;
+  min-width: 68px !important;
+}
+
+/* ── Sidebar header: centre the logo icon, hide text ──────────────── */
+.sidebar.collapsed .sidebar-header {
+  justify-content: center;
+  padding: 14px 0;
+}
+.sidebar.collapsed .logo-wrap {
+  justify-content: center;
+}
+.sidebar.collapsed .logo-text {
+  display: none;
+}
+.sidebar.collapsed .sidebar-logo-img {
+  width: 32px;
+  height: 32px;
+}
+
+/* ── Toggle button: stay centred inside the 68px strip ─────────────── */
+.sidebar.collapsed .sidebar-toggle {
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+
+/* ── Section labels ────────────────────────────────────────────────── */
+.sidebar.collapsed .sidebar-section-label {
+  opacity: 0;
+  pointer-events: none;
+  height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* ── Nav-group collapsed overrides ─────────────────────────────────── */
 .sidebar.collapsed .nav-group { margin: 3px 4px; }
 .sidebar.collapsed .nav-group-label,
 .sidebar.collapsed .nav-group-count,
@@ -434,6 +492,7 @@
   padding: 7px;
   justify-content: center;
   border-radius: 8px;
+  position: relative;
 }
 .sidebar.collapsed .nav-group-icon {
   margin: 0;
@@ -441,6 +500,75 @@
   height: 32px;
 }
 .sidebar.collapsed .nav-group-children { display: none; }
+
+/* ── Tooltip on collapsed group icons ──────────────────────────────── */
+.sidebar.collapsed .nav-group-header::after {
+  content: attr(data-label);
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: #0d1b35;
+  color: #e2e8f0;
+  font-size: 0.75em;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(29,106,229,0.3);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+  z-index: 9999;
+}
+.sidebar.collapsed .nav-group-header:hover::after {
+  opacity: 1;
+}
+
+/* ── Sidebar footer: hide user info text, centre avatar ────────────── */
+.sidebar.collapsed .sidebar-footer {
+  justify-content: center;
+  padding: 10px 0;
+  flex-direction: column;
+  gap: 6px;
+}
+.sidebar.collapsed .sidebar-user {
+  justify-content: center;
+}
+.sidebar.collapsed .user-info-text,
+.sidebar.collapsed .sidebar-logout-btn {
+  display: none;
+}
+
+/* ── Animated SVG hamburger button ─────────────────────────────────── */
+.sidebar-toggle {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Hide the legacy <i class="fas fa-bars"> when SVG is present */
+.sidebar-toggle .sb-ham-svg { display: block; }
+.sidebar-toggle .fa-bars    { display: none; }
+
+.sb-ham-svg { width: 18px; height: 18px; overflow: visible; }
+.sb-ham-line {
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  transition: transform 0.38s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity   0.25s ease;
+  transform-origin: center;
+}
+/* X state when sidebar is collapsed */
+.sidebar.collapsed .sb-ham-line-top    { transform: translateY(5px)  rotate(45deg); }
+.sidebar.collapsed .sb-ham-line-mid    { opacity: 0; transform: scaleX(0); }
+.sidebar.collapsed .sb-ham-line-bot    { transform: translateY(-5px) rotate(-45deg); }
+
+/* ── nav-group overflow: visible so tooltips escape ───────────────── */
+.nav-group        { overflow: visible; }
+.nav-group-header { overflow: visible; }
 
 /* ── Separator between groups ────────────────────────────────────────── */
 .nav-group + .nav-group { margin-top: 3px; }
