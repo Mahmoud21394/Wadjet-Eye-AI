@@ -33,8 +33,249 @@
   <link rel="stylesheet" href="css/soc-dashboard-v2.css" />
   <!-- RAYKAN Pro v3.0 — Professional minimalist-industrial design layer: flat glass, no excess glow, 52px header -->
   <link rel="stylesheet" href="css/raykan-pro.css" />
-  <!-- Malware DNA Engine v5.0 — Production SOC Platform -->
-  <link rel="stylesheet" href="css/malware-dna-v5.css" />
+  <!-- Threat Intelligence Module v1.0 — Malware DNA Engine SPA styles -->
+  <style id="threat-intel-styles">
+    /* ════════════════════════════════════════════════════════════
+       THREAT INTELLIGENCE NAV GROUP — Neon DNA Cyberpunk Design
+    ════════════════════════════════════════════════════════════ */
+
+    /* Group header — deep violet-to-cyan gradient glow */
+    .nav-group--threat-intel .ti-group-header {
+      background: linear-gradient(135deg,rgba(139,92,246,.18) 0%,rgba(34,211,238,.10) 100%);
+      border-left: 3px solid transparent;
+      border-image: linear-gradient(180deg,#8b5cf6,#22d3ee) 1;
+      position: relative;
+      overflow: hidden;
+      transition: background .3s ease, box-shadow .3s ease;
+    }
+    .nav-group--threat-intel .ti-group-header::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg,transparent 0%,rgba(139,92,246,.12) 50%,transparent 100%);
+      transform: translateX(-100%);
+      animation: ti-shimmer 3s infinite;
+    }
+    @keyframes ti-shimmer {
+      0%   { transform: translateX(-100%); }
+      60%  { transform: translateX(100%); }
+      100% { transform: translateX(100%); }
+    }
+    .nav-group--threat-intel .ti-group-header:hover {
+      background: linear-gradient(135deg,rgba(139,92,246,.28) 0%,rgba(34,211,238,.16) 100%);
+      box-shadow: 0 0 20px rgba(139,92,246,.25), inset 0 0 12px rgba(34,211,238,.08);
+    }
+
+    /* DNA helix icon — spinning glow */
+    .ti-group-icon {
+      background: linear-gradient(135deg,#8b5cf6,#22d3ee) !important;
+      -webkit-background-clip: text !important;
+      -webkit-text-fill-color: transparent !important;
+      background-clip: text !important;
+      filter: drop-shadow(0 0 6px rgba(139,92,246,.7));
+      animation: ti-dna-spin 6s ease-in-out infinite;
+    }
+    @keyframes ti-dna-spin {
+      0%,100% { filter: drop-shadow(0 0 6px rgba(139,92,246,.7)); transform: scale(1); }
+      50%      { filter: drop-shadow(0 0 14px rgba(34,211,238,.9)); transform: scale(1.15); }
+    }
+
+    /* Count badge — pulsing neon */
+    .ti-count {
+      background: linear-gradient(135deg,#8b5cf6,#22d3ee) !important;
+      color: #fff !important;
+      font-weight: 700 !important;
+      animation: ti-badge-pulse 2.5s ease-in-out infinite;
+    }
+    @keyframes ti-badge-pulse {
+      0%,100% { box-shadow: 0 0 0 0 rgba(139,92,246,.6); }
+      50%      { box-shadow: 0 0 0 5px rgba(139,92,246,.0); }
+    }
+
+    /* Nav child item — full-width neon glow on hover */
+    .ti-nav-child {
+      position: relative;
+      overflow: hidden;
+      border-radius: 8px;
+      margin: 2px 6px;
+      transition: background .25s ease, box-shadow .25s ease, transform .2s ease;
+    }
+    .ti-nav-child::before {
+      content: '';
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 3px;
+      background: linear-gradient(180deg,#8b5cf6,#22d3ee);
+      border-radius: 0 2px 2px 0;
+      opacity: 0;
+      transition: opacity .25s ease;
+    }
+    .ti-nav-child:hover,
+    .ti-nav-child.active {
+      background: linear-gradient(90deg,rgba(139,92,246,.18),rgba(34,211,238,.10)) !important;
+      box-shadow: 0 0 18px rgba(139,92,246,.22), inset 0 0 10px rgba(34,211,238,.06);
+      transform: translateX(3px);
+    }
+    .ti-nav-child:hover::before,
+    .ti-nav-child.active::before { opacity: 1; }
+
+    /* Icon wrap inside nav child */
+    .ti-nav-icon-wrap {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg,rgba(139,92,246,.25),rgba(34,211,238,.15));
+      border-radius: 8px;
+      margin-right: 8px;
+      flex-shrink: 0;
+      transition: background .25s ease;
+    }
+    .ti-nav-icon-wrap i {
+      font-size: 13px;
+      background: linear-gradient(135deg,#8b5cf6,#22d3ee);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .ti-nav-child:hover .ti-nav-icon-wrap {
+      background: linear-gradient(135deg,rgba(139,92,246,.45),rgba(34,211,238,.30));
+    }
+
+    /* Label + version chip */
+    .ti-nav-label {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      gap: 1px;
+    }
+    .ti-nav-version {
+      font-size: 9px;
+      color: #22d3ee;
+      font-family: 'JetBrains Mono', 'Courier New', monospace;
+      letter-spacing: .5px;
+      opacity: .8;
+    }
+
+    /* NEW badge — neon animated */
+    .ti-badge {
+      background: linear-gradient(135deg,#8b5cf6,#22d3ee) !important;
+      color: #fff !important;
+      font-size: 8px !important;
+      padding: 1px 6px !important;
+      border-radius: 8px !important;
+      animation: ti-new-glow 2s ease-in-out infinite;
+      flex-shrink: 0;
+    }
+    @keyframes ti-new-glow {
+      0%,100% { box-shadow: 0 0 4px rgba(139,92,246,.6); }
+      50%      { box-shadow: 0 0 12px rgba(34,211,238,.9); }
+    }
+
+    /* ════════════════════════════════════════════════════════════
+       MALWARE DNA v1.0.0 PAGE PANEL — full-bleed iframe host
+    ════════════════════════════════════════════════════════════ */
+    #page-malware-dna-v1 {
+      height: calc(100vh - 58px);
+      display: flex;
+      flex-direction: column;
+      background: #0a0a0f;
+    }
+    #page-malware-dna-v1 iframe {
+      flex: 1;
+      width: 100%;
+      border: none;
+      display: block;
+    }
+
+    /* Loading shimmer shown before iframe loads */
+    #page-malware-dna-v1 .ti-loader {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      background: #0a0a0f;
+      z-index: 5;
+      animation: ti-loader-in .4s ease;
+    }
+    @keyframes ti-loader-in {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .ti-loader-dna {
+      position: relative;
+      width: 64px;
+      height: 64px;
+    }
+    .ti-loader-dna-ring {
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      border: 3px solid transparent;
+    }
+    .ti-loader-dna-ring:nth-child(1) {
+      border-top-color: #8b5cf6;
+      animation: ti-spin 1.2s linear infinite;
+    }
+    .ti-loader-dna-ring:nth-child(2) {
+      inset: 8px;
+      border-right-color: #22d3ee;
+      animation: ti-spin 1.8s linear infinite reverse;
+    }
+    .ti-loader-dna-ring:nth-child(3) {
+      inset: 16px;
+      border-bottom-color: #a855f7;
+      animation: ti-spin 2.4s linear infinite;
+    }
+    .ti-loader-dna-ring:nth-child(4) {
+      inset: 24px;
+      border-left-color: #06b6d4;
+      animation: ti-spin .9s linear infinite reverse;
+    }
+    @keyframes ti-spin { to { transform: rotate(360deg); } }
+    .ti-loader-text {
+      text-align: center;
+    }
+    .ti-loader-title {
+      font-size: 18px;
+      font-weight: 700;
+      background: linear-gradient(135deg,#8b5cf6,#22d3ee);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: 1px;
+      margin-bottom: 6px;
+    }
+    .ti-loader-sub {
+      font-size: 12px;
+      color: #4b5563;
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: .5px;
+    }
+    .ti-loader-bar {
+      width: 220px;
+      height: 2px;
+      background: rgba(255,255,255,.06);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .ti-loader-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg,#8b5cf6,#22d3ee,#8b5cf6);
+      background-size: 200% 100%;
+      border-radius: 2px;
+      animation: ti-bar-anim 1.5s ease-in-out infinite;
+    }
+    @keyframes ti-bar-anim {
+      0%   { background-position: 200% 0; width: 30%; }
+      50%  { background-position: 0% 0;   width: 70%; }
+      100% { background-position: -200% 0; width: 30%; }
+    }
+  </style>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -146,7 +387,7 @@
       <button class="nav-group-header" onclick="toggleNavGroup(this)">
         <span class="nav-group-icon"><i class="fas fa-brain"></i></span>
         <span class="nav-group-label">Cyber Defense Brain</span>
-        <span class="nav-group-count">10</span>
+        <span class="nav-group-count">9</span>
         <i class="fas fa-chevron-down nav-group-chevron"></i>
       </button>
       <div class="nav-group-children">
@@ -167,9 +408,6 @@
         <a href="#" class="nav-child" data-page="email-threat">
           <i class="fas fa-envelope-open-text"></i><span>Email Threat Intelligence</span>
           <span class="nav-child-badge" style="background:linear-gradient(90deg,#FF2D55,#FF6B35);color:#fff;font-size:8px;padding:1px 5px;border-radius:8px;">NEW</span>
-        </a>
-        <a href="#" class="nav-child" data-page="malware-dna">
-          <i class="fas fa-dna"></i><span>Malware DNA Engine</span>
         </a>
         <a href="#" class="nav-child" data-page="adversary-sim">
           <i class="fas fa-user-ninja"></i><span>Adversary Simulation Lab</span>
@@ -214,7 +452,31 @@
     <div class="nav-group-sep"></div>
 
     <!-- ════════════════════════════════════════
-         4. INNOVATIONS
+         4. THREAT INTELLIGENCE
+    ════════════════════════════════════════ -->
+    <div class="nav-group nav-group--threat-intel" data-group="threat-intel">
+      <button class="nav-group-header ti-group-header" onclick="toggleNavGroup(this)">
+        <span class="nav-group-icon ti-group-icon"><i class="fas fa-dna"></i></span>
+        <span class="nav-group-label">Threat Intelligence</span>
+        <span class="nav-group-count ti-count">1</span>
+        <i class="fas fa-chevron-down nav-group-chevron"></i>
+      </button>
+      <div class="nav-group-children">
+        <a href="#" class="nav-child ti-nav-child" data-page="malware-dna-v1">
+          <span class="ti-nav-icon-wrap"><i class="fas fa-dna"></i></span>
+          <span class="ti-nav-label">
+            Malware DNA Engine
+            <span class="ti-nav-version">v1.0.0</span>
+          </span>
+          <span class="nav-child-badge ti-badge">NEW</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="nav-group-sep"></div>
+
+    <!-- ════════════════════════════════════════
+         5. INNOVATIONS
     ════════════════════════════════════════ -->
     <div class="nav-group nav-group--innovations" data-group="innovations">
       <button class="nav-group-header" onclick="toggleNavGroup(this)">
@@ -796,9 +1058,6 @@
     <!-- ======= ATTACK GRAPH INTELLIGENCE ======= -->
     <div class="page" id="page-attack-graph" style="padding:0;overflow:auto;"></div>
 
-    <!-- ======= MALWARE DNA ENGINE ======= -->
-    <div class="page" id="page-malware-dna" style="padding:0;overflow:auto;"></div>
-
     <!-- ======= ADVERSARY SIMULATION LAB ======= -->
     <div class="page" id="page-adversary-sim" style="padding:0;overflow:auto;"></div>
 
@@ -822,6 +1081,9 @@
 
     <!-- ======= AUTONOMOUS SOC AGENT ======= -->
     <div class="page" id="page-autonomous-agent" style="padding:0;overflow:auto;"></div>
+
+    <!-- ======= MALWARE DNA ENGINE v1.0.0 — Threat Intelligence SPA ======= -->
+    <div class="page" id="page-malware-dna-v1" style="padding:0;overflow:hidden;position:relative;"></div>
 
     <!-- ════ RAKAY MODULE PAGE ════ -->
     <div class="page" id="page-rakay" style="padding:0;overflow:hidden;"></div>
@@ -1340,14 +1602,10 @@
 <!-- ─── v24.0 Replacements ─────────────────────────────────────────────────
      threat-graph-brain.js  — Full D3 force graph, WebSocket live feed,
                               node profiling, timeline replay, analytics
-     malware-dna-v2.js      — Unified with CDS design system,
-                              YARA generation, behavior profiling, evolution
      settings-v3.js         — Fixed bindings, validation, payload, fallback
 ──────────────────────────────────────────────────────────────────────────── -->
 <script src="js/threat-graph-brain.js"></script>
-<script src="js/malware-dna-v2.js"></script>
-<!-- Malware DNA Engine v5.0 — Production-grade threat intel platform -->
-<script src="js/malware-dna-v5.js"></script>
+<!-- Malware DNA Engine v1.0.0 — Standalone SPA on port 3737 (iframe embedded) -->
 <script src="js/settings-v3.js"></script>
 <!-- Innovation Modules v1.0 — What-If Simulator, Security Memory Brain, Autonomous Agent -->
 <script src="js/innovation-modules.js"></script>
@@ -1384,7 +1642,7 @@
     'cognitive-layer':     true,
     'predictive-engine':   true,
     'attack-graph':        true,
-    'malware-dna':         true,
+    'malware-dna-v1':      true,
     'adversary-sim':       true,
     'soc-memory':          true,
     'threat-graph':        true,
@@ -1404,11 +1662,46 @@
     'cognitive-layer':   () => typeof window.renderCognitiveLayer     === 'function' && window.renderCognitiveLayer(),
     'predictive-engine': () => typeof window.renderPredictiveEngine   === 'function' && window.renderPredictiveEngine(),
     'attack-graph':      () => typeof window.renderAttackGraph        === 'function' && window.renderAttackGraph(),
-    'malware-dna':       () => {
-      const el = document.getElementById('page-malware-dna');
-      if (el && typeof window.renderMalwareDNA === 'function') {
-        el.style.cssText = 'padding:0;overflow:hidden;height:calc(100vh - 58px);';
-        window.renderMalwareDNA(el);
+    'malware-dna-v1':    () => {
+      const el = document.getElementById('page-malware-dna-v1');
+      if (!el) return;
+      if (!el.dataset.loaded) {
+        el.dataset.loaded = '1';
+        el.innerHTML = '';
+
+        /* ── Professional neon loader shown while iframe bootstraps ── */
+        const loader = document.createElement('div');
+        loader.className = 'ti-loader';
+        loader.id = 'ti-dna-loader';
+        loader.innerHTML = `
+          <div class="ti-loader-dna">
+            <div class="ti-loader-dna-ring"></div>
+            <div class="ti-loader-dna-ring"></div>
+            <div class="ti-loader-dna-ring"></div>
+            <div class="ti-loader-dna-ring"></div>
+          </div>
+          <div class="ti-loader-text">
+            <div class="ti-loader-title">MALWARE DNA ENGINE</div>
+            <div class="ti-loader-sub">v1.0.0 · Full-Stack Threat Intelligence</div>
+          </div>
+          <div class="ti-loader-bar">
+            <div class="ti-loader-bar-fill"></div>
+          </div>`;
+        el.appendChild(loader);
+
+        /* ── iframe — hidden until loaded ── */
+        const frame = document.createElement('iframe');
+        frame.src = 'http://localhost:3737';
+        frame.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:none;opacity:0;transition:opacity .5s ease;z-index:1;';
+        frame.allow = 'same-origin';
+        frame.onload = () => {
+          frame.style.opacity = '1';
+          /* fade out loader then remove */
+          loader.style.transition = 'opacity .4s ease';
+          loader.style.opacity = '0';
+          setTimeout(() => loader.remove(), 420);
+        };
+        el.appendChild(frame);
       }
     },
     'adversary-sim':     () => {
@@ -1453,7 +1746,7 @@
     'cognitive-layer':   { title: 'Cognitive Security Layer',       breadcrumb: 'Cyber Defense Brain / Cognitive AI' },
     'predictive-engine': { title: 'Predictive Threat Engine',       breadcrumb: 'Cyber Defense Brain / Predictive Intel' },
     'attack-graph':      { title: 'Attack Graph Intelligence',      breadcrumb: 'Cyber Defense Brain / Attack Graph' },
-    'malware-dna':       { title: 'Malware DNA Engine',             breadcrumb: 'Cyber Defense Brain / Malware DNA' },
+    'malware-dna-v1':    { title: 'Malware DNA Engine v1.0.0',       breadcrumb: 'Threat Intelligence / Malware DNA Engine' },
     'adversary-sim':     { title: 'Adversary Simulation Lab',       breadcrumb: 'Cyber Defense Brain / Adversary Sim' },
     'soc-memory':        { title: 'SOC Memory Engine',              breadcrumb: 'Cyber Defense Brain / SOC Memory' },
     'threat-graph':      { title: 'Threat Intelligence Graph',      breadcrumb: 'Cyber Defense Brain / Threat Graph' },
