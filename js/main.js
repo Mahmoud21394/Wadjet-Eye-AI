@@ -585,15 +585,18 @@ function initNavGroups() {
 window.toggleNavGroup = toggleNavGroup;
 
 /* ────────────────── SIDEBAR TOGGLE ────────────────── */
+/* NOTE: initSidebarToggle() is intentionally a no-op.
+ * platform-utils-v20.js (_initSidebarCollapse) is the single authoritative
+ * owner of the #sidebarToggle click handler. Having two competing
+ * addEventListener('click') on the same button caused the hamburger to
+ * freeze — each handler cancelled the other's class toggle, producing
+ * zero net change on every click.
+ * Ctrl+B, ResizeObserver, mobile overlay, and localStorage persistence
+ * are all handled exclusively by platform-utils-v20.js. Do NOT add a
+ * click listener here.
+ */
 function initSidebarToggle() {
-  const toggle  = document.getElementById('sidebarToggle');
-  const sidebar = document.getElementById('sidebar');
-  const wrapper = document.getElementById('mainWrapper');
-  if (!toggle) return;
-  toggle.addEventListener('click', () => {
-    const collapsed = sidebar.classList.toggle('collapsed');
-    wrapper.classList.toggle('sidebar-collapsed', collapsed);
-  });
+  /* Intentionally empty — owned by platform-utils-v20.js */
 }
 
 /* ────────────────── NAV CLICK HANDLERS ────────────────── */
