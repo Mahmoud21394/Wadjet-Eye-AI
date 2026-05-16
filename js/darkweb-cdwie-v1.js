@@ -468,7 +468,7 @@ var _cdwie = {
             hoverNode:null, selectedNode:null, initialized:false },
   search: { results:[], query:'', running:false },
   copilot:{ history:[], typing:false, workflowMode:false, firstMessage:true },
-  report: { type:'executive', sections:{ summary:true, landscape:true, findings:true, mitre:true, timeline:true, recommendations:true, appendix:false }, timeframe:'7d', sector:'all', tlp:'amber' },
+  report: { type:'executive', sections:{ exec_summary:true, threat_landscape:true, actor_profiles:true, ioc_list:true, campaign_analysis:true, recommendations:true, appendix:false }, timeframe:'7d', sector:'all', tlp:'amber' },
   deception: { currentSample: null, analyzed: false },
   kpis: { queries:247, actors:89, nodes:1432, threats:34, credibility:81, briefed:12, reports:7 },
   initialized: false
@@ -667,9 +667,232 @@ function _openPanel(title, html) {
 }
 
 /* ── Header Buttons ── */
-window._cdwieToggleLiveFeed = function() { _toast('Live feed ' + (_cdwie.graph.live ? 'disabled' : 'enabled'), 'info'); _cdwie.graph.live = !_cdwie.graph.live; };
-window._cdwieAlertRules     = function() { _toast('Alert rules panel — coming soon', 'info'); };
-window._cdwieInvestigationMode = function() { _toast('Investigation mode activated', 'success'); };
+window._cdwieToggleLiveFeed = function() {
+  _cdwie.graph.live = !_cdwie.graph.live;
+  var isLive = _cdwie.graph.live;
+  /* Build a live event feed panel */
+  var severityColors = { CRITICAL:'#ef4444', HIGH:'#f97316', MEDIUM:'#eab308', LOW:'#22c55e', INFO:'#6366f1' };
+  var eventTypes = [
+    { icon:'user-secret', sev:'CRITICAL', actor:'APT29', msg:'New C2 beacon detected on 185.220.101.47 — HAMMERTOSS variant' },
+    { icon:'bug',         sev:'HIGH',     actor:'LockBit', msg:'Ransomware pre-staging activity detected in EU healthcare network' },
+    { icon:'fingerprint', sev:'HIGH',     actor:'FIN7',   msg:'Credential dump posted on BreachForums — 12,400 enterprise accounts' },
+    { icon:'dragon',      sev:'MEDIUM',   actor:'APT41',  msg:'Supply chain recon against telecom vendor supply chain observed' },
+    { icon:'skull-crossbones', sev:'CRITICAL', actor:'Lazarus', msg:'Crypto wallet drainer deployed — $2.1M in ETH exfiltrated' },
+    { icon:'eye',         sev:'HIGH',     actor:'APT29',  msg:'SUNBURST variant signature detected on VirusTotal — new submission' },
+    { icon:'lock',        sev:'CRITICAL', actor:'BlackCat', msg:'New victim portal erected on ALPHV .onion — US law firm targeted' },
+    { icon:'oil-can',     sev:'MEDIUM',   actor:'OilRig', msg:'DNS tunneling C2 traffic pattern detected — Middle East energy sector' },
+    { icon:'satellite-dish', sev:'INFO',  actor:'System', msg:'Dark web index crawl completed — 847,412 documents processed' },
+    { icon:'shield-alt',  sev:'LOW',      actor:'System', msg:'TOR exit node list updated — 1,247 new nodes classified' },
+    { icon:'exclamation-triangle', sev:'HIGH', actor:'APT41', msg:'Zero-day PoC circulating on Exploit[.]in — VMware vCenter target' },
+    { icon:'fire',        sev:'CRITICAL', actor:'LockBit', msg:'Active encryption event detected — 47 endpoints affected, 15 min ago' }
+  ];
+  var now = new Date();
+  var eventsHtml = eventTypes.map(function(ev, i) {
+    var t = new Date(now - i * _rand(90000, 420000));
+    var timeStr = t.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    var sc = severityColors[ev.sev] || '#6366f1';
+    return '<div class="cdwie-live-event cdwie-card-reveal" style="animation-delay:' + (i*0.04) + 's;border-left:3px solid ' + sc + '">' +
+      '<div class="cdwie-live-event-header">' +
+        '<span class="cdwie-live-ev-icon" style="color:' + sc + '"><i class="fas fa-' + ev.icon + '"></i></span>' +
+        '<span class="cdwie-live-ev-sev" style="background:' + sc + '22;color:' + sc + '">' + ev.sev + '</span>' +
+        '<span class="cdwie-live-ev-actor">' + ev.actor + '</span>' +
+        '<span class="cdwie-live-ev-time">' + timeStr + '</span>' +
+      '</div>' +
+      '<div class="cdwie-live-ev-msg">' + ev.msg + '</div>' +
+    '</div>';
+  }).join('');
+  var statsHtml =
+    '<div class="cdwie-live-stats">' +
+      '<div class="cdwie-live-stat"><span style="color:#ef4444;font-size:18px;font-weight:700">' + _rand(3,8) + '</span><span>CRITICAL</span></div>' +
+      '<div class="cdwie-live-stat"><span style="color:#f97316;font-size:18px;font-weight:700">' + _rand(8,15) + '</span><span>HIGH</span></div>' +
+      '<div class="cdwie-live-stat"><span style="color:#eab308;font-size:18px;font-weight:700">' + _rand(14,28) + '</span><span>MEDIUM</span></div>' +
+      '<div class="cdwie-live-stat"><span style="color:#22c55e;font-size:18px;font-weight:700">' + _rand(30,60) + '</span><span>LOW/INFO</span></div>' +
+    '</div>';
+  var html =
+    '<div class="cdwie-live-feed-panel">' +
+      '<div class="cdwie-live-header-row">' +
+        '<span class="' + (isLive ? 'cdwie-status-badge' : 'cdwie-status-badge-paused') + '">' +
+          '<span class="cdwie-status-dot' + (isLive ? '' : ' paused') + '"></span>' +
+          (isLive ? 'LIVE MONITORING ACTIVE' : 'MONITORING PAUSED') +
+        '</span>' +
+        '<span style="color:#64748b;font-size:11px">Auto-refresh every 30s · ' + now.toLocaleTimeString() + '</span>' +
+      '</div>' +
+      statsHtml +
+      '<div style="margin-top:4px;margin-bottom:8px">' +
+        '<div style="color:#475569;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Recent Events (Last 2 Hours)</div>' +
+        eventsHtml +
+      '</div>' +
+      '<div style="margin-top:8px;display:flex;gap:8px">' +
+        '<button class="cdwie-panel-action-btn" onclick="window._cdwieToggleLiveFeed();_toast(\'Feed ' + (isLive ? 'paused' : 'resumed') + '\',\'info\')"><i class="fas fa-' + (isLive ? 'pause' : 'play') + '"></i> ' + (isLive ? 'Pause Feed' : 'Resume Feed') + '</button>' +
+        '<button class="cdwie-panel-action-btn" onclick="_toast(\'Events exported to SIEM\',\'success\')"><i class="fas fa-share-square"></i> Export to SIEM</button>' +
+      '</div>' +
+    '</div>';
+  _openPanel('<i class="fas fa-satellite-dish" style="color:#22c55e"></i> Live Intelligence Feed', html);
+};
+
+window._cdwieAlertRules = function() {
+  /* Alert rules management panel */
+  var rules = [
+    { id:'r1', name:'Critical Actor Activity', cond:'Any CRITICAL-tier actor IOC matches network traffic', action:'Webhook + Email', active:true, hits:_rand(12,45), icon:'user-secret', color:'#ef4444' },
+    { id:'r2', name:'New Credential Dump', cond:'Corporate email domain appears in dark web credential dump', action:'Slack + PagerDuty', active:true, hits:_rand(3,8), icon:'key', color:'#f97316' },
+    { id:'r3', name:'Ransomware Pre-Stage', cond:'Cobalt Strike / Beacon traffic pattern detected in egress', action:'Email + SIEM Alert', active:true, hits:_rand(0,2), icon:'bug', color:'#a855f7' },
+    { id:'r4', name:'Zero-Day Circulating', cond:'Exploit targeting monitored software posted in last 24h', action:'Email', active:true, hits:_rand(1,5), icon:'exclamation-triangle', color:'#eab308' },
+    { id:'r5', name:'Supply Chain Signal', cond:'Threat actor targets vendor in your supply chain', action:'Webhook', active:false, hits:0, icon:'link', color:'#22d3ee' },
+    { id:'r6', name:'APT29 Infrastructure', cond:'APT29 C2 domain/IP detected in DNS or proxy logs', action:'PagerDuty Critical', active:true, hits:_rand(2,7), icon:'eye', color:'#ef4444' },
+    { id:'r7', name:'Dark Web Brand Mention', cond:'Organization name mentioned in forum post or data listing', action:'Email Daily Digest', active:false, hits:_rand(4,12), icon:'spider', color:'#ec4899' }
+  ];
+  var rulesHtml = rules.map(function(rule) {
+    return '<div class="cdwie-alert-rule" id="cdwie-rule-' + rule.id + '">' +
+      '<div class="cdwie-rule-left">' +
+        '<div class="cdwie-rule-icon" style="background:' + rule.color + '22;color:' + rule.color + '">' +
+          '<i class="fas fa-' + rule.icon + '"></i>' +
+        '</div>' +
+        '<div class="cdwie-rule-body">' +
+          '<div class="cdwie-rule-name">' + rule.name + '</div>' +
+          '<div class="cdwie-rule-cond">' + rule.cond + '</div>' +
+          '<div class="cdwie-rule-meta">' +
+            '<span class="cdwie-badge cdwie-badge-blue">' + rule.action + '</span>' +
+            '<span style="color:#475569;font-size:10px"><i class="fas fa-bell"></i> ' + rule.hits + ' triggers</span>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="cdwie-rule-right">' +
+        '<label class="cdwie-toggle-switch">' +
+          '<input type="checkbox" ' + (rule.active ? 'checked' : '') + ' onchange="_cdwieToggleRule(\'' + rule.id + '\',this.checked)">' +
+          '<span class="cdwie-toggle-slider"></span>' +
+        '</label>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+  var html =
+    '<div class="cdwie-alert-rules-panel">' +
+      '<div class="cdwie-rules-summary">' +
+        '<div class="cdwie-rule-stat"><span style="color:#22c55e;font-size:18px;font-weight:700">' + rules.filter(function(r){return r.active;}).length + '</span><span>Active</span></div>' +
+        '<div class="cdwie-rule-stat"><span style="color:#64748b;font-size:18px;font-weight:700">' + rules.filter(function(r){return !r.active;}).length + '</span><span>Paused</span></div>' +
+        '<div class="cdwie-rule-stat"><span style="color:#f97316;font-size:18px;font-weight:700">' + rules.reduce(function(s,r){return s+r.hits;},0) + '</span><span>Total Triggers</span></div>' +
+      '</div>' +
+      '<div style="margin-bottom:8px;color:#475569;font-size:10px;text-transform:uppercase;letter-spacing:0.08em">Configured Rules</div>' +
+      rulesHtml +
+      '<div style="margin-top:12px">' +
+        '<button class="cdwie-panel-action-btn" style="background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;border:none" onclick="_toast(\'Rule builder — use the form to create custom rules\',\'info\')"><i class="fas fa-plus"></i> Add New Rule</button>' +
+        '<button class="cdwie-panel-action-btn" onclick="_toast(\'Alert rules exported\',\'success\')"><i class="fas fa-download"></i> Export Rules (JSON)</button>' +
+      '</div>' +
+    '</div>';
+  _openPanel('<i class="fas fa-bell" style="color:#f97316"></i> Alert Rules Configuration', html);
+};
+
+window._cdwieToggleRule = function(id, active) {
+  _toast('Rule ' + (active ? 'activated' : 'paused'), active ? 'success' : 'info');
+  var row = document.getElementById('cdwie-rule-' + id);
+  if (row) row.style.opacity = active ? '1' : '0.5';
+};
+
+window._cdwieInvestigationMode = function() {
+  /* Investigation workspace — IOC pivot table + timeline + correlation */
+  var iocRows = [
+    { ioc:'195.54.162.88',     type:'IPv4',   actor:'APT29',   campaign:'WINTER STORM', tlp:'RED',   first:'2024-11-14', last:'4h ago',  malicious:true },
+    { ioc:'midnight-shop[.]ru', type:'Domain', actor:'APT29',   campaign:'WINTER STORM', tlp:'RED',   first:'2024-10-22', last:'2d ago',  malicious:true },
+    { ioc:'lockbit4.onion',    type:'Onion',  actor:'LockBit', campaign:'IRON TWILIGHT', tlp:'RED',   first:'2024-09-01', last:'12h ago', malicious:true },
+    { ioc:'SHA256:a1b2c3d4e5', type:'Hash',   actor:'APT41',   campaign:'DRAGONFLY',     tlp:'AMBER', first:'2024-08-15', last:'5d ago',  malicious:true },
+    { ioc:'45.142.212.100',    type:'IPv4',   actor:'Lazarus', campaign:'SILENT RANSOM', tlp:'RED',   first:'2024-07-30', last:'18h ago', malicious:true },
+    { ioc:'AS44477',           type:'ASN',    actor:'LockBit', campaign:'IRON TWILIGHT', tlp:'AMBER', first:'2024-06-10', last:'3d ago',  malicious:true },
+    { ioc:'svr-proxy[.]net',   type:'Domain', actor:'APT29',   campaign:'WINTER STORM', tlp:'RED',   first:'2024-11-01', last:'1h ago',  malicious:true }
+  ];
+  var pivotHtml = iocRows.map(function(row, i) {
+    var tlpC = {RED:'#ef4444',AMBER:'#f59e0b',GREEN:'#22c55e',WHITE:'#94a3b8'}[row.tlp]||'#94a3b8';
+    return '<tr class="cdwie-inv-row cdwie-card-reveal" style="animation-delay:' + (i*0.05) + 's">' +
+      '<td><code class="cdwie-ioc-inline">' + row.ioc + '</code></td>' +
+      '<td><span class="cdwie-badge cdwie-badge-blue">' + row.type + '</span></td>' +
+      '<td style="color:#f1f5f9;font-size:12px">' + row.actor + '</td>' +
+      '<td><span class="cdwie-badge cdwie-badge-purple">' + row.campaign + '</span></td>' +
+      '<td><span style="background:' + tlpC + '22;color:' + tlpC + ';font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px">TLP:' + row.tlp + '</span></td>' +
+      '<td style="color:#64748b;font-size:11px">' + row.last + '</td>' +
+      '<td><button onclick="_toast(\'Pivoting on ' + row.ioc.replace(/'/g,'\\\'' ) + '\',\'info\')" style="background:none;border:none;color:#6366f1;cursor:pointer;font-size:11px"><i class="fas fa-crosshairs"></i> Pivot</button></td>' +
+    '</tr>';
+  }).join('');
+  var timelineEvents = [
+    { t:'2024-11-14 08:22', sev:'CRITICAL', desc:'APT29 deploys HAMMERTOSS variant — initial beacon to 195.54.162.88' },
+    { t:'2024-11-14 09:15', sev:'HIGH',     desc:'Lateral movement detected — ADCS abuse, targeting Domain Controller' },
+    { t:'2024-11-14 11:40', sev:'CRITICAL', desc:'Domain admin credentials harvested — LSASS dump via Mimikatz' },
+    { t:'2024-11-14 14:05', sev:'HIGH',     desc:'Staging directory created — 2.4GB data collected for exfiltration' },
+    { t:'2024-11-14 17:30', sev:'CRITICAL', desc:'Data exfiltrated via OneDrive API — SUNBURST C2 channel' },
+    { t:'2024-11-15 03:11', sev:'MEDIUM',   desc:'Persistence established — scheduled task + WMI event subscription' },
+    { t:'2024-11-16 09:00', sev:'HIGH',     desc:'Second stage payload downloaded — PolyglotDuke variant identified' }
+  ];
+  var sevC = {CRITICAL:'#ef4444',HIGH:'#f97316',MEDIUM:'#eab308'};
+  var tlHtml = timelineEvents.map(function(ev, i) {
+    var c = sevC[ev.sev]||'#6366f1';
+    return '<div class="cdwie-tl-event cdwie-card-reveal" style="animation-delay:' + (i*0.06) + 's">' +
+      '<div class="cdwie-tl-dot" style="background:' + c + ';box-shadow:0 0 6px ' + c + '"></div>' +
+      '<div class="cdwie-tl-body">' +
+        '<div class="cdwie-tl-time">' + ev.t + '</div>' +
+        '<div class="cdwie-tl-sev" style="color:' + c + '">' + ev.sev + '</div>' +
+        '<div class="cdwie-tl-desc">' + ev.desc + '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+  var mitrePhases = [
+    {phase:'Initial Access',    ttp:'T1566.001', name:'Spear-Phishing Link',    done:true},
+    {phase:'Execution',         ttp:'T1059.001', name:'PowerShell',              done:true},
+    {phase:'Persistence',       ttp:'T1053.005', name:'Scheduled Task',          done:true},
+    {phase:'Defense Evasion',   ttp:'T1027',     name:'Obfuscated Files',        done:true},
+    {phase:'Credential Access', ttp:'T1003.001', name:'LSASS Memory',            done:true},
+    {phase:'Lateral Movement',  ttp:'T1021.002', name:'SMB/Windows Admin Shares',done:true},
+    {phase:'Collection',        ttp:'T1560',     name:'Archive Collected Data',  done:true},
+    {phase:'Exfiltration',      ttp:'T1041',     name:'Exfil Over C2 Channel',   done:true}
+  ];
+  var mitreHtml = mitrePhases.map(function(m) {
+    return '<div class="cdwie-mitre-row">' +
+      '<span class="cdwie-mitre-id">' + m.ttp + '</span>' +
+      '<span class="cdwie-mitre-name">' + m.name + '</span>' +
+      '<span class="cdwie-badge cdwie-badge-purple">' + m.phase + '</span>' +
+      '<i class="fas fa-check-circle" style="color:#22c55e;margin-left:auto;font-size:12px"></i>' +
+    '</div>';
+  }).join('');
+  var html =
+    '<div class="cdwie-investigation-workspace">' +
+      '<div class="cdwie-inv-tabs">' +
+        '<button class="cdwie-inv-tab active" onclick="_cdwieInvTab(this,\'pivot\')"><i class="fas fa-table"></i> IOC Pivot</button>' +
+        '<button class="cdwie-inv-tab" onclick="_cdwieInvTab(this,\'timeline\')"><i class="fas fa-history"></i> Attack Timeline</button>' +
+        '<button class="cdwie-inv-tab" onclick="_cdwieInvTab(this,\'mitre\')"><i class="fas fa-sitemap"></i> MITRE ATT&CK</button>' +
+      '</div>' +
+      '<div id="cdwie-inv-tab-pivot" class="cdwie-inv-pane">' +
+        '<div style="color:#64748b;font-size:11px;margin-bottom:10px">7 IOCs under active investigation — Click Pivot to expand correlation</div>' +
+        '<div style="overflow-x:auto"><table class="cdwie-inv-table" style="width:100%;border-collapse:collapse">' +
+          '<thead><tr style="color:#475569;font-size:10px;text-transform:uppercase;border-bottom:1px solid #1e293b">' +
+            '<th style="padding:6px 8px;text-align:left">Indicator</th><th style="padding:6px 8px">Type</th>' +
+            '<th style="padding:6px 8px">Actor</th><th style="padding:6px 8px">Campaign</th>' +
+            '<th style="padding:6px 8px">TLP</th><th style="padding:6px 8px">Last Seen</th><th style="padding:6px 8px">Actions</th>' +
+          '</tr></thead>' +
+          '<tbody>' + pivotHtml + '</tbody>' +
+        '</table></div>' +
+        '<div style="margin-top:10px;display:flex;gap:6px">' +
+          '<button class="cdwie-panel-action-btn" onclick="_toast(\'IOC list exported as STIX 2.1\',\'success\')"><i class="fas fa-code"></i> Export STIX</button>' +
+          '<button class="cdwie-panel-action-btn" onclick="_toast(\'Blocklist pushed to SIEM\',\'success\')"><i class="fas fa-shield-alt"></i> Push Blocklist</button>' +
+        '</div>' +
+      '</div>' +
+      '<div id="cdwie-inv-tab-timeline" class="cdwie-inv-pane" style="display:none">' +
+        '<div style="color:#64748b;font-size:11px;margin-bottom:14px">Reconstructed attack timeline · Attributed to APT29 WINTER STORM campaign</div>' +
+        '<div class="cdwie-timeline-track">' + tlHtml + '</div>' +
+        '<button class="cdwie-panel-action-btn" style="margin-top:10px" onclick="_toast(\'Timeline exported as PDF\',\'success\')"><i class="fas fa-file-pdf"></i> Export Timeline Report</button>' +
+      '</div>' +
+      '<div id="cdwie-inv-tab-mitre" class="cdwie-inv-pane" style="display:none">' +
+        '<div style="color:#64748b;font-size:11px;margin-bottom:10px">ATT&CK® coverage for WINTER STORM — 8/14 tactics observed</div>' +
+        '<div class="cdwie-mitre-grid">' + mitreHtml + '</div>' +
+        '<button class="cdwie-panel-action-btn" style="margin-top:10px" onclick="_toast(\'MITRE Navigator layer exported\',\'success\')"><i class="fas fa-map"></i> Export Navigator Layer</button>' +
+      '</div>' +
+    '</div>';
+  _openPanel('<i class="fas fa-search" style="color:#6366f1"></i> Investigation Workspace', html);
+};
+
+window._cdwieInvTab = function(btn, tab) {
+  document.querySelectorAll('.cdwie-inv-tab').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+  ['pivot','timeline','mitre'].forEach(function(t) {
+    var pane = document.getElementById('cdwie-inv-tab-' + t);
+    if (pane) pane.style.display = t === tab ? 'block' : 'none';
+  });
+};
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -801,9 +1024,135 @@ window._cdwieRunSearch = function(queryArg) {
     clearInterval(stepInt);
     if (loading) loading.style.display = 'none';
     _cdwie.search.running = false;
-    _cdwieRenderSearchResults(DW_SEARCH_RESULTS);
+    _cdwieRenderSearchResults(_cdwieQueryResults(q));
   }, 1900);
 };
+
+/* ── Dynamic query engine: returns contextually-matched results based on query ── */
+function _cdwieQueryResults(q) {
+  var qL = q.toLowerCase();
+  /* Score each result against the query */
+  var scored = DW_SEARCH_RESULTS.map(function(r) {
+    var score = 0;
+    var fields = [r.title, r.subtitle, r.summary, (r.tags||[]).join(' '), (r.iocs||[]).join(' ')];
+    fields.forEach(function(f) {
+      if (!f) return;
+      var fl = f.toLowerCase();
+      /* Exact phrase match */
+      if (fl.includes(qL)) score += 40;
+      /* Word-level matches */
+      qL.split(/\s+/).forEach(function(word) {
+        if (word.length > 2 && fl.includes(word)) score += 10;
+      });
+    });
+    /* Actor name/alias matching */
+    Object.values(DW_ACTORS).forEach(function(a) {
+      var aL = (a.name + ' ' + a.alias + ' ' + (a.aliases||[]).join(' ')).toLowerCase();
+      if (qL.includes(a.id) || aL.split(' ').some(function(w){ return w.length > 3 && qL.includes(w); })) {
+        if ((r.title+r.subtitle+r.summary).toLowerCase().includes(a.id) ||
+            (r.title+r.subtitle+r.summary).toLowerCase().includes(a.name.toLowerCase())) {
+          score += 25;
+        }
+      }
+    });
+    return { r: r, score: score + Math.random() * 5 };
+  });
+  /* Sort by score descending */
+  scored.sort(function(a,b){ return b.score - a.score; });
+  var matched = scored.filter(function(x){ return x.score > 5; }).map(function(x){ return x.r; });
+  /* If nothing matched, generate contextual synthetic results */
+  if (matched.length === 0) {
+    matched = _cdwieSynthesizeResults(q);
+  } else if (matched.length < 3) {
+    /* Pad with synthetic results */
+    matched = matched.concat(_cdwieSynthesizeResults(q).slice(0, 4 - matched.length));
+  }
+  /* Adjust confidence scores based on query relevance */
+  return matched.slice(0, 7).map(function(r, i) {
+    return Object.assign({}, r, {
+      confidence: Math.max(55, Math.min(99, r.confidence - i * 3 + _rand(-5,5))),
+      lastSeen: i === 0 ? _rand(5,45) + 'm ago' : i < 3 ? _rand(1,12) + 'h ago' : _rand(1,5) + 'd ago'
+    });
+  });
+}
+
+/* ── Synthesize contextual results for novel queries ── */
+function _cdwieSynthesizeResults(q) {
+  var qL = q.toLowerCase();
+  var now = new Date();
+  /* Determine category from keywords */
+  var isActorQ  = /apt|fin|group|nation|state|bear|panda|dragon|lazarus|cozy|fancy/.test(qL);
+  var isIocQ    = /\d{1,3}\.\d{1,3}\.\d{1,3}|\.(onion|ru|cn|ir)|hash|sha|md5|domain|ip\b/.test(qL);
+  var isMalware = /malware|ransomware|rat|trojan|backdoor|stealer|botnet|loader|dropper|beacon|cobalt/.test(qL);
+  var isCampaign= /campaign|operation|op\s|attack|storm|iron|winter|silent|dragonfly/.test(qL);
+  var isCredQ   = /cred|password|dump|breach|leak|forum|darkweb|dark web|breach/.test(qL);
+  var isCveQ    = /cve|zero.day|vuln|exploit|rce|lpe|0day/.test(qL);
+  /* Extract potential actor references */
+  var actorMatch = Object.values(DW_ACTORS).filter(function(a) {
+    var nm = (a.name+' '+(a.aliases||[]).join(' ')+' '+a.alias).toLowerCase();
+    return qL.split(/\s+/).some(function(w){ return w.length > 3 && nm.includes(w); });
+  })[0];
+  var actor = actorMatch || Object.values(DW_ACTORS)[Math.floor(Math.random()*Object.values(DW_ACTORS).length)];
+  var ts = function(h) { return h < 60 ? h + 'm ago' : h < 1440 ? Math.floor(h/60) + 'h ago' : Math.floor(h/1440) + 'd ago'; };
+  var base = [];
+  /* Actor result */
+  if (isActorQ || actorMatch) {
+    base.push({ id:'syn1', type:'actor', confidence:_rand(78,97), tlp:'RED',
+      title: actor.name, subtitle: actor.alias + ' \u2014 ' + actor.origin,
+      tags: [actor.origin, actor.threat, 'Nation-State'].filter(Boolean),
+      summary: actor.desc ? actor.desc.substring(0,200)+'...' : 'Tracked threat actor with confirmed operational history.',
+      iocs: (actor.infra && actor.infra.c2Domains) ? actor.infra.c2Domains.slice(0,2) : [],
+      references: _rand(5,18), lastSeen: ts(_rand(30,300)), risk: actor.threat.toLowerCase() });
+  }
+  /* IOC / Infrastructure result */
+  if (isIocQ) {
+    base.push({ id:'syn2', type:'ioc', confidence:_rand(85,99), tlp:'RED',
+      title: qL.match(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/) ? q.match(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/)[0] : q.substring(0,30),
+      subtitle: 'Active C2 Infrastructure \u2014 ' + actor.name,
+      tags:['C2','Active','Malicious'], summary:'IOC identified in ' + _rand(3,14) + ' independent threat feeds. Cross-referenced with ' + actor.name + ' operational infrastructure. ASN: ' + (actor.infra&&actor.infra.asns?actor.infra.asns[0]:'AS unknown') + '.',
+      iocs:[q.substring(0,40)], references:_rand(3,9), lastSeen:ts(_rand(5,120)), risk:'critical' });
+  }
+  /* Malware family result */
+  if (isMalware || Math.random()>0.5) {
+    var tools = actor.tools || ['Cobalt Strike','Mimikatz'];
+    var tool = tools[Math.floor(Math.random()*tools.length)];
+    base.push({ id:'syn3', type:'malware', confidence:_rand(72,95), tlp:'AMBER',
+      title: tool, subtitle: 'Malware family \u2014 ' + actor.name + ' toolkit',
+      tags:['Malware',actor.origin,'Active'], summary:'Observed in active campaigns attributed to ' + actor.name + '. Detected by ' + _rand(35,68) + '/72 AV vendors. Latest variant deployed in ' + now.getFullYear() + '.',
+      iocs:[], references:_rand(4,14), lastSeen:ts(_rand(60,720)), risk:'high' });
+  }
+  /* Campaign result */
+  if (isCampaign || DW_PREDICTIONS.campaigns.length) {
+    var camp = DW_PREDICTIONS.campaigns[Math.floor(Math.random()*DW_PREDICTIONS.campaigns.length)];
+    base.push({ id:'syn4', type:'campaign', confidence:_rand(74,96), tlp:'RED',
+      title:'Operation '+camp.name, subtitle:'Active campaign \u2014 '+camp.group,
+      tags:['Campaign','Active',camp.confidence], summary:'Campaign currently in phase '+(camp.phaseDone||2)+' of '+camp.phases.length+'. Probability of escalation: '+camp.prob+'%. Expected impact timeframe: '+camp.eta+'.',
+      iocs:[], references:_rand(3,8), lastSeen:ts(_rand(10,200)), risk: camp.prob >= 80 ? 'critical' : 'high' });
+  }
+  /* Dark web forum / credential result */
+  if (isCredQ || Math.random()>0.6) {
+    base.push({ id:'syn5', type:'darkweb', confidence:_rand(65,88), tlp:'AMBER',
+      title:'Forum Thread: '+q.substring(0,35), subtitle:'BreachForums \u2014 threat actor discussion',
+      tags:['DarkWeb','Forum','Intel'], summary:'Thread posted by high-reputation user (score 82/100). References '+actor.name+'. '+(isCredQ?_rand(1000,50000).toLocaleString()+' records claimed. Partial sample validated. ':'Contains operational planning discussion. '),
+      iocs:[], references:_rand(1,4), lastSeen:ts(_rand(60,1440)), risk:'high' });
+  }
+  /* CVE/Exploit result */
+  if (isCveQ) {
+    var cveId = 'CVE-'+(now.getFullYear()-_rand(0,1))+'-'+_rand(10000,50000);
+    base.push({ id:'syn6', type:'ioc', confidence:_rand(80,98), tlp:'RED',
+      title: cveId, subtitle:'Zero-day exploit \u2014 '+actor.name,
+      tags:['CVE','Exploit','0-Day'], summary:'Vulnerability in '+(['VMware vCenter','Fortinet FortiOS','Citrix NetScaler','MOVEit Transfer','Exchange Server'][_rand(0,4)])+'. CVSS '+(_rand(75,100)/10).toFixed(1)+'. PoC observed in dark web exploit marketplaces. Attribution: '+actor.name+'.',
+      iocs:[cveId], references:_rand(5,12), lastSeen:ts(_rand(15,360)), risk:'critical' });
+  }
+  /* Infrastructure result */
+  base.push({ id:'syn7', type:'infra', confidence:_rand(68,88), tlp:'AMBER',
+    title:'Bulletproof Hosting Cluster \u2014 '+(actor.infra&&actor.infra.asns?actor.infra.asns[0]:'AS'+_rand(10000,60000)),
+    subtitle:'Known APT infrastructure provider',
+    tags:['Hosting','BulletProof','Infrastructure'], summary:'Autonomous system providing infrastructure to '+actor.name+' and associated affiliates. '+ _rand(12,45) + ' malicious IPs observed in this range over 90 days.',
+    iocs: (actor.infra&&actor.infra.asns) ? actor.infra.asns.slice(0,1) : [],
+    references:_rand(4,11), lastSeen:ts(_rand(120,2880)), risk:'high' });
+  return base;
+}
 
 window._cdwieGenerateQueries = function() {
   var suggestions = document.querySelectorAll('.cdwie-query-chip');
@@ -1061,20 +1410,59 @@ function _renderActorDnaTab(a, tab) {
 
 function _buildActivityHeatmap(a) {
   var days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-  var html = '<div class="cdwie-heatmap-labels">' +
-    days.map(function(d){ return '<span>' + d + '</span>'; }).join('') +
-  '</div><div class="cdwie-heatmap-cells">';
-  for (var h = 0; h < 24; h++) {
-    for (var d = 0; d < 7; d++) {
-      var intensity = Math.random();
-      if (a.opHours && a.opHours.includes('09:00')) { if (h < 9 || h > 18) intensity *= 0.2; }
-      if (a.opHours && a.opHours.includes('Night')) { if (h > 8 && h < 20) intensity *= 0.3; }
-      var alpha = (intensity * 0.8 + 0.1).toFixed(2);
-      html += '<div class="cdwie-heatmap-cell" style="background:rgba(99,102,241,' + alpha + ')" title="' + days[d] + ' ' + h + ':00 UTC"></div>';
-    }
+  /* Determine active hour range from opHours string */
+  var startH = 0, endH = 23;
+  if (a.opHours) {
+    var m = a.opHours.match(/(\d{2}):00\D+(\d{2}):00/);
+    if (m) { startH = parseInt(m[1]); endH = parseInt(m[2]); }
   }
-  html += '</div>';
-  return html;
+  var isNight = a.opHours && a.opHours.toLowerCase().includes('night');
+  var isWeekday = a.opHours && (a.opHours.includes('Mon\u2013Fri') || a.opHours.includes('Mon-Fri') || a.opHours.includes('Tue\u2013Sat') || a.opHours.includes('Tue-Sat'));
+  var isSundayRest = a.opHours && a.opHours.includes('Sun\u2013Thu');
+  var actorColor = a.color || '#6366f1';
+  /* Convert hex color to rgb */
+  var rgb = '99,102,241';
+  var hc = actorColor.replace('#','');
+  if (hc.length === 6) {
+    rgb = parseInt(hc.substr(0,2),16)+','+parseInt(hc.substr(2,2),16)+','+parseInt(hc.substr(4,2),16);
+  }
+  /* Hour axis labels (every 4h) */
+  var hourLabels = '';
+  for (var hx = 0; hx < 24; hx++) {
+    hourLabels += '<div class="cdwie-heatmap-hour-lbl">' + (hx % 4 === 0 ? hx+'h' : '') + '</div>';
+  }
+  /* Build rows: one row per day */
+  var rows = '';
+  for (var d = 0; d < 7; d++) {
+    var cells = '';
+    for (var h = 0; h < 24; h++) {
+      var base = Math.random();
+      /* Apply time-of-day weight */
+      if (isNight) {
+        base = (h < 6 || h > 20) ? base * 0.9 + 0.1 : base * 0.15;
+      } else if (endH > startH) {
+        base = (h >= startH && h <= endH) ? base * 0.85 + 0.15 : base * 0.12;
+      }
+      /* Apply day-of-week weight */
+      if (isWeekday && (d === 5 || d === 6)) base *= 0.08; // Sat/Sun low
+      if (isSundayRest && d === 6) base *= 0.05;           // Sun rest
+      /* Add slight noise */
+      base = Math.min(1, Math.max(0.02, base + (Math.random() - 0.5) * 0.1));
+      var alpha = base.toFixed(2);
+      var tooltip = days[d] + ' ' + (h < 10 ? '0' : '') + h + ':00 UTC';
+      cells += '<div class="cdwie-heatmap-cell" style="background:rgba(' + rgb + ',' + alpha + ')" title="' + tooltip + '"></div>';
+    }
+    rows += '<div class="cdwie-heatmap-row"><span class="cdwie-heatmap-day-lbl">' + days[d] + '</span>' + cells + '</div>';
+  }
+  /* Legend */
+  var legendCells = [0.08, 0.25, 0.45, 0.65, 0.85, 0.95].map(function(v) {
+    return '<div class="cdwie-heatmap-legend-cell" style="background:rgba(' + rgb + ',' + v + ')"></div>';
+  }).join('');
+  return '<div class="cdwie-heatmap-wrap">' +
+    '<div class="cdwie-heatmap-hour-axis"><div style="width:32px;flex-shrink:0"></div>' + hourLabels + '</div>' +
+    rows +
+    '<div class="cdwie-heatmap-legend"><span>Less</span><div class="cdwie-heatmap-legend-cells">' + legendCells + '</div><span>More</span></div>' +
+  '</div>';
 }
 
 window._cdwieDnaTab = function(actorId, tab) {
@@ -1255,8 +1643,8 @@ function _cdwieGraphPhysics() {
 
   // Spring forces along edges
   for (var e = 0; e < edges.length; e++) {
-    var src = nodes.filter(function(n) { return n.id === edges[e].source; })[0];
-    var tgt = nodes.filter(function(n) { return n.id === edges[e].target; })[0];
+    var src = nodes.filter(function(n) { return n.id === (edges[e].source||edges[e].s); })[0];
+    var tgt = nodes.filter(function(n) { return n.id === (edges[e].target||edges[e].t); })[0];
     if (!src || !tgt) continue;
     var edx = tgt.x - src.x;
     var edy = tgt.y - src.y;
@@ -1296,8 +1684,8 @@ function _cdwieGraphDraw() {
 
   // Draw edges
   for (var e = 0; e < edges.length; e++) {
-    var src = nodes.filter(function(n) { return n.id === edges[e].source; })[0];
-    var tgt = nodes.filter(function(n) { return n.id === edges[e].target; })[0];
+    var src = nodes.filter(function(n) { return n.id === (edges[e].source||edges[e].s); })[0];
+    var tgt = nodes.filter(function(n) { return n.id === (edges[e].target||edges[e].t); })[0];
     if (!src || !tgt) continue;
     ctx.beginPath();
     ctx.moveTo(src.x, src.y);
@@ -1423,9 +1811,9 @@ function _cdwieGraphAttachEvents(canvas) {
 function _openNodePanel(n) {
   var nodeColors = { actor:'#ef4444', malware:'#f97316', ioc:'#3b82f6', campaign:'#a855f7', target:'#22c55e', infra:'#14b8a6', wallet:'#eab308', darkweb:'#ec4899' };
   var color = nodeColors[n.type] || '#6366f1';
-  var connectedEdges = _cdwie.graph.edges.filter(function(e) { return e.source === n.id || e.target === n.id; });
+  var connectedEdges = _cdwie.graph.edges.filter(function(e) { return (e.source||e.s) === n.id || (e.target||e.t) === n.id; });
   var connHtml = connectedEdges.map(function(e) {
-    var other = e.source === n.id ? e.target : e.source;
+    var other = (e.source||e.s) === n.id ? (e.target||e.t) : (e.source||e.s);
     var otherNode = _cdwie.graph.nodes.filter(function(x) { return x.id === other; })[0];
     return '<div class="cdwie-node-conn-row"><span class="cdwie-badge cdwie-badge-blue">' + e.type + '</span><span>' + (otherNode ? (otherNode.label||otherNode.id) : other) + '</span></div>';
   }).join('');
@@ -1454,8 +1842,8 @@ window._cdwieGraphFilter = function(type) {
   var gd = DW_GRAPH_DATA;
   if (type === 'all') { _cdwie.graph.edges = gd.edges; }
   else { _cdwie.graph.edges = gd.edges.filter(function(e) {
-    var src = _cdwie.graph.nodes.filter(function(n){ return n.id === e.source; })[0];
-    var tgt = _cdwie.graph.nodes.filter(function(n){ return n.id === e.target; })[0];
+    var src = _cdwie.graph.nodes.filter(function(n){ return n.id === (e.source||e.s); })[0];
+    var tgt = _cdwie.graph.nodes.filter(function(n){ return n.id === (e.target||e.t); })[0];
     return (src && src.type === type) || (tgt && tgt.type === type);
   }); }
 };
@@ -1533,7 +1921,9 @@ function _buildEnginePredictive() {
         '</div>' +
         '<div class="cdwie-forecast-panel cdwie-glass">' +
           '<h3><i class="fas fa-chart-line"></i> 30-Day Threat Forecast</h3>' +
-          '<canvas id="cdwie-forecast-chart" height="160"></canvas>' +
+          '<div style="position:relative;height:160px;width:100%">' +
+            '<canvas id="cdwie-forecast-chart"></canvas>' +
+          '</div>' +
         '</div>' +
       '</div>' +
       '<div class="cdwie-pred-right">' +
@@ -2083,106 +2473,282 @@ function _cdwieRenderReportPreview() {
   var tlpColors = { white:'#94a3b8', green:'#22c55e', amber:'#f59e0b', red:'#ef4444' };
   var tlpColor = tlpColors[r.tlp] || '#94a3b8';
   var date = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
-  var typeLabels = { executive:'Executive Intelligence Brief', technical:'Technical Threat Report', ioc:'IOC Bulletin', incident:'Incident Report' };
+  var timeLabels  = { '24h':'Last 24 Hours','7d':'Last 7 Days','30d':'Last 30 Days','90d':'Last Quarter' };
+  var timePhrases = { '24h':'past 24 hours','7d':'past 7 days','30d':'past 30 days','90d':'past quarter' };
+  var typeLabels  = { executive:'Executive Intelligence Brief', technical:'Technical Threat Report', ioc:'IOC Bulletin', incident:'Incident Report' };
   var title = typeLabels[r.type] || 'Intelligence Report';
+  var secs  = r.sections;
 
-  var topActors = Object.values(DW_ACTORS).slice(0,3).map(function(a) {
+  /* ── Shared data builders ── */
+  var criticalActors = Object.values(DW_ACTORS).filter(function(a){ return a.threat.toLowerCase()==='critical'; });
+  var highActors     = Object.values(DW_ACTORS).filter(function(a){ return a.threat.toLowerCase()==='high'; });
+
+  var topActorsHtml = Object.values(DW_ACTORS).slice(0,5).map(function(a) {
+    var rC = a.threat.toLowerCase()==='critical'?'red':'orange';
     return '<div class="rp-actor-row">' +
-      '<span class="rp-actor-flag">' + a.flag + '</span>' +
-      '<strong>' + a.name + '</strong>' +
-      '<span class="rp-actor-alias">' + a.alias + '</span>' +
-      '<span class="rp-badge rp-badge-' + (a.threat.toLowerCase()==='critical'?'red':'orange') + '">' + a.threat.toUpperCase() + '</span>' +
+      '<div style="width:32px;height:32px;border-radius:8px;background:' + a.color + '22;color:' + a.color + ';display:flex;align-items:center;justify-content:center;flex-shrink:0">' +
+        '<i class="fas fa-' + (a.faIcon||'user-secret') + '" style="font-size:13px"></i>' +
+      '</div>' +
+      '<div style="flex:1">' +
+        '<div style="font-weight:600;color:#0f172a;font-size:13px">' + a.flag + ' ' + a.name + '</div>' +
+        '<div style="color:#64748b;font-size:11px">' + a.alias + ' \xb7 ' + a.origin + '</div>' +
+      '</div>' +
+      '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">' +
+        '<span class="rp-badge rp-badge-' + rC + '">' + a.threat.toUpperCase() + '</span>' +
+        '<span style="color:#94a3b8;font-size:10px">' + a.confidence + '% confidence</span>' +
+      '</div>' +
     '</div>';
   }).join('');
 
-  var topIOCs = DW_SEARCH_RESULTS.filter(function(x) { return x.type==='ioc'; }).concat(
-    DW_SEARCH_RESULTS.filter(function(x) { return x.type!=='ioc'; })
-  ).slice(0,5).map(function(ioc) {
-    return (ioc.iocs||[]).map(function(v) {
-      return '<div class="rp-ioc-row"><code>' + v + '</code><span class="rp-badge rp-badge-red">ACTIVE</span></div>';
-    }).join('');
+  var allIocs = [
+    { ioc:'195.54.162.88',          type:'IPv4',   actor:'APT29',    status:'ACTIVE',    first:'2024-11-14' },
+    { ioc:'lockbit4[.]onion',       type:'Onion',  actor:'LockBit',  status:'ACTIVE',    first:'2024-09-01' },
+    { ioc:'midnight-shop[.]ru',     type:'Domain', actor:'APT29',    status:'ACTIVE',    first:'2024-10-22' },
+    { ioc:'45.142.212.100',         type:'IPv4',   actor:'Lazarus',  status:'ACTIVE',    first:'2024-07-30' },
+    { ioc:'svr-proxy[.]net',        type:'Domain', actor:'APT29',    status:'ACTIVE',    first:'2024-11-01' },
+    { ioc:'SHA256:a3f7b2913dc...',  type:'Hash',   actor:'APT41',    status:'ACTIVE',    first:'2024-08-15' },
+    { ioc:'bc1q9f2a6wk5xp...',     type:'Wallet', actor:'Lazarus',  status:'MONITORED', first:'2024-06-20' },
+    { ioc:'blockchain-update[.]com',type:'Domain', actor:'Lazarus',  status:'ACTIVE',    first:'2024-10-05' }
+  ];
+  var iocListHtml = allIocs.map(function(item) {
+    var sC = item.status==='ACTIVE'?'#ef4444':'#eab308';
+    return '<div class="rp-ioc-row">' +
+      '<code>' + item.ioc + '</code>' +
+      '<span class="rp-badge" style="background:#eff6ff;color:#3b82f6">' + item.type + '</span>' +
+      '<span style="color:#64748b;font-size:11px">' + item.actor + '</span>' +
+      '<span class="rp-badge" style="background:' + sC + '22;color:' + sC + '">' + item.status + '</span>' +
+      '<span style="color:#94a3b8;font-size:10px">' + item.first + '</span>' +
+    '</div>';
   }).join('');
 
-  var secs = r.sections;
+  var campaignHtml = DW_PREDICTIONS.campaigns.map(function(c) {
+    var pC = c.prob>=80?'#ef4444':c.prob>=60?'#f97316':'#eab308';
+    var phases = c.phases.map(function(ph){ return '<span class="rp-badge rp-badge-blue">' + ph + '</span>'; }).join(' ');
+    return '<div class="rp-campaign-row" style="flex-direction:column;align-items:flex-start;gap:6px">' +
+      '<div style="display:flex;align-items:center;gap:8px;width:100%">' +
+        '<strong>' + c.name + '</strong>' +
+        '<span class="rp-badge" style="background:' + pC + '22;color:' + pC + '">' + c.prob + '% prob</span>' +
+        '<span class="rp-badge rp-badge-blue" style="margin-left:auto">ETA: ' + c.eta + '</span>' +
+      '</div>' +
+      '<div style="display:flex;gap:4px;flex-wrap:wrap">' + phases + '</div>' +
+      '<div style="color:#64748b;font-size:11px">' + c.group + ' \xb7 ' + c.confidence + ' confidence</div>' +
+    '</div>';
+  }).join('');
+
+  /* ── Type-specific summary text ── */
+  var summaryBody = '';
+  if (r.type === 'executive') {
+    summaryBody =
+      '<p>This Executive Intelligence Brief assesses the global threat landscape for the <strong>' + (timePhrases[r.timeframe]||r.timeframe) + '</strong>. ' +
+      'The Wadjet-Eye AI platform processed <strong>847,412 dark web documents</strong> across ' +
+      '<strong>34 monitored forums, 12 paste sites, and 8 onion services</strong> during this period.</p>' +
+      '<p style="margin-top:10px">Current global threat index: <strong style="color:#ef4444">' + DW_PREDICTIONS.riskScore + '/100 (HIGH)</strong>. ' +
+      '<strong>' + criticalActors.length + ' CRITICAL-tier</strong> and <strong>' + highActors.length + ' HIGH-tier</strong> actors are assessed as actively operational. ' +
+      'Primary sectors at elevated risk: <strong>Healthcare, Finance, Government, and Critical Infrastructure</strong>.</p>' +
+      '<p style="margin-top:10px"><strong>Key Findings:</strong></p>' +
+      '<ul style="color:#334155;font-size:13px;line-height:1.9;padding-left:18px;margin:6px 0 0">' +
+        '<li>APT29 (Cozy Bear) confirmed operational — new C2 infrastructure on EU network ranges; HAMMERTOSS v4 deployed</li>' +
+        '<li>LockBit 4.0 affiliate activity +34% this period; healthcare sector targeted in 8 confirmed incidents</li>' +
+        '<li>Lazarus Group cryptocurrency theft campaign ongoing; est. $47M in reporting window</li>' +
+        '<li>' + (8 + Math.floor(Math.random()*10)) + ' credential dumps with corporate email addresses published on dark web forums</li>' +
+        '<li>' + DW_PREDICTIONS.campaigns.filter(function(c){return c.prob>=75;}).length + ' campaigns at \u226575% escalation probability within reporting window</li>' +
+      '</ul>';
+  } else if (r.type === 'technical') {
+    summaryBody =
+      '<p>This Technical Threat Report provides in-depth TTP analysis, IOC inventory, and behavioral profiling for the <strong>' + (timePhrases[r.timeframe]||r.timeframe) + '</strong>. ' +
+      'Coverage includes malware family analysis, network infrastructure mapping, and full MITRE ATT&CK\xae alignment.</p>' +
+      '<p style="margin-top:10px"><strong>Technical Highlights:</strong></p>' +
+      '<ul style="color:#334155;font-size:13px;line-height:1.9;padding-left:18px;margin:6px 0 0">' +
+        '<li><strong>APT29:</strong> HAMMERTOSS v4 using Twitter/GitHub image steganography for C2 — new DGA domains via Namecheap registrar</li>' +
+        '<li><strong>LockBit 4.0:</strong> Rust-compiled binary; Intermittent Encryption + anti-VM evasion; beacon sleep 4,200ms jitter 38%</li>' +
+        '<li><strong>APT41:</strong> ShadowPad loader via DLL side-loading (<code style="font-size:11px;background:#f8fafc;padding:1px 4px">iiWin.dll</code>) in legitimate software update chains</li>' +
+        '<li><strong>Lazarus:</strong> AppleJeus macOS variant targeting crypto exchange staff via fake trading platform installers</li>' +
+        '<li>Cobalt Strike Team Server detected on 5 new IPs — certificate: self-signed, CN=localhost; JA3: 72a7c4bb318f</li>' +
+      '</ul>';
+  } else if (r.type === 'ioc') {
+    summaryBody =
+      '<p>This IOC Bulletin contains validated, machine-readable threat indicators collected from dark web sources, OSINT feeds, and autonomous sensors during the <strong>' + (timePhrases[r.timeframe]||r.timeframe) + '</strong>. ' +
+      'All indicators are de-duplicated and confidence-scored based on multi-source corroboration.</p>' +
+      '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px">' +
+        '<div class="rp-stat-box"><span class="rp-stat-num" style="color:#ef4444">' + allIocs.filter(function(x){return x.status==='ACTIVE';}).length + '</span><span>Active IOCs</span></div>' +
+        '<div class="rp-stat-box"><span class="rp-stat-num" style="color:#f97316">12</span><span>New This Period</span></div>' +
+        '<div class="rp-stat-box"><span class="rp-stat-num" style="color:#22c55e">99%</span><span>Avg Confidence</span></div>' +
+      '</div>';
+  } else if (r.type === 'incident') {
+    summaryBody =
+      '<p>This Incident Report documents a confirmed <strong style="color:#ef4444">CRITICAL</strong> intrusion attributed to <strong>APT29 (Cozy Bear / Midnight Blizzard)</strong> with 94% confidence. ' +
+      'The incident involved spear-phishing initial access, ADCS credential abuse, lateral movement, and data exfiltration via SUNBURST C2 channel.</p>' +
+      '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px;margin-top:10px">' +
+        '<div style="font-weight:700;color:#ef4444;margin-bottom:8px"><i class="fas fa-exclamation-triangle"></i> Incident Summary</div>' +
+        '<table style="font-size:12px;color:#334155;border-collapse:collapse;width:100%">' +
+          '<tr><td style="padding:4px 8px 4px 0;color:#64748b;white-space:nowrap;width:130px">Detection Date:</td><td style="padding:4px 0">2024-11-14 08:22 UTC</td></tr>' +
+          '<tr><td style="padding:4px 8px 4px 0;color:#64748b">Attribution:</td><td style="padding:4px 0"><strong>APT29 (SVR)</strong> \xb7 94% confidence</td></tr>' +
+          '<tr><td style="padding:4px 8px 4px 0;color:#64748b">Dwell Time:</td><td style="padding:4px 0">Estimated 21 days before detection</td></tr>' +
+          '<tr><td style="padding:4px 8px 4px 0;color:#64748b">Data Impact:</td><td style="padding:4px 0">~2.4 GB exfiltrated via OneDrive API C2</td></tr>' +
+          '<tr><td style="padding:4px 8px 4px 0;color:#64748b">MITRE Tactics:</td><td style="padding:4px 0">8/14 ATT&CK tactics confirmed</td></tr>' +
+          '<tr><td style="padding:4px 8px 4px 0;color:#64748b">Status:</td><td style="padding:4px 0"><span style="color:#22c55e;font-weight:600"><i class="fas fa-check-circle"></i> CONTAINED \u2014 Remediation 94% complete</span></td></tr>' +
+        '</table>' +
+      '</div>';
+  }
+
+  /* ── Recommendations ── */
+  var recsHtml = '';
+  if (r.type === 'executive') {
+    recsHtml =
+      '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
+        '<thead><tr style="color:#64748b;font-size:10px;text-transform:uppercase;border-bottom:2px solid #e2e8f0">' +
+          '<th style="padding:6px 8px;text-align:left">Priority</th><th style="text-align:left;padding:6px 8px">Action</th>' +
+          '<th style="text-align:left;padding:6px 8px">Owner</th><th style="text-align:left;padding:6px 8px">Timeline</th>' +
+        '</tr></thead>' +
+        '<tbody>' +
+          '<tr style="border-bottom:1px solid #f1f5f9"><td style="padding:8px"><span class="rp-badge rp-badge-red">P1</span></td><td style="color:#0f172a;padding:8px">Block all APT29 IOCs in SIEM/SOAR and network perimeter immediately</td><td style="color:#64748b;padding:8px">SOC</td><td style="padding:8px"><span class="rp-badge rp-badge-red">Immediate</span></td></tr>' +
+          '<tr style="border-bottom:1px solid #f1f5f9"><td style="padding:8px"><span class="rp-badge rp-badge-red">P1</span></td><td style="color:#0f172a;padding:8px">Audit external-facing services for CVE-2024 vulnerabilities exploited by APT41</td><td style="color:#64748b;padding:8px">Vuln Mgmt</td><td style="padding:8px"><span class="rp-badge rp-badge-red">24 Hours</span></td></tr>' +
+          '<tr style="border-bottom:1px solid #f1f5f9"><td style="padding:8px"><span class="rp-badge rp-badge-orange">P2</span></td><td style="color:#0f172a;padding:8px">Enforce phishing-resistant MFA (FIDO2) on all privileged and external accounts</td><td style="color:#64748b;padding:8px">IAM</td><td style="padding:8px"><span class="rp-badge rp-badge-orange">7 Days</span></td></tr>' +
+          '<tr style="border-bottom:1px solid #f1f5f9"><td style="padding:8px"><span class="rp-badge rp-badge-orange">P2</span></td><td style="color:#0f172a;padding:8px">Deploy EDR across all endpoints; validate Cobalt Strike detection rule coverage</td><td style="color:#64748b;padding:8px">SecOps</td><td style="padding:8px"><span class="rp-badge rp-badge-orange">14 Days</span></td></tr>' +
+          '<tr style="border-bottom:1px solid #f1f5f9"><td style="padding:8px"><span class="rp-badge rp-badge-blue">P3</span></td><td style="color:#0f172a;padding:8px">Enroll in continuous dark web monitoring for credential exposure alerts</td><td style="color:#64748b;padding:8px">Threat Intel</td><td style="padding:8px"><span class="rp-badge rp-badge-blue">30 Days</span></td></tr>' +
+          '<tr><td style="padding:8px"><span class="rp-badge rp-badge-blue">P3</span></td><td style="color:#0f172a;padding:8px">Run tabletop exercise simulating APT29 WINTER STORM lateral movement scenario</td><td style="color:#64748b;padding:8px">CISO</td><td style="padding:8px"><span class="rp-badge rp-badge-blue">60 Days</span></td></tr>' +
+        '</tbody>' +
+      '</table>';
+  } else if (r.type === 'technical') {
+    recsHtml =
+      '<ul style="color:#334155;font-size:13px;line-height:2;padding-left:18px;margin:0">' +
+        '<li>Hunt HAMMERTOSS: monitor PowerShell <code style="background:#f8fafc;font-size:11px">Get-Random</code>, encoded commands, and social media image downloads from corp endpoints</li>' +
+        '<li>Deploy YARA rules for LockBit 4.0 Rust binary signatures (provided in Appendix A)</li>' +
+        '<li>Block known ShadowPad DLL side-loading chains; alert on <code style="background:#f8fafc;font-size:11px">iiWin.dll</code>, <code style="background:#f8fafc;font-size:11px">msvcr120.dll</code></li>' +
+        '<li>Block Cobalt Strike default TLS certificates; detect JA3/JA3S hash <code style="background:#f8fafc;font-size:11px">72a7c4bb318f</code></li>' +
+        '<li>Enable ADCS audit logging; alert ESC1/ESC8 escalation attempts via <code style="background:#f8fafc;font-size:11px">certreq.exe</code></li>' +
+        '<li>Validate EDR telemetry completeness against APT29 ATT&CK\xae Navigator layer (provided)</li>' +
+      '</ul>';
+  } else if (r.type === 'ioc') {
+    recsHtml =
+      '<p style="color:#334155;font-size:13px;line-height:1.7;margin:0 0 10px">Ingest all indicators via STIX 2.1 / TAXII into your SIEM and network controls. Priority IOCs (confidence \u226590%) should be blocked immediately; medium-confidence IOCs should trigger alerting only.</p>' +
+      '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px;font-size:12px;color:#166534">' +
+        '<i class="fas fa-check-circle"></i> <strong>STIX 2.1 bundle available</strong> \u2014 Click "Export STIX" to download machine-readable IOC package for automated SIEM/SOAR ingestion.' +
+      '</div>';
+  } else {
+    recsHtml =
+      '<ul style="color:#334155;font-size:13px;line-height:2;padding-left:18px;margin:0">' +
+        '<li>Complete forensic imaging of all affected endpoints before remediation activities commence</li>' +
+        '<li>Revoke and reissue all service account and privileged credentials immediately</li>' +
+        '<li>Conduct full Active Directory security audit; review all GPO changes in past 30 days</li>' +
+        '<li>File incident report with CISA (AA##-###A) and relevant ISAC within 72 hours</li>' +
+        '<li>Preserve all log evidence in tamper-evident storage for legal/regulatory proceedings</li>' +
+        '<li>Engage external IR firm to validate containment and provide independent attestation</li>' +
+        '<li>Brief executive leadership and legal team on regulatory disclosure obligations</li>' +
+      '</ul>';
+  }
+
+  /* ── MITRE section (technical/incident only) ── */
+  var mitreSection = '';
+  if (secs.actor_profiles && (r.type === 'technical' || r.type === 'incident')) {
+    var mitreEntries = [
+      {id:'T1566.001',name:'Spear-Phishing Link',         phase:'Initial Access',     actors:['APT29','FIN7','APT41']},
+      {id:'T1059.001',name:'PowerShell',                   phase:'Execution',          actors:['APT29','APT41','Lazarus']},
+      {id:'T1053.005',name:'Scheduled Task/Job',           phase:'Persistence',        actors:['APT29','APT41']},
+      {id:'T1027',    name:'Obfuscated Files/Information', phase:'Defense Evasion',    actors:['APT29','Lazarus']},
+      {id:'T1003.001',name:'LSASS Memory Dump',            phase:'Credential Access',  actors:['APT29','FIN7']},
+      {id:'T1021.002',name:'SMB/Windows Admin Shares',     phase:'Lateral Movement',   actors:['APT29','LockBit']},
+      {id:'T1041',    name:'Exfiltration Over C2 Channel', phase:'Exfiltration',       actors:['APT29','APT41','OilRig']},
+      {id:'T1486',    name:'Data Encrypted for Impact',    phase:'Impact',             actors:['LockBit','BlackCat','Lazarus']}
+    ];
+    var mRows = mitreEntries.map(function(m) {
+      return '<tr style="border-bottom:1px solid #f1f5f9;font-size:12px">' +
+        '<td style="padding:7px 8px;font-family:monospace;color:#6366f1">' + m.id + '</td>' +
+        '<td style="padding:7px 8px;color:#0f172a">' + m.name + '</td>' +
+        '<td style="padding:7px 8px;color:#64748b">' + m.phase + '</td>' +
+        '<td style="padding:7px 8px">' + m.actors.map(function(a){ return '<span class="rp-badge rp-badge-blue">' + a + '</span>'; }).join(' ') + '</td>' +
+      '</tr>';
+    }).join('');
+    mitreSection =
+      '<div class="rp-section">' +
+        '<h2 class="rp-section-title"><i class="fas fa-sitemap"></i> MITRE ATT&CK\xae Technique Coverage</h2>' +
+        '<table style="width:100%;border-collapse:collapse">' +
+          '<thead><tr style="color:#64748b;font-size:10px;text-transform:uppercase;border-bottom:2px solid #e2e8f0">' +
+            '<th style="padding:6px 8px;text-align:left">ID</th><th style="padding:6px 8px;text-align:left">Technique</th>' +
+            '<th style="padding:6px 8px;text-align:left">Tactic</th><th style="padding:6px 8px;text-align:left">Observed Actors</th>' +
+          '</tr></thead>' +
+          '<tbody>' + mRows + '</tbody>' +
+        '</table>' +
+      '</div>';
+  }
+
   var html =
     '<div class="rp-report">' +
       '<div class="rp-header" style="border-top:4px solid ' + tlpColor + '">' +
         '<div class="rp-header-top">' +
-          '<div class="rp-org"><i class="fas fa-eye"></i> WADJET-EYE AI</div>' +
+          '<div class="rp-org"><i class="fas fa-eye"></i> WADJET-EYE AI INTELLIGENCE PLATFORM</div>' +
           '<div class="rp-tlp" style="background:' + tlpColor + '22;color:' + tlpColor + ';border:1px solid ' + tlpColor + '">TLP:' + r.tlp.toUpperCase() + '</div>' +
         '</div>' +
         '<h1 class="rp-title">' + title + '</h1>' +
         '<div class="rp-meta">' +
           '<span><i class="fas fa-calendar"></i> Generated: ' + date + '</span>' +
-          '<span><i class="fas fa-clock"></i> Period: ' + ({
-            '24h':'Last 24 Hours','7d':'Last 7 Days','30d':'Last 30 Days','90d':'Last Quarter'
-          }[r.timeframe]||r.timeframe) + '</span>' +
+          '<span><i class="fas fa-clock"></i> Period: ' + (timeLabels[r.timeframe]||r.timeframe) + '</span>' +
           '<span><i class="fas fa-industry"></i> Sector: ' + (r.sector==='all'?'All Sectors':r.sector.charAt(0).toUpperCase()+r.sector.slice(1)) + '</span>' +
+          '<span><i class="fas fa-robot"></i> AI-Generated \xb7 CDWIE v1.0</span>' +
         '</div>' +
       '</div>' +
       (secs.exec_summary ?
         '<div class="rp-section">' +
-          '<h2 class="rp-section-title"><i class="fas fa-file-alt"></i> Executive Summary</h2>' +
-          '<p>This intelligence brief covers threat landscape assessment for the ' + ({
-            '24h':'past 24 hours','7d':'past 7 days','30d':'past 30 days','90d':'past quarter'
-          }[r.timeframe]||r.timeframe) + '. ' +
-          'Current global threat level is assessed as <strong style="color:#ef4444">HIGH</strong> with an index score of <strong>' + DW_PREDICTIONS.riskScore + '/100</strong>. ' +
-          'Primary threat actors remain active across ' + Object.values(DW_ACTORS).filter(function(a){return a.active;}).length + ' monitored campaigns. ' +
-          Object.values(DW_ACTORS).filter(function(a){return a.threat.toLowerCase()==='critical';}).length + ' critical-tier actors identified with ongoing operations.</p>' +
+          '<h2 class="rp-section-title"><i class="fas fa-file-alt"></i> ' + (r.type==='incident'?'Incident Overview':r.type==='ioc'?'Bulletin Summary':'Executive Summary') + '</h2>' +
+          summaryBody +
         '</div>' : '') +
       (secs.threat_landscape ?
         '<div class="rp-section">' +
-          '<h2 class="rp-section-title"><i class="fas fa-globe"></i> Threat Landscape</h2>' +
+          '<h2 class="rp-section-title"><i class="fas fa-globe"></i> Threat Landscape Assessment</h2>' +
           '<div class="rp-stats-row">' +
-            '<div class="rp-stat-box"><span class="rp-stat-num">' + DW_PREDICTIONS.riskScore + '</span><span>Risk Score</span></div>' +
-            '<div class="rp-stat-box"><span class="rp-stat-num">' + Object.keys(DW_ACTORS).length + '</span><span>Active Actors</span></div>' +
-            '<div class="rp-stat-box"><span class="rp-stat-num">' + DW_PREDICTIONS.campaigns.length + '</span><span>Campaigns</span></div>' +
-            '<div class="rp-stat-box"><span class="rp-stat-num">' + DW_PREDICTIONS.geoThreats.length + '</span><span>Geo Threats</span></div>' +
+            '<div class="rp-stat-box"><span class="rp-stat-num" style="color:#ef4444">' + DW_PREDICTIONS.riskScore + '</span><span>Global Risk Index</span></div>' +
+            '<div class="rp-stat-box"><span class="rp-stat-num" style="color:#f97316">' + Object.keys(DW_ACTORS).length + '</span><span>Tracked Actors</span></div>' +
+            '<div class="rp-stat-box"><span class="rp-stat-num" style="color:#a855f7">' + DW_PREDICTIONS.campaigns.length + '</span><span>Active Campaigns</span></div>' +
+            '<div class="rp-stat-box"><span class="rp-stat-num" style="color:#22d3ee">' + DW_PREDICTIONS.geoThreats.length + '</span><span>Geo Threat Zones</span></div>' +
           '</div>' +
-          '<p class="rp-landscape-para">Threat intelligence analysis indicates sustained elevated activity across nation-state and criminal actor groups. ' +
-          'Supply chain attacks, ransomware-as-a-service operations, and credential harvesting remain primary attack vectors.</p>' +
+          '<p class="rp-landscape-para">Analysis of ' + (timePhrases[r.timeframe]||r.timeframe) + ' confirms sustained elevation in nation-state espionage and RaaS operations. ' +
+          'Top attack vectors: <strong>Spear-phishing (38%)</strong>, <strong>Public application exploits (24%)</strong>, <strong>Supply chain (19%)</strong>, <strong>Credential theft (14%)</strong>. ' +
+          'Infrastructure hotspots: Eastern Europe, Russia, DPRK, and China-attributed ranges.</p>' +
+          '<div style="margin-top:12px"><div style="color:#64748b;font-size:11px;margin-bottom:8px;font-weight:600">Emerging Threats \u2014 ' + (timeLabels[r.timeframe]||r.timeframe) + '</div>' +
+            DW_PREDICTIONS.emerging.slice(0,4).map(function(t) {
+              return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f1f5f9">' +
+                '<i class="fas fa-' + (t.icon||'exclamation-circle') + '" style="color:#f97316;font-size:12px;width:16px"></i>' +
+                '<span style="color:#0f172a;font-size:13px;flex:1">' + t.name + '</span>' +
+                '<span class="rp-badge" style="background:#fff7ed;color:#f97316">' + t.type + '</span>' +
+              '</div>';
+            }).join('') +
+          '</div>' +
         '</div>' : '') +
       (secs.actor_profiles ?
         '<div class="rp-section">' +
-          '<h2 class="rp-section-title"><i class="fas fa-users"></i> Top Threat Actors</h2>' +
-          '<div class="rp-actors-list">' + topActors + '</div>' +
+          '<h2 class="rp-section-title"><i class="fas fa-users"></i> Threat Actor Profiles</h2>' +
+          '<div class="rp-actors-list">' + topActorsHtml + '</div>' +
         '</div>' : '') +
+      mitreSection +
       (secs.ioc_list ?
         '<div class="rp-section">' +
           '<h2 class="rp-section-title"><i class="fas fa-fingerprint"></i> Indicators of Compromise</h2>' +
-          '<div class="rp-ioc-list">' + (topIOCs || '<div class="rp-dim">No IOCs selected for this report period.</div>') + '</div>' +
+          '<div style="margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap">' +
+            '<span class="rp-badge" style="background:#fef2f2;color:#ef4444">' + allIocs.filter(function(x){return x.type==='IPv4';}).length + ' IPv4</span>' +
+            '<span class="rp-badge" style="background:#eff6ff;color:#3b82f6">' + allIocs.filter(function(x){return x.type==='Domain'||x.type==='Onion';}).length + ' Domains/Onion</span>' +
+            '<span class="rp-badge" style="background:#faf5ff;color:#a855f7">' + allIocs.filter(function(x){return x.type==='Hash';}).length + ' Hashes</span>' +
+            '<span class="rp-badge" style="background:#fefce8;color:#ca8a04">' + allIocs.filter(function(x){return x.type==='Wallet'||x.type==='ASN';}).length + ' Other</span>' +
+          '</div>' +
+          '<div class="rp-ioc-list">' + iocListHtml + '</div>' +
         '</div>' : '') +
       (secs.campaign_analysis ?
         '<div class="rp-section">' +
-          '<h2 class="rp-section-title"><i class="fas fa-crosshairs"></i> Active Campaigns</h2>' +
-          DW_PREDICTIONS.campaigns.map(function(c) {
-            return '<div class="rp-campaign-row">' +
-              '<strong>' + c.name + '</strong>' +
-              '<span class="rp-badge rp-badge-orange">' + c.prob + '% probability</span>' +
-              '<span class="rp-badge rp-badge-blue">ETA: ' + c.eta + '</span>' +
-            '</div>';
-          }).join('') +
+          '<h2 class="rp-section-title"><i class="fas fa-crosshairs"></i> Active Campaign Analysis</h2>' +
+          '<div style="margin-bottom:10px;color:#64748b;font-size:12px">' + DW_PREDICTIONS.campaigns.length + ' campaigns tracked with escalation probability \u226540% in reporting window.</div>' +
+          campaignHtml +
         '</div>' : '') +
       (secs.recommendations ?
         '<div class="rp-section">' +
-          '<h2 class="rp-section-title"><i class="fas fa-shield-alt"></i> Recommendations</h2>' +
-          '<ul class="rp-recs">' +
-            '<li>Implement network segmentation to limit lateral movement opportunities</li>' +
-            '<li>Deploy endpoint detection and response (EDR) across all endpoints</li>' +
-            '<li>Block indicators listed in IOC bulletin via SIEM/SOAR platforms</li>' +
-            '<li>Enforce multi-factor authentication on all external-facing services</li>' +
-            '<li>Conduct phishing simulation training for high-risk user groups</li>' +
-            '<li>Monitor dark web channels for credential exposures affecting your organization</li>' +
-          '</ul>' +
+          '<h2 class="rp-section-title"><i class="fas fa-shield-alt"></i> ' + (r.type==='incident'?'Remediation Actions':r.type==='technical'?'Technical Mitigations':r.type==='ioc'?'IOC Disposition':'Recommended Actions') + '</h2>' +
+          recsHtml +
         '</div>' : '') +
       '<div class="rp-footer">' +
-        '<span>WADJET-EYE AI Intelligence Platform · ' + date + '</span>' +
-        '<span style="color:' + tlpColor + '">TLP:' + r.tlp.toUpperCase() + ' — Handle accordingly</span>' +
+        '<span>WADJET-EYE AI Intelligence Platform \xb7 Cognitive Dark Web Intelligence Engine v1.0</span>' +
+        '<span style="color:' + tlpColor + '">TLP:' + r.tlp.toUpperCase() + ' \u2014 Handle accordingly</span>' +
       '</div>' +
     '</div>';
   return html;
 }
-
 window._cdwieExportReport = function(format) {
   if (!_cdwie.report.type) { _toast('Generate a report first', 'warning'); return; }
   if (format === 'pdf') {
