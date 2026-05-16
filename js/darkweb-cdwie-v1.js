@@ -134,6 +134,8 @@ const DW_ACTORS = {
     writingStyle:'Professional business communication. English primary. Negotiation-oriented.',
   }
 };
+/* Computed array for iteration — DW_ACTORS is an object keyed by id */
+var _DW_ACTORS_ARR = Object.values(DW_ACTORS);
 
 /* ── Knowledge Graph Data ── */
 const DW_GRAPH_DATA = (function(){
@@ -535,30 +537,20 @@ window.renderDarkWeb = function() {
   root.appendChild(_buildHeader());
   // Tabs
   root.appendChild(_buildTabs());
-  // Content
-  var content = _el('div','cdwie-content');
-  content.id = 'cdwie-content';
-  root.appendChild(content);
-
-  // Render all engine shells
-  content.appendChild(_buildEngineCognitiveSearch());
-  content.appendChild(_buildEngineActorDNA());
-  content.appendChild(_buildEngineGraph());
-  content.appendChild(_buildEnginePredictive());
-  content.appendChild(_buildEngineDeception());
-  content.appendChild(_buildEngineCopilot());
-  content.appendChild(_buildEngineReporting());
-
-  // Tooltip (graph)
-  var tt = _el('div','cdwie-graph-tooltip');
-  tt.id = 'cdwie-graph-tooltip';
-  root.appendChild(tt);
+  // Single engine panel — hydrated dynamically on tab switch
+  var panel = _el('div','cdwie-content');
+  panel.id = 'cdwie-engine-panel';
+  root.appendChild(panel);
 
   // Detail panel
   root.appendChild(_buildDetailPanel());
 
   _cdwie.initialized = true;
-  window._cdwieTab('cognitive-search');
+
+  // Load the default tab engine after DOM is ready
+  setTimeout(function() {
+    window._cdwieTab(_cdwie.activeTab || 'cognitive-search');
+  }, 60);
 
   // Animate KPIs
   setTimeout(_animateKPIs, 200);
@@ -645,24 +637,8 @@ function _buildTabs() {
   return nav;
 }
 
-/* ── Tab Switcher ── */
-window._cdwieTab = function(tab) {
-  _cdwie.activeTab = tab;
-  // Stop graph if switching away
-  if (tab !== 'knowledge-graph' && _cdwie.graph.animFrame) {
-    cancelAnimationFrame(_cdwie.graph.animFrame);
-    _cdwie.graph.animFrame = null;
-  }
-  _qsa('.cdwie-tab').forEach(function(el){ el.classList.toggle('active', el.dataset.tab===tab); });
-  _qsa('.cdwie-engine').forEach(function(el){ el.classList.toggle('active', el.id==='cdwie-engine-'+tab); });
-
-  // Engine-specific init
-  if (tab==='actor-dna'       && !_qs('#cdwie-actor-radar canvas')) _initActorDNACharts();
-  if (tab==='knowledge-graph' && !_cdwie.graph.initialized) _cdwieGraphInit();
-  else if (tab==='knowledge-graph') _cdwieGraphStartLoop();
-  if (tab==='predictive') _initPredictiveCharts();
-  if (tab==='reporting')  _cdwieRenderReportPreview();
-};
+/* ── Tab Switcher stub — overridden by full implementation in ENGINE WIRING section ── */
+window._cdwieTab = function(tab) { /* full impl defined below after all engines load */ };
 
 /* ── Detail Panel ── */
 function _buildDetailPanel() {
@@ -925,8 +901,8 @@ window._cdwieLoadResult = function(id) {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 function _buildEngineActorDNA() {
-  var actorList = DW_ACTORS.map(function(a) {
-    var riskColor = a.threat === 'critical' ? '#ef4444' : a.threat === 'high' ? '#f97316' : '#eab308';
+  var actorList = Object.values(DW_ACTORS).map(function(a) {
+    var riskColor = a.threat.toLowerCase() === 'critical' ? '#ef4444' : a.threat.toLowerCase() === 'high' ? '#f97316' : '#eab308';
     return '<div class="cdwie-actor-row ' + (a.id === _cdwie.actor.selected ? 'active' : '') + '" ' +
       'onclick="window._cdwieSelectActor(\'' + a.id + '\')" data-actor="' + a.id + '">' +
       '<div class="cdwie-actor-avatar" style="background:' + a.color + '22;color:' + a.color + '">' +
@@ -947,7 +923,7 @@ function _buildEngineActorDNA() {
       '<div class="cdwie-actor-roster">' +
         '<div class="cdwie-roster-header">' +
           '<span class="cdwie-roster-title"><i class="fas fa-users"></i> Threat Actors</span>' +
-          '<span class="cdwie-badge cdwie-badge-red">' + DW_ACTORS.length + ' tracked</span>' +
+          '<span class="cdwie-badge cdwie-badge-red">' + Object.keys(DW_ACTORS).length + ' tracked</span>' +
         '</div>' +
         '<div class="cdwie-actor-list">' + actorList + '</div>' +
       '</div>' +
@@ -967,12 +943,12 @@ window._cdwieSelectActor = function(id) {
 };
 
 function _renderActorProfile(id) {
-  var a = DW_ACTORS.filter(function(x) { return x.id === id; })[0];
+  var a = Object.values(DW_ACTORS).filter(function(x) { return x.id === id; })[0];
   if (!a) return;
   var cont = document.getElementById('cdwie-actor-profile-content');
   if (!cont) return;
 
-  var riskColor = a.threat === 'critical' ? '#ef4444' : a.threat === 'high' ? '#f97316' : '#eab308';
+  var riskColor = a.threat.toLowerCase() === 'critical' ? '#ef4444' : a.threat.toLowerCase() === 'high' ? '#f97316' : '#eab308';
   var sectors = a.sectors.map(function(s) { return '<span class="cdwie-badge cdwie-badge-blue">' + s + '</span>'; }).join('');
   var ttps = a.ttps.map(function(t) { return '<span class="cdwie-badge cdwie-badge-purple">' + t + '</span>'; }).join('');
   var tools = a.tools.map(function(t) { return '<span class="cdwie-badge cdwie-badge-teal">' + t + '</span>'; }).join('');
@@ -1106,7 +1082,7 @@ window._cdwieDnaTab = function(actorId, tab) {
   document.querySelectorAll('.cdwie-dna-tab').forEach(function(b) {
     b.classList.toggle('active', b.textContent.toLowerCase().includes(tab.replace('-',' ').split(' ')[0].toLowerCase()));
   });
-  var a = DW_ACTORS.filter(function(x) { return x.id === actorId; })[0];
+  var a = Object.values(DW_ACTORS).filter(function(x) { return x.id === actorId; })[0];
   if (!a) return;
   var tc = document.getElementById('cdwie-dna-tab-content');
   if (tc) {
@@ -1211,7 +1187,7 @@ window._cdwieGraphInit = function() {
   canvas.width  = container.offsetWidth  || 900;
   canvas.height = container.offsetHeight || 600;
 
-  var gd = DW_GRAPH_DATA();
+  var gd = DW_GRAPH_DATA;
   _cdwie.graph.nodes = gd.nodes.map(function(n, i) {
     return Object.assign({}, n, {
       x: canvas.width  * 0.1 + Math.random() * canvas.width  * 0.8,
@@ -1475,7 +1451,7 @@ window._cdwieGraphToggleLive = function() {
   _toast('Live graph updates ' + (_cdwie.graph.live ? 'enabled' : 'paused'), 'info');
 };
 window._cdwieGraphFilter = function(type) {
-  var gd = DW_GRAPH_DATA();
+  var gd = DW_GRAPH_DATA;
   if (type === 'all') { _cdwie.graph.edges = gd.edges; }
   else { _cdwie.graph.edges = gd.edges.filter(function(e) {
     var src = _cdwie.graph.nodes.filter(function(n){ return n.id === e.source; })[0];
@@ -1496,9 +1472,9 @@ function _buildEnginePredictive() {
                 f.trend === 'down' ? '<i class="fas fa-arrow-down" style="color:#22c55e"></i>' :
                 '<i class="fas fa-minus" style="color:#eab308"></i>';
     return '<div class="cdwie-factor-row">' +
-      '<span class="cdwie-factor-label">' + f.factor + '</span>' +
-      '<div class="cdwie-factor-bar-wrap"><div class="cdwie-factor-bar" style="width:' + f.weight + '%;background:' + f.color + '"></div></div>' +
-      '<span class="cdwie-factor-weight">' + f.weight + '%</span>' +
+      '<span class="cdwie-factor-label">' + f.label + '</span>' +
+      '<div class="cdwie-factor-bar-wrap"><div class="cdwie-factor-bar" style="width:' + f.score + '%;background:' + f.color + '"></div></div>' +
+      '<span class="cdwie-factor-weight">' + f.score + '%</span>' +
       trend +
     '</div>';
   }).join('');
@@ -1516,23 +1492,24 @@ function _buildEnginePredictive() {
       '<div class="cdwie-campaign-eta"><i class="fas fa-clock"></i> ETA: ' + c.eta + '</div>' +
       '<div class="cdwie-campaign-phases">' + phaseHtml + '</div>' +
       '<div class="cdwie-campaign-targets">' +
-        c.targets.map(function(t) { return '<span class="cdwie-badge cdwie-badge-blue">' + t + '</span>'; }).join('') +
+        '<span class="cdwie-badge cdwie-badge-grey">' + c.group + '</span>' +
+        '<span class="cdwie-badge cdwie-badge-blue">' + c.confidence + '</span>' +
       '</div>' +
     '</div>';
   }).join('');
 
   var geoRows = pred.geoThreats.slice(0, 12).map(function(g) {
-    var barW = g.score;
-    var color = g.score >= 80 ? '#ef4444' : g.score >= 60 ? '#f97316' : g.score >= 40 ? '#eab308' : '#22c55e';
+    var barW = g.level;
+    var color = g.level >= 80 ? '#ef4444' : g.level >= 60 ? '#f97316' : g.level >= 40 ? '#eab308' : '#22c55e';
     return '<div class="cdwie-geo-row">' +
-      '<span class="cdwie-geo-country">' + g.country + '</span>' +
+      '<span class="cdwie-geo-country">' + g.label + '</span>' +
       '<div class="cdwie-geo-bar-wrap"><div class="cdwie-geo-bar" style="width:' + barW + '%;background:' + color + '"></div></div>' +
-      '<span class="cdwie-geo-score">' + g.score + '</span>' +
+      '<span class="cdwie-geo-score">' + g.level + '</span>' +
     '</div>';
   }).join('');
 
-  var tickerHtml = pred.emergingThreats.map(function(t) {
-    return '<span class="cdwie-ticker-item"><i class="fas fa-exclamation-triangle"></i> ' + t + '</span>';
+  var tickerHtml = pred.emerging.map(function(t) {
+    return '<span class="cdwie-ticker-item"><i class="fas fa-' + (t.icon||'exclamation-triangle') + '"></i> ' + t.name + ' <span style="opacity:0.6;font-size:10px">' + t.type + '</span></span>';
   }).join(' &nbsp;·&nbsp; ');
 
   return '<div class="cdwie-engine" id="cdwie-engine-predictive">' +
@@ -1618,10 +1595,12 @@ function _initPredictiveCharts() {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 function _buildEngineDeception() {
-  var samples = DW_DECEPTION_SAMPLES.map(function(s, i) {
+  var samples = Object.values(DW_DECEPTION_SAMPLES).map(function(s, i) {
+    var iconMap = { 'Fake Ransomware Leak Claim':'times-circle', 'Genuine APT Forum Post':'check-circle', 'Credential Dump Listing':'user-secret', 'False Flag Operation':'theater-masks' };
+    var ico = iconMap[s.label] || 'file-alt';
     return '<button class="cdwie-sample-btn" onclick="window._cdwieLoadSample(' + i + ')">' +
-      '<i class="fas fa-' + (s.verdict === 'DISINFORMATION' ? 'times-circle' : s.verdict === 'GENUINE' ? 'check-circle' : s.verdict === 'CREDENTIAL THEFT' ? 'user-secret' : 'theater-masks') + '"></i> ' +
-      s.verdict +
+      '<i class="fas fa-' + ico + '"></i> ' +
+      s.label +
     '</button>';
   }).join('');
 
@@ -1647,7 +1626,7 @@ function _buildEngineDeception() {
 }
 
 window._cdwieLoadSample = function(idx) {
-  var s = DW_DECEPTION_SAMPLES[idx];
+  var s = Object.values(DW_DECEPTION_SAMPLES)[idx];
   if (!s) return;
   _cdwie.deception.currentSample = s;
   var ta = document.getElementById('cdwie-deception-text');
@@ -1662,7 +1641,8 @@ window._cdwieAnalyzeContent = function() {
 
   var sample = _cdwie.deception.currentSample;
   if (!sample) {
-    sample = DW_DECEPTION_SAMPLES[Math.floor(Math.random() * DW_DECEPTION_SAMPLES.length)];
+    var _dsArr = Object.values(DW_DECEPTION_SAMPLES);
+    sample = _dsArr[Math.floor(Math.random() * _dsArr.length)];
   }
 
   var btn = document.querySelector('.cdwie-analyze-btn');
@@ -1684,17 +1664,20 @@ function _renderDeceptionResults(s) {
 
   results.style.display = 'block';
 
-  var vColor = { 'GENUINE':'#22c55e', 'DISINFORMATION':'#ef4444', 'CREDENTIAL THEFT':'#f97316', 'FALSE FLAG':'#a855f7' }[s.verdict] || '#6366f1';
+  var vColor = s.verdictColor || '#6366f1';
+  var vText  = s.verdict || s.label || 'ANALYZED';
+  var vIconMap = { 'LIKELY AUTHENTIC':'shield-check', 'LIKELY FABRICATED':'skull-crossbones', 'AMBIGUOUS — VERIFY':'question-circle', 'DECEPTION DETECTED':'theater-masks' };
+  var vIcon = vIconMap[vText] || 'microscope';
 
   if (verdictArea) {
     verdictArea.innerHTML =
       '<div class="cdwie-verdict-badge cdwie-card-reveal" style="border-color:' + vColor + ';animation-delay:0s">' +
         '<div class="cdwie-verdict-icon" style="color:' + vColor + '">' +
-          '<i class="fas fa-' + (s.verdict === 'GENUINE' ? 'shield-check' : s.verdict === 'DISINFORMATION' ? 'skull-crossbones' : s.verdict === 'CREDENTIAL THEFT' ? 'user-secret' : 'theater-masks') + '"></i>' +
+          '<i class="fas fa-' + vIcon + '"></i>' +
         '</div>' +
         '<div class="cdwie-verdict-text">' +
           '<div class="cdwie-verdict-label">AI Verdict</div>' +
-          '<div class="cdwie-verdict-value" style="color:' + vColor + '">' + s.verdict + '</div>' +
+          '<div class="cdwie-verdict-value" style="color:' + vColor + '">' + vText + '</div>' +
         '</div>' +
       '</div>';
   }
@@ -1707,7 +1690,12 @@ function _renderDeceptionResults(s) {
       { key:'misinfo',     label:'Misinfo Risk',        icon:'times-circle',  color:'#f97316' }
     ];
     scoreCards.innerHTML = metrics.map(function(m, i) {
-      var val = s.scores[m.key] || 0;
+      var raw = s.scores[m.key];
+      /* trust is a string ('LOW'/'MEDIUM'/'HIGH') — convert to number for the ring */
+      var val = (typeof raw === 'string')
+        ? ({ 'LOW':20, 'MEDIUM':50, 'HIGH':85 }[raw.toUpperCase()] || 50)
+        : (raw || 0);
+      var displayVal = (typeof raw === 'string') ? raw : val;
       var circumference = 2 * Math.PI * 26;
       var dashOffset = circumference - (circumference * val / 100);
       return '<div class="cdwie-score-card cdwie-card-reveal" style="animation-delay:' + (0.1 + i*0.08) + 's">' +
@@ -1716,7 +1704,7 @@ function _renderDeceptionResults(s) {
           '<circle cx="30" cy="30" r="26" fill="none" stroke="' + m.color + '" stroke-width="5" stroke-linecap="round" ' +
             'stroke-dasharray="' + circumference.toFixed(1) + '" stroke-dashoffset="' + dashOffset.toFixed(1) + '" ' +
             'transform="rotate(-90 30 30)" style="transition:stroke-dashoffset 1s ease"/>' +
-          '<text x="30" y="35" text-anchor="middle" fill="#f1f5f9" font-size="13" font-weight="700" font-family="Inter">' + val + '</text>' +
+          '<text x="30" y="35" text-anchor="middle" fill="#f1f5f9" font-size="11" font-weight="700" font-family="Inter">' + displayVal + '</text>' +
         '</svg>' +
         '<div class="cdwie-score-label"><i class="fas fa-' + m.icon + '" style="color:' + m.color + '"></i><span>' + m.label + '</span></div>' +
       '</div>';
@@ -1724,11 +1712,19 @@ function _renderDeceptionResults(s) {
   }
 
   if (analysisGrid) {
-    var indicators = s.indicators.map(function(ind) {
-      return '<div class="cdwie-indicator-row"><i class="fas fa-dot-circle" style="color:#ef4444"></i><span>' + ind + '</span></div>';
+    var indicators = (s.indicators || []).map(function(ind) {
+      /* indicators are {ok:bool, text:str} objects */
+      var indObj = (typeof ind === 'object') ? ind : { ok: false, text: String(ind) };
+      var iColor = indObj.ok ? '#22c55e' : '#ef4444';
+      var iIcon  = indObj.ok ? 'check-circle' : 'times-circle';
+      return '<div class="cdwie-indicator-row"><i class="fas fa-' + iIcon + '" style="color:' + iColor + '"></i><span>' + _e(indObj.text) + '</span></div>';
     }).join('');
-    var signals = s.signals.map(function(sig) {
-      return '<div class="cdwie-signal-row"><i class="fas fa-check-circle" style="color:#22c55e"></i><span>' + sig + '</span></div>';
+    var signals = (s.signals || []).map(function(sig) {
+      /* signals are {warn:bool, text:str} objects */
+      var sigObj = (typeof sig === 'object') ? sig : { warn: false, text: String(sig) };
+      var sColor = sigObj.warn ? '#f97316' : '#22c55e';
+      var sIcon  = sigObj.warn ? 'exclamation-triangle' : 'check-double';
+      return '<div class="cdwie-signal-row"><i class="fas fa-' + sIcon + '" style="color:' + sColor + '"></i><span>' + _e(sigObj.text) + '</span></div>';
     }).join('');
     analysisGrid.innerHTML =
       '<div class="cdwie-analysis-col cdwie-glass cdwie-card-reveal" style="animation-delay:0.5s">' +
@@ -1932,41 +1928,41 @@ function _cdwieDispatchCopilotResponse(msg) {
   var resp = DW_COPILOT_RESPONSES;
 
   if (m === '/clear') { window._cdwieCopilotClear(); return { text: '', type: 'text' }; }
-  if (m === '/help' || m === 'help') return { text: resp.help(), type: 'text' };
-  if (m === '/export') return { text: resp.report(), type: 'text' };
+  if (m === '/help' || m === 'help') return { text: resp.help().text, type: 'text' };
+  if (m === '/export') return { text: resp.report().text, type: 'text' };
 
   var ipMatch = m.match(/\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/);
-  if (ipMatch) return { text: resp.ip(ipMatch[1]), type: 'ioc-card', data: {
+  if (ipMatch) { var _ir = resp.ip(ipMatch[1]); return { text: _ir.data.rows.map(function(r){return '<strong>'+r.k+':</strong> '+r.v;}).join('<br>'), type: 'ioc-card', data: {
     iocs: [{ value: ipMatch[1], type: 'IPv4', malicious: true }, { value: 'AS8342', type: 'ASN', malicious: false }]
-  }};
+  }};}
 
   var domMatch = m.match(/(?:analyze|check|lookup)\s+([\w.-]+\.[a-z]{2,})/i);
-  if (domMatch) return { text: resp.domain(domMatch[1]), type: 'ioc-card', data: {
+  if (domMatch) { var _dr = resp.domain(domMatch[1]); return { text: _dr.data.rows.map(function(r){return '<strong>'+r.k+':</strong> '+r.v;}).join('<br>'), type: 'ioc-card', data: {
     iocs: [{ value: domMatch[1], type: 'Domain', malicious: true }, { value: '195.54.162.88', type: 'IPv4', malicious: true }]
-  }};
+  }};}
 
   var hashMatch = m.match(/\b([0-9a-f]{32,64})\b/i);
-  if (hashMatch) return { text: resp.hash(hashMatch[1]), type: 'ioc-card', data: {
+  if (hashMatch) { var _hr = resp.hash(hashMatch[1]); return { text: _hr.data.rows.map(function(r){return '<strong>'+r.k+':</strong> '+r.v;}).join('<br>'), type: 'ioc-card', data: {
     iocs: [{ value: hashMatch[1].substring(0,16) + '...', type: 'SHA256', malicious: true }]
-  }};
+  }};}
 
   var actorNameMatch = m.match(/(?:actor|group|apt|fin|lazarus|lockbit|apt29|apt41|fin7|oilrig|blackcat)\s*([\w\s]+)?/i);
   if (actorNameMatch) {
     var actorQuery = (actorNameMatch[0] + ' ' + (actorNameMatch[1]||'')).trim();
-    var matchedActor = DW_ACTORS.filter(function(a) {
+    var matchedActor = Object.values(DW_ACTORS).filter(function(a) {
       return actorQuery.toLowerCase().includes(a.id) || actorQuery.toLowerCase().includes(a.name.toLowerCase()) ||
              a.aliases.some(function(al) { return actorQuery.toLowerCase().includes(al.toLowerCase()); });
-    })[0] || DW_ACTORS[0];
-    return { text: resp.actor(actorQuery), type: 'actor-card', data: { actor: matchedActor } };
+    })[0] || Object.values(DW_ACTORS)[0];
+    return { text: resp.actor(actorQuery).data.desc || '', type: 'actor-card', data: { actor: matchedActor } };
   }
 
-  if (/ransomware|lockbit|blackcat|ryuk|revil/.test(m)) return { text: resp.ransomware(m), type: 'ioc-card', data: {
+  if (/ransomware|lockbit|blackcat|ryuk|revil/.test(m)) return { text: resp.ransomware(m).text, type: 'ioc-card', data: {
     iocs: [{ value: 'lockbit3-decrypt.onion', type: 'Onion', malicious: true }, { value: 'ransom-key-001.bin', type: 'File', malicious: true }]
   }};
 
-  if (/predict|forecast|threat.*next|next.*month|escalat/.test(m)) return { text: resp.predict(), type: 'prediction' };
-  if (/correlate|cluster|group.*ioc|ioc.*relation/.test(m)) return { text: resp.correlate(), type: 'text' };
-  if (/report|export|generate|brief/.test(m)) return { text: resp.report(), type: 'text' };
+  if (/predict|forecast|threat.*next|next.*month|escalat/.test(m)) return { text: resp.predict().data.events.map(function(e){return e.prob+'% — '+e.event;}).join('<br>'), type: 'prediction' };
+  if (/correlate|cluster|group.*ioc|ioc.*relation/.test(m)) return { text: resp.correlate().text, type: 'text' };
+  if (/report|export|generate|brief/.test(m)) return { text: resp.report().text, type: 'text' };
 
   // Fallback
   return { text: 'I analyzed your query about <strong>' + _escapeHtml(msg.substring(0,40)) + '</strong>. ' +
@@ -2090,12 +2086,12 @@ function _cdwieRenderReportPreview() {
   var typeLabels = { executive:'Executive Intelligence Brief', technical:'Technical Threat Report', ioc:'IOC Bulletin', incident:'Incident Report' };
   var title = typeLabels[r.type] || 'Intelligence Report';
 
-  var topActors = DW_ACTORS.slice(0,3).map(function(a) {
+  var topActors = Object.values(DW_ACTORS).slice(0,3).map(function(a) {
     return '<div class="rp-actor-row">' +
       '<span class="rp-actor-flag">' + a.flag + '</span>' +
       '<strong>' + a.name + '</strong>' +
       '<span class="rp-actor-alias">' + a.alias + '</span>' +
-      '<span class="rp-badge rp-badge-' + (a.threat==='critical'?'red':'orange') + '">' + a.threat.toUpperCase() + '</span>' +
+      '<span class="rp-badge rp-badge-' + (a.threat.toLowerCase()==='critical'?'red':'orange') + '">' + a.threat.toUpperCase() + '</span>' +
     '</div>';
   }).join('');
 
@@ -2131,15 +2127,15 @@ function _cdwieRenderReportPreview() {
             '24h':'past 24 hours','7d':'past 7 days','30d':'past 30 days','90d':'past quarter'
           }[r.timeframe]||r.timeframe) + '. ' +
           'Current global threat level is assessed as <strong style="color:#ef4444">HIGH</strong> with an index score of <strong>' + DW_PREDICTIONS.riskScore + '/100</strong>. ' +
-          'Primary threat actors remain active across ' + DW_ACTORS.filter(function(a){return a.active;}).length + ' monitored campaigns. ' +
-          DW_ACTORS.filter(function(a){return a.threat==='critical';}).length + ' critical-tier actors identified with ongoing operations.</p>' +
+          'Primary threat actors remain active across ' + Object.values(DW_ACTORS).filter(function(a){return a.active;}).length + ' monitored campaigns. ' +
+          Object.values(DW_ACTORS).filter(function(a){return a.threat.toLowerCase()==='critical';}).length + ' critical-tier actors identified with ongoing operations.</p>' +
         '</div>' : '') +
       (secs.threat_landscape ?
         '<div class="rp-section">' +
           '<h2 class="rp-section-title"><i class="fas fa-globe"></i> Threat Landscape</h2>' +
           '<div class="rp-stats-row">' +
             '<div class="rp-stat-box"><span class="rp-stat-num">' + DW_PREDICTIONS.riskScore + '</span><span>Risk Score</span></div>' +
-            '<div class="rp-stat-box"><span class="rp-stat-num">' + DW_ACTORS.length + '</span><span>Active Actors</span></div>' +
+            '<div class="rp-stat-box"><span class="rp-stat-num">' + Object.keys(DW_ACTORS).length + '</span><span>Active Actors</span></div>' +
             '<div class="rp-stat-box"><span class="rp-stat-num">' + DW_PREDICTIONS.campaigns.length + '</span><span>Campaigns</span></div>' +
             '<div class="rp-stat-box"><span class="rp-stat-num">' + DW_PREDICTIONS.geoThreats.length + '</span><span>Geo Threats</span></div>' +
           '</div>' +
@@ -2203,7 +2199,9 @@ window._cdwieExportReport = function(format) {
    ENGINE WIRING — Tab switch hydration + post-render chart/graph hooks
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* Override the stub _cdwieTab defined in Phase 1 shell with full implementation */
+/* ═══════════════════════════════════════════════════════════════════════════
+   FINAL _cdwieTab — full implementation (overrides stub above)
+   ═══════════════════════════════════════════════════════════════════════════ */
 window._cdwieTab = function(tabId) {
   /* Stop graph physics if leaving the graph tab */
   if (_cdwie.activeTab === 'knowledge-graph' && tabId !== 'knowledge-graph') {
@@ -2212,59 +2210,49 @@ window._cdwieTab = function(tabId) {
 
   _cdwie.activeTab = tabId;
 
-  /* Update tab button states */
+  /* Update tab button active states */
   document.querySelectorAll('.cdwie-tab').forEach(function(t) {
     t.classList.toggle('active', t.dataset.tab === tabId);
   });
 
-  /* Hydrate the engine panel */
+  /* Hydrate the single engine panel with current engine HTML */
   var panel = document.getElementById('cdwie-engine-panel');
   if (!panel) return;
 
-  var html = '';
   switch (tabId) {
-    case 'cognitive-search': html = _buildEngineCognitiveSearch(); break;
-    case 'actor-dna':        html = _buildEngineActorDNA();        break;
-    case 'knowledge-graph':  html = _buildEngineGraph();           break;
-    case 'predictive':       html = _buildEnginePredictive();      break;
-    case 'deception':        html = _buildEngineDeception();       break;
-    case 'copilot':          html = _buildEngineCopilot();         break;
-    case 'reporting':        html = _buildEngineReporting();       break;
-    default:                 html = '<div class="cdwie-engine"><p style="color:#94a3b8;padding:40px">Engine not found: ' + tabId + '</p></div>';
+    case 'cognitive-search': panel.innerHTML = _buildEngineCognitiveSearch(); break;
+    case 'actor-dna':        panel.innerHTML = _buildEngineActorDNA();        break;
+    case 'knowledge-graph':  panel.innerHTML = _buildEngineGraph();           break;
+    case 'predictive':       panel.innerHTML = _buildEnginePredictive();      break;
+    case 'deception':        panel.innerHTML = _buildEngineDeception();       break;
+    case 'copilot':          panel.innerHTML = _buildEngineCopilot();         break;
+    case 'reporting':        panel.innerHTML = _buildEngineReporting();       break;
+    default:
+      panel.innerHTML = '<div style="color:#94a3b8;padding:40px;text-align:center">Engine not found: ' + tabId + '</div>';
   }
-  panel.innerHTML = html;
 
   /* Post-render hooks */
   switch (tabId) {
     case 'actor-dna':
-      setTimeout(function() {
-        _renderActorProfile(_cdwie.actor.selected);
-      }, 50);
+      setTimeout(function() { _renderActorProfile(_cdwie.actor.selected); }, 60);
       break;
     case 'knowledge-graph':
-      setTimeout(function() {
-        window._cdwieGraphInit();
-      }, 80);
+      setTimeout(function() { window._cdwieGraphInit(); }, 100);
       break;
     case 'predictive':
-      setTimeout(function() {
-        _initPredictiveCharts();
-      }, 80);
+      setTimeout(function() { _initPredictiveCharts(); }, 80);
+      break;
+    case 'deception':
+      /* nothing extra needed — samples loaded on click */
+      break;
+    case 'copilot':
+      /* nothing extra needed */
+      break;
+    case 'reporting':
+      /* nothing extra needed — report generated on button click */
       break;
   }
 };
-
-/* Patch renderDarkWeb to wire first tab after shell renders */
-(function _patchRenderDarkWeb() {
-  var _origRender = window.renderDarkWeb;
-  window.renderDarkWeb = function() {
-    _origRender();
-    /* Load the default first tab engine */
-    setTimeout(function() {
-      window._cdwieTab(_cdwie.activeTab || 'cognitive-search');
-    }, 120);
-  };
-})();
 
 /* ═══════════════════════════════════════════════════════════════════════════
    MISSING CSS RULES — injected at runtime for edge cases
