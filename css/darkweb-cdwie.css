@@ -206,8 +206,10 @@
 .cdwie-content::-webkit-scrollbar-track { background: transparent; }
 .cdwie-content::-webkit-scrollbar-thumb { background: var(--p19-border, #1c2840); border-radius: 2px; }
 
+/* Dynamic injection model: only one engine exists in the panel at a time.
+   Always visible; .active class kept for legacy compat but not required. */
 .cdwie-engine {
-  display: none;
+  display: block;
   padding: 24px;
   min-height: 100%;
   animation: cdwie-fade-in-up .3s ease both;
