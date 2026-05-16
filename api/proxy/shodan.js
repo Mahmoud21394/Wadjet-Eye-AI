@@ -2,96 +2,83 @@
  * Vercel Serverless Function — Shodan InternetDB Proxy
  * Route: /proxy/shodan/*
  *
- * Uses internetdb.shodan.io (free, no API key, works from any IP).
- * api.shodan.io blocks cloud/Vercel IPs on the free plan.
+ * Security (Audit Phase 0):
+ *   FIX-001: Origin-validated CORS via handlePreflight / sendJSON
+ *   FIX-003: JWT verification via verifyProxyRequest
+ *   FIX-004: SSRF protection — IP validated against private ranges
+ *            before proxying (extra check on top of proxyUpstream guard)
  *
- * InternetDB endpoint: GET https://internetdb.shodan.io/{ip}
- * Returns: { ip, ports, cpes, hostnames, tags, vulns }
+ * Uses internetdb.shodan.io (free, no API key).
+ *
+ * @module api/proxy/shodan
  */
 'use strict';
 
 const https = require('https');
-
-const CORS = {
-  'Access-Control-Allow-Origin':  '*',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Accept',
-};
-
-function sendJSON(res, status, body) {
-  const json = JSON.stringify(body);
-  res.writeHead(status, {
-    'Content-Type':   'application/json',
-    'Content-Length': Buffer.byteLength(json),
-    ...CORS,
-  });
-  res.end(json);
-}
+const { sendJSON, handlePreflight, resolveOrigin, isPrivateIPv4 } = require('../_proxy-utils');
+const { verifyProxyRequest } = require('../_auth-guard');
 
 function extractIP(req) {
-  // Vercel rewrite: /proxy/shodan/:path* → ?_path=:path*
-  // Frontend calls: /proxy/shodan/185.220.101.45
   const raw    = req.url || '';
   const qIdx   = raw.indexOf('?');
   const qs     = qIdx >= 0 ? raw.slice(qIdx + 1) : '';
   const params = new URLSearchParams(qs);
   const path   = params.get('_path') || '';
-
-  // path might be "185.220.101.45" or "/185.220.101.45" or "shodan/host/185.220.101.45"
-  // strip leading slash + any "shodan/host/" prefix
-  const clean = path.replace(/^\//, '').replace(/^shodan\/host\//, '');
-  // take only the IP part (before any slash or query)
+  const clean  = path.replace(/^\//, '').replace(/^shodan\/host\//, '');
   return clean.split(/[/?]/)[0] || null;
 }
 
 module.exports = async function handler(req, res) {
-  if (req.method === 'OPTIONS') {
-    Object.entries(CORS).forEach(([k, v]) => res.setHeader(k, v));
-    res.writeHead(204); res.end(); return;
+  if (handlePreflight(req, res)) return;
+
+  const auth = await verifyProxyRequest(req);
+  if (!auth.ok) {
+    if (auth.retryAfter) res.setHeader('Retry-After', String(auth.retryAfter));
+    return sendJSON(req, res, auth.status || 401, { error: auth.error, code: auth.error });
   }
 
   const ip = extractIP(req);
   if (!ip || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
-    return sendJSON(res, 400, { error: 'invalid_ip', message: 'Valid IPv4 address required' });
+    return sendJSON(req, res, 400, { error: 'invalid_ip', message: 'Valid IPv4 address required' });
+  }
+
+  // FIX-004: Extra SSRF guard — block private IPs before making request
+  if (isPrivateIPv4(ip)) {
+    console.warn(`[Shodan Proxy] SSRF attempt blocked — private IP: ${ip} user=${auth.userId}`);
+    return sendJSON(req, res, 400, { error: 'invalid_ip', message: 'Private IP addresses not permitted' });
   }
 
   const targetUrl = `https://internetdb.shodan.io/${ip}`;
-  console.log(`[Shodan/InternetDB] GET ${targetUrl}`);
+  console.log(`[Shodan/InternetDB] GET ${targetUrl} user=${auth.userId}`);
 
   return new Promise((resolve) => {
     const req2 = https.request(targetUrl, {
       method:  'GET',
-      headers: { 'Accept': 'application/json', 'User-Agent': 'wadjet-eye-proxy/1.0' },
+      headers: { 'Accept': 'application/json', 'User-Agent': 'wadjet-eye-proxy/2.0' },
       timeout: 15000,
     }, (upstream) => {
       const chunks = [];
       upstream.on('data',  c => chunks.push(c));
       upstream.on('end', () => {
-        const body = Buffer.concat(chunks).toString();
-        Object.entries(CORS).forEach(([k, v]) => res.setHeader(k, v));
+        const body        = Buffer.concat(chunks).toString();
+        const allowedOrigin = resolveOrigin(req);
+        const corsHdrs    = allowedOrigin
+          ? { 'Access-Control-Allow-Origin': allowedOrigin, 'Access-Control-Allow-Credentials': 'true', 'Vary': 'Origin' }
+          : { 'Vary': 'Origin' };
+
         res.writeHead(upstream.statusCode || 200, {
           'Content-Type':   'application/json',
           'Content-Length': Buffer.byteLength(body),
-          ...CORS,
+          ...corsHdrs,
         });
         res.end(body);
         resolve();
       });
-      upstream.on('error', () => {
-        sendJSON(res, 502, { error: 'upstream_error' });
-        resolve();
-      });
+      upstream.on('error', () => { sendJSON(req, res, 502, { error: 'upstream_error' }); resolve(); });
     });
 
-    req2.on('timeout', () => {
-      req2.destroy();
-      sendJSON(res, 504, { error: 'upstream_timeout', message: 'InternetDB timed out' });
-      resolve();
-    });
-    req2.on('error', (err) => {
-      sendJSON(res, 502, { error: 'request_error', message: err.message });
-      resolve();
-    });
+    req2.on('timeout', () => { req2.destroy(); sendJSON(req, res, 504, { error: 'upstream_timeout', message: 'InternetDB timed out' }); resolve(); });
+    req2.on('error',   (err) => { sendJSON(req, res, 502, { error: 'request_error', message: err.message }); resolve(); });
     req2.end();
   });
 };

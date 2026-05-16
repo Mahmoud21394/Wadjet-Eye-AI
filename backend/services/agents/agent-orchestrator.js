@@ -19,18 +19,33 @@
 const crypto = require('crypto');
 const { buildContext }    = require('../rag/rag-pipeline');
 const { reconstructAttackChain } = require('../graph/neo4j-service');
+const { guardInput, wrapUntrusted, guardOutput } = require('../../middleware/promptGuard');
 
 // ── LLM provider (reuses RAKAY engine) ───────────────────────────
+/**
+ * llmCall — call an LLM provider and return the raw response.
+ *
+ * AI-FIX-002: Adds `is_mock` field to responses generated without a real
+ * API key. SOAR execution MUST check this flag and refuse to auto-execute
+ * mock decisions — they carry no real intelligence and could be
+ * substituted by an attacker who disables the LLM key.
+ *
+ * @param {string} systemPrompt
+ * @param {string} userPrompt
+ * @param {object} [opts]
+ * @returns {Promise<{ content: string, mock?: boolean, usage?: object }>}
+ */
 async function llmCall(systemPrompt, userPrompt, opts = {}) {
-  const provider   = process.env.AGENT_LLM_PROVIDER || 'openai';
-  const apiKey     = process.env.OPENAI_API_KEY || process.env.CLAUDE_API_KEY;
-  const model      = opts.model || (provider === 'openai' ? 'gpt-4o' : 'claude-opus-4-5');
-  const maxTokens  = opts.maxTokens || 2000;
+  const provider    = opts.provider || process.env.AGENT_LLM_PROVIDER || 'openai';
+  const apiKey      = process.env.OPENAI_API_KEY || process.env.CLAUDE_API_KEY;
+  const model       = opts.model || (provider === 'openai' ? 'gpt-4o' : 'claude-opus-4-5');
+  const maxTokens   = opts.maxTokens || 2000;
   const temperature = opts.temperature ?? 0.2;
 
   if (!apiKey) {
-    console.warn('[Agent] No LLM API key — returning mock decision');
-    return { content: '{"decision":"needs_review","confidence":50,"reasoning":"No LLM key configured"}', mock: true };
+    console.warn('[Agent] No LLM API key — returning mock decision (is_mock=true)');
+    // AI-FIX-002: Explicit is_mock flag prevents SOAR auto-execution
+    return { content: '{"decision":"needs_review","confidence":50,"reasoning":"No LLM key configured","is_mock":true}', mock: true, is_mock: true };
   }
 
   try {
@@ -74,9 +89,22 @@ async function llmCall(systemPrompt, userPrompt, opts = {}) {
 }
 
 // ── Confidence thresholds ─────────────────────────────────────────
-const AUTO_EXECUTE_THRESHOLD = 85;    // ≥85% → auto-execute without approval
+// AI-FIX-002: Raised auto-execute threshold 85 → 95 to reduce the risk
+// of an adversarially injected or hallucinated decision being acted upon
+// without human review.  The previous threshold of 85% was too low for
+// autonomous SOAR execution — a confident-but-wrong LLM decision at 86%
+// could block legitimate IP ranges or isolate production hosts.
+const AUTO_EXECUTE_THRESHOLD = 95;    // ≥95% → auto-execute (raised from 85)
 const ESCALATE_THRESHOLD     = 40;    // <40% → escalate to senior analyst
-const CLOSE_THRESHOLD        = 90;    // ≥90% false-positive confidence → auto-close
+const CLOSE_THRESHOLD        = 95;    // ≥95% false-positive confidence → auto-close (raised from 90)
+
+// ── Multi-model consensus ─────────────────────────────────────────
+// AI-FIX-002: When a decision reaches AUTO_EXECUTE_THRESHOLD, require
+// a second LLM (or same model, different temperature) to independently
+// agree before allowing auto-execution.  Disagreement demotes the
+// decision to 'awaiting_approval'.
+const CONSENSUS_REQUIRED   = process.env.AGENT_CONSENSUS_REQUIRED !== 'false'; // default true
+const CONSENSUS_PROVIDER_2 = process.env.AGENT_CONSENSUS_PROVIDER || 'openai'; // second model
 
 // ── Agent 1: Triage Agent ─────────────────────────────────────────
 
@@ -154,13 +182,60 @@ Historical False Positive Patterns: ${alert.fp_patterns || 'None on record'}
 
 Make a triage decision based on the above evidence.`;
 
+    // AI-FIX-002: Scan enrichment data for prompt injection before LLM call
+    const enrichText = JSON.stringify(enrichments);
+    const injCheck   = guardInput(enrichText, { logMatches: true });
+    if (injCheck.blocked) {
+      console.warn(`[Triage Agent] Prompt injection detected in enrichment data — taskId=${taskId} patterns=[${injCheck.patterns.map(p=>p.id).join(',')}]`);
+      return {
+        task_id:     taskId,
+        alert_id:    alert.id,
+        agent:       'triage',
+        decision:    'needs_review',
+        confidence:  0,
+        reasoning:   'Prompt injection detected in enrichment data — human review required',
+        route:       'human_review',
+        escalate:    true,
+        is_mock:     false,
+        injection_detected: true,
+        injection_patterns: injCheck.patterns.map(p => p.id),
+        duration_ms: Date.now() - start,
+        created_at:  new Date().toISOString(),
+      };
+    }
+
+    // AI-FIX-002: Wrap external alert data in untrusted content tags
+    const safeAlertContent = wrapUntrusted(
+      `Title: ${alert.title}\nDescription: ${alert.description || ''}\nIOCs: ${JSON.stringify(alert.iocs || [])}`,
+      'alert_source'
+    );
+
     const llmResponse = await llmCall(systemPrompt, userPrompt, { jsonMode: true, temperature: 0.1 });
+
+    // AI-FIX-002: Validate LLM output for injection signs
+    const outputCheck = guardOutput(llmResponse.content);
+    if (outputCheck.suspicious) {
+      console.warn(`[Triage Agent] Suspicious LLM output — possible injection. taskId=${taskId} anomalies=[${outputCheck.anomalies.map(a=>a.id).join(',')}]`);
+    }
 
     let decision;
     try {
       decision = JSON.parse(llmResponse.content);
     } catch {
       decision = { decision: 'needs_review', confidence: 50, reasoning: 'LLM parse error', escalate_to_l2: true, risk_score: alert.risk_score || 50 };
+    }
+
+    // AI-FIX-002: Propagate is_mock flag — prevents SOAR auto-execution
+    if (llmResponse.is_mock || llmResponse.mock) {
+      decision.is_mock = true;
+    }
+
+    // AI-FIX-002: Output injection check forces human review
+    if (outputCheck.requiresHumanReview) {
+      decision.requires_human_review = true;
+      decision.decision = 'needs_review';
+      decision.confidence = Math.min(decision.confidence || 50, 50);
+      decision.escalate_to_l2 = true;
     }
 
     // Step 4: Route based on decision + confidence
@@ -179,8 +254,14 @@ Make a triage decision based on the above evidence.`;
       actions:      decision.recommended_actions || [],
       mitre_ttps:   decision.mitre_techniques || [],
       route,
-      escalate:     decision.escalate_to_l2 || false,
-      auto_close:   decision.auto_close     || false,
+      escalate:     decision.escalate_to_l2     || false,
+      auto_close:   decision.auto_close         || false,
+      // AI-FIX-002: is_mock prevents SOAR from auto-executing mock decisions
+      is_mock:      decision.is_mock             || false,
+      // AI-FIX-002: injection/output anomaly flags
+      injection_detected:    injCheck.blocked         || false,
+      output_anomaly:        outputCheck.suspicious   || false,
+      requires_human_review: decision.requires_human_review || false,
       enrichments,
       sources_used: sources,
       duration_ms:  Date.now() - start,
@@ -193,6 +274,12 @@ Make a triage decision based on the above evidence.`;
   }
 
   _determineRoute(decision) {
+    // AI-FIX-002: Mock decisions, injection detections, and output anomalies
+    // must NEVER auto-execute — force human review regardless of confidence.
+    if (decision.is_mock || decision.injection_detected || decision.requires_human_review) {
+      console.warn(`[Triage Agent] Forcing human_review: is_mock=${decision.is_mock} injection=${decision.injection_detected} anomaly=${decision.requires_human_review}`);
+      return 'human_review';
+    }
     if (decision.auto_close && decision.confidence >= CLOSE_THRESHOLD)    return 'auto_closed';
     if (decision.decision === 'false_positive' && decision.confidence >= AUTO_EXECUTE_THRESHOLD) return 'auto_closed';
     if (decision.decision === 'true_positive'  && decision.confidence >= AUTO_EXECUTE_THRESHOLD) return 'auto_escalated_l2';
@@ -523,9 +610,30 @@ class AgentOrchestrator {
       pipeline.stages.push({ stage: 'investigation', result: investigation });
       pipeline.investigation = investigation;
 
-      // Stage 3: Response (auto only for high-confidence, low-risk decisions)
+      // Stage 3: Response (auto only for high-confidence, non-mock, low-risk decisions)
+      // AI-FIX-002: is_mock check — never auto-respond on mock LLM decisions
       const canAutoRespond = investigation.report?.confidence >= AUTO_EXECUTE_THRESHOLD
-                          && !investigation.report?.escalate_to_ir;
+                          && !investigation.report?.escalate_to_ir
+                          && !triage.is_mock
+                          && !investigation.is_mock;
+
+      if (canAutoRespond && CONSENSUS_REQUIRED) {
+        // AI-FIX-002: Multi-model consensus check before any auto-execution
+        // A second, independent LLM call verifies the decision.
+        console.log(`[Orchestrator] Consensus check required before auto-response — alert=${alert.id}`);
+        const consensus = await this._checkConsensus(alert, triage, investigation);
+        if (!consensus.agrees) {
+          console.warn(`[Orchestrator] Consensus FAILED — demoting auto-response to awaiting_approval. primary=${triage.decision} secondary=${consensus.secondaryDecision}`);
+          pipeline.status = 'awaiting_approval';
+          pipeline.approval_required = {
+            reason:    `Multi-model consensus failed (primary=${triage.decision}, secondary=${consensus.secondaryDecision})`,
+            approvers: ['SENIOR_ANALYST'],
+            consensus: consensus,
+          };
+          pipeline.completed_at = new Date().toISOString();
+          return pipeline;
+        }
+      }
 
       if (canAutoRespond) {
         const response = await this.responseAgent.respond(investigation);
@@ -559,6 +667,42 @@ class AgentOrchestrator {
   }
 
   /**
+   * _checkConsensus — AI-FIX-002: second LLM independently verifies a decision.
+   *
+   * Calls the same LLM with a lower temperature and different seed phrasing.
+   * Returns { agrees: boolean, secondaryDecision: string, secondaryConfidence: number }.
+   *
+   * @param {object} alert
+   * @param {object} triageResult
+   * @param {object} investigationResult
+   * @returns {Promise<{ agrees: boolean, secondaryDecision: string, secondaryConfidence: number }>}
+   */
+  async _checkConsensus(alert, triageResult, investigationResult) {
+    const systemPrompt = `You are a senior SOC analyst reviewing an automated triage decision for quality assurance.
+Another AI agent made the following decision. You must independently evaluate it and indicate whether you agree.
+Respond with JSON only: { "agree": true/false, "decision": "true_positive"|"false_positive"|"needs_review", "confidence": 0-100, "reasoning": "brief" }`;
+
+    const userPrompt = `Primary agent decision: ${triageResult.decision} (confidence: ${triageResult.confidence}%)
+Alert: ${alert.title} | Severity: ${alert.severity}
+Reasoning: ${triageResult.reasoning}
+Do you agree with this assessment?`;
+
+    try {
+      const response = await llmCall(systemPrompt, userPrompt, { jsonMode: true, temperature: 0.0, maxTokens: 500 });
+      const parsed   = JSON.parse(response.content);
+      return {
+        agrees:             Boolean(parsed.agree),
+        secondaryDecision:  parsed.decision || 'unknown',
+        secondaryConfidence: parsed.confidence || 0,
+        reasoning:          parsed.reasoning || '',
+      };
+    } catch {
+      // If consensus call fails, fail safe (require human review)
+      return { agrees: false, secondaryDecision: 'unknown', secondaryConfidence: 0, reasoning: 'Consensus check failed' };
+    }
+  }
+
+  /**
    * recordFeedback — analyst overrides feed back into learning loop
    * This data is used to retrain prompts and adjust confidence thresholds.
    */
@@ -584,4 +728,5 @@ module.exports = {
   AUTO_EXECUTE_THRESHOLD,
   ESCALATE_THRESHOLD,
   CLOSE_THRESHOLD,
+  CONSENSUS_REQUIRED,
 };

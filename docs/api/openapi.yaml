@@ -824,3 +824,230 @@ paths:
                 type: object
                 properties:
                   connected: { type: boolean }
+
+  # ── Security Audit Phase 0 — New Endpoints ────────────────────────
+
+  /api/security/metrics:
+    get:
+      summary: Security Observability Metrics (Prometheus)
+      description: |
+        Returns Prometheus-compatible security metrics for Grafana dashboards.
+        Includes: auth failures, rate limit violations, SSRF attempts,
+        prompt injection detections, CORS rejections.
+        **INFRA-003**
+      tags: [Security, Observability]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [prometheus, json]
+            default: prometheus
+      responses:
+        '200':
+          description: Security metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: |
+                  # HELP auth_failures_total Security event counter
+                  auth_failures_total 42
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/intelligence/adversary-dna:
+    post:
+      summary: Build and Store Adversary DNA Fingerprint
+      description: |
+        Generates a 616-dimensional adversary DNA fingerprint from observed TTPs,
+        temporal activity patterns, infrastructure indicators, and toolchain data.
+        Stores in Pinecone for attribution queries.
+        **INNOVATION-001** — Feature flag: FEATURE_ADVERSARY_DNA=true
+      tags: [Intelligence, Innovation]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [actor_id]
+              properties:
+                actor_id:
+                  type: string
+                  example: apt28
+                actor_name:
+                  type: string
+                  example: Fancy Bear
+                ttps:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      technique_id: { type: string, example: T1078 }
+                      count:        { type: integer, example: 3 }
+                events:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      timestamp: { type: string, format: date-time }
+                infrastructure:
+                  type: object
+                  properties:
+                    asns:       { type: array, items: { type: string } }
+                    tlds:       { type: array, items: { type: string } }
+                    registrars: { type: array, items: { type: string } }
+                    hosting:    { type: array, items: { type: string } }
+                tools:
+                  type: object
+                  properties:
+                    malware_families: { type: array, items: { type: string } }
+                    packers:          { type: array, items: { type: string } }
+                    yara_rules:       { type: array, items: { type: string } }
+      responses:
+        '201':
+          description: DNA fingerprint stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  actor_id:      { type: string }
+                  dimensions:    { type: integer, example: 616 }
+                  generated_at:  { type: string, format: date-time }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '503':
+          description: Feature flag disabled or Pinecone unavailable
+
+  /api/intelligence/adversary-dna/attribute:
+    post:
+      summary: Attribute an Incident to a Known Threat Actor
+      description: |
+        Builds a DNA fingerprint from the incident data and queries Pinecone
+        for the closest matching known threat actor.
+        **INNOVATION-001** — Feature flag: FEATURE_ADVERSARY_DNA=true
+      tags: [Intelligence, Innovation]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdversaryDNAInput'
+      responses:
+        '200':
+          description: Attribution results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  matches:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        actor_id:   { type: string }
+                        actor_name: { type: string }
+                        similarity: { type: number, format: float }
+                        confidence: { type: integer }
+                  best_match:
+                    type: object
+                    nullable: true
+
+  /api/intelligence/kill-chain/forecast:
+    post:
+      summary: Predict Next Kill Chain Steps
+      description: |
+        Uses a Markov chain model to predict the most likely next adversary
+        tactics given the currently observed kill-chain stage.
+        **INNOVATION-002** — Feature flag: FEATURE_KILL_CHAIN_FORECAST=true
+      tags: [Intelligence, Predictive, Innovation]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mitre_tactic:
+                  type: string
+                  example: lateral-movement
+                mitre_chain:
+                  type: array
+                  items: { type: string }
+                  example: [initial-access, execution, persistence]
+                steps:
+                  type: integer
+                  default: 3
+                  minimum: 1
+                  maximum: 7
+      responses:
+        '200':
+          description: Kill chain forecast
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  current_tactic:  { type: string }
+                  observed_chain:  { type: array, items: { type: string } }
+                  predictions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        step:                    { type: integer }
+                        tactic:                  { type: string }
+                        probability:             { type: number }
+                        confidence_label:        { type: string, enum: [HIGH, MEDIUM, LOW] }
+                        recommended_detections:  { type: array, items: { type: string } }
+                        mitre_url:               { type: string, format: uri }
+
+  /api/intelligence/cyber-terrain/{ip}:
+    get:
+      summary: Cyber Terrain Risk Analysis for an IP Address
+      description: |
+        Performs BGP route lookup, ASN risk scoring, country attribution,
+        and IOC density analysis for the given IP address.
+        **INNOVATION-004** — Feature flag: FEATURE_CYBER_TERRAIN=true
+      tags: [Intelligence, Terrain, Innovation]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: ip
+          in: path
+          required: true
+          schema:
+            type: string
+            example: 185.220.101.45
+      responses:
+        '200':
+          description: Terrain analysis
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ip:             { type: string }
+                  asn:            { type: integer, nullable: true }
+                  asn_org:        { type: string, nullable: true }
+                  prefix:         { type: string, nullable: true }
+                  country:        { type: string, nullable: true }
+                  country_risk:   { type: integer, minimum: 0, maximum: 100 }
+                  risk_score:     { type: integer, minimum: 0, maximum: 100 }
+                  risk_label:     { type: string, enum: [CRITICAL, HIGH, MEDIUM, LOW, INFO] }
+                  analysis_at:    { type: string, format: date-time }
+        '400':
+          $ref: '#/components/responses/BadRequest'

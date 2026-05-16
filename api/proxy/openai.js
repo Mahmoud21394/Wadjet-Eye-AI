@@ -2,45 +2,47 @@
  * Vercel Serverless Function — OpenAI API Proxy
  * Route: /proxy/openai/*
  *
+ * Security (Audit Phase 0):
+ *   FIX-001: Origin-validated CORS via handlePreflight / sendJSON
+ *   FIX-003: JWT verification via verifyProxyRequest
+ *   FIX-004: SSRF protection applied inside proxyUpstream
+ *
  * Forwards requests to https://api.openai.com/*
  * API key injected server-side from OPENAI_API_KEY env var.
  *
- * Environment variables:
- *   OPENAI_API_KEY — required
+ * @module api/proxy/openai
  */
 'use strict';
 
-const { sendJSON, proxyUpstream, extractSubPath } = require('../_proxy-utils');
+const { sendJSON, proxyUpstream, extractSubPath, handlePreflight } = require('../_proxy-utils');
+const { verifyProxyRequest } = require('../_auth-guard');
 
 const OPENAI_BASE = 'https://api.openai.com';
 
 module.exports = async function handler(req, res) {
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept');
-    res.writeHead(204); res.end(); return;
+  if (handlePreflight(req, res)) return;
+
+  const auth = await verifyProxyRequest(req);
+  if (!auth.ok) {
+    if (auth.retryAfter) res.setHeader('Retry-After', String(auth.retryAfter));
+    return sendJSON(req, res, auth.status || 401, { error: auth.error, code: auth.error });
   }
 
   const openaiKey = process.env.OPENAI_API_KEY;
   if (!openaiKey) {
-    sendJSON(res, 200, {
-      error:  'missing_api_key',
-      status: 'missing_api_key',
-      message: 'OPENAI_API_KEY environment variable is not set. Add it in Vercel Dashboard → Settings → Environment Variables.',
+    return sendJSON(req, res, 503, {
+      error:   'missing_api_key',
+      code:    'OPENAI_KEY_MISSING',
+      message: 'OPENAI_API_KEY not configured. Set it in Vercel Environment Variables.',
     });
-    return;
   }
 
-  // Extract sub-path (e.g. /v1/chat/completions), handles Vercel _path param
-  const afterProxy = extractSubPath(req, '/proxy/openai');
+  const afterProxy = extractSubPath(req);
   const targetUrl  = `${OPENAI_BASE}${afterProxy}`;
-  console.log(`[OpenAI Proxy] ${req.method} ${targetUrl}`);
+  console.log(`[OpenAI Proxy] ${req.method} ${targetUrl} user=${auth.userId}`);
 
-  const extraHeaders = {
+  await proxyUpstream(targetUrl, req, res, {
     'Authorization': `Bearer ${openaiKey}`,
     'Content-Type':  'application/json',
-  };
-
-  await proxyUpstream(targetUrl, req, res, extraHeaders);
+  });
 };
