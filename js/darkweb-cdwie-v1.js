@@ -34,7 +34,7 @@ const DW_ACTORS = {
     origin:'Russia', sponsor:'SVR (Foreign Intelligence Service)',
     active:'2008–Present', confidence:94,
     threat:'CRITICAL', color:'#ef4444', flag:'🇷🇺',
-    icon:'👁', sectors:['Government','Defense','Think Tanks','Energy','Healthcare'],
+    icon:'fas fa-eye', faIcon:'fa-eye', sectors:['Government','Defense','Think Tanks','Energy','Healthcare'],
     ttps:['T1566.001','T1059.001','T1078','T1021.002','T1083','T1027','T1036','T1057','T1055','T1102'],
     tools:['HAMMERTOSS','MiniDuke','CosmicDuke','FatDuke','PolyglotDuke','BEATDROP','BEACON','WellMess'],
     desc:'APT29 is a sophisticated Russian nation-state threat actor sponsored by the SVR. Known for highly targeted spear-phishing campaigns, living-off-the-land techniques, and long-term persistent access. Responsible for the SolarWinds supply chain attack (SUNBURST) and numerous high-value intelligence collection operations against Western governments.',
@@ -49,7 +49,7 @@ const DW_ACTORS = {
     origin:'Russia (suspected)', sponsor:'Criminal / RaaS',
     active:'2019–Present', confidence:91,
     threat:'CRITICAL', color:'#f97316', flag:'🌐',
-    icon:'🔒', sectors:['Healthcare','Finance','Manufacturing','Government','Legal'],
+    icon:'fas fa-lock', faIcon:'fa-lock', sectors:['Healthcare','Finance','Manufacturing','Government','Legal'],
     ttps:['T1486','T1490','T1083','T1489','T1562','T1078','T1021','T1003','T1047'],
     tools:['LockBit 4.0','StealBit','Mimikatz','Cobalt Strike','Rclone'],
     desc:'LockBit is the world\'s most prolific ransomware-as-a-service (RaaS) operation. Operating since 2019, LockBit 4.0 features advanced affiliate programs, automatic encryption, and triple extortion (encryption + data theft + DDoS). The group has claimed over 1,700 victims globally.',
@@ -64,7 +64,7 @@ const DW_ACTORS = {
     origin:'China', sponsor:'MSS (Ministry of State Security)',
     active:'2012–Present', confidence:89,
     threat:'HIGH', color:'#a855f7', flag:'🇨🇳',
-    icon:'🐉', sectors:['Technology','Healthcare','Telecom','Finance','Gaming'],
+    icon:'fas fa-dragon', faIcon:'fa-dragon', sectors:['Technology','Healthcare','Telecom','Finance','Gaming'],
     ttps:['T1190','T1059.003','T1053.005','T1027','T1140','T1070','T1055.001','T1071'],
     tools:['CROSSWALK','POISONPLUG','ShadowPad','Cobalt Strike','njRAT','PlugX','KeyPlug'],
     desc:'APT41 is a unique Chinese state-sponsored group conducting both espionage and financially motivated intrusions. They target pharmaceutical companies for IP theft, gaming companies for financial gain, and government entities for intelligence collection. Known for exploiting supply chains and managed service providers.',
@@ -79,7 +79,7 @@ const DW_ACTORS = {
     origin:'Ukraine/Russia', sponsor:'Criminal / Financial',
     active:'2013–Present', confidence:88,
     threat:'CRITICAL', color:'#eab308', flag:'🌐',
-    icon:'💰', sectors:['Finance','Retail','Hospitality','Healthcare','Technology'],
+    icon:'fas fa-dollar-sign', faIcon:'fa-dollar-sign', sectors:['Finance','Retail','Hospitality','Healthcare','Technology'],
     ttps:['T1566','T1059.007','T1203','T1021.006','T1056.001','T1110','T1539'],
     tools:['CARBANAK','GRIFFON','BOOSTWRITE','RDFSNIFFER','Cobalt Strike','PowerShell Empire'],
     desc:'FIN7 is a sophisticated financially motivated threat actor responsible for billions in losses. Pioneered the use of a fake company "Combi Security" to recruit penetration testers. Specializes in point-of-sale malware and business email compromise targeting the hospitality and retail sectors.',
@@ -94,7 +94,7 @@ const DW_ACTORS = {
     origin:'Iran', sponsor:'MOIS (Ministry of Intelligence)',
     active:'2014–Present', confidence:86,
     threat:'HIGH', color:'#22d3ee', flag:'🇮🇷',
-    icon:'🛢', sectors:['Energy','Government','Finance','Telecom','Aviation'],
+    icon:'fas fa-oil-can', faIcon:'fa-oil-can', sectors:['Energy','Government','Finance','Telecom','Aviation'],
     ttps:['T1190','T1566.001','T1078','T1505.003','T1071.001','T1041','T1059.004'],
     tools:['QUADAGENT','POSHC2','DNSpionage','RDAT','Karkoff','SideTwist','Marlin'],
     desc:'OilRig (APT34) is an Iranian state-sponsored threat actor primarily targeting Middle Eastern nations and organizations connected to the region. Known for sophisticated DNS tunneling C2 and watering hole attacks. Focuses on persistent access for intelligence gathering.',
@@ -109,7 +109,7 @@ const DW_ACTORS = {
     origin:'North Korea', sponsor:'RGB (Reconnaissance General Bureau)',
     active:'2009–Present', confidence:93,
     threat:'CRITICAL', color:'#ec4899', flag:'🇰🇵',
-    icon:'☠', sectors:['Finance','Cryptocurrency','Defense','Aerospace','Government'],
+    icon:'fas fa-skull-crossbones', faIcon:'fa-skull-crossbones', sectors:['Finance','Cryptocurrency','Defense','Aerospace','Government'],
     ttps:['T1566','T1059.003','T1053','T1070','T1485','T1486','T1552','T1041'],
     tools:['HOPLIGHT','BLINDINGCAN','BADCALL','AppleJeus','DRATzarus','FALLCHILL','ELECTRICFISH'],
     desc:'Lazarus Group is a prolific North Korean state-sponsored threat actor responsible for the most significant cryptocurrency thefts in history, including $625M from Ronin Network. Conducts financially motivated attacks to fund the regime\'s weapons programs. Also conducts destructive attacks and espionage.',
@@ -124,7 +124,7 @@ const DW_ACTORS = {
     origin:'Unknown (ex-DarkSide/BlackMatter)', sponsor:'Criminal / RaaS',
     active:'2021–Present', confidence:87,
     threat:'CRITICAL', color:'#ef4444', flag:'🌐',
-    icon:'🐈', sectors:['Healthcare','Legal','Energy','Manufacturing','Finance'],
+    icon:'fas fa-cat', faIcon:'fa-cat', sectors:['Healthcare','Legal','Energy','Manufacturing','Finance'],
     ttps:['T1486','T1657','T1562','T1190','T1059.001','T1078','T1021.001','T1567'],
     tools:['BlackCat Ransomware','ExMatter','Conti Leaked Toolkit','Cobalt Strike','BurntCigar'],
     desc:'BlackCat/ALPHV operates the first ransomware written in Rust, enabling cross-platform attacks. Uses triple-extortion: encryption + data theft + victim shaming. Suffered FBI seizure in December 2023 but retaliated and relaunched. Known for medical facility targeting and public pressure tactics.',
@@ -906,7 +906,7 @@ function _buildEngineActorDNA() {
     return '<div class="cdwie-actor-row ' + (a.id === _cdwie.actor.selected ? 'active' : '') + '" ' +
       'onclick="window._cdwieSelectActor(\'' + a.id + '\')" data-actor="' + a.id + '">' +
       '<div class="cdwie-actor-avatar" style="background:' + a.color + '22;color:' + a.color + '">' +
-        '<i class="' + a.icon + '"></i>' +
+        '<i class="fas fa-' + (a.faIcon||'user-secret') + '"></i>' +
       '</div>' +
       '<div class="cdwie-actor-info">' +
         '<div class="cdwie-actor-name">' + a.flag + ' ' + a.name + '</div>' +
@@ -969,7 +969,7 @@ function _renderActorProfile(id) {
     '<div class="cdwie-actor-profile">' +
       '<div class="cdwie-actor-profile-header">' +
         '<div class="cdwie-actor-avatar-lg" style="background:' + a.color + '22;color:' + a.color + '">' +
-          '<i class="' + a.icon + '"></i>' +
+          '<i class="fas fa-' + (a.faIcon||'user-secret') + '"></i>' +
         '</div>' +
         '<div class="cdwie-actor-profile-meta">' +
           '<h2 class="cdwie-actor-profile-name">' + a.flag + ' ' + a.name + '</h2>' +
@@ -977,7 +977,7 @@ function _renderActorProfile(id) {
           '<div class="cdwie-actor-profile-badges">' +
             '<span class="cdwie-badge" style="background:' + riskColor + '22;color:' + riskColor + '">' + a.threat.toUpperCase() + ' THREAT</span>' +
             '<span class="cdwie-badge cdwie-badge-blue">Confidence: ' + a.confidence + '%</span>' +
-            '<span class="cdwie-badge ' + (a.active?'cdwie-badge-green':'cdwie-badge-grey') + '">' + (a.active?'ACTIVE':'DORMANT') + '</span>' +
+            '<span class="cdwie-badge cdwie-badge-green">' + (a.active||'Active') + '</span>' +
           '</div>' +
         '</div>' +
         '<div class="cdwie-actor-profile-stats">' +
@@ -1874,7 +1874,7 @@ function _renderCopilotResponseHtml(type, text, data) {
       (a ? '<div class="cdwie-actor-mini-card cdwie-glass">' +
         '<div style="display:flex;align-items:center;gap:12px">' +
           '<div style="width:40px;height:40px;border-radius:50%;background:' + a.color + '22;color:' + a.color + ';display:flex;align-items:center;justify-content:center">' +
-            '<i class="' + a.icon + '"></i>' +
+            '<i class="fas fa-' + (a.faIcon||'user-secret') + '"></i>' +
           '</div>' +
           '<div><strong>' + a.flag + ' ' + a.name + '</strong><br><small style="color:#94a3b8">' + a.alias + '</small></div>' +
         '</div>' +
@@ -2230,6 +2230,9 @@ window._cdwieTab = function(tabId) {
     default:
       panel.innerHTML = '<div style="color:#94a3b8;padding:40px;text-align:center">Engine not found: ' + tabId + '</div>';
   }
+  /* Belt-and-suspenders: ensure the injected engine div is always visible */
+  var engineDiv = panel.querySelector('.cdwie-engine');
+  if (engineDiv) engineDiv.classList.add('active');
 
   /* Post-render hooks */
   switch (tabId) {
@@ -2263,6 +2266,8 @@ window._cdwieTab = function(tabId) {
   var s = document.createElement('style');
   s.id = id;
   s.textContent = [
+    /* ── CRITICAL: engine visibility override — dynamic panel always shows one engine ── */
+    '#cdwie-engine-panel .cdwie-engine{display:block!important}',
     /* Spinner */
     '.cdwie-spinner{width:32px;height:32px;border:3px solid #1e293b;border-top-color:#6366f1;border-radius:50%;animation:cdwie-spin 0.8s linear infinite}',
     '@keyframes cdwie-spin{to{transform:rotate(360deg)}}',
