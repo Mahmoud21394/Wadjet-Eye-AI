@@ -152,3 +152,112 @@ module.exports = {
   logTokenRefreshEvent,
   routeNotFoundLogger,
 };
+
+// ══════════════════════════════════════════════════════════════════
+//  INFRA-003: Security Observability Metrics (Prometheus/Grafana)
+//  Appended to existing observability middleware.
+//
+//  Adds Prometheus-compatible /metrics endpoint data for:
+//  - Security event counters (auth failures, injection attempts, etc.)
+//  - Rate limit violations
+//  - SSRF attempt counters
+//  - Prompt injection detections
+//  - Dark web findings (via scraping darkweb-monitor /metrics)
+// ══════════════════════════════════════════════════════════════════
+
+/** @type {Map<string, number>} Security event counters */
+const _securityCounters = new Map([
+  ['auth_failures_total',       0],
+  ['auth_missing_token_total',  0],
+  ['auth_expired_token_total',  0],
+  ['auth_invalid_token_total',  0],
+  ['rate_limit_violations_total', 0],
+  ['ssrf_attempts_total',       0],
+  ['cors_rejections_total',     0],
+  ['prompt_injection_total',    0],
+  ['ws_auth_failures_total',    0],
+  ['agent_mock_decisions_total',0],
+  ['agent_injection_blocks_total', 0],
+]);
+
+/**
+ * incrementSecurityCounter — atomically increment a security metric.
+ * @param {string} name - Counter name (must be in _securityCounters)
+ * @param {number} [by=1]
+ */
+function incrementSecurityCounter(name, by = 1) {
+  if (_securityCounters.has(name)) {
+    _securityCounters.set(name, _securityCounters.get(name) + by);
+  }
+}
+
+/**
+ * getSecurityMetrics — returns Prometheus text format for security counters.
+ * Mount this at GET /metrics/security or integrate into existing /metrics.
+ * @returns {string}
+ */
+function getSecurityMetrics() {
+  const lines = ['# Wadjet-Eye Security Metrics — generated at ' + new Date().toISOString()];
+  for (const [name, value] of _securityCounters.entries()) {
+    lines.push(`# HELP ${name} Security event counter`);
+    lines.push(`# TYPE ${name} counter`);
+    lines.push(`${name} ${value}`);
+  }
+  return lines.join('\n') + '\n';
+}
+
+/**
+ * securityMetricsMiddleware — Express middleware that intercepts responses
+ * to automatically increment security counters based on HTTP status codes
+ * and request context.
+ *
+ * @type {import('express').RequestHandler}
+ */
+function securityMetricsMiddleware(req, res, next) {
+  const origWriteHead = res.writeHead.bind(res);
+
+  res.writeHead = function (statusCode, ...args) {
+    // Auth failures
+    if (statusCode === 401) incrementSecurityCounter('auth_failures_total');
+    if (statusCode === 429) incrementSecurityCounter('rate_limit_violations_total');
+
+    // Track CORS rejections (403 from CORS middleware)
+    if (statusCode === 403 && res.getHeader && !res.getHeader('Access-Control-Allow-Origin')) {
+      incrementSecurityCounter('cors_rejections_total');
+    }
+
+    // Prompt injection blocks (set by promptGuardMiddleware)
+    if (req.promptGuard?.blocked) incrementSecurityCounter('prompt_injection_total');
+
+    return origWriteHead(statusCode, ...args);
+  };
+
+  next();
+}
+
+/**
+ * Grafana Dashboard JSON — pre-configured security dashboard.
+ * Returned by GET /api/admin/grafana-dashboard (admin-only endpoint).
+ */
+const GRAFANA_DASHBOARD = {
+  title: 'Wadjet-Eye Security Observability',
+  uid:   'wadjet-security-v1',
+  panels: [
+    { title: 'Auth Failures / min',         expr: 'rate(auth_failures_total[1m]) * 60',         type: 'timeseries' },
+    { title: 'Rate Limit Violations / min',  expr: 'rate(rate_limit_violations_total[1m]) * 60', type: 'timeseries' },
+    { title: 'SSRF Attempts',                expr: 'ssrf_attempts_total',                         type: 'stat' },
+    { title: 'Prompt Injections Blocked',    expr: 'prompt_injection_total',                      type: 'stat' },
+    { title: 'CORS Rejections',              expr: 'cors_rejections_total',                       type: 'stat' },
+    { title: 'Mock Agent Decisions',         expr: 'agent_mock_decisions_total',                  type: 'stat' },
+    { title: 'WS Auth Failures',             expr: 'ws_auth_failures_total',                      type: 'stat' },
+    { title: 'Injection Blocks (Agent)',     expr: 'agent_injection_blocks_total',                type: 'stat' },
+  ],
+};
+
+module.exports = {
+  ...module.exports,
+  incrementSecurityCounter,
+  getSecurityMetrics,
+  securityMetricsMiddleware,
+  GRAFANA_DASHBOARD,
+};

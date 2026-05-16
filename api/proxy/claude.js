@@ -2,46 +2,48 @@
  * Vercel Serverless Function — Anthropic Claude API Proxy
  * Route: /proxy/claude/*
  *
+ * Security (Audit Phase 0):
+ *   FIX-001: Origin-validated CORS via handlePreflight / sendJSON
+ *   FIX-003: JWT verification via verifyProxyRequest
+ *   FIX-004: SSRF protection applied inside proxyUpstream
+ *
  * Forwards requests to https://api.anthropic.com/*
  * API key injected server-side from CLAUDE_API_KEY env var.
  *
- * Environment variables:
- *   CLAUDE_API_KEY — required
+ * @module api/proxy/claude
  */
 'use strict';
 
-const { sendJSON, proxyUpstream, extractSubPath } = require('../_proxy-utils');
+const { sendJSON, proxyUpstream, extractSubPath, handlePreflight } = require('../_proxy-utils');
+const { verifyProxyRequest } = require('../_auth-guard');
 
 const CLAUDE_BASE = 'https://api.anthropic.com';
 
 module.exports = async function handler(req, res) {
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, anthropic-version, Accept');
-    res.writeHead(204); res.end(); return;
+  if (handlePreflight(req, res)) return;
+
+  const auth = await verifyProxyRequest(req);
+  if (!auth.ok) {
+    if (auth.retryAfter) res.setHeader('Retry-After', String(auth.retryAfter));
+    return sendJSON(req, res, auth.status || 401, { error: auth.error, code: auth.error });
   }
 
   const claudeKey = process.env.CLAUDE_API_KEY;
   if (!claudeKey) {
-    sendJSON(res, 200, {
-      error:  'missing_api_key',
-      status: 'missing_api_key',
-      message: 'CLAUDE_API_KEY environment variable is not set. Add it in Vercel Dashboard → Settings → Environment Variables.',
+    return sendJSON(req, res, 503, {
+      error:   'missing_api_key',
+      code:    'CLAUDE_KEY_MISSING',
+      message: 'CLAUDE_API_KEY not configured. Set it in Vercel Environment Variables.',
     });
-    return;
   }
 
-  // Extract sub-path (e.g. /v1/messages), handles Vercel _path param
-  const afterProxy = extractSubPath(req, '/proxy/claude');
+  const afterProxy = extractSubPath(req);
   const targetUrl  = `${CLAUDE_BASE}${afterProxy}`;
-  console.log(`[Claude Proxy] ${req.method} ${targetUrl}`);
+  console.log(`[Claude Proxy] ${req.method} ${targetUrl} user=${auth.userId}`);
 
-  const extraHeaders = {
+  await proxyUpstream(targetUrl, req, res, {
     'x-api-key':          claudeKey,
     'anthropic-version':  '2023-06-01',
     'Content-Type':       'application/json',
-  };
-
-  await proxyUpstream(targetUrl, req, res, extraHeaders);
+  });
 };

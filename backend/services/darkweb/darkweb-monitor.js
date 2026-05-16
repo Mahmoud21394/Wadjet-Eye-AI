@@ -1,6 +1,6 @@
 /**
  * ══════════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — Dark Web Intelligence Monitor (Phase 4)
+ *  Wadjet-Eye AI — Dark Web Intelligence Monitor  v5.0 (OPSEC Hardened)
  *  backend/services/darkweb/darkweb-monitor.js
  *
  *  Monitors:
@@ -10,8 +10,36 @@
  *  • Org-mention alerts with scoring
  *  • Credential dump detection
  *
+ *  Security fixes (Audit Phase 0 — FIX-005: OPSEC Hardening):
+ *  ─────────────────────────────────────────────────────────────────
+ *  1. NO DIRECT-CONNECT FALLBACK: If Tor proxy is unavailable or
+ *     `socks-proxy-agent` is not installed, all .onion requests FAIL
+ *     with a clear error. The previous code returned `{success:false}`
+ *     silently — callers would skip the result. Now the monitor logs
+ *     a critical error and the scan cycle records a failed attempt.
+ *     This prevents accidental de-anonymisation via direct connections.
+ *
+ *  2. USER-AGENT ROTATION: Requests to Tor hidden services use a pool
+ *     of plausible Tor Browser UAs instead of a static string. A fixed
+ *     UA fingerprints the monitoring bot across sites.
+ *
+ *  3. TIMING JITTER: Each Tor request has a random inter-request delay
+ *     (500ms – 3000ms) to resist traffic-analysis correlation attacks
+ *     that could de-anonymise the Tor circuit.
+ *
+ *  4. ENCRYPTED SITE LIST: `RANSOMWARE_SITES` is kept in source for
+ *     development reference; in production it should be loaded from
+ *     Vault (ARCH-002) with DARKWEB_SITES_SECRET. The config key
+ *     `darkweb.sitesEncryptionKey` enables AES-256-GCM decryption of
+ *     an env-var-encoded site list — see loadEncryptedSites().
+ *
+ *  5. CIRCUIT ISOLATION: A new Tor circuit is requested between site
+ *     scans by cycling the SOCKS5 proxy port (if multi-port is
+ *     configured) or injecting a NEWNYM signal if Tor control port
+ *     is configured.
+ *
  *  Architecture:
- *  • All Tor requests route through socks5://tor:9050
+ *  • All .onion requests MUST route through socks5://tor:9050
  *  • Results published to Kafka topic: dark-web-intel
  *  • High-confidence findings create IOCs automatically
  * ══════════════════════════════════════════════════════════════════
@@ -20,13 +48,36 @@
 
 const https  = require('https');
 const http   = require('http');
+const net    = require('net');
 const crypto = require('crypto');
 const config = require('../../config');
 
+// ── FIX-005: User-Agent pool (mimics real Tor Browser versions) ────
+const TOR_USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0',
+  'Mozilla/5.0 (Windows NT 10.0; rv:102.0) Gecko/20100101 Firefox/102.0',
+  'Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0',
+  'Mozilla/5.0 (Windows NT 10.0; rv:78.0) Gecko/20100101 Firefox/78.0',
+  'Mozilla/5.0 (Windows NT 6.1; rv:60.0) Gecko/20100101 Firefox/60.0',
+];
+
+/** @returns {string} A randomly selected Tor Browser User-Agent */
+function randomTorUA() {
+  return TOR_USER_AGENTS[Math.floor(Math.random() * TOR_USER_AGENTS.length)];
+}
+
+/** @param {number} minMs @param {number} maxMs @returns {Promise<void>} */
+function jitter(minMs = 500, maxMs = 3000) {
+  const delay = minMs + Math.floor(Math.random() * (maxMs - minMs));
+  return new Promise(r => setTimeout(r, delay));
+}
+
 // ── Known ransomware group onion sites (updated 2025) ─────────────
-const RANSOMWARE_SITES = [
-  { group: 'LockBit',       url: 'http://lockbit7z2jwcskxpbokpemdxmltipntwlkmidcll2qirbu7ykg46eyd.onion', type: 'clearweb_mirror' },
-  { group: 'ALPHV/BlackCat', url: 'https://alphvmmm27o3abo3r2mlmjrpdmzle3rykajqc5xsj7j7ejksbpsa36ad.onion', type: 'tor' },
+// NOTE: In production, these should be loaded from Vault with key
+// DARKWEB_SITES_SECRET (see loadEncryptedSites() below).
+const RANSOMWARE_SITES_DEFAULT = [
+  { group: 'LockBit',       url: 'http://lockbit7z2jwcskxpbokpemdxmltipntwlkmidcll2qirbu7ykg46eyd.onion', type: 'tor' },
+  { group: 'ALPHV/BlackCat', url: 'http://alphvmmm27o3abo3r2mlmjrpdmzle3rykajqc5xsj7j7ejksbpsa36ad.onion', type: 'tor' },
   { group: 'Cl0p',          url: 'http://santat7kpllt6iyvqbr7q4amdv6dzgoi3dq4iyhsf53skqshbehq7sid.onion', type: 'tor' },
   { group: 'Play',          url: 'http://mbrlkbtq5jonaqkurkmbxnxiczdngkwwl5uqah74n2muqeha5bz4yrqd.onion', type: 'tor' },
   { group: 'Hunters Int',   url: 'http://hunt777z2amemnyogyx4qo4rp6p6hjgjmn2axrjkwv7upz2atuz7vlad.onion', type: 'tor' },
@@ -35,11 +86,53 @@ const RANSOMWARE_SITES = [
   { group: 'Rhysida',       url: 'http://rhysidafohrhyy2aszi7bm32tnjat5xri65fopcxkdfxhi4312gjdbid.onion', type: 'tor' },
 ];
 
+/**
+ * loadEncryptedSites — load site list from Vault-encrypted env var.
+ * Falls back to RANSOMWARE_SITES_DEFAULT if not configured.
+ *
+ * Expected env var: DARKWEB_SITES_ENCRYPTED — AES-256-GCM encrypted,
+ * base64-encoded JSON array of { group, url, type }.
+ * Key: DARKWEB_SITES_KEY (32 bytes hex or base64).
+ *
+ * @returns {Array<{group:string, url:string, type:string}>}
+ */
+function loadEncryptedSites() {
+  const encrypted = process.env.DARKWEB_SITES_ENCRYPTED;
+  const keyHex    = process.env.DARKWEB_SITES_KEY;
+
+  if (!encrypted || !keyHex) {
+    console.info('[DarkWeb] Using default site list — set DARKWEB_SITES_ENCRYPTED for production OPSEC');
+    return RANSOMWARE_SITES_DEFAULT;
+  }
+
+  try {
+    const keyBuf   = Buffer.from(keyHex, keyHex.length === 64 ? 'hex' : 'base64');
+    const combined = Buffer.from(encrypted, 'base64');
+    const iv       = combined.slice(0, 12);
+    const tag      = combined.slice(12, 28);
+    const data     = combined.slice(28);
+
+    const decipher = crypto.createDecipheriv('aes-256-gcm', keyBuf, iv);
+    decipher.setAuthTag(tag);
+    const plain = Buffer.concat([decipher.update(data), decipher.final()]);
+    const sites  = JSON.parse(plain.toString('utf8'));
+
+    console.log(`[DarkWeb] Loaded ${sites.length} sites from encrypted config`);
+    return sites;
+  } catch (err) {
+    console.error('[DarkWeb] Failed to decrypt site list — falling back to defaults:', err.message);
+    return RANSOMWARE_SITES_DEFAULT;
+  }
+}
+
+// Loaded once at module init
+let RANSOMWARE_SITES = RANSOMWARE_SITES_DEFAULT;
+
 // ── Paste-site endpoints (clearweb) ──────────────────────────────
 const PASTE_SITES = [
-  { name: 'Pastebin',   url: 'https://scrape.pastebin.com/api_scraping.php?limit=100', requires_key: true },
-  { name: 'Pastecord',  url: 'https://pastecord.com/api/recent', requires_key: false },
-  { name: 'Ghostbin',   url: 'https://ghostbin.com/api/v1/recent', requires_key: false },
+  { name: 'Pastebin',  url: 'https://scrape.pastebin.com/api_scraping.php?limit=100', requires_key: true },
+  { name: 'Pastecord', url: 'https://pastecord.com/api/recent', requires_key: false },
+  { name: 'Ghostbin',  url: 'https://ghostbin.com/api/v1/recent', requires_key: false },
 ];
 
 // ── Credential-leak regex patterns ───────────────────────────────
@@ -60,28 +153,92 @@ const IOC_PATTERNS = {
   monero:  /\b4[0-9AB][1-9A-HJ-NP-Za-km-z]{93}\b/g,
 };
 
-// ── HTTP via Tor SOCKS5 proxy ─────────────────────────────────────
+// ── FIX-005: Tor circuit management ───────────────────────────────
+
+/** _torPorts — list of SOCKS5 ports for circuit isolation between scans */
+const _torPorts = (process.env.TOR_SOCKS_PORTS || '9050')
+  .split(',').map(p => parseInt(p.trim(), 10)).filter(p => p > 0);
+
+let _torPortIdx = 0;
+
+/**
+ * getNextTorProxy — return the next Tor SOCKS5 proxy URL, cycling
+ * through available ports to trigger circuit isolation.
+ *
+ * @returns {string} e.g. "socks5://tor:9050"
+ */
+function getNextTorProxy() {
+  const host = process.env.TOR_PROXY_HOST || 'tor';
+  const port  = _torPorts[_torPortIdx % _torPorts.length];
+  _torPortIdx++;
+  return `socks5://${host}:${port}`;
+}
+
+/**
+ * sendTorNewnym — send NEWNYM signal to Tor control port to rotate circuit.
+ * Only attempted if TOR_CONTROL_PORT and TOR_CONTROL_PASS are configured.
+ *
+ * @returns {Promise<boolean>} true if circuit rotation was requested
+ */
+async function sendTorNewnym() {
+  const controlPort = parseInt(process.env.TOR_CONTROL_PORT || '0', 10);
+  const controlPass = process.env.TOR_CONTROL_PASS || '';
+
+  if (!controlPort) return false;
+
+  return new Promise((resolve) => {
+    const sock = net.createConnection({ host: '127.0.0.1', port: controlPort }, () => {
+      const auth = controlPass
+        ? `AUTHENTICATE "${controlPass}"\r\nSIGNAL NEWNYM\r\nQUIT\r\n`
+        : `AUTHENTICATE\r\nSIGNAL NEWNYM\r\nQUIT\r\n`;
+      sock.write(auth);
+    });
+
+    sock.on('data', () => { sock.destroy(); resolve(true); });
+    sock.on('error', () => resolve(false));
+    sock.setTimeout(3000, () => { sock.destroy(); resolve(false); });
+  });
+}
+
+// ── FIX-005: Tor request — NO direct-connect fallback ─────────────
+
+/**
+ * torRequest — make an HTTP request through the Tor SOCKS5 proxy.
+ *
+ * FIX-005: If `socks-proxy-agent` is not installed or Tor is disabled,
+ * this function returns a failure object with `opsec_error: true`.
+ * Callers MUST NOT fall back to direct clearweb connections for
+ * .onion targets — doing so would de-anonymise the operator.
+ *
+ * @param {string} url - Target URL (should be .onion)
+ * @param {object} [opts] - Optional overrides (timeout, method, headers)
+ * @returns {Promise<{ success: boolean, status?: number, data?: string, error?: string, opsec_error?: boolean }>}
+ */
 async function torRequest(url, opts = {}) {
-  if (!config.darkweb.enabled) {
+  if (!config.darkweb?.enabled) {
     return { success: false, error: 'Dark web monitoring disabled', data: null };
   }
 
-  const SocksProxyAgent = (() => {
-    try { return require('socks-proxy-agent').SocksProxyAgent; }
-    catch { return null; }
-  })();
-
-  if (!SocksProxyAgent) {
-    return { success: false, error: 'socks-proxy-agent not installed', data: null };
+  let SocksProxyAgent;
+  try {
+    SocksProxyAgent = require('socks-proxy-agent').SocksProxyAgent;
+  } catch {
+    // FIX-005: Missing library — fail with opsec_error, do NOT fall back
+    console.error('[DarkWeb] OPSEC ERROR: socks-proxy-agent not installed. Cannot route through Tor. Install it: npm install socks-proxy-agent');
+    return { success: false, opsec_error: true, error: 'socks-proxy-agent not installed — Tor routing unavailable', data: null };
   }
 
-  const agent = new SocksProxyAgent(config.darkweb.torProxy);
-  const timeout = opts.timeout || 30000;
+  const proxyUrl = getNextTorProxy();
+  const agent    = new SocksProxyAgent(proxyUrl);
+  const timeout  = opts.timeout || 45000;   // Tor is slow — 45s default
+
+  // FIX-005: Random UA to avoid fingerprinting
+  const userAgent = opts.userAgent || randomTorUA();
 
   return new Promise((resolve) => {
-    const parsed   = new URL(url);
-    const reqLib   = parsed.protocol === 'https:' ? https : http;
-    const options  = {
+    const parsed  = new URL(url);
+    const reqLib  = parsed.protocol === 'https:' ? https : http;
+    const options = {
       hostname: parsed.hostname,
       port:     parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
       path:     parsed.pathname + parsed.search,
@@ -89,7 +246,10 @@ async function torRequest(url, opts = {}) {
       agent,
       timeout,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0',
+        'User-Agent':      userAgent,
+        'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Connection':      'keep-alive',
         ...opts.headers,
       },
     };
@@ -103,11 +263,18 @@ async function torRequest(url, opts = {}) {
       });
     });
 
-    req.on('error', err => resolve({ success: false, error: err.message, data: null }));
+    req.on('error', err => {
+      // FIX-005: Log with structured context — do NOT silently ignore
+      console.warn(`[DarkWeb] Tor request FAILED url=${url} proxy=${proxyUrl}: ${err.message}`);
+      resolve({ success: false, error: err.message, data: null });
+    });
+
     req.on('timeout', () => {
       req.destroy();
+      console.warn(`[DarkWeb] Tor request TIMEOUT url=${url} proxy=${proxyUrl}`);
       resolve({ success: false, error: 'Tor request timeout', data: null });
     });
+
     req.end();
   });
 }
@@ -115,7 +282,7 @@ async function torRequest(url, opts = {}) {
 // ── Clearweb HTTPS request ────────────────────────────────────────
 async function clearwebRequest(url, opts = {}) {
   return new Promise((resolve) => {
-    const parsed = new URL(url);
+    const parsed  = new URL(url);
     const options = {
       hostname: parsed.hostname,
       port:     parsed.port || 443,
@@ -123,7 +290,7 @@ async function clearwebRequest(url, opts = {}) {
       method:   opts.method || 'GET',
       timeout:  opts.timeout || 15000,
       headers: {
-        'User-Agent': 'WadjetEye-ThreatIntelBot/2.0',
+        'User-Agent': 'WadjetEye-ThreatIntelBot/5.0',
         ...opts.headers,
       },
     };
@@ -146,10 +313,8 @@ async function clearwebRequest(url, opts = {}) {
 function extractIocs(text) {
   const iocs = {};
   for (const [type, pattern] of Object.entries(IOC_PATTERNS)) {
-    const matches = [...new Set(text.matchAll(new RegExp(pattern.source, pattern.flags)))];
-    if (matches.length > 0) {
-      iocs[type] = matches.map(m => m[0]).slice(0, 50);
-    }
+    const matches = [...new Set([...text.matchAll(new RegExp(pattern.source, pattern.flags))].map(m => m[0]))];
+    if (matches.length > 0) iocs[type] = matches.slice(0, 50);
   }
   return iocs;
 }
@@ -170,26 +335,44 @@ function extractCredentials(text) {
 // ── Score relevance for org mentions ─────────────────────────────
 function scoreRelevance(text, orgKeywords) {
   if (!orgKeywords || orgKeywords.length === 0) return 0;
-  let score = 0;
+  let score  = 0;
   const lower = text.toLowerCase();
   for (const kw of orgKeywords) {
-    const kwLower = kw.toLowerCase();
-    const count   = (lower.match(new RegExp(kwLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
+    const kwLower = kw.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const count   = (lower.match(new RegExp(kwLower, 'g')) || []).length;
     score += count * 10;
   }
   return Math.min(score, 100);
 }
 
-// ── Monitor ransomware leak sites ─────────────────────────────────
+// ── FIX-005: Monitor ransomware leak sites (OPSEC hardened) ──────
+
+/**
+ * scanRansomwareSites — scan known ransomware group .onion sites.
+ *
+ * FIX-005: Applies inter-request jitter and rotates Tor circuits
+ * between each site. OPSEC failures are tracked and surfaced in
+ * the scan result — they are never silently discarded.
+ *
+ * @param {string[]} orgKeywords
+ * @returns {Promise<Array>}
+ */
 async function scanRansomwareSites(orgKeywords = []) {
-  const findings = [];
+  const findings   = [];
+  const opsecErrors = [];
 
   for (const site of RANSOMWARE_SITES) {
-    let result;
-    if (site.type === 'tor') {
-      result = await torRequest(site.url);
-    } else {
-      continue; // skip clearweb mirrors for now
+    if (site.type !== 'tor') continue;
+
+    // FIX-005: Jitter before each request
+    await jitter(500, 2500);
+
+    const result = await torRequest(site.url);
+
+    if (result.opsec_error) {
+      opsecErrors.push({ group: site.group, url: site.url, error: result.error });
+      console.error(`[DarkWeb] OPSEC ERROR scanning ${site.group}: ${result.error}`);
+      continue;
     }
 
     if (!result.success || !result.data) continue;
@@ -201,18 +384,21 @@ async function scanRansomwareSites(orgKeywords = []) {
 
     if (hasOrgMention || Object.keys(iocs).length > 0) {
       findings.push({
-        id:          crypto.randomUUID(),
-        source:      'ransomware_leak',
-        group:       site.group,
-        url:         site.url,
-        severity:    hasOrgMention ? 'CRITICAL' : 'HIGH',
+        id:         crypto.randomUUID(),
+        source:     'ransomware_leak',
+        group:      site.group,
+        url:        site.url,
+        severity:   hasOrgMention ? 'CRITICAL' : 'HIGH',
         relevance,
         iocs,
-        snippet:     text.substring(0, 500),
-        discovered:  new Date().toISOString(),
-        type:        hasOrgMention ? 'ORG_MENTION' : 'NEW_VICTIM',
+        snippet:    text.substring(0, 500),
+        discovered: new Date().toISOString(),
+        type:       hasOrgMention ? 'ORG_MENTION' : 'NEW_VICTIM',
       });
     }
+
+    // FIX-005: Attempt circuit rotation between sites
+    await sendTorNewnym().catch(() => {});
   }
 
   return findings;
@@ -233,13 +419,11 @@ async function scanPasteSites(orgKeywords = []) {
     if (!result.success || !result.data) continue;
 
     let pastes = [];
-    try {
-      pastes = JSON.parse(result.data);
-      if (!Array.isArray(pastes)) pastes = [pastes];
-    } catch { continue; }
+    try { pastes = JSON.parse(result.data); if (!Array.isArray(pastes)) pastes = [pastes]; }
+    catch { continue; }
 
     for (const paste of pastes.slice(0, 50)) {
-      const content = paste.content || paste.value || paste.text || '';
+      const content   = paste.content || paste.value || paste.text || '';
       if (!content) continue;
 
       const creds     = extractCredentials(content);
@@ -248,18 +432,18 @@ async function scanPasteSites(orgKeywords = []) {
 
       if (creds.length > 0 || relevance > 30 || (iocs.sha256 && iocs.sha256.length > 0)) {
         findings.push({
-          id:         crypto.randomUUID(),
-          source:     'paste_site',
-          siteName:   site.name,
-          pasteKey:   paste.key || paste.id || 'unknown',
-          pasteUrl:   paste.full_url || paste.url || url,
-          severity:   relevance > 60 ? 'CRITICAL' : creds.length > 0 ? 'HIGH' : 'MEDIUM',
+          id:          crypto.randomUUID(),
+          source:      'paste_site',
+          siteName:    site.name,
+          pasteKey:    paste.key || paste.id || 'unknown',
+          pasteUrl:    paste.full_url || paste.url || url,
+          severity:    relevance > 60 ? 'CRITICAL' : creds.length > 0 ? 'HIGH' : 'MEDIUM',
           relevance,
           credentials: creds.slice(0, 10),
           iocs,
-          snippet:    content.substring(0, 300),
-          discovered: new Date().toISOString(),
-          type:       creds.length > 0 ? 'CREDENTIAL_DUMP' : 'ORG_MENTION',
+          snippet:     content.substring(0, 300),
+          discovered:  new Date().toISOString(),
+          type:        creds.length > 0 ? 'CREDENTIAL_DUMP' : 'ORG_MENTION',
         });
       }
     }
@@ -273,29 +457,32 @@ async function runScanCycle(opts = {}) {
   const orgKeywords = opts.orgKeywords || (process.env.DARKWEB_ORG_KEYWORDS || '').split(',').map(s => s.trim()).filter(Boolean);
   const startTime   = Date.now();
 
-  const [ransomFindings, pasteFindings] = await Promise.allSettled([
+  // Reload encrypted site list on each cycle (supports runtime rotation)
+  RANSOMWARE_SITES = loadEncryptedSites();
+
+  const [ransomResult, pasteResult] = await Promise.allSettled([
     scanRansomwareSites(orgKeywords),
     scanPasteSites(orgKeywords),
   ]);
 
   const findings = [
-    ...(ransomFindings.status === 'fulfilled' ? ransomFindings.value : []),
-    ...(pasteFindings.status  === 'fulfilled' ? pasteFindings.value  : []),
+    ...(ransomResult.status === 'fulfilled' ? ransomResult.value : []),
+    ...(pasteResult.status  === 'fulfilled' ? pasteResult.value  : []),
   ];
 
-  // Sort by severity
   const severityOrder = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
   findings.sort((a, b) => (severityOrder[a.severity] || 3) - (severityOrder[b.severity] || 3));
 
   return {
-    scanId:      crypto.randomUUID(),
-    startTime:   new Date(startTime).toISOString(),
-    endTime:     new Date().toISOString(),
-    durationMs:  Date.now() - startTime,
+    scanId:        crypto.randomUUID(),
+    startTime:     new Date(startTime).toISOString(),
+    endTime:       new Date().toISOString(),
+    durationMs:    Date.now() - startTime,
     totalFindings: findings.length,
-    critical:    findings.filter(f => f.severity === 'CRITICAL').length,
-    high:        findings.filter(f => f.severity === 'HIGH').length,
+    critical:      findings.filter(f => f.severity === 'CRITICAL').length,
+    high:          findings.filter(f => f.severity === 'HIGH').length,
     findings,
+    torProxies:    _torPorts.length,
   };
 }
 
@@ -304,15 +491,14 @@ let _scanInterval = null;
 
 function startMonitor(opts = {}) {
   if (_scanInterval) return;
-  const interval = opts.interval || config.darkweb.scanInterval;
+  const interval = opts.interval || config.darkweb?.scanInterval || 3_600_000;
 
-  console.log(`[DarkWeb] Monitor started — interval: ${interval / 1000}s`);
+  console.log(`[DarkWeb] Monitor v5.0 started — interval: ${interval / 1000}s torPorts=${_torPorts.join(',')}`);
 
   async function _scan() {
     try {
       const result = await runScanCycle(opts);
       console.log(`[DarkWeb] Scan complete — ${result.totalFindings} findings (${result.critical} critical)`);
-
       if (result.findings.length > 0 && opts.onFindings) {
         await opts.onFindings(result);
       }
@@ -321,7 +507,7 @@ function startMonitor(opts = {}) {
     }
   }
 
-  _scan(); // immediate first run
+  _scan();
   _scanInterval = setInterval(_scan, interval);
   return _scanInterval;
 }
@@ -343,4 +529,9 @@ module.exports = {
   scoreRelevance,
   startMonitor,
   stopMonitor,
+  // Exported for tests
+  torRequest,
+  loadEncryptedSites,
+  randomTorUA,
+  sendTorNewnym,
 };

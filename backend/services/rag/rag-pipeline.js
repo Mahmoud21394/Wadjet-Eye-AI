@@ -27,6 +27,21 @@ const EMBED_MODEL       = process.env.EMBED_MODEL      || 'text-embedding-3-larg
 const EMBED_DIMENSIONS  = parseInt(process.env.EMBED_DIMENSIONS || '1536', 10);
 const CHUNK_SIZE        = parseInt(process.env.RAG_CHUNK_SIZE   || '800',  10);
 const CHUNK_OVERLAP     = parseInt(process.env.RAG_CHUNK_OVERLAP|| '100',  10);
+// AI-FIX-003: Document freshness configuration
+// Documents older than RAG_DOC_TTL_HOURS are considered stale and
+// excluded from context retrieval to prevent outdated intel influencing
+// current investigations.
+const RAG_DOC_TTL_HOURS = parseInt(process.env.RAG_DOC_TTL_HOURS || '720', 10); // default: 30 days
+// Namespace-specific TTLs (hours) — more volatile namespaces expire sooner
+const NAMESPACE_TTL_HOURS = {
+  'ioc-context':     24,    // IOC intelligence: 24 hours
+  'threat-reports':  168,   // Threat reports: 7 days
+  'cve-database':    720,   // CVE database: 30 days
+  'mitre-attack':    2160,  // MITRE ATT&CK: 90 days (rarely changes)
+  'past-incidents':  8760,  // Past incidents: 1 year
+  'playbooks':       720,   // Playbooks: 30 days
+  'threat-actors':   168,   // Threat actor profiles: 7 days
+};
 
 // ── Namespaces (logical partitions in the vector store) ───────────
 const NAMESPACES = {
@@ -150,8 +165,11 @@ async function upsertVectors(vectors, namespace = NAMESPACES.THREAT_REPORTS) {
  * @param {object} opts - { namespace, topK, filter, minScore }
  * @returns {Promise<Array<{id, score, metadata, text}>>}
  */
+/**
+ * queryVectors — AI-FIX-003: freshness-filtered semantic search.
+ */
 async function queryVectors(queryVector, opts = {}) {
-  const { namespace = null, topK = 5, filter = {}, minScore = 0.7 } = opts;
+  const { namespace = null, topK = 5, filter = {}, minScore = 0.7, skipFreshnessFilter = false } = opts;
 
   let results;
   if (PINECONE_API_KEY() && PINECONE_HOST) {
@@ -160,7 +178,21 @@ async function queryVectors(queryVector, opts = {}) {
     results = await queryWeaviate(queryVector, { namespace, topK: topK * 2 });
   }
 
-  return results
+  // AI-FIX-003: Freshness filter — exclude documents past their TTL
+  const now = new Date();
+  const fresh = skipFreshnessFilter
+    ? results
+    : results.filter(r => {
+        const expiresAt = r.metadata?.expires_at;
+        if (!expiresAt) return true;
+        const isExpired = new Date(expiresAt) < now;
+        if (isExpired) {
+          console.info(`[RAG] Filtered stale doc: id=${r.id} expires=${expiresAt} source=${r.metadata?.provenance || 'unknown'}`);
+        }
+        return !isExpired;
+      });
+
+  return fresh
     .filter(r => r.score >= minScore)
     .slice(0, topK);
 }
@@ -325,25 +357,44 @@ async function openaiRequest(path, method, body) {
  * @param {object} metadata - { title, source, type, url, date, ... }
  * @param {string} namespace - Which knowledge base to store in
  */
+/**
+ * ingestDocument — AI-FIX-003: adds provenance + freshness metadata.
+ * @param {string} text
+ * @param {object} metadata - { title, source, type, url, date, provenance, version }
+ * @param {string} namespace
+ */
 async function ingestDocument(text, metadata = {}, namespace = NAMESPACES.THREAT_REPORTS) {
   const chunks    = chunkText(text, metadata);
   const docId     = metadata.id || crypto.randomUUID();
+  const now       = new Date().toISOString();
 
-  console.log(`[RAG] Ingesting document '${metadata.title || docId}' → ${chunks.length} chunks → namespace: ${namespace}`);
+  // AI-FIX-003: Integrity hash and effective TTL
+  const sourceHash = crypto.createHash('sha256').update(text).digest('hex');
+  const ttlHours   = NAMESPACE_TTL_HOURS[namespace] || RAG_DOC_TTL_HOURS;
+  const expiresAt  = new Date(Date.now() + ttlHours * 3_600_000).toISOString();
+
+  console.log(`[RAG] Ingesting '${metadata.title || docId}' → ${chunks.length} chunks → ns:${namespace} ttl:${ttlHours}h`);
 
   // Batch embed all chunks
   const chunkTexts = chunks.map(c => c.text);
   const embeddings = await embed(chunkTexts);
 
-  // Build vectors
+  // Build vectors with provenance metadata
   const vectors = chunks.map((chunk, i) => ({
     id:     `${docId}-${chunk.chunk_idx}`,
     values: embeddings[i],
     metadata: {
       ...chunk.metadata,
-      text:      chunk.text,
-      doc_id:    docId,
+      text:        chunk.text,
+      doc_id:      docId,
       namespace,
+      // AI-FIX-003: Freshness + provenance
+      ingested_at: now,
+      ttl_hours:   ttlHours,
+      expires_at:  expiresAt,
+      source_hash: sourceHash,
+      provenance:  metadata.provenance || metadata.source || metadata.url || 'unknown',
+      doc_version: metadata.version   || 1,
     },
   }));
 
@@ -353,7 +404,11 @@ async function ingestDocument(text, metadata = {}, namespace = NAMESPACES.THREAT
     doc_id:      docId,
     chunks:      chunks.length,
     namespace,
-    ingested_at: new Date().toISOString(),
+    ingested_at: now,
+    ttl_hours:   ttlHours,
+    expires_at:  expiresAt,
+    source_hash: sourceHash,
+    provenance:  metadata.provenance || metadata.source || 'unknown',
   };
 }
 
@@ -477,6 +532,47 @@ async function buildContext(alert) {
   return { context_blocks: blocks, sources: [...new Set(sources)] };
 }
 
+/**
+ * checkDocumentFreshness — AI-FIX-003: nightly staleness audit.
+ * Returns { total, expired, expiringSoon, documents }.
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.deleteExpired=false]
+ */
+async function checkDocumentFreshness(opts = {}) {
+  const now    = new Date();
+  const soonMs = 24 * 3_600_000;
+  const report = { total: 0, expired: 0, expiringSoon: 0, documents: [] };
+
+  console.log('[RAG] Running freshness integrity check...');
+
+  for (const namespace of Object.values(NAMESPACES)) {
+    try {
+      const dummyVec  = new Array(EMBED_DIMENSIONS).fill(0); dummyVec[0] = 1;
+      const results   = await queryVectors(dummyVec, { namespace, topK: 100, minScore: 0, skipFreshnessFilter: true });
+      report.total   += results.length;
+
+      for (const r of results) {
+        const expiresAt = r.metadata?.expires_at ? new Date(r.metadata.expires_at) : null;
+        const entry     = { id: r.id, namespace, provenance: r.metadata?.provenance || 'unknown', ingested_at: r.metadata?.ingested_at || null, expires_at: r.metadata?.expires_at || null, status: 'ok' };
+
+        if (expiresAt) {
+          if (expiresAt < now) { entry.status = 'expired'; report.expired++; }
+          else if ((expiresAt - now) < soonMs) { entry.status = 'expiring_soon'; report.expiringSoon++; }
+        } else {
+          entry.status = 'no_expiry_metadata';
+        }
+        report.documents.push(entry);
+      }
+    } catch (err) {
+      console.warn(`[RAG] Freshness check failed for ${namespace}:`, err.message);
+    }
+  }
+
+  console.log(`[RAG] Freshness check: total=${report.total} expired=${report.expired} expiringSoon=${report.expiringSoon}`);
+  return report;
+}
+
 module.exports = {
   embed,
   embedOne,
@@ -488,6 +584,9 @@ module.exports = {
   queryVectors,
   search,
   buildContext,
+  checkDocumentFreshness,
   NAMESPACES,
   hashEmbed,
+  RAG_DOC_TTL_HOURS,
+  NAMESPACE_TTL_HOURS,
 };

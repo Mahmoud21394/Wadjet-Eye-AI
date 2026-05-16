@@ -215,3 +215,117 @@ spec:
         - port: 443
         - port: 53
           protocol: UDP
+---
+# ── Dark Web Monitor: ONLY Tor proxy access (ARCH-001 + INFRA-001) ──
+# This policy enforces FIX-005: the darkweb microservice can ONLY
+# egress through the Tor proxy pod — direct clearweb egress is denied.
+# Ingress: only from the backend (for /scan triggers) and monitoring.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-darkweb-netpol
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "wadjet-eye.labels" . | nindent 4 }}
+    security.wadjet-eye.io/policy: opsec-isolation
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: darkweb-monitor
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Only backend can trigger manual scans
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: backend
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8081    # Health/scan API port
+    # Prometheus metrics scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8081
+  egress:
+    # DNS only (required for Tor proxy hostname resolution)
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Tor SOCKS5 proxy — the ONLY external egress allowed
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: tor-proxy
+      ports:
+        - port: 9050    # SOCKS5
+        - port: 9051    # Tor control port
+    # Tor control port (NEWNYM circuit rotation)
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: tor-proxy
+      ports:
+        - port: 9051
+    # Kafka output (publish findings)
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: kafka
+      ports:
+        - port: 9092
+    # Redis (cache / pub-sub eviction)
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: redis
+      ports:
+        - port: 6379
+    # Vault (encrypted site list fetch)
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: vault
+      ports:
+        - port: 8200
+    # NO DIRECT INTERNET EGRESS — enforced by absence of catch-all egress rule
+    # Any attempt to reach the clearweb directly will be blocked.
+---
+# ── Tor Proxy pod: only darkweb-monitor ingress ──────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wadjet-eye.fullname" . }}-tor-proxy-netpol
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: tor-proxy
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: darkweb-monitor
+      ports:
+        - port: 9050
+        - port: 9051
+  egress:
+    # DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+    # TLS to Tor network (ports 443 and 9001 for Tor relays)
+    - ports:
+        - port: 443
+        - port: 9001

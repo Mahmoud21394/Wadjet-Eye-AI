@@ -1,31 +1,75 @@
 'use strict';
 
 /**
- * ══════════════════════════════════════════════════════════════
- *  Wadjet-Eye AI — WebSocket Server  v4.0
+ * ══════════════════════════════════════════════════════════════════
+ *  Wadjet-Eye AI — WebSocket Server  v5.0  (Security Hardened)
+ *  backend/realtime/websockets.js
  *
- *  Dual-mode WebSocket support:
+ *  Security fixes (Audit Phase 0):
+ *  ─────────────────────────────────────────────────────────────────
+ *  FIX-002: Demo/marker token bypass REMOVED.
+ *    • resolveRakayDemoToken() removed entirely — the
+ *      `RAKAY_DEMO_NO_JWT_LIB` opaque marker and any unauthenticated
+ *      "demo" path no longer exist.
+ *    • Missing JWT_SECRET on startup is now a FATAL ERROR: the process
+ *      exits with code 1 rather than silently degrading to insecure
+ *      behaviour.  This ensures misconfigured deployments are caught
+ *      immediately at boot, not silently in production.
+ *    • Unknown tokens are now REJECTED with code 4401 (not silently
+ *      accepted as "guest").  The previous guest fallback allowed any
+ *      anonymous WebSocket connection to receive live intelligence data.
+ *    • Service-key bypass is retained for internal microservice
+ *      communication but now requires the key to be at least 32 chars.
+ *
+ *  Dual-mode WebSocket support retained:
  *   1. Socket.IO  — for the main detection/alert stream (io)
  *   2. Native WS  — raw ws endpoint at /ws/detections
- *                   (required by RAKAY frontend v2.0)
+ *                   (required by RAKAY frontend v2.0+)
  *
- *  v4.0 Changes:
- *   ✅ Native WSS endpoint /ws/detections alongside Socket.IO
- *   ✅ Token validation: Supabase JWT + RAKAY demo JWT + service key
- *   ✅ Heartbeat ping/pong every 30 s (detects dead connections)
- *   ✅ Graceful disconnect: close all intervals, remove from registry
- *   ✅ Exponential-backoff hint in disconnect message
- *   ✅ Connection registry (max 1 per userId to prevent dupes)
- *   ✅ Structured lifecycle logs: CONNECT, AUTH, HEARTBEAT, DISCONNECT
- *   ✅ Error boundary: uncaught errors in socket handlers caught/logged
- * ══════════════════════════════════════════════════════════════
+ *  v5.0 Changes vs v4.0:
+ *   ✅ Demo token bypass removed — hard auth required
+ *   ✅ Startup fatal error if JWT_SECRET absent
+ *   ✅ Anonymous guest connections rejected (code 4401)
+ *   ✅ Service-key minimum length enforced (32 chars)
+ *   ✅ Connection origin validated against CORS allowlist
+ *   ✅ All auth decisions logged with structured fields
+ * ══════════════════════════════════════════════════════════════════
  */
 
 const { WebSocketServer } = require('ws');
-const url  = require('url');
+const url    = require('url');
 const crypto = require('crypto');
+const jwt    = require('jsonwebtoken');
 
-// ── Lazy Supabase (not available during unit tests) ──────────────────────────
+// ── FIX-002: Fatal error on missing JWT_SECRET ─────────────────────
+// This block runs at module load time (server startup).
+// If neither JWT secret is configured, the server cannot safely verify
+// WebSocket tokens — so we fail fast rather than run insecurely.
+const _WS_JWT_SECRET     = process.env.SUPABASE_JWT_SECRET || process.env.JWT_SECRET || null;
+const _WS_ALT_JWT_SECRET = (() => {
+  const s = process.env.SUPABASE_JWT_SECRET;
+  const c = process.env.JWT_SECRET;
+  return (s && c && s !== c) ? (s ? c : s) : null;
+})();
+
+if (!_WS_JWT_SECRET) {
+  // Non-recoverable configuration error — exit immediately.
+  console.error('[WS] FATAL: JWT_SECRET (or SUPABASE_JWT_SECRET) is not set.');
+  console.error('[WS] WebSocket connections cannot be authenticated without a JWT secret.');
+  console.error('[WS] Set JWT_SECRET in your environment and restart the server.');
+  process.exit(1);
+}
+
+// ── Allowed WebSocket origins ───────────────────────────────────────
+const _WS_ALLOWED_ORIGINS = new Set(
+  (process.env.CORS_ALLOWED_ORIGINS || 'https://wadjet-eye.vercel.app,http://localhost:3000,http://localhost:5173')
+    .split(',').map(s => s.trim()).filter(Boolean)
+);
+
+// ── Service key (internal microservices only) ──────────────────────
+const _SERVICE_KEY = process.env.RAKAY_SERVICE_KEY || process.env.RAKAY_API_KEY || null;
+
+// ── Lazy Supabase (not available during unit tests) ──────────────────
 let _supabase = null;
 function getSupabase() {
   if (_supabase) return _supabase;
@@ -41,15 +85,26 @@ function randomIP() {
   return Array.from({ length: 4 }, () => Math.floor(Math.random() * 255)).join('.');
 }
 
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
-
 async function withTimeout(promise, ms = 3000) {
   return Promise.race([
     promise,
     new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), ms)),
   ]);
+}
+
+/**
+ * validateOrigin — check the WebSocket connection's Origin header.
+ * @param {import('http').IncomingMessage} request
+ * @returns {boolean}
+ */
+function validateOrigin(request) {
+  const origin = request.headers['origin'] || '';
+  if (!origin) return true; // same-origin or server-to-server (no header)
+  if (_WS_ALLOWED_ORIGINS.has(origin)) return true;
+  // Allow vercel.app preview deployments
+  if (/^https:\/\/[a-z0-9-]+-[a-z0-9]+\.vercel\.app$/.test(origin)) return true;
+  console.warn(`[WS] Rejected origin: "${origin}"`);
+  return false;
 }
 
 /* ─────────────────────────────────────────────── */
@@ -62,7 +117,6 @@ function makeDetectionEvent(tenantId) {
   const type     = DETECTION_TYPES[Math.floor(Math.random() * DETECTION_TYPES.length)];
   const severity = SEVERITIES[Math.floor(Math.random() * SEVERITIES.length)];
   const ip       = randomIP();
-
   return {
     id:         `DET-${Date.now()}`,
     title:      `${type} detected`,
@@ -76,29 +130,71 @@ function makeDetectionEvent(tenantId) {
 }
 
 /* ─────────────────────────────────────────────── */
-/*  Auth helpers                                   */
+/*  Auth helpers  (FIX-002)                        */
 /* ─────────────────────────────────────────────── */
 
-/** Resolve Supabase JWT → user profile */
+/**
+ * resolveJwtLocal — verify a JWT locally without network calls.
+ * Tries primary secret first, then alt secret if the first fails
+ * with a non-expiry error.
+ *
+ * @param {string} token
+ * @returns {{ user: object, authType: string } | null}
+ */
+function resolveJwtLocal(token) {
+  const opts = { algorithms: ['HS256'], clockTolerance: 60 };
+
+  let decoded = null;
+  let lastErr = null;
+
+  try {
+    decoded = jwt.verify(token, _WS_JWT_SECRET, opts);
+  } catch (err1) {
+    lastErr = err1;
+    if (err1.name !== 'TokenExpiredError' && _WS_ALT_JWT_SECRET) {
+      try {
+        decoded = jwt.verify(token, _WS_ALT_JWT_SECRET, opts);
+        lastErr = null;
+      } catch (err2) {
+        lastErr = err2.name === 'TokenExpiredError' ? err2 : err1;
+      }
+    }
+  }
+
+  if (!decoded) {
+    if (lastErr?.name === 'TokenExpiredError') {
+      console.warn('[WS] Token expired');
+    }
+    return null;
+  }
+
+  return {
+    userId:   decoded.sub || 'unknown',
+    tenantId: decoded.tenant_id || decoded.tenantId || 'default',
+    email:    decoded.email || null,
+    role:     decoded.role || 'viewer',
+    authType: 'jwt-local',
+  };
+}
+
+/**
+ * resolveSocketUser — verify via Supabase auth service (network).
+ * Only used when local JWT check is inconclusive.
+ *
+ * @param {string} token
+ * @returns {Promise<object|null>}
+ */
 async function resolveSocketUser(token) {
   if (!token) return null;
-
   const supabase = getSupabase();
   if (!supabase) return null;
 
   try {
-    const { data: { user } } = await withTimeout(
-      supabase.auth.getUser(token),
-      3000
-    );
+    const { data: { user } } = await withTimeout(supabase.auth.getUser(token), 3000);
     if (!user) return null;
 
     const { data: profile } = await withTimeout(
-      supabase
-        .from('users')
-        .select('id, name, role, tenant_id')
-        .eq('auth_id', user.id)
-        .single(),
+      supabase.from('users').select('id, name, role, tenant_id').eq('auth_id', user.id).single(),
       3000
     );
     if (!profile) return null;
@@ -106,8 +202,8 @@ async function resolveSocketUser(token) {
     return {
       userId:   profile.id,
       tenantId: profile.tenant_id,
-      userName: profile.name,
-      userRole: profile.role,
+      email:    user.email,
+      role:     profile.role,
       authType: 'supabase',
     };
   } catch {
@@ -115,63 +211,36 @@ async function resolveSocketUser(token) {
   }
 }
 
-/** Resolve RAKAY demo JWT → synthetic user */
-function resolveRakayDemoToken(token) {
+/**
+ * resolveToken — authenticate a WebSocket connection token.
+ *
+ * FIX-002: Demo bypass removed. Resolution order:
+ *  1. Service key (internal microservices)
+ *  2. JWT local verification (fast, zero-network)
+ *  3. Supabase auth service (network fallback)
+ *  4. REJECT — returns null (caller closes connection with 4401)
+ *
+ * @param {string|null} token
+ * @returns {Promise<object|null>}  null = not authenticated
+ */
+async function resolveToken(token) {
   if (!token) return null;
 
-  // Opaque marker token (fallback when jsonwebtoken not installed)
-  if (token === 'RAKAY_DEMO_NO_JWT_LIB') {
-    return {
-      userId:   'demo-user',
-      tenantId: 'demo',
-      userName: 'Demo Analyst',
-      userRole: 'analyst',
-      authType: 'demo-marker',
-    };
+  // 1. Service key (internal only, minimum 32 chars)
+  if (_SERVICE_KEY && _SERVICE_KEY.length >= 32 && token === _SERVICE_KEY) {
+    return { userId: 'service', tenantId: 'service', email: null, role: 'service', authType: 'service-key' };
   }
 
-  // Try JWT verification against demo secret
-  let jwt = null;
-  try { jwt = require('jsonwebtoken'); } catch { return null; }
+  // 2. Local JWT (fast path — covers 99% of requests)
+  const localUser = resolveJwtLocal(token);
+  if (localUser) return localUser;
 
-  const base   = process.env.JWT_SECRET || process.env.SUPABASE_SERVICE_KEY || 'rakay-demo-fallback-2024';
-  const secret = crypto.createHash('sha256').update(`RAKAY_DEMO_${base}`).digest('hex');
-
-  try {
-    const decoded = jwt.verify(token, secret, { algorithms: ['HS256'] });
-    if (!decoded.rakay_demo) return null;
-    return {
-      userId:   decoded.sub,
-      tenantId: decoded.tenantId || 'demo',
-      userName: decoded.name || 'Demo Analyst',
-      userRole: decoded.role || 'analyst',
-      authType: 'demo-jwt',
-    };
-  } catch {
-    return null;
-  }
-}
-
-/** Multi-strategy token resolution: Supabase → RAKAY demo → service key → guest */
-async function resolveToken(token) {
-  if (!token) return { userId: 'guest', tenantId: 'guest', userName: 'guest', userRole: 'viewer', authType: 'guest' };
-
-  // 1. RAKAY demo token (fast, no network)
-  const demoUser = resolveRakayDemoToken(token);
-  if (demoUser) return demoUser;
-
-  // 2. Service key bypass
-  const serviceKey = process.env.RAKAY_SERVICE_KEY || process.env.RAKAY_API_KEY;
-  if (serviceKey && token === serviceKey) {
-    return { userId: 'service', tenantId: 'service', userName: 'Service', userRole: 'service', authType: 'service-key' };
-  }
-
-  // 3. Supabase JWT (network call)
+  // 3. Supabase auth network fallback
   const supabaseUser = await resolveSocketUser(token);
   if (supabaseUser) return supabaseUser;
 
-  // 4. Unknown token — still allow as guest so connection isn't hard-rejected
-  return { userId: 'guest', tenantId: 'guest', userName: 'guest', userRole: 'viewer', authType: 'guest' };
+  // 4. All strategies failed — reject
+  return null;
 }
 
 /* ─────────────────────────────────────────────── */
@@ -179,7 +248,7 @@ async function resolveToken(token) {
 /* ─────────────────────────────────────────────── */
 async function getRealIOC(tenantId) {
   const supabase = getSupabase();
-  if (!supabase || tenantId === 'demo' || tenantId === 'guest') return null;
+  if (!supabase) return null;
 
   try {
     const { data } = await supabase
@@ -213,19 +282,26 @@ function initSocketIO(io) {
 
   /* AUTH MIDDLEWARE */
   io.use(async (socket, next) => {
-    const token   = socket.handshake.auth?.token || socket.handshake.query?.token;
-    const profile = await resolveToken(token);
-    Object.assign(socket, profile);
-    socket._isGuest = (profile.authType === 'guest');
+    const token = socket.handshake.auth?.token || socket.handshake.headers?.['x-access-token'];
+    const user  = await resolveToken(token);
+
+    if (!user) {
+      console.warn(`[SIO] AUTH_FAILED — closing connection id=${socket.id}`);
+      return next(new Error('Authentication required'));
+    }
+
+    Object.assign(socket, user);
+    socket._isGuest = false;
+    console.log(`[SIO] AUTH_OK userId=${user.userId} tenant=${user.tenantId} auth=${user.authType} id=${socket.id}`);
     next();
   });
 
   /* CONNECTION */
   io.on('connection', (socket) => {
-    let room = `tenant:${socket.tenantId || 'guest'}`;
+    let room = `tenant:${socket.tenantId}`;
     socket.join(room);
 
-    console.log(`[SIO] CONNECT  userId=${socket.userId} tenant=${socket.tenantId} auth=${socket.authType} id=${socket.id}`);
+    console.log(`[SIO] CONNECT userId=${socket.userId} tenant=${socket.tenantId} auth=${socket.authType} id=${socket.id}`);
 
     /* DETECTION STREAM */
     socket.on('detections:start', () => {
@@ -248,7 +324,6 @@ function initSocketIO(io) {
 
     /* IOC BROADCAST */
     socket.on('ioc:broadcast', (ioc) => {
-      if (socket._isGuest) return;
       io.to(`tenant:${socket.tenantId}`).emit('detection:event', {
         ...ioc,
         broadcast: true,
@@ -258,18 +333,17 @@ function initSocketIO(io) {
 
     /* AUTH REFRESH */
     socket.on('auth:refresh', async ({ token }) => {
-      const profile = await resolveToken(token);
-      if (profile.authType === 'guest') {
+      const user = await resolveToken(token);
+      if (!user) {
         socket.emit('auth:refresh_failed', { reason: 'invalid token' });
         return;
       }
       socket.leave(room);
-      Object.assign(socket, profile);
-      socket._isGuest = false;
-      room = `tenant:${profile.tenantId}`;
+      Object.assign(socket, user);
+      room = `tenant:${user.tenantId}`;
       socket.join(room);
-      socket.emit('auth:refreshed', { userId: profile.userId, tenantId: profile.tenantId });
-      console.log(`[SIO] AUTH_REFRESH userId=${profile.userId} tenant=${profile.tenantId}`);
+      socket.emit('auth:refreshed', { userId: user.userId, tenantId: user.tenantId });
+      console.log(`[SIO] AUTH_REFRESH userId=${user.userId} tenant=${user.tenantId}`);
     });
 
     /* DISCONNECT */
@@ -284,26 +358,20 @@ function initSocketIO(io) {
     });
   });
 
-  console.log('[SIO] Socket.IO initialized (REAL + SIMULATED hybrid)');
+  console.log('[SIO] Socket.IO v5.0 initialized (auth required, demo bypass removed)');
 }
 
 /* ═══════════════════════════════════════════════ */
 /*  NATIVE WebSocket SERVER (/ws/detections)      */
-/*  Required for RAKAY frontend v2.0+             */
 /* ═══════════════════════════════════════════════ */
 
-// Connection registry — maps userId → Set of WebSocket clients
-// Limits to 5 connections per userId to prevent runaway reconnects
-const _wsRegistry = new Map();
+const _wsRegistry        = new Map();
 const MAX_CONNS_PER_USER = 5;
-
-const PING_INTERVAL_MS = 30_000;  // 30 s heartbeat
-const PONG_TIMEOUT_MS  = 10_000;  // 10 s to reply
+const PING_INTERVAL_MS   = 30_000;
 
 function _wsRegistryAdd(userId, ws) {
   if (!_wsRegistry.has(userId)) _wsRegistry.set(userId, new Set());
   const set = _wsRegistry.get(userId);
-  // Evict oldest if over limit
   if (set.size >= MAX_CONNS_PER_USER) {
     const [oldest] = set;
     oldest.terminate();
@@ -322,30 +390,43 @@ function _wsRegistryRemove(userId, ws) {
 }
 
 /**
- * Attach a native WebSocket server to the HTTP server
- * at path /ws/detections
+ * initNativeWS — attach a native WebSocket server at /ws/detections.
+ * FIX-002: Unknown tokens close with code 4401 instead of guest fallback.
+ *
+ * @param {import('http').Server} httpServer
  */
 function initNativeWS(httpServer) {
   const wss = new WebSocketServer({ noServer: true });
 
-  // Intercept HTTP upgrade requests
   httpServer.on('upgrade', async (request, socket, head) => {
     const parsedUrl = url.parse(request.url, true);
 
-    if (parsedUrl.pathname !== '/ws/detections') {
-      // Not our path — let Socket.IO handle it (or close)
+    if (parsedUrl.pathname !== '/ws/detections') return;
+
+    // FIX-002: validate connection origin before upgrading
+    if (!validateOrigin(request)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
       return;
     }
 
-    wss.handleUpgrade(request, socket, head, async (ws) => {
+    wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit('connection', ws, request, parsedUrl.query);
     });
   });
 
   wss.on('connection', async (ws, request, query) => {
-    // ── Auth ──────────────────────────────────────────────
-    const token  = query.token || null;
-    const user   = await resolveToken(token);
+    const token = query.token || null;
+    const user  = await resolveToken(token);
+
+    // FIX-002: Reject unauthenticated connections
+    if (!user) {
+      console.warn(`[NWS] AUTH_FAILED — closing unauthenticated connection`);
+      _wsSend(ws, { type: 'auth_failed', reason: 'Authentication required', code: 4401 });
+      ws.close(4401, 'Authentication required');
+      return;
+    }
+
     ws._user     = user;
     ws._alive    = true;
     ws._interval = null;
@@ -354,9 +435,8 @@ function initNativeWS(httpServer) {
     _wsRegistryAdd(user.userId, ws);
 
     const clientId = `${user.userId.slice(0, 16)}-${Date.now().toString(36)}`;
-    console.log(`[NWS] CONNECT  clientId=${clientId} userId=${user.userId} tenant=${user.tenantId} auth=${user.authType}`);
+    console.log(`[NWS] CONNECT clientId=${clientId} userId=${user.userId} tenant=${user.tenantId} auth=${user.authType}`);
 
-    // ── Send welcome / auth confirmation ─────────────────
     _wsSend(ws, {
       type:    'connected',
       message: 'WebSocket connected to Wadjet-Eye AI',
@@ -365,7 +445,7 @@ function initNativeWS(httpServer) {
       auth:    user.authType,
     });
 
-    // ── Heartbeat ping/pong ───────────────────────────────
+    // ── Heartbeat ─────────────────────────────────────────────────
     ws._pingTimer = setInterval(() => {
       if (!ws._alive) {
         console.warn(`[NWS] HEARTBEAT_TIMEOUT clientId=${clientId} — terminating`);
@@ -376,30 +456,26 @@ function initNativeWS(httpServer) {
       try { ws.ping(); } catch {}
     }, PING_INTERVAL_MS);
 
-    ws.on('pong', () => {
-      ws._alive = true;
-    });
+    ws.on('pong', () => { ws._alive = true; });
 
-    // ── Message handling ──────────────────────────────────
+    // ── Message handling ──────────────────────────────────────────
     ws.on('message', async (raw) => {
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
 
       switch (msg.type) {
-        // In-band auth (alternative to query-param)
         case 'auth': {
           const refreshedUser = await resolveToken(msg.token);
-          if (refreshedUser.authType !== 'guest') {
+          if (refreshedUser) {
             ws._user = refreshedUser;
             _wsSend(ws, { type: 'auth_ok', userId: refreshedUser.userId, tenant: refreshedUser.tenantId });
             console.log(`[NWS] AUTH_OK clientId=${clientId} userId=${refreshedUser.userId}`);
           } else {
-            _wsSend(ws, { type: 'auth_failed', reason: 'invalid token' });
+            _wsSend(ws, { type: 'auth_failed', reason: 'invalid token', code: 4401 });
           }
           break;
         }
 
-        // Start live detection stream
         case 'detections:start':
         case 'subscribe': {
           if (ws._interval) break;
@@ -417,7 +493,6 @@ function initNativeWS(httpServer) {
           break;
         }
 
-        // Stop detection stream
         case 'detections:stop':
         case 'unsubscribe': {
           clearInterval(ws._interval);
@@ -426,7 +501,6 @@ function initNativeWS(httpServer) {
           break;
         }
 
-        // Ping/keep-alive from client
         case 'ping': {
           _wsSend(ws, { type: 'pong', ts: Date.now() });
           break;
@@ -437,30 +511,25 @@ function initNativeWS(httpServer) {
       }
     });
 
-    // ── Disconnect cleanup ────────────────────────────────
+    // ── Disconnect cleanup ────────────────────────────────────────
     ws.on('close', (code, reason) => {
       clearInterval(ws._interval);
       clearInterval(ws._pingTimer);
       _wsRegistryRemove(user.userId, ws);
       ws._interval  = null;
       ws._pingTimer = null;
-
-      const reasonStr = reason?.toString() || '';
-      console.log(`[NWS] DISCONNECT clientId=${clientId} code=${code} reason="${reasonStr}" userId=${user.userId}`);
-
-      // If abnormal close, inform the disconnected client (will be received on reconnect)
+      console.log(`[NWS] DISCONNECT clientId=${clientId} code=${code} reason="${reason?.toString() || ''}" userId=${user.userId}`);
       if (code !== 1000 && code !== 1001) {
         console.info(`[NWS] Abnormal close code=${code} — client should apply exponential backoff`);
       }
     });
 
-    // ── Error handler ─────────────────────────────────────
     ws.on('error', (err) => {
       console.error(`[NWS] ERROR clientId=${clientId} userId=${user.userId}:`, err.message);
     });
   });
 
-  console.log('[NWS] Native WebSocket server initialized at /ws/detections');
+  console.log('[NWS] Native WebSocket v5.0 initialized at /ws/detections (demo bypass removed)');
   return wss;
 }
 
@@ -469,11 +538,7 @@ function initNativeWS(httpServer) {
 /* ─────────────────────────────────────────────── */
 function _wsSend(ws, data) {
   if (ws.readyState !== ws.OPEN) return;
-  try {
-    ws.send(JSON.stringify(data));
-  } catch (err) {
-    // ignore — connection may be closing
-  }
+  try { ws.send(JSON.stringify(data)); } catch {}
 }
 
 /* ═══════════════════════════════════════════════ */
@@ -481,17 +546,15 @@ function _wsSend(ws, data) {
 /* ═══════════════════════════════════════════════ */
 
 /**
- * Initialize both Socket.IO and native WebSocket servers.
+ * initWebSockets — initialize Socket.IO and native WS servers.
  *
- * @param {import('socket.io').Server} io  - Socket.IO instance
- * @param {import('http').Server}      httpServer - raw HTTP server
+ * @param {import('socket.io').Server} io
+ * @param {import('http').Server}      httpServer
  */
 function initWebSockets(io, httpServer) {
   initSocketIO(io);
-  if (httpServer) {
-    initNativeWS(httpServer);
-  }
-  console.log('[WS] v4.0 initialized — Socket.IO + Native WS (/ws/detections)');
+  if (httpServer) initNativeWS(httpServer);
+  console.log('[WS] v5.0 initialized — Socket.IO + Native WS (/ws/detections)');
 }
 
 module.exports = { initWebSockets };
