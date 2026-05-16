@@ -15,6 +15,8 @@
   <link rel="stylesheet" href="css/enhancements.css" />
   <!-- Platform v19.0 Master CSS — Full redesign with animations, responsive, micro-interactions -->
   <link rel="stylesheet" href="css/platform-v19.css" />
+  <!-- CDWIE — Dark Web Intelligence Engine v1 CSS -->
+  <link rel="stylesheet" href="css/darkweb-cdwie.css" />
   <!-- Platform v20.0 — Micro-interactions, skeletons, pricing, global fixes -->
   <link rel="stylesheet" href="css/platform-v20.css" />
   <!-- Login v20.0 — Production-grade SOC-style login page -->
@@ -1138,8 +1140,8 @@
 <script src="js/playbooks-data.js"></script>
 <script src="js/playbooks-ui.js"></script>
 <!-- darkweb.js uses const _DW_DATA at global scope — expose as window._ to prevent re-declare -->
-<script>window.__DW_PRELOAD_GUARD__ = true;</script>
-<script src="js/darkweb.js"></script>
+<!-- <script>window.__DW_PRELOAD_GUARD__ = true;</script> -->
+<!-- <script src="js/darkweb.js"></script> --> <!-- superseded by darkweb-cdwie-v1.js -->
 <!-- Guard: move _DW_DATA to window so next darkweb file can override without const collision -->
 <script>try { if(typeof _DW_DATA !== 'undefined') window._DW_DATA_v4 = _DW_DATA; } catch(e){}</script>
 <script src="js/live-pages.js"></script>
@@ -1199,8 +1201,8 @@
      Tenant Management v2.0
      MUST load AFTER: main.js, ioc-intelligence.js, platform-settings.js
 ═══════════════════════════════════════════════════════════ -->
-<!-- Dark Web Intelligence v5.0 — Threat Actor style, animations -->
-<script src="js/darkweb-enhanced.js"></script>
+<!-- Dark Web Intelligence v5.0 — superseded by darkweb-cdwie-v1.js -->
+<!-- <script src="js/darkweb-enhanced.js"></script> -->
 <!-- Exposure Assessment v3.0 — CVE tracking, CVSS, EPSS -->
 <script src="js/exposure-enhanced.js"></script>
 <!-- IOC Registry Search Enhancement v2.0 — real-time type detection -->
@@ -1222,8 +1224,8 @@
      Tenant RBAC v3.0 · Reports v2.0 · Pricing v3.0 · Settings v3.0
      MUST load AFTER all other modules
 ═══════════════════════════════════════════════════════════ -->
-<!-- Dark Web Intelligence v6.0 — Full redesign, 5 tabs, animated cards -->
-<script src="js/darkweb-v6.js"></script>
+<!-- Dark Web Intelligence v6.0 — superseded by darkweb-cdwie-v1.js -->
+<!-- <script src="js/darkweb-v6.js"></script> -->
 <!-- AI Orchestrator v5.0 — Real OpenAI/Claude integration, streaming -->
 <script src="js/ai-orchestrator-v5.js"></script>
 <!-- Live IOC Lookup v3.0 — VT, AbuseIPDB, Shodan, OTX, URLhaus -->
@@ -1494,8 +1496,10 @@
 ═══════════════════════════════════════════════════════════ -->
 <!-- Animation Orchestrator v1.0 — Skeleton loaders, counter anims, page transitions -->
 <script src="js/animation-system.js"></script>
-<!-- Dark Web Intelligence ULTIMATE v7.0 — Root cause fix: all tabs use window.* scope -->
-<script src="js/darkweb-ultimate.js"></script>
+<!-- Dark Web Intelligence ULTIMATE v7.0 — superseded by darkweb-cdwie-v1.js -->
+<!-- <script src="js/darkweb-ultimate.js"></script> -->
+<!-- CDWIE — Dark Web Intelligence Engine v1 (7-engine enterprise module) -->
+<script src="js/darkweb-cdwie-v1.js"></script>
 <!-- Adversary Simulation Engine v1.0 — 8 MITRE-mapped attack chains, interactive SOC UI -->
 <script src="js/adversary-sim.js"></script>
 
