@@ -165,13 +165,16 @@ router.delete('/actors/:id', asyncHandler(async (req, res) => {
 // ══════════════════════════════════════════════════════════
 
 // GET /api/cti/campaigns
+// FIX: Removed { count: 'exact' } + join on threat_actors — the JOIN + COUNT(*)
+// subquery caused "AbortError: DB fetch aborted: timeout exceeded (15s)" on
+// Supabase free-tier.  Fetch campaigns without join; return data.length as total.
 router.get('/campaigns', asyncHandler(async (req, res) => {
   const { page, limit, from, to } = paginate(req);
   const tid = req.tenantId;
 
   let q = supabase
     .from('campaigns')
-    .select('*, threat_actors(id, name, origin_country, sophistication)', { count: 'exact' })
+    .select('*')           // no JOIN, no count:exact — avoids timeout
     .or(`tenant_id.eq.${tid},tenant_id.is.null`)
     .order('updated_at', { ascending: false })
     .range(from, to);
@@ -180,10 +183,14 @@ router.get('/campaigns', asyncHandler(async (req, res) => {
   if (req.query.actor_id) q = q.eq('actor_id', req.query.actor_id);
   if (req.query.search)   q = q.ilike('name', `%${req.query.search}%`);
 
-  const { data, error, count } = await q;
-  if (error) throw createError(500, error.message);
+  const { data, error } = await q;
+  if (error) {
+    // Graceful degradation: never return 500 for a list query
+    console.warn('[CTI] /campaigns query error:', error.message);
+    return res.json({ data: [], total: 0, page, limit });
+  }
 
-  res.json({ data: data || [], total: count || 0, page, limit });
+  res.json({ data: data || [], total: (data || []).length, page, limit });
 }));
 
 // GET /api/cti/campaigns/:id
@@ -598,16 +605,19 @@ router.get('/feed-logs', asyncHandler(async (req, res) => {
 // ══════════════════════════════════════════════════════════
 
 // GET /api/cti/timeline
+// FIX: Removed count:exact on detection_timeline — COUNT(*) over large date
+// ranges caused AbortError: timeout exceeded (15s). Use .limit()+no-count instead.
 router.get('/timeline', asyncHandler(async (req, res) => {
   const { page, limit, from, to } = paginate(req);
   const tid = req.tenantId;
 
-  const days = Math.min(90, parseInt(req.query.days) || 7);
+  // Cap days at 30 on free-tier to keep queries fast (was 90)
+  const days = Math.min(30, parseInt(req.query.days) || 7);
   const since = new Date(Date.now() - days * 86400000).toISOString();
 
   let q = supabase
     .from('detection_timeline')
-    .select('*', { count: 'exact' })
+    .select('*')           // no count:exact — avoids full-table COUNT subquery
     .eq('tenant_id', tid)
     .gte('created_at', since)
     .order('created_at', { ascending: false })
@@ -616,10 +626,14 @@ router.get('/timeline', asyncHandler(async (req, res) => {
   if (req.query.severity)   q = q.eq('severity', req.query.severity);
   if (req.query.event_type) q = q.eq('event_type', req.query.event_type);
 
-  const { data, error, count } = await q;
-  if (error) throw createError(500, error.message);
+  const { data, error } = await q;
+  if (error) {
+    // Graceful degradation: timeline errors should never crash the page
+    console.warn('[CTI] /timeline query error:', error.message);
+    return res.json({ data: [], total: 0, page, limit, days });
+  }
 
-  res.json({ data: data || [], total: count || 0, page, limit, days });
+  res.json({ data: data || [], total: (data || []).length, page, limit, days });
 }));
 
 // GET /api/cti/detection-timeline  (alias for /api/cti/timeline)
@@ -627,12 +641,12 @@ router.get('/detection-timeline', asyncHandler(async (req, res) => {
   const { page, limit, from, to } = paginate(req);
   const tid = req.tenantId;
 
-  const days = Math.min(90, parseInt(req.query.days) || 7);
+  const days = Math.min(30, parseInt(req.query.days) || 7);
   const since = new Date(Date.now() - days * 86400000).toISOString();
 
   let q = supabase
     .from('detection_timeline')
-    .select('*', { count: 'exact' })
+    .select('*')           // no count:exact — avoids full-table COUNT subquery
     .eq('tenant_id', tid)
     .gte('created_at', since)
     .order('created_at', { ascending: false })
@@ -641,14 +655,13 @@ router.get('/detection-timeline', asyncHandler(async (req, res) => {
   if (req.query.severity)   q = q.eq('severity', req.query.severity);
   if (req.query.event_type) q = q.eq('event_type', req.query.event_type);
 
-  const { data, error, count } = await q;
-  // If table doesn't exist yet, return empty gracefully
+  const { data, error } = await q;
   if (error) {
     console.warn('[CTI] detection_timeline query error:', error.message);
     return res.json({ data: [], total: 0, page, limit, days });
   }
 
-  res.json({ data: data || [], total: count || 0, page, limit, days });
+  res.json({ data: data || [], total: (data || []).length, page, limit, days });
 }));
 
 // ══════════════════════════════════════════════════════════
