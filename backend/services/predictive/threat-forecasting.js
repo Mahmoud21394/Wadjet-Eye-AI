@@ -91,7 +91,7 @@ async function fetchGdeltGeoContext(country = '', themes = '') {
       });
     });
     req.on('error',   () => resolve({ success: false, data: [] }));
-    req.on('timeout', () => { req.destroy(); resolve({ success: false, data: [] })); });
+    req.on('timeout', () => { req.destroy(); resolve({ success: false, data: [] }); });
   });
 }
 

@@ -1,4 +1,4 @@
-# Wadjet-Eye AI — Autonomous Cyber Defense Brain v24.0
+# Wadjet-Eye AI — Autonomous Cyber Defense Brain v25.0
 
 > \*\*The world's first Autonomous Cyber Defense Platform — not a dashboard, SIEM, or SOAR.\*\*  
 > Designed to \*\*think, learn, and act\*\* like a human SOC analyst with 13+ AI modules, 3 innovations, and mathematical privacy guarantees.
@@ -17,6 +17,50 @@ Wadjet-Eye AI is a next-generation **Autonomous Cyber Defense Brain** — a modu
 * **Narrates**: Attack Storyline Generator reconstructs attacks as cinematic human-readable stories
 
 \---
+
+## 🆕 v25.0 Release Notes — Elite Security Audit (Phases 0–4)
+
+### What's New in v25.0
+
+A comprehensive **4-phase security audit** hardened every layer of the platform — from API security to AI model integrity to infrastructure isolation.
+
+#### 🔒 Phase 0 — P0 Critical Security Fixes (6 CVEs resolved)
+
+| Fix | Was | Now |
+|-|-|-|
+| FIX-001: CORS | Wildcard `*` on all Vercel proxies | Origin whitelist via `CORS_ALLOWED_ORIGINS`; `Vary: Origin` always set |
+| FIX-002: WebSocket auth | Demo token bypass allowed unauthenticated connections | Fatal startup guard — `process.exit(1)` if `JWT_SECRET` absent; close(4401) for unknowns |
+| FIX-003: Proxy auth | Unauthenticated API proxy calls | Shared JWT guard (`api/_auth-guard.js`) + Upstash Redis rate limiting (60 req/min) |
+| FIX-004: SSRF | No egress validation | Pure-Node IPv4/IPv6 private-range blocker + DNS pre-resolution on every proxy outbound |
+| FIX-005: Dark web OPSEC | Static UA, fixed Tor circuit, plaintext site list | UA rotation pool + 500–3000 ms jitter + AES-256-GCM encrypted site list + NEWNYM circuit rotation |
+| FIX-006: Cache staleness | In-process LRU only | Redis pub/sub eviction propagates suspension to all workers in <1 ms via `profile:evict` channel |
+
+#### 🤖 Phase 1 — AI Security
+
+- **Prompt Injection Defense** (`backend/middleware/promptGuard.js`) — 3 layers: 16-pattern regex (PI-001→PI-016), XML structural isolation (`wrapUntrusted`), output anomaly validation (7 anomaly patterns)
+- **Agent hardening** — `AUTO_EXECUTE_THRESHOLD` 85→95, `is_mock` flag, `_checkConsensus()` dual-provider validation, injection blocking wired into orchestrator
+- **RAG freshness** — TTL metadata on every chunk (`ingested_at`, `expires_at`, `source_hash`, `provenance`); freshness filter on query; nightly `checkDocumentFreshness()` audit
+
+#### 🏗️ Phase 2 — Architecture
+
+- **Dark web Docker microservice** (`backend/services/darkweb/Dockerfile`) — multi-stage Alpine, non-root uid 10001, tini PID 1, `/health` + `/metrics` endpoints, no catch-all egress
+
+#### 🧬 Phase 3 — New Intelligence Capabilities (feature-flagged, off by default)
+
+| Module | Flag | Description |
+|-|-|-|
+| Adversary DNA | `FEATURE_ADVERSARY_DNA` | 616-dim fingerprint vector: TTP(256)+Temporal(168)+Infra(64)+Toolchain(128); Pinecone storage |
+| Kill Chain Forecaster | `FEATURE_KILL_CHAIN_FORECAST` | 14-tactic Markov matrix + Viterbi propagation; Bayesian learning from incidents |
+| Multilingual Dark Web | `FEATURE_MULTILINGUAL_DW` | `franc` language detection + DeepL translation + regex NER pipeline |
+| Cyber Terrain Map | `FEATURE_CYBER_TERRAIN` | BGP.tools ASN lookup + risk scoring + terrain analysis |
+
+#### ⚙️ Phase 4 — Infrastructure
+
+- **K8s NetworkPolicy** — darkweb-monitor restricted to Tor proxy egress only; tor-proxy restricted to Tor relay egress only
+- **CI Security Scanning** — 4 new GitHub Actions jobs: truffleHog secret scan, Semgrep SAST (OWASP Top 10), Trivy container CVE scan, CycloneDX SBOM generation
+- **Prometheus security metrics** — 11 counters (CORS rejections, injection blocks, SSRF blocks, rate limits, WS auth failures, etc.) + Grafana dashboard JSON
+
+---
 
 ## 🆕 v24.0 Release Notes — Threat Graph v2, DNA Engine v2, Settings v3
 
@@ -408,13 +452,19 @@ Remove these 5 lines from `index.html` to fully revert in 30 seconds:
 |Control|Status|Details|
 |-|-|-|
 |Transport|✅ Active|TLS 1.3 enforced|
-|Authentication|✅ Active|Supabase JWT + RLS|
-|API Keys|✅ Active|Vault-stored, backend-proxied|
+|Authentication|✅ Active|Supabase JWT + RLS; WS fatal-guards on missing secret|
+|CORS|✅ Hardened|Origin whitelist (`CORS_ALLOWED_ORIGINS`); no wildcards; `Vary: Origin`|
+|API Keys|✅ Active|Vault-stored, backend-proxied; JWT guard on all 8 proxy endpoints|
+|SSRF Protection|✅ Active|IPv4/IPv6 RFC-1918/loopback/IMDS blocking + DNS pre-resolution|
+|Prompt Injection|✅ Active|3-layer defense: 16 regex patterns + XML isolation + output anomaly detection|
 |Malware Isolation|✅ Active|Sandbox APIs only, no local storage|
 |Privacy (Federated)|✅ Active|ε-DP Laplace mechanism (ε=0.1)|
 |RBAC|✅ Active|Role-scoped destructive action approval|
-|Audit Trail|✅ Active|Full autonomous agent action log|
-|TTL Auto-Delete|✅ Active|Malware reports: 24-72h configurable|
+|Audit Trail|✅ Active|Full autonomous agent action log + `security_audit_log` table with RLS|
+|Rate Limiting|✅ Active|60 req/min per user via Upstash Redis sliding window|
+|Dark Web OPSEC|✅ Hardened|UA rotation + jitter + encrypted site list + Tor circuit rotation|
+|Cache Eviction|✅ Active|Redis pub/sub `profile:evict` — cross-process in <1ms|
+|TTL Auto-Delete|✅ Active|Malware reports: 24-72h; RAG docs: configurable TTL (default 30 days)|
 
 \---
 
