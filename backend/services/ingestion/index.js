@@ -159,12 +159,17 @@ async function upsertIOCs(tenantId, iocs) {
 
   if (deduped.length === 0) return { new: 0, updated: 0, duplicate: dupCount };
 
-  // ── Step 3: batch upsert in chunks of 50 ────────────────────
-  // FIX: Reduced from 100 → 50 rows per chunk to stay well within
-  // Supabase free-tier 15 s statement-timeout. Each chunk takes ~1–3 s.
-  const CHUNK = 50;
-  // Circuit-breaker: stop after 3 consecutive DB errors to avoid
-  // hammering a stalled Supabase connection and burning statement time.
+  // ── Step 3: batch upsert in chunks ──────────────────────────
+  // Chunk size: 25 rows (reduced from 50).
+  // Root cause of "canceling statement due to statement timeout":
+  //   - Supabase free-tier has a 15 s statement timeout.
+  //   - Upserting 50 rows with JSONB enrichment_data + text[] tags can
+  //     take 10-14 s on a busy cluster, randomly exceeding the limit.
+  //   - Dropping .select() removes a second DB round-trip that was the
+  //     primary extra cost — rows are counted conservatively instead.
+  // Inter-chunk delay: 300 ms (up from 150 ms) to let the connection
+  // pool breathe when multiple feed workers run in parallel.
+  const CHUNK = 25;
   let consecutiveErrors = 0;
   const MAX_CONSECUTIVE_ERRORS = 3;
 
@@ -179,49 +184,46 @@ async function upsertIOCs(tenantId, iocs) {
 
     const chunk = deduped.slice(i, i + CHUNK);
 
-    // FIX 2: Supabase JS v2 — do NOT chain .catch() on a Builder.
-    //   Use async/await destructuring only.
-    const { data, error } = await supabase
+    // No .select() — avoids the second DB round-trip that causes timeouts
+    const { error } = await supabase
       .from('iocs')
       .upsert(chunk, {
         onConflict:       'tenant_id,value',
         ignoreDuplicates: false,
-      })
-      .select('id, created_at');
+      });
 
     if (error) {
       consecutiveErrors++;
+      const isTimeout = error.message?.includes('statement timeout') ||
+                        error.message?.includes('canceling statement');
       if (consecutiveErrors === 1 || consecutiveErrors % 5 === 0) {
         console.error(`[Ingestion] upsert error (${consecutiveErrors}):`, error.message);
       }
-      // If still a conflict error, retry with ignoreDuplicates: true
-      if (error.message?.includes('cannot affect row')) {
+      if (isTimeout) {
+        // Timeout: wait 2 s, retry with ignoreDuplicates (faster, no conflict resolution)
+        await new Promise(r => setTimeout(r, 2000));
         const { error: e2 } = await supabase
           .from('iocs')
           .upsert(chunk, { onConflict: 'tenant_id,value', ignoreDuplicates: true });
-        if (e2) {
-          console.error('[Ingestion] retry upsert error:', e2.message);
-        } else {
-          updatedCount += chunk.length;
-          consecutiveErrors = 0; // reset on successful retry
-        }
+        if (!e2) { updatedCount += chunk.length; consecutiveErrors = 0; }
+        else console.error('[Ingestion] timeout-retry error:', e2.message);
+      } else if (error.message?.includes('cannot affect row')) {
+        // Intra-batch duplicate — retry with ignoreDuplicates
+        const { error: e2 } = await supabase
+          .from('iocs')
+          .upsert(chunk, { onConflict: 'tenant_id,value', ignoreDuplicates: true });
+        if (!e2) { updatedCount += chunk.length; consecutiveErrors = 0; }
+        else console.error('[Ingestion] conflict-retry error:', e2.message);
       }
     } else {
-      consecutiveErrors = 0; // reset on success
-      if (data) {
-        const freshCutoff = Date.now() - 10000; // 10s window = "new"
-        for (const row of data) {
-          const createdMs = new Date(row.created_at).getTime();
-          if (createdMs > freshCutoff) newCount++;
-          else updatedCount++;
-        }
-      }
+      consecutiveErrors = 0;
+      // Count conservatively — can't distinguish new vs updated without SELECT
+      updatedCount += chunk.length;
     }
 
-    // Back-pressure: 150 ms between chunks prevents saturating the
-    // Supabase free-tier connection pool and avoids AbortError cascades.
+    // Back-pressure: 300 ms between chunks
     if (i + CHUNK < deduped.length) {
-      await new Promise(r => setTimeout(r, 150));
+      await new Promise(r => setTimeout(r, 300));
     }
   }
 

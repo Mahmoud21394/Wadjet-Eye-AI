@@ -846,19 +846,24 @@ router.post('/correlate', verifyToken, asyncHandler(async (req, res) => {
             .eq('id', existing[0].id);
           campaignsUpdated++;
         } else {
-          // Create new campaign
+          // Create new campaign.
+          // FIX: campaigns table has NO 'threat_actor' text column — it uses
+          // actor_id (UUID FK to threat_actors). Passing a free-text actor name
+          // caused: "Could not find the 'threat_actor' column of 'campaigns'".
+          // Store the actor name in the description field instead and leave
+          // actor_id null (auto-correlated campaigns don't have a DB actor yet).
           const { error: insertErr } = await supabaseAdmin
             .from('campaigns')
             .insert({
-              tenant_id:    tenantId,
-              name:         campaignName,
-              threat_actor: actor,
-              status:       'active',
-              ioc_count:    members.length,
-              severity:     members.some(m => m.risk_score >= 80) ? 'HIGH' : 'MEDIUM',
-              created_at:   now,
-              updated_at:   now,
-              // auto_generated column removed — not in DB schema cache
+              tenant_id:   tenantId,
+              name:        campaignName,
+              description: `Auto-correlated from IOC clustering. Threat actor key: ${actor}`,
+              status:      'active',
+              ioc_count:   members.length,
+              severity:    members.some(m => m.risk_score >= 80) ? 'HIGH' : 'MEDIUM',
+              source:      'auto',
+              created_at:  now,
+              updated_at:  now,
             });
           if (!insertErr) campaignsCreated++;
           else console.warn('[Correlate] Campaign insert error:', insertErr.message);

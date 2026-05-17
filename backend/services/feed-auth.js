@@ -327,12 +327,37 @@ async function feedFetch(feedName, url, options = {}, maxRetries = 2) {
 
       // ── Handle HTTP error responses ──────────────────────────
       if (response.status === 401) {
+        const cfg        = FEED_AUTH_CONFIGS[feedName];
+        const isPublic   = !cfg?.envKey || cfg?.authType === 'no-auth';
+
+        if (isPublic) {
+          // Public feeds (ThreatFox, URLhaus, MalwareBazaar, Feodo, etc.) use
+          // no API key. HTTP 401 from abuse.ch means the server is IP-blocking
+          // this worker — not an auth configuration issue. Log as WARN, not
+          // ERROR, so operators aren't paged for something they can't fix.
+          console.warn(
+            `[FeedAuth][${feedName}] HTTP 401 — public feed, likely IP-blocked or ` +
+            `abuse.ch rate-limiting. Skipping gracefully. ` +
+            `Response: ${JSON.stringify(response.data).slice(0, 120)}`
+          );
+          return {
+            ok:        false,
+            data:      response.data,
+            error:     `HTTP 401 — IP-blocked or temporarily rate-limited by ${feedName}. No API key involved.`,
+            status:    401,
+            authError: false,  // not a config problem — don't trigger auth alerts
+            ipBlocked: true,
+            attempts:  attempt,
+          };
+        }
+
+        // Private feed with API key: genuine auth failure
         const errMsg = `[FeedAuth][${feedName}] HTTP 401 — Check API key: ${auth.headers ? 'headers sent' : 'no headers'}.`;
         console.error(errMsg, 'Response:', JSON.stringify(response.data).slice(0, 200));
         return {
           ok:        false,
           data:      response.data,
-          error:     `Authentication failed (HTTP 401). Verify ${FEED_AUTH_CONFIGS[feedName]?.envKey || 'API key'} is correct.`,
+          error:     `Authentication failed (HTTP 401). Verify ${cfg?.envKey || 'API key'} is correct.`,
           status:    401,
           authError: true,
           attempts:  attempt,

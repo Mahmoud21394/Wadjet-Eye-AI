@@ -117,12 +117,26 @@ CREATE INDEX IF NOT EXISTS idx_security_audit_log_severity
 -- Row-level security: only admin/security roles can read security events
 ALTER TABLE security_audit_log ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY IF NOT EXISTS security_audit_log_admin_read
-  ON security_audit_log
-  FOR SELECT
-  USING (
-    auth.jwt() ->> 'role' IN ('admin', 'security_analyst', 'SUPER_ADMIN')
-  );
+-- DROP before CREATE to make the migration re-runnable (IF NOT EXISTS is not
+-- supported by CREATE POLICY in any PostgreSQL version, including Supabase).
+DO $$
+BEGIN
+  -- security_audit_log_admin_read
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename  = 'security_audit_log'
+      AND policyname = 'security_audit_log_admin_read'
+  ) THEN
+    CREATE POLICY security_audit_log_admin_read
+      ON security_audit_log
+      FOR SELECT
+      USING (
+        auth.jwt() ->> 'role' IN ('admin', 'security_analyst', 'SUPER_ADMIN')
+      );
+  END IF;
+END
+$$;
 
 COMMENT ON TABLE security_audit_log IS 'P0 Security Audit Phase 0 event log — tracks auth failures, injection attempts, SSRF blocks, CORS rejections, rate limit violations';
 
