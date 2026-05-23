@@ -19,6 +19,8 @@
   <link rel="stylesheet" href="css/darkweb-cdwie.css" />
   <!-- CDWIE v2.0 — Cognitive Dark Web Intelligence Engine v2 CSS -->
   <link rel="stylesheet" href="css/darkweb-cdwie-v2.css" />
+  <!-- Threat Modules v2 — TIG v2 + Global Threat Landscape shared stylesheet -->
+  <link rel="stylesheet" href="css/threat-modules-v2.css" />
   <!-- Platform v20.0 — Micro-interactions, skeletons, pricing, global fixes -->
   <link rel="stylesheet" href="css/platform-v20.css" />
   <!-- Login v20.0 — Production-grade SOC-style login page -->
@@ -336,7 +338,11 @@
         </a>
         <a href="#" class="nav-child" data-page="threat-graph">
           <i class="fas fa-project-diagram"></i><span>Threat Intelligence Graph</span>
-          <span class="nav-child-badge" style="background:linear-gradient(90deg,#22d3ee,#3b82f6);color:#fff;font-size:8px;padding:1px 5px;border-radius:8px;">LIVE</span>
+          <span class="nav-child-badge" style="background:linear-gradient(90deg,#22d3ee,#3b82f6);color:#fff;font-size:8px;padding:1px 5px;border-radius:8px;">v2</span>
+        </a>
+        <a href="#" class="nav-child" data-page="global-threat-landscape">
+          <i class="fas fa-globe"></i><span>Global Threat Landscape</span>
+          <span class="nav-child-badge" style="background:linear-gradient(90deg,#ef4444,#f97316);color:#fff;font-size:8px;padding:1px 5px;border-radius:8px;">LIVE</span>
         </a>
         <a href="#" class="nav-child" data-page="digital-risk">
           <i class="fas fa-shield-virus"></i><span>Digital Risk Protection</span>
@@ -985,6 +991,9 @@
     <!-- ======= THREAT INTELLIGENCE GRAPH BRAIN ======= -->
     <div class="page" id="page-threat-graph" style="padding:0;overflow:auto;"></div>
 
+    <!-- ======= GLOBAL THREAT LANDSCAPE ======= -->
+    <div class="page" id="page-global-threat-landscape" style="padding:0;overflow:auto;"></div>
+
     <!-- ======= DIGITAL RISK PROTECTION ======= -->
     <div class="page" id="page-digital-risk" style="padding:0;overflow:auto;"></div>
 
@@ -1527,6 +1536,10 @@
      settings-v3.js         — Fixed bindings, validation, payload, fallback
 ──────────────────────────────────────────────────────────────────────────── -->
 <script src="js/threat-graph-brain.js"></script>
+<!-- Threat Intelligence Graph v2 — 6 enhancements: temporal replay, attack path, blast radius, lens filters, ego mode, AI narrator -->
+<script src="js/threat-graph-v2.js"></script>
+<!-- Global Threat Landscape — 7 tabs: world map, actor registry, campaigns, vuln radar, sector matrix, geopolitical risk, AI brief -->
+<script src="js/global-threat-landscape.js"></script>
 <!-- Malware DNA Engine v1.0.0 — Fully Self-Contained Inline SPA (zero server dependency) -->
 <script src="js/malware-dna-v1-inline.js"></script>
 <script src="js/settings-v3.js"></script>
@@ -1568,7 +1581,8 @@
     'malware-dna-v1':      true,
     'adversary-sim':       true,
     'soc-memory':          true,
-    'threat-graph':        true,
+    'threat-graph':              true,
+    'global-threat-landscape':   true,
     'digital-risk':        true,
     'attack-storyline':    true,
     'whatif-simulator':    true,
@@ -1603,8 +1617,12 @@
     },
     'soc-memory':        () => typeof window.renderSOCMemoryEngine     === 'function' && window.renderSOCMemoryEngine(),
     'threat-graph':      () => {
-      if (typeof window.renderThreatGraph === 'function') window.renderThreatGraph();
+      if (typeof window.renderThreatGraphV2 === 'function') window.renderThreatGraphV2();
+      else if (typeof window.renderThreatGraph === 'function') window.renderThreatGraph();
       else if (typeof window.renderThreatGraphBrain === 'function') window.renderThreatGraphBrain();
+    },
+    'global-threat-landscape': () => {
+      if (typeof window.renderGlobalThreatLandscape === 'function') window.renderGlobalThreatLandscape();
     },
     'digital-risk':      () => typeof window.renderDigitalRiskProtection==='function' && window.renderDigitalRiskProtection(),
     'attack-storyline':  () => typeof window.renderAttackStorylineGenerator==='function' && window.renderAttackStorylineGenerator(),
@@ -1642,7 +1660,8 @@
     'malware-dna-v1':    { title: 'Malware DNA Engine v1.0.0',       breadcrumb: 'Threat Intelligence / Malware DNA Engine' },
     'adversary-sim':     { title: 'Adversary Simulation Lab',       breadcrumb: 'Cyber Defense Brain / Adversary Sim' },
     'soc-memory':        { title: 'SOC Memory Engine',              breadcrumb: 'Cyber Defense Brain / SOC Memory' },
-    'threat-graph':      { title: 'Threat Intelligence Graph',      breadcrumb: 'Cyber Defense Brain / Threat Graph' },
+    'threat-graph':             { title: 'Threat Intelligence Graph v2',  breadcrumb: 'Cyber Defense Brain / Threat Graph v2' },
+    'global-threat-landscape':  { title: 'Global Threat Landscape',        breadcrumb: 'Cyber Defense Brain / Global Threat Landscape' },
     'digital-risk':      { title: 'Digital Risk Protection',        breadcrumb: 'Cyber Defense Brain / Digital Risk' },
     'attack-storyline':  { title: 'Attack Storyline Generator',     breadcrumb: 'Innovations / Attack Storyline' },
     'whatif-simulator':  { title: 'What-If Attack Simulator',       breadcrumb: 'Innovations / What-If Simulator' },
