@@ -9,13 +9,25 @@ const express  = require('express');
 const crypto   = require('crypto');
 const router   = express.Router();
 const logger   = require('../utils/logger');
-const { createClient } = require('@supabase/supabase-js');
+const { createClient } = require('@getSupabase()/getSupabase()-js');
 
 const _SRV = 'EnterpriseAuth';
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+
+// Lazy singleton — createClient() is deferred until first request so that
+// Render's env vars are fully injected before the module executes.
+let _supabase = null;
+function getSupabase() {
+  if (!_supabase) {
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      throw new Error('[EnterpriseAuth] SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY env vars are required');
+    }
+    _supabase = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
+  }
+  return _supabase;
+}
 
 // ── SAML 2.0 Configuration ─────────────────────────────────────────
 const SAML_CONFIG = {
@@ -69,7 +81,7 @@ router.get('/saml/login', async (req, res) => {
   if (!tenant_id) return res.status(400).json({ error: 'tenant_id required' });
 
   try {
-    const { data: tenant } = await supabase
+    const { data: tenant } = await getSupabase()
       .from('tenants')
       .select('saml_idp_metadata_url, saml_idp_entity_id, saml_idp_sso_url')
       .eq('id', tenant_id)
@@ -134,7 +146,7 @@ router.post('/saml/acs', express.urlencoded({ extended: true }), async (req, res
     for (const [, name, value] of attrMatches) attributes[name] = value.trim();
 
     // Upsert user in database
-    const { data: user, error } = await supabase
+    const { data: user, error } = await getSupabase()
       .from('users')
       .upsert({
         email,
@@ -171,7 +183,7 @@ router.get('/oidc/:tenantId/login', async (req, res) => {
   const { tenantId } = req.params;
 
   try {
-    const { data: tenant } = await supabase
+    const { data: tenant } = await getSupabase()
       .from('tenants')
       .select('oidc_issuer, oidc_client_id, oidc_client_secret, oidc_scopes')
       .eq('id', tenantId)
@@ -253,7 +265,7 @@ router.get('/oidc/:tenantId/callback', async (req, res) => {
     const fullName  = userInfo.name  || email;
 
     // Upsert user
-    const { data: user, error } = await supabase
+    const { data: user, error } = await getSupabase()
       .from('users')
       .upsert({
         email, tenant_id: tenantId,
@@ -301,7 +313,7 @@ router.get('/scim/v2/Users', scimAuth, async (req, res) => {
   const tenantId = req.headers['x-tenant-id'];
   if (!tenantId) return res.status(400).json({ error: 'X-Tenant-ID header required' });
 
-  let query = supabase.from('users').select('*').eq('tenant_id', tenantId);
+  let query = getSupabase().from('users').select('*').eq('tenant_id', tenantId);
   if (filter) {
     const emailMatch = filter.match(/userName eq "([^"]+)"/i);
     if (emailMatch) query = query.eq('email', emailMatch[1]);
@@ -325,7 +337,7 @@ router.post('/scim/v2/Users', scimAuth, express.json(), async (req, res) => {
   const { userName, displayName, emails = [], active = true } = req.body;
   const email = emails[0]?.value || userName;
 
-  const { data: user, error } = await supabase
+  const { data: user, error } = await getSupabase()
     .from('users')
     .insert({
       email,
@@ -350,7 +362,7 @@ router.put('/scim/v2/Users/:id', scimAuth, express.json(), async (req, res) => {
   const { displayName, active, emails = [] } = req.body;
   const email = emails[0]?.value;
 
-  const { data: user, error } = await supabase
+  const { data: user, error } = await getSupabase()
     .from('users')
     .update({ full_name: displayName, active, ...(email && { email }) })
     .eq('id', id).eq('tenant_id', tenantId)
@@ -374,7 +386,7 @@ router.patch('/scim/v2/Users/:id', scimAuth, express.json(), async (req, res) =>
     if (op.op === 'Replace' && op.path === 'displayName') updates.full_name = op.value;
   }
 
-  const { data: user, error } = await supabase
+  const { data: user, error } = await getSupabase()
     .from('users').update(updates)
     .eq('id', id).eq('tenant_id', tenantId)
     .select().single();
@@ -388,7 +400,7 @@ router.patch('/scim/v2/Users/:id', scimAuth, express.json(), async (req, res) =>
 router.delete('/scim/v2/Users/:id', scimAuth, async (req, res) => {
   const tenantId = req.headers['x-tenant-id'];
   const { id } = req.params;
-  await supabase.from('users').update({ active: false }).eq('id', id).eq('tenant_id', tenantId);
+  await getSupabase().from('users').update({ active: false }).eq('id', id).eq('tenant_id', tenantId);
   logger.info(_SRV, 'SCIM user deprovisioned', { id, tenantId });
   res.status(204).send();
 });
@@ -413,7 +425,7 @@ function scimUserMap(u) {
 // ── SCIM Groups ────────────────────────────────────────────────────
 router.get('/scim/v2/Groups', scimAuth, async (req, res) => {
   const tenantId = req.headers['x-tenant-id'];
-  const { data: roles } = await supabase.from('roles').select('*').eq('tenant_id', tenantId);
+  const { data: roles } = await getSupabase().from('roles').select('*').eq('tenant_id', tenantId);
   res.json({
     schemas: ['urn:ietf:params:scim:api:messages:2.0:ListResponse'],
     totalResults: (roles || []).length,
@@ -430,7 +442,7 @@ router.get('/partner/tenants', async (req, res) => {
   if (!req.user || req.user.role !== 'SUPER_ADMIN') {
     return res.status(403).json({ error: 'Partner portal requires SUPER_ADMIN role' });
   }
-  const { data: tenants } = await supabase
+  const { data: tenants } = await getSupabase()
     .from('tenants')
     .select('id, name, plan, created_at, active, seats_used, seats_limit, mrr_usd')
     .order('created_at', { ascending: false });
@@ -445,7 +457,7 @@ router.post('/partner/tenants', async (req, res) => {
   if (!name || !admin_email) return res.status(400).json({ error: 'name and admin_email required' });
 
   const tenantId = crypto.randomUUID();
-  const { data: tenant, error } = await supabase
+  const { data: tenant, error } = await getSupabase()
     .from('tenants')
     .insert({ id: tenantId, name, plan, seats_limit, active: true })
     .select().single();
@@ -453,7 +465,7 @@ router.post('/partner/tenants', async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
 
   // Create initial admin user
-  await supabase.from('users').insert({
+  await getSupabase().from('users').insert({
     email: admin_email, tenant_id: tenantId,
     role: 'admin', full_name: admin_email, active: true,
   });
@@ -468,8 +480,8 @@ router.get('/mssp/overview', async (req, res) => {
     return res.status(403).json({ error: 'MSSP access required' });
   }
 
-  const { data: stats } = await supabase.rpc('mssp_tenant_overview');
-  const { data: alerts } = await supabase
+  const { data: stats } = await getSupabase().rpc('mssp_tenant_overview');
+  const { data: alerts } = await getSupabase()
     .from('alerts').select('tenant_id, severity, status')
     .eq('status', 'open').limit(1000);
 
@@ -491,7 +503,7 @@ router.get('/sso/config', async (req, res) => {
   const tenantId = req.tenantId;
   if (!tenantId) return res.status(400).json({ error: 'Tenant context required' });
 
-  const { data } = await supabase
+  const { data } = await getSupabase()
     .from('tenants')
     .select('saml_idp_metadata_url, saml_idp_entity_id, saml_idp_sso_url, oidc_issuer, oidc_client_id, sso_provider')
     .eq('id', tenantId).single();
@@ -510,14 +522,14 @@ router.put('/sso/config', async (req, res) => {
   const updates = {};
   for (const k of allowed) { if (req.body[k] !== undefined) updates[k] = req.body[k]; }
 
-  await supabase.from('tenants').update(updates).eq('id', tenantId);
+  await getSupabase().from('tenants').update(updates).eq('id', tenantId);
   logger.info(_SRV, 'SSO config updated', { tenantId, provider: updates.sso_provider });
   res.json({ message: 'SSO configuration updated', tenant_id: tenantId });
 });
 
 // ── API Key Management (versioned APIs, service accounts) ─────────
 router.get('/api-keys', async (req, res) => {
-  const { data } = await supabase
+  const { data } = await getSupabase()
     .from('api_keys')
     .select('id, name, created_at, last_used_at, expires_at, scopes, active')
     .eq('tenant_id', req.tenantId);
@@ -533,7 +545,7 @@ router.post('/api-keys', async (req, res) => {
   const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
   const expiresAt = new Date(Date.now() + expires_days * 86400000).toISOString();
 
-  const { data, error } = await supabase.from('api_keys').insert({
+  const { data, error } = await getSupabase().from('api_keys').insert({
     tenant_id: req.tenantId, name, key_hash: keyHash,
     scopes, expires_at: expiresAt, created_by: req.user.id, active: true,
   }).select('id, name, expires_at, scopes').single();
@@ -544,7 +556,7 @@ router.post('/api-keys', async (req, res) => {
 });
 
 router.delete('/api-keys/:id', async (req, res) => {
-  await supabase.from('api_keys').update({ active: false })
+  await getSupabase().from('api_keys').update({ active: false })
     .eq('id', req.params.id).eq('tenant_id', req.tenantId);
   res.json({ message: 'API key revoked' });
 });
