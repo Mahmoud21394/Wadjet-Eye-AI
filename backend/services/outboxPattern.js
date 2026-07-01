@@ -3,6 +3,10 @@
  * WS9: Transactional Outbox Pattern for reliable event publishing
  * Ensures at-least-once delivery of domain events to Kafka/event bus
  * Prevents dual-write failures between DB and event bus
+ *
+ * Fault-tolerant: if the outbox_events table doesn't exist yet (migration
+ * pending), the relay pauses silently and retries every 60 s instead of
+ * spamming an error every 5 s.
  */
 'use strict';
 
@@ -12,10 +16,37 @@ const { createClient } = require('@supabase/supabase-js');
 
 const _SRV = 'OutboxPattern';
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+// ── Lazy Supabase singleton (same pattern as enterprise-auth.js) ──
+let _supabase = null;
+function getSupabase() {
+  if (!_supabase) {
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      throw new Error('[OutboxPattern] SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required');
+    }
+    _supabase = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
+  }
+  return _supabase;
+}
+
+// ── Table-readiness guard ─────────────────────────────────────────
+// Tracks whether the outbox_events table has been confirmed to exist.
+// Avoids hammering Supabase with error logs every 5 s when the migration
+// hasn't been run yet.
+let _tableReady  = false;   // set true on first successful query
+let _tableMissing = false;  // set true when "table not found" detected
+const TABLE_MISSING_MSGS = [
+  'Could not find the table',
+  'does not exist',
+  'relation "public.outbox_events" does not exist',
+  'schema cache',
+];
+
+function isTableMissingError(errMsg = '') {
+  return TABLE_MISSING_MSGS.some(m => errMsg.includes(m));
+}
 
 // Kafka producer (optional — gracefully degrades if not configured)
 let kafkaProducer = null;
@@ -46,75 +77,132 @@ async function getKafkaProducer() {
 
 // ── Domain Event Types ────────────────────────────────────────────
 const EVENTS = {
-  ALERT_CREATED:       'alert.created',
-  ALERT_ESCALATED:     'alert.escalated',
-  ALERT_RESOLVED:      'alert.resolved',
-  IOC_DETECTED:        'ioc.detected',
-  IOC_ENRICHED:        'ioc.enriched',
-  DECISION_MADE:       'decision.made',
-  DECISION_APPROVED:   'decision.approved',
-  SOAR_ACTION:         'soar.action.executed',
-  TENANT_CREATED:      'tenant.created',
-  USER_CREATED:        'user.created',
-  CASE_CREATED:        'case.created',
-  THREAT_DETECTED:     'threat.detected',
-  COMPLIANCE_VIOLATION:'compliance.violation',
-  SECURITY_EVENT:      'security.event',
+  ALERT_CREATED:        'alert.created',
+  ALERT_ESCALATED:      'alert.escalated',
+  ALERT_RESOLVED:       'alert.resolved',
+  IOC_DETECTED:         'ioc.detected',
+  IOC_ENRICHED:         'ioc.enriched',
+  DECISION_MADE:        'decision.made',
+  DECISION_APPROVED:    'decision.approved',
+  SOAR_ACTION:          'soar.action.executed',
+  TENANT_CREATED:       'tenant.created',
+  USER_CREATED:         'user.created',
+  CASE_CREATED:         'case.created',
+  THREAT_DETECTED:      'threat.detected',
+  COMPLIANCE_VIOLATION: 'compliance.violation',
+  SECURITY_EVENT:       'security.event',
 };
 
 /**
- * Append event to outbox table (within the same DB transaction as the domain write)
- * @param {string} eventType - One of EVENTS.*
- * @param {object} payload   - Event payload
- * @param {object} opts      - { tenantId, aggregateId, aggregateType, traceId }
- * @returns {string} eventId
+ * Append event to outbox table (within the same DB transaction as the domain write).
+ * No-ops silently if the table doesn't exist yet.
  */
 async function appendEvent(eventType, payload, opts = {}) {
+  if (_tableMissing) {
+    // Table not yet created — queue internally or skip (non-critical path)
+    logger.warn(_SRV, 'appendEvent skipped — outbox_events table not yet created', { eventType });
+    return null;
+  }
+
   const eventId = crypto.randomUUID();
   const { tenantId, aggregateId, aggregateType = 'unknown', traceId } = opts;
 
-  const { error } = await supabase.from('outbox_events').insert({
-    id:             eventId,
-    event_type:     eventType,
-    aggregate_type: aggregateType,
-    aggregate_id:   aggregateId,
-    tenant_id:      tenantId,
-    payload:        payload,
-    trace_id:       traceId,
-    status:         'pending',
-    created_at:     new Date().toISOString(),
-    retry_count:    0,
-  });
+  try {
+    const { error } = await getSupabase().from('outbox_events').insert({
+      id:             eventId,
+      event_type:     eventType,
+      aggregate_type: aggregateType,
+      aggregate_id:   aggregateId,
+      tenant_id:      tenantId,
+      payload:        payload,
+      trace_id:       traceId,
+      status:         'pending',
+      created_at:     new Date().toISOString(),
+      retry_count:    0,
+    });
 
-  if (error) {
-    logger.error(_SRV, 'Failed to append outbox event', { eventType, error: error.message });
-    throw error;
+    if (error) {
+      if (isTableMissingError(error.message)) {
+        _tableMissing = true;
+        logger.warn(_SRV, 'outbox_events table missing — run migration SQL. appendEvent disabled until table exists.');
+        return null;
+      }
+      logger.error(_SRV, 'Failed to append outbox event', { eventType, error: error.message });
+      throw error;
+    }
+
+    _tableReady  = true;
+    _tableMissing = false;
+    logger.info(_SRV, 'Event appended to outbox', { eventId, eventType, tenantId, aggregateId });
+    return eventId;
+  } catch (err) {
+    if (isTableMissingError(err.message)) {
+      _tableMissing = true;
+      logger.warn(_SRV, 'outbox_events table missing — outbox disabled until migration is run.');
+      return null;
+    }
+    throw err;
   }
-
-  logger.info(_SRV, 'Event appended to outbox', { eventId, eventType, tenantId, aggregateId });
-  return eventId;
 }
 
 /**
- * Relay processor — reads pending outbox events and publishes to Kafka (or fallback)
- * Runs on an interval; designed to be idempotent
+ * Relay processor — reads pending outbox events and publishes to Kafka (or fallback).
+ * Skips silently (no error log) when the table is confirmed missing.
  */
 async function relayPendingEvents({ batchSize = 50 } = {}) {
-  const { data: events, error } = await supabase
-    .from('outbox_events')
-    .select('*')
-    .eq('status', 'pending')
-    .lt('retry_count', 5)
-    .order('created_at', { ascending: true })
-    .limit(batchSize);
+  // If we already know the table is missing, skip silently
+  if (_tableMissing) return;
 
-  if (error) { logger.error(_SRV, 'Relay query failed', { error: error.message }); return; }
-  if (!events || events.length === 0) return;
+  let data, error;
+  try {
+    ({ data, error } = await getSupabase()
+      .from('outbox_events')
+      .select('*')
+      .eq('status', 'pending')
+      .lt('retry_count', 5)
+      .order('created_at', { ascending: true })
+      .limit(batchSize));
+  } catch (err) {
+    if (isTableMissingError(err.message)) {
+      _tableMissing = true;
+      logger.warn(_SRV, 'outbox_events table not found — relay paused. Run migration SQL to enable.');
+      return;
+    }
+    logger.error(_SRV, 'Relay query exception', { error: err.message });
+    return;
+  }
 
-  logger.info(_SRV, `Relaying ${events.length} outbox events`);
+  if (error) {
+    if (isTableMissingError(error.message)) {
+      // Log ONCE, then go silent until the table is created
+      if (!_tableMissing) {
+        logger.warn(_SRV,
+          'outbox_events table not found — relay paused.\n' +
+          '  → Run this SQL in Supabase SQL Editor:\n' +
+          '  → backend/db/migrations/20260701_enterprise_ws8_ws9.sql\n' +
+          '  → The relay will auto-resume once the table exists.'
+        );
+        _tableMissing = true;
+      }
+      return;
+    }
+    logger.error(_SRV, 'Relay query failed', { error: error.message });
+    return;
+  }
+
+  // Table confirmed reachable
+  if (_tableMissing) {
+    logger.info(_SRV, 'outbox_events table now reachable — relay resumed.');
+    _tableMissing = false;
+  }
+  _tableReady = true;
+
+  if (!data || data.length === 0) return;
+
+  logger.info(_SRV, `Relaying ${data.length} outbox events`);
   const producer = await getKafkaProducer();
 
-  for (const event of events) {
+  for (const event of data) {
     try {
       if (producer) {
         await producer.send({
@@ -132,29 +220,29 @@ async function relayPendingEvents({ batchSize = 50 } = {}) {
               timestamp:      event.created_at,
             }),
             headers: {
-              'x-event-id':    event.id,
-              'x-tenant-id':   event.tenant_id || '',
-              'x-trace-id':    event.trace_id  || '',
-              'x-event-type':  event.event_type,
+              'x-event-id':   event.id,
+              'x-tenant-id':  event.tenant_id || '',
+              'x-trace-id':   event.trace_id  || '',
+              'x-event-type': event.event_type,
             },
           }],
         });
       } else {
-        // Fallback: log event for SIEM/webhook delivery
+        // No Kafka — structured log fallback for SIEM ingestion
         logger.info(_SRV, 'Outbox event (no-Kafka fallback)', {
           eventType: event.event_type, tenantId: event.tenant_id, payload: event.payload,
         });
       }
 
       // Mark published
-      await supabase.from('outbox_events').update({
+      await getSupabase().from('outbox_events').update({
         status:       'published',
         published_at: new Date().toISOString(),
       }).eq('id', event.id);
 
     } catch (err) {
       logger.error(_SRV, 'Event relay failed', { eventId: event.id, error: err.message });
-      await supabase.from('outbox_events').update({
+      await getSupabase().from('outbox_events').update({
         retry_count:  event.retry_count + 1,
         last_error:   err.message,
         status:       event.retry_count + 1 >= 5 ? 'failed' : 'pending',
@@ -208,20 +296,43 @@ class SagaCoordinator {
 }
 
 // ── Outbox Relay Scheduler ────────────────────────────────────────
-let _relayInterval = null;
+// Uses two intervals:
+//   FAST  (5 s)  — normal relay when table exists
+//   SLOW  (60 s) — health-check probe when table is missing
+let _fastInterval = null;
+let _slowInterval = null;
 
 function startOutboxRelay(intervalMs = 5_000) {
-  if (_relayInterval) return;
-  _relayInterval = setInterval(() => {
-    relayPendingEvents().catch(err =>
-      logger.error(_SRV, 'Relay interval error', { error: err.message })
-    );
+  if (_fastInterval) return; // already running
+
+  // Fast relay loop
+  _fastInterval = setInterval(async () => {
+    if (_tableMissing) return; // table missing — skip, slow loop handles probe
+    try {
+      await relayPendingEvents();
+    } catch (err) {
+      logger.error(_SRV, 'Relay interval error', { error: err.message });
+    }
   }, intervalMs);
-  logger.info(_SRV, `Outbox relay started (interval: ${intervalMs}ms)`);
+
+  // Slow probe loop — retries when table is missing
+  _slowInterval = setInterval(async () => {
+    if (!_tableMissing) return; // table present — fast loop handles it
+    logger.info(_SRV, 'Probing for outbox_events table...');
+    _tableMissing = false; // reset so relayPendingEvents will try
+    try {
+      await relayPendingEvents();
+    } catch (err) {
+      logger.error(_SRV, 'Probe error', { error: err.message });
+    }
+  }, 60_000);
+
+  logger.info(_SRV, `Outbox relay started (fast: ${intervalMs}ms, slow-probe: 60000ms)`);
 }
 
 function stopOutboxRelay() {
-  if (_relayInterval) { clearInterval(_relayInterval); _relayInterval = null; }
+  if (_fastInterval) { clearInterval(_fastInterval); _fastInterval = null; }
+  if (_slowInterval) { clearInterval(_slowInterval); _slowInterval = null; }
 }
 
 module.exports = {
