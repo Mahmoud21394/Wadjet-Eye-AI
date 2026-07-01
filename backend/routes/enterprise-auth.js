@@ -9,7 +9,7 @@ const express  = require('express');
 const crypto   = require('crypto');
 const router   = express.Router();
 const logger   = require('../utils/logger');
-const { createClient } = require('@getSupabase()/getSupabase()-js');
+const { createClient } = require('@supabase/supabase-js');
 
 const _SRV = 'EnterpriseAuth';
 
