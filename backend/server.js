@@ -155,6 +155,10 @@ const {
   slowRequestLogger,
   routeNotFoundLogger,
 } = require('./middleware/observability');
+// ── Enterprise Audit Remediation: AI Security Firewall ───────────
+const { aiFirewallMiddleware } = require('./middleware/aiFirewall');
+const { ssrfGuardMiddleware }  = require('./middleware/ssrfGuard');
+const { dlpResponseMiddleware } = require('./middleware/dlp');
 
 // ── Routes ───────────────────────────────────────────────────────
 const authRoutes      = require('./routes/auth');
@@ -200,6 +204,15 @@ const sysmonRoutes        = require('./routes/sysmon');              // ← Sysm
 const threatActorRoutes   = require('./routes/threat-actors');       // ← Threat actor Intel
 const whatifRoutes        = require('./routes/whatif');              // ← What-if scenario planner
 const v2MetricsRoutes     = require('./routes/v2/metrics');          // ← API v2 metrics
+
+// ── Enterprise Audit Remediation: WS2-WS10 ───────────────────────
+const { tenantValidationMiddleware, fromRequest } = require('./db/tenantDb');
+const { telemetryMiddleware, recordHttpRequest }  = require('./services/telemetry');
+const aiGovernanceRoutes  = require('./routes/ai-governance');       // ← WS4 AI Governance
+const complianceRoutes    = require('./routes/compliance');           // ← WS5 Compliance
+const metricsRoutes       = require('./routes/metrics');             // ← WS6 Prometheus metrics
+const enterpriseAuthRoutes = require('./routes/enterprise-auth');    // ← WS8 SAML/OIDC/SCIM
+const { startOutboxRelay } = require('./services/outboxPattern');    // ← WS9 Outbox
 
 // ── Realtime ─────────────────────────────────────────────────────
 const { initWebSockets } = require('./realtime/websockets');
@@ -655,6 +668,24 @@ app.use('/api/malware', malwareAnalysisRoutes);
 // ════════════════════════════════════════════════════════════════
 app.use(verifyToken);  // All routes BELOW this line require a valid JWT
 app.use(auditLog);     // Automatically log every mutating request
+app.use(dlpResponseMiddleware);    // DLP: attach res.dlpScan() + res.auditedDownload() helpers
+app.use(telemetryMiddleware);      // WS6: OpenTelemetry trace ID on every request
+
+// ── AI Security Firewall — applied to ALL AI/RAG/Agent routes ────
+// Every LLM entry point is protected: prompt injection, taint tracking,
+// tool allow-lists, model allow-lists. No exceptions.
+app.use('/api/ai',            aiFirewallMiddleware);
+app.use('/api/rag',           aiFirewallMiddleware, ssrfGuardMiddleware);
+app.use('/api/agents',        aiFirewallMiddleware);
+app.use('/api/RAKAY',         aiFirewallMiddleware);
+app.use('/api/raykan',        aiFirewallMiddleware);
+app.use('/api/soc',           aiFirewallMiddleware);
+app.use('/api/email-threat',  aiFirewallMiddleware);
+app.use('/api/malware',       aiFirewallMiddleware);
+app.use('/api/cti',           aiFirewallMiddleware);
+app.use('/api/intel',         ssrfGuardMiddleware);
+app.use('/api/adversary-sim', aiFirewallMiddleware);
+app.use('/api/ingest',        ssrfGuardMiddleware);
 
 app.use('/api/alerts',    alertRoutes);
 app.use('/api/cases',     caseRoutes);
@@ -697,6 +728,27 @@ app.use('/api/sysmon',         sysmonRoutes);
 app.use('/api/threat-actors',  threatActorRoutes);
 app.use('/api/whatif',         whatifRoutes);
 app.use('/api/soc-metrics',    socMetricsRoutes);
+
+// ── WS4 AI Governance ─────────────────────────────────────────────
+app.use('/api/ai-governance', aiFirewallMiddleware, aiGovernanceRoutes);
+
+// ── WS5 Compliance ───────────────────────────────────────────────
+app.use('/api/compliance',    complianceRoutes);
+
+// ── WS6 Prometheus Metrics ──────────────────────────────────────
+app.use('/metrics',           metricsRoutes);
+
+// ── WS8 Enterprise Auth (SAML/OIDC/SCIM/Partner Portal) ─────────
+app.use('/api/enterprise',    enterpriseAuthRoutes);
+
+// ── WS2 Tenant Validation (applied to all data routes) ──────────
+app.use([
+  '/api/alerts', '/api/cases', '/api/iocs', '/api/playbooks',
+  '/api/collectors', '/api/vulnerabilities', '/api/reports',
+  '/api/exposure', '/api/soar', '/api/detection', '/api/rag',
+  '/api/graph', '/api/threat-graph', '/api/stix', '/api/soc-metrics',
+], tenantValidationMiddleware);
+
 // NOTE: /api/raykan is mounted BEFORE verifyToken (see PUBLIC ROUTES section above)
 //       so it is accessible without JWT for demo mode and frontend integration.
 // ════════════════════════════════════════════════════════════════
@@ -727,6 +779,9 @@ initWebSockets(io, httpServer);
 //  SCHEDULER — starts CTI ingestion + SOAR cron jobs
 // ════════════════════════════════════════════════════════════════
 startScheduler();
+
+// ── WS9: Outbox relay — reliable event publishing ────────────────
+startOutboxRelay(5_000);
 
 // ════════════════════════════════════════════════════════════════
 //  GRACEFUL SHUTDOWN
