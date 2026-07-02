@@ -169,15 +169,20 @@ async function upsertIOCs(tenantId, iocs) {
   //     primary extra cost — rows are counted conservatively instead.
   // Inter-chunk delay: 300 ms (up from 150 ms) to let the connection
   // pool breathe when multiple feed workers run in parallel.
-  const CHUNK = 25;
+  // Chunk size: 25 rows normally. Halved to 10 if timeouts are detected.
+  // Root fix: run migration 20260702_fix_news_ioc_schema.sql which creates
+  // uq_iocs_tenant_value — eliminates the full-table scan that causes timeouts.
+  let CHUNK = 25;
   let consecutiveErrors = 0;
+  let timeoutsSeen = 0;
   const MAX_CONSECUTIVE_ERRORS = 3;
 
   for (let i = 0; i < deduped.length; i += CHUNK) {
     if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
       console.warn(
         `[Ingestion] Circuit-breaker tripped after ${consecutiveErrors} errors — ` +
-        `skipping remaining ${deduped.length - i} IOCs`
+        `skipping remaining ${deduped.length - i} IOCs. ` +
+        `Run migration 20260702_fix_news_ioc_schema.sql to fix timeouts.`
       );
       break;
     }
@@ -196,12 +201,22 @@ async function upsertIOCs(tenantId, iocs) {
       consecutiveErrors++;
       const isTimeout = error.message?.includes('statement timeout') ||
                         error.message?.includes('canceling statement');
+      // Log only first error and every 5th to avoid spam
       if (consecutiveErrors === 1 || consecutiveErrors % 5 === 0) {
-        console.error(`[Ingestion] upsert error (${consecutiveErrors}):`, error.message);
+        const hint = isTimeout
+          ? ' (run migration 20260702_fix_news_ioc_schema.sql to add missing index)'
+          : '';
+        console.error(`[Ingestion] upsert error (${consecutiveErrors}):`, error.message + hint);
       }
       if (isTimeout) {
-        // Timeout: wait 2 s, retry with ignoreDuplicates (faster, no conflict resolution)
-        await new Promise(r => setTimeout(r, 2000));
+        timeoutsSeen++;
+        // After first timeout: halve chunk size for remaining rows
+        if (timeoutsSeen === 1 && CHUNK > 10) {
+          CHUNK = 10;
+          console.warn('[Ingestion] Timeout detected — reducing chunk size to 10 rows.');
+        }
+        // Wait 3s, retry with ignoreDuplicates (faster path, skips conflict resolution)
+        await new Promise(r => setTimeout(r, 3000));
         const { error: e2 } = await supabase
           .from('iocs')
           .upsert(chunk, { onConflict: 'tenant_id,value', ignoreDuplicates: true });
@@ -221,9 +236,9 @@ async function upsertIOCs(tenantId, iocs) {
       updatedCount += chunk.length;
     }
 
-    // Back-pressure: 300 ms between chunks
+    // Back-pressure: 300 ms between chunks (500 ms after a timeout)
     if (i + CHUNK < deduped.length) {
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise(r => setTimeout(r, timeoutsSeen > 0 ? 500 : 300));
     }
   }
 
