@@ -572,6 +572,9 @@ global.cnhApplyNewsFilter = function () {
   S.filters.news.severity = document.getElementById('nf-sev')?.value || '';
   S.filters.news.source   = document.getElementById('nf-src')?.value || '';
   S.newsPage = 1;
+  // FIX (Issue 1): Bust the news cache on every filter change so "All Severities"
+  // never returns a stale cached empty result from a previous failed/empty load.
+  S.newsCache.clear();
   loadNews(S.tab);
 };
 
@@ -598,7 +601,13 @@ async function loadNews(category) {
   if (!data) {
     try {
       data = await apiFetch(url);
-      cSet(S.newsCache, cacheKey, data);
+      // FIX (Issue 1): Only cache non-empty successful responses.
+      // Never cache an empty data array — that would cause "All Severities"
+      // to permanently return nothing if the first load coincided with a DB
+      // error (e.g. schema migration not yet run).
+      if (data && Array.isArray(data.data) && data.data.length > 0) {
+        cSet(S.newsCache, cacheKey, data);
+      }
     } catch (err) {
       S.busy = false;
       showError('News Service Unavailable',
@@ -630,6 +639,11 @@ function renderNewsGrid(articles, totalPages, category) {
   const accentColor = {
     'threat-intelligence':'#3b82f6','vulnerabilities':'#f97316','cyber-attacks':'#ef4444',
   }[category] || '#3b82f6';
+  // FIX (Issue 2): Reset the article store before each grid render so that
+  // (a) old indices don't pile up in memory across page navigations, and
+  // (b) indices in the new grid always start fresh and never collide.
+  _articleStore.clear();
+  _articleStoreIdx = 0;
   content.innerHTML = `
     <div class="cnh-grid" id="cnh-news-grid">
       ${articles.map(a => newsCard(a, accentColor)).join('')}
@@ -637,6 +651,25 @@ function renderNewsGrid(articles, totalPages, category) {
     ${pagination(S.newsPage, totalPages, 'cnhNewsPage')}
   `;
 }
+
+// ─── Article store — indexed lookup avoids embedding JSON in onclick attrs ──
+// FIX (Issue 2): Instead of serialising the full article object into an inline
+// onclick attribute (which breaks for articles containing quotes, newlines or
+// other characters that interfere with HTML attribute parsing / JS string
+// literal parsing), we store each article in a module-level Map and pass
+// only its numeric index.  This eliminates the entire class of "only the
+// first article opens" bugs caused by JSON parse failures on onclick strings.
+const _articleStore = new Map();
+let   _articleStoreIdx = 0;
+
+function storeArticle(a) {
+  const idx = _articleStoreIdx++;
+  _articleStore.set(idx, a);
+  return idx;
+}
+
+// Exposed globally so the onclick attribute can reach it
+global._cnhGetArticle = function(idx) { return _articleStore.get(idx) || null; };
 
 // ─── News card ─────────────────────────────────────────────────────────
 function newsCard(a, accentColor) {
@@ -649,11 +682,13 @@ function newsCard(a, accentColor) {
   const actors = (a.threatActors || a.threat_actors || []).slice(0, 2);
   const summary = cleanText(a.summary || a.description || '');
   const url   = a.url || a.link || '#';
-  const safeA = JSON.stringify(a).replace(/</g,'\\u003c').replace(/>/g,'\\u003e').replace(/&/g,'\\u0026');
+  // FIX (Issue 2): Store article in indexed map; pass only integer index to onclick.
+  // Avoids all JSON-in-HTML-attribute escaping issues that silently broke cards 2+.
+  const artIdx = storeArticle(a);
 
   return `
   <div class="cnh-card"
-    onclick="cnhOpenDetail(${h(safeA)})"
+    onclick="cnhOpenDetailByIdx(${artIdx})"
     style="border-top:3px solid ${accentColor}"
     onmouseover="this.style.borderColor='${accentColor}';this.style.transform='translateY(-3px)';this.style.boxShadow='0 10px 30px rgba(0,0,0,.5)'"
     onmouseout="this.style.borderColor='#0f1929';this.style.borderTopColor='${accentColor}';this.style.transform='';this.style.boxShadow=''"
@@ -737,6 +772,18 @@ function newsCard(a, accentColor) {
 }
 
 // ─── Article detail panel ───────────────────────────────────────────────
+// FIX (Issue 2): New index-based article opener — no JSON parsing required.
+global.cnhOpenDetailByIdx = function (idx) {
+  const a = global._cnhGetArticle(idx);
+  if (!a) {
+    console.error('[CyberNewsHub] cnhOpenDetailByIdx: article not found for idx', idx);
+    return;
+  }
+  renderDetailPanel(a);
+};
+
+// Legacy entry point kept for backward compatibility (e.g. existing bookmarks
+// or other callers that pass a JSON string directly).
 global.cnhOpenDetail = function (jsonStr) {
   try {
     const a = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
@@ -876,7 +923,16 @@ global.cnhCloseDetail = function (evt) {
     if (evt.target && evt.target.id !== 'cnh-detail-overlay') return;
   }
   const overlay = document.getElementById('cnh-detail-overlay');
-  if (overlay) { overlay.style.display = 'none'; overlay.innerHTML = ''; }
+  // FIX (Issue 2): NEVER use overlay.innerHTML = '' — that destroys the
+  // structural child elements (cnh-detail-panel, cnh-detail-body) so that
+  // renderDetailPanel() finds no #cnh-detail-body and returns immediately
+  // on every subsequent open, making all articles after the first appear broken.
+  // Correct approach: hide the overlay and clear only the BODY content.
+  if (overlay) {
+    overlay.style.display = 'none';
+    const body = document.getElementById('cnh-detail-body');
+    if (body) body.innerHTML = '';
+  }
   document.body.style.overflow = '';
 };
 
