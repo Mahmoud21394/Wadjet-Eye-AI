@@ -114,6 +114,8 @@ function classifyCategory(text, feedDefault) {
 }
 
 // ── Severity classifier ───────────────────────────────────────────
+// Returns only values in the severity_level ENUM / TEXT CHECK constraint:
+//   'critical' | 'high' | 'medium' | 'low' | 'informational' | 'unknown'
 function classifySeverity(text) {
   if (/critical|zero.?day|actively exploit|in the wild|ransomware|nation.?state|supply.?chain attack/i.test(text))
     return 'critical';
@@ -122,6 +124,24 @@ function classifySeverity(text) {
   if (/patch|update|advisory|vulnerability|cve|medium/i.test(text))
     return 'medium';
   return 'low';
+}
+
+// ── Severity sanitizer ───────────────────────────────────────────
+// Defence-in-depth: normalises ANY arbitrary severity string coming from
+// external RSS/API feeds to the exact values the DB column accepts.
+// This prevents "invalid input value for enum severity_level" even if
+// the column is still an ENUM type in production (pre-migration).
+const VALID_SEVERITY = new Set(['critical', 'high', 'medium', 'low', 'informational', 'unknown']);
+function sanitizeSeverity(value) {
+  if (!value) return 'medium';
+  const v = String(value).toLowerCase().trim();
+  if (VALID_SEVERITY.has(v)) return v;
+  // Map common aliases to canonical values
+  if (v === 'info' || v === 'notice')   return 'informational';
+  if (v === 'warn' || v === 'warning')  return 'medium';
+  if (v === 'error' || v === 'severe')  return 'high';
+  if (v === 'emergency' || v === 'fatal') return 'critical';
+  return 'medium'; // safe default for anything unrecognised
 }
 
 // ── Entity extractor ─────────────────────────────────────────────
@@ -297,7 +317,7 @@ async function storeArticles(articles, tenantId) {
       category:         a.category || 'threat-intelligence',
       summary:          (a.description || '').slice(0, 2000),
       image_url:        a.imageUrl || null,
-      severity:         a.severity || 'medium',
+      severity:         sanitizeSeverity(a.severity),
       cves:             a.cves || [],
       threat_actors:    a.actors || [],
       malware_families: a.malware || [],
@@ -321,6 +341,7 @@ async function storeArticles(articles, tenantId) {
   if (typeof storeArticles._compositeOk === 'undefined') storeArticles._compositeOk = true;
   if (typeof storeArticles._warnedImg === 'undefined') storeArticles._warnedImg = false;
   if (typeof storeArticles._warnedComposite === 'undefined') storeArticles._warnedComposite = false;
+  if (typeof storeArticles._warnedSeverityEnum === 'undefined') storeArticles._warnedSeverityEnum = false;
 
   for (let i = 0; i < records.length; i += CHUNK_SIZE) {
     const chunk = records.slice(i, i + CHUNK_SIZE);
@@ -397,6 +418,27 @@ async function storeArticles(articles, tenantId) {
           // ── UUID leak: should never happen now (id stripped above) ─
           // Log clearly so it's easy to diagnose if it recurs.
           console.error('[News] UUID syntax error despite id-strip — chunk skipped. First record external_guid:', chunk[0]?.external_guid);
+
+        } else if (msg.includes('invalid input value for enum') && msg.includes('severity')) {
+          // ── Enum rejection: production DB column is still an ENUM type.
+          // sanitizeSeverity() should prevent this, but if it still fires
+          // (e.g. a DB constraint the migration hasn't run yet), retry with
+          // severity stripped out so the chunk still lands in the DB.
+          if (!storeArticles._warnedSeverityEnum) {
+            console.warn(
+              '[News] severity column is an ENUM type rejecting values — ' +
+              'run migration 20260702_fix_news_ioc_schema.sql FIX 5 in Supabase. ' +
+              'Retrying chunk with severity omitted for this session.'
+            );
+            storeArticles._warnedSeverityEnum = true;
+          }
+          const withoutSeverity = (rows) => rows.map(r => { const { severity: _s, ...rest } = r; return rest; }); // eslint-disable-line no-unused-vars
+          const { error: e2 } = await supabaseClient
+            .from('news_articles')
+            .upsert(withoutSeverity(workingChunk), { onConflict: conflictCol, ignoreDuplicates: true });
+          if (!e2) { updatedCount += chunk.length; upsertOk = true; }
+          else console.warn('[News] Severity-omit retry error:', e2.message);
+
         } else {
           console.warn('[News] DB upsert error:', error.message);
         }

@@ -7,9 +7,11 @@
 --   [News] there is no unique or exclusion constraint matching ON CONFLICT
 --   [Correlate] IOC fetch error: canceling statement due to statement timeout
 --   [Ingestion] upsert error: canceling statement due to statement timeout
+--   [News] DB upsert error: invalid input value for enum severity_level
+--   [Exposure] Failed to fetch assets: column asset_inventory.name does not exist
 --
 -- Run in: Supabase Dashboard → SQL Editor → paste → Run
--- Safe to run multiple times (all use IF NOT EXISTS)
+-- Safe to run multiple times (all use IF NOT EXISTS / DO $$ blocks)
 -- ══════════════════════════════════════════════════════════════════════════════
 
 BEGIN;
@@ -119,6 +121,87 @@ CREATE INDEX IF NOT EXISTS idx_outbox_pending
 CREATE INDEX IF NOT EXISTS idx_outbox_tenant
   ON outbox_events (tenant_id);
 
+-- ─────────────────────────────────────────────────────────────────────────────
+-- FIX 5: news_articles.severity — convert from ENUM to TEXT
+--
+-- Error: [News] DB upsert error: invalid input value for enum severity_level: "medium"
+--
+-- Root cause: In some deployments the news_articles.severity column was created
+-- with the severity_level ENUM type, but the production enum instance differs
+-- from the migration definition, causing valid values like 'medium'/'high'/'low'
+-- to be rejected with "invalid input value for enum severity_level".
+--
+-- Fix: Convert the column to plain TEXT. The application already validates
+-- severity values via classifySeverity() which only returns valid values.
+-- A CHECK constraint is added for defence-in-depth.
+-- ─────────────────────────────────────────────────────────────────────────────
+DO $$
+BEGIN
+  -- Only convert if the column is currently an enum type (not TEXT already)
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_name  = 'news_articles'
+      AND column_name = 'severity'
+      AND data_type   = 'USER-DEFINED'
+  ) THEN
+    -- Cast to TEXT (preserves existing data, removes enum constraint)
+    ALTER TABLE news_articles
+      ALTER COLUMN severity TYPE TEXT USING severity::TEXT;
+
+    RAISE NOTICE 'news_articles.severity converted from ENUM to TEXT';
+  ELSE
+    RAISE NOTICE 'news_articles.severity is already TEXT — no conversion needed';
+  END IF;
+END $$;
+
+-- Add CHECK constraint so only valid values are accepted at the DB layer
+-- (defence-in-depth — the app layer also validates via classifySeverity())
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'news_articles'::regclass
+      AND conname  = 'news_articles_severity_check'
+  ) THEN
+    ALTER TABLE news_articles
+      ADD CONSTRAINT news_articles_severity_check
+      CHECK (severity IN ('critical','high','medium','low','informational','unknown'));
+    RAISE NOTICE 'news_articles_severity_check constraint added';
+  ELSE
+    RAISE NOTICE 'news_articles_severity_check already exists — skipping';
+  END IF;
+END $$;
+
+-- Set a sensible default for rows that have NULL severity
+UPDATE news_articles
+  SET severity = 'medium'
+  WHERE severity IS NULL;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- FIX 6: asset_inventory.name — add missing column
+--
+-- Error: [Exposure] Failed to fetch assets: column asset_inventory.name does not exist
+--
+-- Root cause: The asset_inventory table was created without the `name` column
+-- in some deployment paths (the column is defined in migration-v5.2-live-cti.sql
+-- as NOT NULL, but that migration may not have run, or the table was created
+-- differently).
+--
+-- Fix: Add the column with a safe default (NOT NULL default 'Unknown Asset').
+-- Existing rows get default='Unknown Asset'; new rows must supply a real name.
+-- ─────────────────────────────────────────────────────────────────────────────
+ALTER TABLE asset_inventory
+  ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT 'Unknown Asset';
+
+-- Also ensure hostname column exists (used in exposure correlation)
+ALTER TABLE asset_inventory
+  ADD COLUMN IF NOT EXISTS hostname TEXT;
+
+-- Performance index for the ilike search in GET /api/exposure/assets?search=
+CREATE INDEX IF NOT EXISTS idx_asset_inventory_name_trgm
+  ON asset_inventory USING GIN (name gin_trgm_ops);
+
 COMMIT;
 
 -- ══════════════════════════════════════════════════════════════════════════════
@@ -130,16 +213,26 @@ COMMIT;
 --    WHERE table_name = 'news_articles'
 --    ORDER BY ordinal_position;
 --
--- 2. Check news_articles indexes (should include uq_news_articles_tenant_guid):
+-- 2. Confirm news_articles.severity is now TEXT (not USER-DEFINED):
+--    SELECT column_name, data_type, udt_name
+--    FROM information_schema.columns
+--    WHERE table_name = 'news_articles' AND column_name = 'severity';
+--
+-- 3. Check news_articles indexes (should include uq_news_articles_tenant_guid):
 --    SELECT indexname, indexdef
 --    FROM pg_indexes
 --    WHERE tablename = 'news_articles';
 --
--- 3. Check iocs indexes (should include uq_iocs_tenant_value):
+-- 4. Check iocs indexes (should include uq_iocs_tenant_value):
 --    SELECT indexname, indexdef
 --    FROM pg_indexes
 --    WHERE tablename = 'iocs';
 --
--- 4. Confirm outbox_events exists:
+-- 5. Confirm outbox_events exists:
 --    SELECT COUNT(*) FROM outbox_events;
+--
+-- 6. Confirm asset_inventory has name column:
+--    SELECT column_name, data_type, column_default
+--    FROM information_schema.columns
+--    WHERE table_name = 'asset_inventory' AND column_name = 'name';
 -- ══════════════════════════════════════════════════════════════════════════════
