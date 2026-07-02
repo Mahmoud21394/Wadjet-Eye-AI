@@ -313,19 +313,34 @@ async function storeArticles(articles, tenantId) {
   const CHUNK_SIZE = 15;
   let newCount = 0, updatedCount = 0;
 
+  // ── Schema-state flags (module-level memoization) ────────────────
+  // Once we discover that image_url or the composite index is missing,
+  // we skip those attempts for all subsequent chunks in this run.
+  // This eliminates per-chunk repeated warnings in the Render logs.
+  if (typeof storeArticles._imgOk === 'undefined') storeArticles._imgOk = true;
+  if (typeof storeArticles._compositeOk === 'undefined') storeArticles._compositeOk = true;
+  if (typeof storeArticles._warnedImg === 'undefined') storeArticles._warnedImg = false;
+  if (typeof storeArticles._warnedComposite === 'undefined') storeArticles._warnedComposite = false;
+
   for (let i = 0; i < records.length; i += CHUNK_SIZE) {
     const chunk = records.slice(i, i + CHUNK_SIZE);
 
     // Helper: strip image_url from all rows in chunk
     const withoutImg = (rows) => rows.map(r => { const { image_url, ...rest } = r; return rest; }); // eslint-disable-line no-unused-vars
 
+    // Apply memoized schema knowledge to avoid repeated failing attempts
+    let workingChunk = storeArticles._imgOk ? chunk : withoutImg(chunk);
+    const conflictCol = storeArticles._compositeOk
+      ? 'tenant_id,external_guid'
+      : 'external_guid';
+
     let upsertOk = false;
 
-    // ── Attempt 1: composite onConflict (requires unique index) ──
+    // ── Attempt 1: upsert with current best-known schema ─────────
     try {
       const { error } = await supabaseClient
         .from('news_articles')
-        .upsert(chunk, { onConflict: 'tenant_id,external_guid', ignoreDuplicates: true });
+        .upsert(workingChunk, { onConflict: conflictCol, ignoreDuplicates: true });
 
       if (!error) {
         updatedCount += chunk.length;
@@ -339,35 +354,44 @@ async function storeArticles(articles, tenantId) {
           await new Promise(r => setTimeout(r, 2000));
           const { error: e2 } = await supabaseClient
             .from('news_articles')
-            .upsert(withoutImg(chunk), { onConflict: 'tenant_id,external_guid', ignoreDuplicates: true });
+            .upsert(withoutImg(workingChunk), { onConflict: conflictCol, ignoreDuplicates: true });
           if (!e2) { updatedCount += chunk.length; upsertOk = true; }
           else console.warn('[News] Timeout-retry error:', e2.message);
 
         } else if (msg.includes('no unique or exclusion constraint') ||
                    msg.includes('there is no unique or exclusion constraint')) {
-          // ── No composite index: fall back to single-col onConflict ─
-          console.warn('[News] Missing composite index — falling back to external_guid-only conflict');
+          // ── No composite index: memoize + fall back to single-col ─
+          if (!storeArticles._warnedComposite) {
+            console.warn('[News] Missing composite unique index on (tenant_id,external_guid).' +
+              ' Run migration 20260702_fix_news_ioc_schema.sql in Supabase.' +
+              ' Falling back to external_guid-only conflict for this session.');
+            storeArticles._warnedComposite = true;
+          }
+          storeArticles._compositeOk = false;
           const { error: e2 } = await supabaseClient
             .from('news_articles')
             .upsert(withoutImg(chunk), { onConflict: 'external_guid', ignoreDuplicates: true });
           if (!e2) { updatedCount += chunk.length; upsertOk = true; }
           else {
-            // Last resort: plain insert, ignore duplicates entirely
+            // Last resort: plain insert (may produce duplicates but won't crash)
             const { error: e3 } = await supabaseClient
               .from('news_articles')
-              .insert(withoutImg(chunk))
-              .throwOnError();
+              .insert(withoutImg(chunk));
             if (!e3) { newCount += chunk.length; upsertOk = true; }
           }
 
         } else if (msg.includes('image_url') || msg.includes('column')) {
-          // ── Schema drift: retry without image_url ──────────────
-          console.warn('[News] image_url column missing — retrying without it');
+          // ── Schema drift: memoize + retry without image_url ───────
+          if (!storeArticles._warnedImg) {
+            console.warn('[News] image_url column missing — run migration 20260702_fix_news_ioc_schema.sql.' +
+              ' Dropping image_url from inserts for this session.');
+            storeArticles._warnedImg = true;
+          }
+          storeArticles._imgOk = false;
           const { error: e2 } = await supabaseClient
             .from('news_articles')
-            .upsert(withoutImg(chunk), { onConflict: 'tenant_id,external_guid', ignoreDuplicates: true });
+            .upsert(withoutImg(chunk), { onConflict: conflictCol, ignoreDuplicates: true });
           if (!e2) { updatedCount += chunk.length; upsertOk = true; }
-          else console.warn('[News] Schema-fallback error:', e2.message);
 
         } else if (msg.includes('invalid input syntax for type uuid')) {
           // ── UUID leak: should never happen now (id stripped above) ─
