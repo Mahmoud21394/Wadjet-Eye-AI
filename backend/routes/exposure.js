@@ -74,7 +74,7 @@ async function runExposureCorrelation(tenantId) {
     // 2. Get all active assets
     const { data: assets, error: assetErr } = await supabase
       .from('asset_inventory')
-      .select('id, name, ip_address, hostname, open_ports, services, criticality, type')
+      .select('id, ip_address, hostname, open_ports, services, criticality, type')
       .eq('tenant_id', tenantId)
       .eq('status', 'active');
 
@@ -160,7 +160,7 @@ async function runExposureCorrelation(tenantId) {
           metadata: {
             ioc_value:       ioc.value,
             ioc_type:        ioc.type,
-            asset_name:      asset.name,
+            asset_name:      asset.name || asset.hostname || asset.ip_address || 'Unknown Asset',
             asset_type:      asset.type,
             kill_chain_phase: ioc.kill_chain_phase,
           },
@@ -299,7 +299,7 @@ router.get('/assets', asyncHandler(async (req, res) => {
 
   if (req.query.type)        q = q.eq('type', req.query.type);
   if (req.query.criticality) q = q.eq('criticality', req.query.criticality);
-  if (req.query.search)      q = q.ilike('name', `%${req.query.search}%`);
+  if (req.query.search)      q = q.ilike('hostname', `%${req.query.search}%`);
 
   const { data, count, error } = await q;
   if (error) throw error;
@@ -423,7 +423,7 @@ router.get('/mappings', asyncHandler(async (req, res) => {
     .select(`
       *,
       iocs!ioc_id(value, type, reputation, risk_score, source),
-      asset_inventory!asset_id(name, type, ip_address, criticality)
+      asset_inventory!asset_id(type, ip_address, hostname, criticality)
     `, { count: 'exact' })
     .eq('tenant_id', tenantId)
     .order('risk_score', { ascending: false })

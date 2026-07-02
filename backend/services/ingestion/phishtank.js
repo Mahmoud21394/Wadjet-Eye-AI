@@ -249,7 +249,8 @@ async function ingestPhishTank(tenantId) {
           validateStatus: (s) => s < 500, // Accept 404/429 without throw
         });
         if (resp.status === 404) {
-          console.warn(`[Ingestion][PhishTank] 404 on attempt ${attempt} — PhishTank feed may be unavailable`);
+          // PhishTank public feed frequently returns 404 — log at INFO to reduce noise
+          if (attempt === 1) console.info('[Ingestion][PhishTank] Feed returned 404 — will retry then fall back to OpenPhish');
           lastErr = new Error('PhishTank feed returned 404 — feed temporarily unavailable');
           await new Promise(r => setTimeout(r, 5000 * attempt));
           continue;
@@ -257,7 +258,7 @@ async function ingestPhishTank(tenantId) {
         if (resp.status === 429) {
           const retryAfter = parseInt(resp.headers['retry-after'] || '60', 10);
           const wait = Math.min(retryAfter, 120) * 1000;
-          console.warn(`[Ingestion][PhishTank] 429 rate limited — waiting ${wait/1000}s (attempt ${attempt})`);
+          if (attempt === 1) console.info(`[Ingestion][PhishTank] Rate limited (429) — waiting ${wait/1000}s before retry`);
           lastErr = new Error(`PhishTank rate limited (429)`);
           await new Promise(r => setTimeout(r, wait));
           continue;
@@ -266,7 +267,8 @@ async function ingestPhishTank(tenantId) {
         break;
       } catch (fetchErr) {
         lastErr = fetchErr;
-        console.warn(`[Ingestion][PhishTank] Attempt ${attempt} failed: ${fetchErr.message}`);
+        // Only log first attempt failure to avoid log spam across 3 retries
+        if (attempt === 1) console.info(`[Ingestion][PhishTank] Fetch error (will retry): ${fetchErr.message}`);
         if (attempt < 3) await new Promise(r => setTimeout(r, 5000 * attempt));
       }
     }
@@ -276,7 +278,8 @@ async function ingestPhishTank(tenantId) {
       // PhishTank is frequently unavailable or IP-rate-limited; OpenPhish provides
       // a comparable public phishing URL feed that requires no authentication.
       const fallbackErr = lastErr?.message || 'PhishTank feed unavailable after 3 attempts';
-      console.warn(`[Ingestion][PhishTank] All attempts failed (${fallbackErr}) — falling back to OpenPhish`);
+      // Single consolidated warning (not 3 separate ones) — OpenPhish fallback handles coverage
+      console.info(`[Ingestion][PhishTank] Unavailable (${fallbackErr}) — using OpenPhish fallback`);
 
       try {
         const fallbackResp = await axios.get('https://openphish.com/feed.txt', {
@@ -310,7 +313,7 @@ async function ingestPhishTank(tenantId) {
           return fStats;
         }
       } catch (fbErr) {
-        console.warn(`[Ingestion][PhishTank] OpenPhish fallback also failed: ${fbErr.message}`);
+        console.warn(`[Ingestion][PhishTank] OpenPhish fallback also failed: ${fbErr.message} — no phishing URLs this run`);
       }
 
       // Both PhishTank and OpenPhish failed — log gracefully and return skipped
