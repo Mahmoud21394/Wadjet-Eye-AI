@@ -137,7 +137,12 @@ router.get('/', async (req, res) => {
       _real_data: true,
     };
 
-    ncSet(cacheKey, response);
+    // FIX (Issue 1): Only cache non-empty responses. Caching empty arrays would
+    // make "All Severities" permanently return nothing when the first request
+    // coincided with a DB schema error (e.g. severity column ENUM mismatch).
+    if (normalized.length > 0) {
+      ncSet(cacheKey, response);
+    }
     res.json(response);
   } catch (err) {
     console.error('[News API] Error:', err.message);
