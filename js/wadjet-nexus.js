@@ -123,6 +123,7 @@ function scoreRing(score, max = 100, color = DS.accent) {
 // ── State ─────────────────────────────────────────────────────────────────────
 const NX = {
   tab: 'nexus-dashboard',
+  currentEl: null,         // the active page-nexus-* div
   data: {},
   filters: {},
   loading: {},
@@ -130,18 +131,37 @@ const NX = {
 };
 
 // ── Module Container ──────────────────────────────────────────────────────────
-function getContainer() {
-  return document.getElementById('nexus-container') || document.getElementById('main-content');
+// Priority order:
+//  1. An element explicitly passed by the PAGE_CONFIG wiring (page-nexus-* div)
+//  2. The last page-nexus-* div that was made active by main.js
+//  3. Any visible .page element (fallback)
+function getContainer(explicitEl) {
+  if (explicitEl && explicitEl.nodeType === 1) return explicitEl;
+  if (NX.currentEl && NX.currentEl.nodeType === 1) return NX.currentEl;
+  // Find the currently active page div
+  const active = document.querySelector('.page.active[id^="page-nexus"]');
+  if (active) return active;
+  // Fallback: first nexus page div
+  return document.querySelector('[id^="page-nexus-"]');
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  MAIN RENDER DISPATCH
 // ══════════════════════════════════════════════════════════════════════════════
-function renderNexusPage(page) {
-  const container = getContainer();
-  if (!container) return;
+// renderNexusPage(page, el)
+//   page  — internal sub-page key (e.g. 'nexus-dashboard')
+//   el    — optional DOM element to render into (passed by PAGE_CONFIG wiring)
+function renderNexusPage(page, el) {
+  const container = getContainer(el);
+  if (!container) {
+    console.warn('[NexusModule] No container found for page:', page);
+    return;
+  }
+  NX.currentEl = container;
   NX.tab = page;
-  container.innerHTML = `<div class="nexus-wrapper" style="padding:24px;min-height:calc(100vh - 80px);background:${DS.bg};">${nexusShell(page)}</div>`;
+  // Make container scrollable and sized correctly
+  container.style.cssText = 'overflow-y:auto;height:100%;min-height:300px;';
+  container.innerHTML = `<div class="nexus-wrapper" style="display:flex;min-height:100%;background:${DS.bg};">${nexusShell(page)}</div>`;
   dispatchPage(page);
 }
 
@@ -223,8 +243,10 @@ function nexusShell(page) {
       .nexus-wrapper { display:flex; gap:0; font-family:'Inter',system-ui,sans-serif; }
       .nx-sidebar {
         width:220px; min-width:220px; background:${DS.bgCard};
-        border-right:1px solid ${DS.border}; height:calc(100vh - 80px);
-        overflow-y:auto; padding:12px 8px; position:sticky; top:0;
+        border-right:1px solid ${DS.border};
+        min-height:100%; height:auto;
+        overflow-y:auto; padding:12px 8px;
+        align-self:stretch;
         scrollbar-width:thin; scrollbar-color:${DS.border} transparent;
       }
       .nx-sidebar-brand {
@@ -253,7 +275,7 @@ function nexusShell(page) {
         font-weight:600; }
       .nx-content {
         flex:1; min-width:0; padding:0 24px 24px; overflow-y:auto;
-        height:calc(100vh - 80px);
+        min-height:400px; height:100%;
       }
       .nx-page-header {
         display:flex; align-items:center; gap:12px; padding:20px 0 16px;
@@ -371,37 +393,54 @@ function nexusShell(page) {
 
 function dispatchPage(page) {
   const map = {
-    'nexus-dashboard': renderDashboard,
-    'nexus-ctem':      renderCTEM,
-    'nexus-vuln':      renderVulnerabilities,
-    'nexus-path':      renderAttackPaths,
-    'nexus-grc':       renderGRC,
-    'nexus-hunt':      renderThreatHunting,
-    'nexus-bas':       renderBAS,
-    'nexus-dfir':      renderDFIR,
-    'nexus-tid':       renderTID,
-    'nexus-mitre':     renderMITRE,
-    'nexus-kill':      renderKillChain,
-    'nexus-risk':      renderRiskRegister,
-    'nexus-tprm':      renderTPRM,
-    'nexus-sbom':      renderSBOM,
-    'nexus-crisis':    renderCrisis,
-    'nexus-conn':      renderConnectors,
-    'nexus-ransom':    renderRansomware,
-    'nexus-aoi':       renderAOI,
-    'nexus-insure':    renderInsurance,
-    'nexus-pqcmm':     renderPQCMM,
-    'nexus-pentest':   renderPentest,
-    'nexus-sigma':     renderSigma,
-    'nexus-yara':      renderYARA,
-    'nexus-ebios':     renderEBIOS,
-    'nexus-nist':      renderNIST,
-    'nexus-bia':       renderBIA,
-    'nexus-disc':      renderDiscovery,
-    'nexus-policy':    renderPolicies,
-    'nexus-jobs':      renderJobs,
-    'nexus-ident':     renderIdentities,
-    'nexus-fairmam':   renderFAIRMAM,
+    // ── Internal short-keys (used by within-module NexusModule.goto() calls) ──
+    'nexus-dashboard':    renderDashboard,
+    'nexus-ctem':         renderCTEM,
+    'nexus-vuln':         renderVulnerabilities,
+    'nexus-path':         renderAttackPaths,
+    'nexus-grc':          renderGRC,
+    'nexus-hunt':         renderThreatHunting,
+    'nexus-bas':          renderBAS,
+    'nexus-dfir':         renderDFIR,
+    'nexus-tid':          renderTID,
+    'nexus-mitre':        renderMITRE,
+    'nexus-kill':         renderKillChain,
+    'nexus-risk':         renderRiskRegister,
+    'nexus-tprm':         renderTPRM,
+    'nexus-sbom':         renderSBOM,
+    'nexus-crisis':       renderCrisis,
+    'nexus-conn':         renderConnectors,
+    'nexus-ransom':       renderRansomware,
+    'nexus-aoi':          renderAOI,
+    'nexus-insure':       renderInsurance,
+    'nexus-pqcmm':        renderPQCMM,
+    'nexus-pentest':      renderPentest,
+    'nexus-sigma':        renderSigma,
+    'nexus-yara':         renderYARA,
+    'nexus-ebios':        renderEBIOS,
+    'nexus-nist':         renderNIST,
+    'nexus-bia':          renderBIA,
+    'nexus-disc':         renderDiscovery,
+    'nexus-policy':       renderPolicies,
+    'nexus-jobs':         renderJobs,
+    'nexus-ident':        renderIdentities,
+    'nexus-fairmam':      renderFAIRMAM,
+    // ── Full page-IDs used by the sidebar nav & PAGE_CONFIG wiring ──
+    // These map the data-page values (e.g. "nexus-vulnerabilities") to renderers
+    'nexus-vulnerabilities': renderVulnerabilities,
+    'nexus-attack-paths':    renderAttackPaths,
+    'nexus-threat-hunting':  renderThreatHunting,
+    'nexus-risk-register':   renderRiskRegister,
+    'nexus-connectors':      renderConnectors,
+    'nexus-kill-chain':      renderKillChain,
+    'nexus-ransomware':      renderRansomware,
+    'nexus-insurance':       renderInsurance,
+    'nexus-identities':      renderIdentities,
+    'nexus-fair-mam':        renderFAIRMAM,
+    'nexus-discovery':       renderDiscovery,
+    'nexus-policies':        renderPolicies,
+    'nexus-scheduler':       renderJobs,
+    'nexus-ai-guardrails':   renderPolicies,   // reuse Policies layout until dedicated renderer added
   };
   const fn = map[page];
   if (fn) fn();
@@ -409,7 +448,13 @@ function dispatchPage(page) {
 }
 
 function setContent(html) {
-  const el = document.getElementById('nx-content');
+  // Primary: the inner #nx-content div rendered by nexusShell
+  let el = document.getElementById('nx-content');
+  // Fallback: write directly into the current page container
+  if (!el && NX.currentEl) {
+    el = NX.currentEl;
+    el.style.cssText = 'overflow-y:auto;height:100%;min-height:300px;padding:24px;background:' + DS.bg + ';';
+  }
   if (el) { el.innerHTML = html; el.classList.add('nx-slide-in'); }
 }
 
@@ -2438,8 +2483,8 @@ function showToast(message, type = 'info') {
 //  PUBLIC API
 // ══════════════════════════════════════════════════════════════════════════════
 const NexusModule = {
-  init: renderNexusPage,
-  goto: renderNexusPage,
+  init:   renderNexusPage,
+  goto:   renderNexusPage,   // goto(page, el?) — el is the page-nexus-* div
   render: renderNexusPage,
 
   // Dashboard
@@ -2488,10 +2533,12 @@ const NexusModule = {
   assessInsurance,
 };
 
-// Expose globally for onclick handlers
-if (typeof global !== 'undefined') { global.NexusModule = NexusModule; }
+// Expose globally for onclick handlers in HTML attributes
 if (typeof window !== 'undefined') { window.NexusModule = NexusModule; }
 
-module.exports = NexusModule;
+// CommonJS export — guarded so it doesn't throw in a browser context
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = NexusModule;
+}
 
 })(typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : this);
