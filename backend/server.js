@@ -204,6 +204,9 @@ const sysmonRoutes        = require('./routes/sysmon');              // ← Sysm
 const threatActorRoutes   = require('./routes/threat-actors');       // ← Threat actor Intel
 const whatifRoutes        = require('./routes/whatif');              // ← What-if scenario planner
 const v2MetricsRoutes     = require('./routes/v2/metrics');          // ← API v2 metrics
+// ── Wadjet Nexus — Cyber Risk & Exposure Management ──────────────
+const nexusRoutes         = require('./routes/nexus');               // ← Wadjet Nexus (XORCISM integration)
+const { startNexusScheduler } = require('./services/nexus-scheduler'); // ← Nexus background jobs
 
 // ── Enterprise Audit Remediation: WS2-WS10 ───────────────────────
 const { tenantValidationMiddleware, fromRequest } = require('./db/tenantDb');
@@ -728,6 +731,8 @@ app.use('/api/sysmon',         sysmonRoutes);
 app.use('/api/threat-actors',  threatActorRoutes);
 app.use('/api/whatif',         whatifRoutes);
 app.use('/api/soc-metrics',    socMetricsRoutes);
+// ── Wadjet Nexus — Cyber Risk & Exposure Management ───────────────
+app.use('/api/nexus',          nexusRoutes);
 
 // ── WS4 AI Governance ─────────────────────────────────────────────
 app.use('/api/ai-governance', aiFirewallMiddleware, aiGovernanceRoutes);
@@ -779,6 +784,9 @@ initWebSockets(io, httpServer);
 //  SCHEDULER — starts CTI ingestion + SOAR cron jobs
 // ════════════════════════════════════════════════════════════════
 startScheduler();
+
+// ── Wadjet Nexus: Background scheduler (CVE/RiskScore/AttackPath) ─
+startNexusScheduler();
 
 // ── WS9: Outbox relay — reliable event publishing ────────────────
 startOutboxRelay(5_000);
