@@ -493,6 +493,72 @@
     <div class="nav-group-sep"></div>
 
     <!-- ════════════════════════════════════════
+         WADJET NEXUS — Cyber Risk & Exposure Management
+    ════════════════════════════════════════ -->
+    <div class="nav-group nav-group--nexus" data-group="nexus">
+      <button class="nav-group-header" onclick="toggleNavGroup(this)">
+        <span class="nav-group-icon"><i class="fas fa-eye"></i></span>
+        <span class="nav-group-label">Wadjet Nexus</span>
+        <span class="nav-group-count">16</span>
+        <span class="nav-child-badge" style="background:linear-gradient(90deg,#3b82f6,#06b6d4);color:#fff;font-size:8px;padding:1px 5px;border-radius:8px;margin-left:4px;">NEW</span>
+        <i class="fas fa-chevron-down nav-group-chevron"></i>
+      </button>
+      <div class="nav-group-children">
+        <a href="#" class="nav-child" data-page="nexus-dashboard">
+          <i class="fas fa-tachometer-alt"></i><span>Risk Dashboard</span>
+          <span class="nav-child-badge" style="background:linear-gradient(90deg,#ef4444,#f97316);color:#fff;font-size:8px;padding:1px 5px;border-radius:8px;">LIVE</span>
+        </a>
+        <a href="#" class="nav-child" data-page="nexus-vulnerabilities">
+          <i class="fas fa-bug"></i><span>Vulnerability Mgmt</span>
+        </a>
+        <a href="#" class="nav-child" data-page="nexus-attack-paths">
+          <i class="fas fa-project-diagram"></i><span>Attack Path Analysis</span>
+        </a>
+        <a href="#" class="nav-child" data-page="nexus-ctem">
+          <i class="fas fa-crosshairs"></i><span>CTEM / Exposure</span>
+        </a>
+        <a href="#" class="nav-child" data-page="nexus-mitre">
+          <i class="fas fa-th"></i><span>MITRE ATT&amp;CK</span>
+        </a>
+        <a href="#" class="nav-child" data-page="nexus-tid">
+          <i class="fas fa-shield-alt"></i><span>TID Cockpit</span>
+        </a>
+        <a href="#" class="nav-child" data-page="nexus-threat-hunting">
+          <i class="fas fa-search"></i><span>Threat Hunting</span>
+        </a>
+        <a href="#" class="nav-child" data-page="nexus-bas">
+          <i class="fas fa-vials"></i><span>BAS / Purple Team</span>
+        </a>
+        <a href="#" class="nav-child" data-page="nexus-dfir">
+          <i class="fas fa-microscope"></i><span>DFIR</span>
+        </a>
+        <a href="#" class="nav-child" data-page="nexus-grc">
+          <i class="fas fa-balance-scale"></i><span>GRC / Compliance</span>
+        </a>
+        <a href="#" class="nav-child" data-page="nexus-risk-register">
+          <i class="fas fa-clipboard-list"></i><span>Risk Register (FAIR)</span>
+        </a>
+        <a href="#" class="nav-child" data-page="nexus-tprm">
+          <i class="fas fa-handshake"></i><span>TPRM</span>
+        </a>
+        <a href="#" class="nav-child" data-page="nexus-sbom">
+          <i class="fas fa-cubes"></i><span>SBOM / SCA</span>
+        </a>
+        <a href="#" class="nav-child" data-page="nexus-sigma">
+          <i class="fas fa-code"></i><span>Sigma / YARA</span>
+        </a>
+        <a href="#" class="nav-child" data-page="nexus-connectors">
+          <i class="fas fa-plug"></i><span>Connectors (1200+)</span>
+        </a>
+        <a href="#" class="nav-child" data-page="nexus-crisis">
+          <i class="fas fa-exclamation-triangle"></i><span>Crisis &amp; BIA</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="nav-group-sep"></div>
+
+    <!-- ════════════════════════════════════════
          7. PLATFORM
     ════════════════════════════════════════ -->
     <div class="nav-group nav-group--platform" data-group="platform">
@@ -1017,6 +1083,24 @@
 
     <!-- ════ ETI-AARE: Email Threat Intelligence Module PAGE ════ -->
     <div class="page" id="page-email-threat" style="padding:0;overflow:hidden;height:100%;display:flex;flex-direction:column;"></div>
+
+    <!-- ════ WADJET NEXUS — Cyber Risk & Exposure Management ════ -->
+    <div class="page" id="page-nexus-dashboard"  style="padding:0;overflow:hidden;"></div>
+    <div class="page" id="page-nexus-vulnerabilities" style="padding:0;overflow:hidden;"></div>
+    <div class="page" id="page-nexus-attack-paths"    style="padding:0;overflow:hidden;"></div>
+    <div class="page" id="page-nexus-ctem"            style="padding:0;overflow:hidden;"></div>
+    <div class="page" id="page-nexus-mitre"           style="padding:0;overflow:hidden;"></div>
+    <div class="page" id="page-nexus-tid"             style="padding:0;overflow:hidden;"></div>
+    <div class="page" id="page-nexus-threat-hunting"  style="padding:0;overflow:hidden;"></div>
+    <div class="page" id="page-nexus-bas"             style="padding:0;overflow:hidden;"></div>
+    <div class="page" id="page-nexus-dfir"            style="padding:0;overflow:hidden;"></div>
+    <div class="page" id="page-nexus-grc"             style="padding:0;overflow:hidden;"></div>
+    <div class="page" id="page-nexus-risk-register"   style="padding:0;overflow:hidden;"></div>
+    <div class="page" id="page-nexus-tprm"            style="padding:0;overflow:hidden;"></div>
+    <div class="page" id="page-nexus-sbom"            style="padding:0;overflow:hidden;"></div>
+    <div class="page" id="page-nexus-sigma"           style="padding:0;overflow:hidden;"></div>
+    <div class="page" id="page-nexus-connectors"      style="padding:0;overflow:hidden;"></div>
+    <div class="page" id="page-nexus-crisis"          style="padding:0;overflow:hidden;"></div>
 
   </div><!-- end content-area -->
 </div><!-- end main-wrapper -->
@@ -1563,6 +1647,105 @@
 
 <!-- ════ ETI-AARE Email Threat Intelligence Module v1.0 ════ -->
 <script src="js/email-threat-module.js"></script>
+
+<!-- ════ WADJET NEXUS — Cyber Risk & Exposure Management v1.0 ════
+     XORCISM integration: 16 modules, 80+ API endpoints, 35 DB tables
+     Load AFTER email-threat-module.js
+════ -->
+<script src="js/wadjet-nexus.js"></script>
+<script>
+/* ── Wadjet Nexus PAGE_CONFIG wiring ── */
+(function() {
+  'use strict';
+  const NEXUS_PAGES = [
+    'nexus-dashboard', 'nexus-vulnerabilities', 'nexus-attack-paths',
+    'nexus-ctem',      'nexus-mitre',           'nexus-tid',
+    'nexus-threat-hunting', 'nexus-bas',         'nexus-dfir',
+    'nexus-grc',       'nexus-risk-register',   'nexus-tprm',
+    'nexus-sbom',      'nexus-sigma',           'nexus-connectors',
+    'nexus-crisis',
+  ];
+  const NEXUS_META = {
+    'nexus-dashboard':      { title: 'Wadjet Nexus — Risk Dashboard',        breadcrumb: 'Wadjet Nexus / Risk Dashboard' },
+    'nexus-vulnerabilities':{ title: 'Vulnerability Management',              breadcrumb: 'Wadjet Nexus / Vulnerabilities' },
+    'nexus-attack-paths':   { title: 'Attack Path Analysis',                  breadcrumb: 'Wadjet Nexus / Attack Paths' },
+    'nexus-ctem':           { title: 'CTEM / Exposure Management',            breadcrumb: 'Wadjet Nexus / CTEM' },
+    'nexus-mitre':          { title: 'MITRE ATT&CK Navigator',               breadcrumb: 'Wadjet Nexus / MITRE' },
+    'nexus-tid':            { title: 'Threat-Informed Defense Cockpit',       breadcrumb: 'Wadjet Nexus / TID' },
+    'nexus-threat-hunting': { title: 'Threat Hunting',                        breadcrumb: 'Wadjet Nexus / Threat Hunting' },
+    'nexus-bas':            { title: 'BAS / Purple Team',                     breadcrumb: 'Wadjet Nexus / BAS' },
+    'nexus-dfir':           { title: 'DFIR — Digital Forensics & IR',         breadcrumb: 'Wadjet Nexus / DFIR' },
+    'nexus-grc':            { title: 'GRC / Compliance',                      breadcrumb: 'Wadjet Nexus / GRC' },
+    'nexus-risk-register':  { title: 'Risk Register (FAIR/CRQ)',               breadcrumb: 'Wadjet Nexus / Risk Register' },
+    'nexus-tprm':           { title: 'Third-Party Risk Management',           breadcrumb: 'Wadjet Nexus / TPRM' },
+    'nexus-sbom':           { title: 'SBOM / SCA',                            breadcrumb: 'Wadjet Nexus / SBOM' },
+    'nexus-sigma':          { title: 'Sigma / YARA Rules',                    breadcrumb: 'Wadjet Nexus / Sigma & YARA' },
+    'nexus-connectors':     { title: 'Connectors — 1200+ Integrations',       breadcrumb: 'Wadjet Nexus / Connectors' },
+    'nexus-crisis':         { title: 'Crisis Management & BIA',               breadcrumb: 'Wadjet Nexus / Crisis & BIA' },
+  };
+
+  /* Map page IDs to NexusModule sub-page keys */
+  const NEXUS_SUB = {
+    'nexus-dashboard':      'nexus-dashboard',
+    'nexus-vulnerabilities':'nexus-vulnerabilities',
+    'nexus-attack-paths':   'nexus-attack-paths',
+    'nexus-ctem':           'nexus-ctem',
+    'nexus-mitre':          'nexus-mitre',
+    'nexus-tid':            'nexus-tid',
+    'nexus-threat-hunting': 'nexus-threat-hunting',
+    'nexus-bas':            'nexus-bas',
+    'nexus-dfir':           'nexus-dfir',
+    'nexus-grc':            'nexus-grc',
+    'nexus-risk-register':  'nexus-risk-register',
+    'nexus-tprm':           'nexus-tprm',
+    'nexus-sbom':           'nexus-sbom',
+    'nexus-sigma':          'nexus-sigma',
+    'nexus-connectors':     'nexus-connectors',
+    'nexus-crisis':         'nexus-crisis',
+  };
+
+  function wireNexus() {
+    const PC = window.PAGE_CONFIG;
+    if (!PC) return false;
+    NEXUS_PAGES.forEach(pageId => {
+      const subPage = NEXUS_SUB[pageId];
+      const meta    = NEXUS_META[pageId] || { title: pageId, breadcrumb: pageId };
+      PC[pageId] = {
+        title:      meta.title,
+        breadcrumb: meta.breadcrumb,
+        onEnter: function() {
+          const el = document.getElementById('page-' + pageId);
+          if (!el) return;
+          if (typeof window.NexusModule !== 'undefined') {
+            window.NexusModule.goto(subPage, el);
+          } else {
+            el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:300px;color:#94a3b8;font-family:monospace;"><i class="fas fa-spinner fa-spin" style="margin-right:8px;"></i>Loading Wadjet Nexus…</div>';
+            /* retry once NexusModule is ready */
+            let tries = 0;
+            const iv = setInterval(() => {
+              if (typeof window.NexusModule !== 'undefined') {
+                clearInterval(iv);
+                window.NexusModule.goto(subPage, el);
+              } else if (++tries > 50) clearInterval(iv);
+            }, 200);
+          }
+        },
+      };
+    });
+    console.log('[Wadjet Nexus] ✅ 16 pages wired into PAGE_CONFIG');
+    return true;
+  }
+
+  /* Poll until PAGE_CONFIG is ready */
+  let _n = 0;
+  function _tryWire() {
+    if (wireNexus()) return;
+    if (++_n < 100) setTimeout(_tryWire, 100);
+    else console.warn('[Wadjet Nexus] PAGE_CONFIG not found after 10 s');
+  }
+  _tryWire();
+})();
+</script>
 
 <!-- Cyber Defense Brain — PAGE_CONFIG Wiring & Feature Flags -->
 <script>

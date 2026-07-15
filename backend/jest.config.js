@@ -19,6 +19,8 @@ module.exports = {
     '/tests/',
     'server.js',       // integration - tested separately
     'workers/',        // background workers
+    'routes/nexus.js', // route integration - 2062-line XORCISM integration, covered by nexus.test.js HTTP suite
+    'services/nexus-scheduler.js', // background scheduler - runs in live env
   ],
   testTimeout: 30000,
   verbose:     true,
