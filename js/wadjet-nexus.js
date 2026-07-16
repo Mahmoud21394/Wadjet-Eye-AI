@@ -131,18 +131,23 @@ const NX = {
 };
 
 // ── Module Container ──────────────────────────────────────────────────────────
-// Priority order:
-//  1. An element explicitly passed by the PAGE_CONFIG wiring (page-nexus-* div)
-//  2. The last page-nexus-* div that was made active by main.js
-//  3. Any visible .page element (fallback)
+// Single-hub architecture: all 16 nav items point to one 'page-nexus' div.
+// The platform (main.js) only manages ONE page toggle (nexus ↔ other pages).
+// The Nexus module's own sidebar handles all internal sub-navigation.
+//
+// Container resolution priority:
+//  1. An element explicitly passed by PAGE_CONFIG onEnter (page-nexus div)
+//  2. The cached NX.currentEl from the last explicit call
+//  3. The active .page.active element whose id starts with page-nexus
+//  4. The single #page-nexus hub div
 function getContainer(explicitEl) {
   if (explicitEl && explicitEl.nodeType === 1) return explicitEl;
   if (NX.currentEl && NX.currentEl.nodeType === 1) return NX.currentEl;
-  // Find the currently active page div
   const active = document.querySelector('.page.active[id^="page-nexus"]');
   if (active) return active;
-  // Fallback: first nexus page div
-  return document.querySelector('[id^="page-nexus-"]');
+  // Single-hub fallback: the one hub div
+  return document.getElementById('page-nexus') ||
+         document.querySelector('[id^="page-nexus"]');
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -150,7 +155,11 @@ function getContainer(explicitEl) {
 // ══════════════════════════════════════════════════════════════════════════════
 // renderNexusPage(page, el)
 //   page  — internal sub-page key (e.g. 'nexus-dashboard')
-//   el    — optional DOM element to render into (passed by PAGE_CONFIG wiring)
+//   el    — the page-nexus div passed by PAGE_CONFIG onEnter
+//
+// ⚠ CRITICAL: NEVER use container.style.cssText — it replaces ALL inline styles
+// and will erase the display:'' that main.js sets so .page.active{display:block}
+// can take effect.  Always use individual style property assignments.
 function renderNexusPage(page, el) {
   const container = getContainer(el);
   if (!container) {
@@ -159,8 +168,17 @@ function renderNexusPage(page, el) {
   }
   NX.currentEl = container;
   NX.tab = page;
-  // Make container scrollable and sized correctly
-  container.style.cssText = 'overflow-y:auto;height:100%;min-height:300px;';
+
+  // ── Apply layout styles without touching display ──────────────────────────
+  // MUST use individual properties — cssText would wipe the display:'' set by
+  // main.js navigateTo(), causing the browser to fall back to the CSS rule
+  // .page { display:none } and hide the entire page.
+  container.style.overflowY  = 'auto';
+  container.style.height     = '100%';
+  container.style.minHeight  = '400px';
+  container.style.padding    = '0';
+  container.style.background = DS.bg;
+
   container.innerHTML = `<div class="nexus-wrapper" style="display:flex;min-height:100%;background:${DS.bg};">${nexusShell(page)}</div>`;
   dispatchPage(page);
 }
@@ -451,9 +469,14 @@ function setContent(html) {
   // Primary: the inner #nx-content div rendered by nexusShell
   let el = document.getElementById('nx-content');
   // Fallback: write directly into the current page container
+  // ⚠ DO NOT use cssText — individual properties only, to preserve display:''
   if (!el && NX.currentEl) {
     el = NX.currentEl;
-    el.style.cssText = 'overflow-y:auto;height:100%;min-height:300px;padding:24px;background:' + DS.bg + ';';
+    el.style.overflowY  = 'auto';
+    el.style.height     = '100%';
+    el.style.minHeight  = '400px';
+    el.style.padding    = '24px';
+    el.style.background = DS.bg;
   }
   if (el) { el.innerHTML = html; el.classList.add('nx-slide-in'); }
 }
