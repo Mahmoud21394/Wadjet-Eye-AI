@@ -1,0 +1,1145 @@
+/*
+ * ══════════════════════════════════════════════════════════════════════════════
+ *  Wadjet-Eye AI — Premium Enterprise Sidebar v3.0
+ *  Design standard: Fortune 500 · Microsoft Defender XDR · CrowdStrike Falcon
+ *  Author: AI Senior Product Designer · 2026
+ *
+ *  Architecture: Loaded LAST — overrides sidebar-v2.css, style.css, platform-v20.css
+ *  Scope: .sidebar and all descendants only. Zero impact on page content.
+ * ══════════════════════════════════════════════════════════════════════════════
+ */
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   DESIGN TOKEN LAYER
+   ══════════════════════════════════════════════════════════════════════════════ */
+:root {
+  /* ── Width ──────────────────────────────────────────────────────────────── */
+  --sidebar-width:        280px;
+
+  /* ── Surface ────────────────────────────────────────────────────────────── */
+  --sb-bg:               #0b1120;
+  --sb-bg-hover:         #131e34;
+  --sb-bg-active:        #152240;
+  --sb-bg-active-deep:   #0f1a30;
+
+  /* ── Brand Blue ─────────────────────────────────────────────────────────── */
+  --sb-blue:             #2d7ef7;
+  --sb-blue-bright:      #5096ff;
+  --sb-blue-glow:        rgba(45, 126, 247, 0.18);
+  --sb-blue-border:      rgba(45, 126, 247, 0.32);
+  --sb-blue-icon-bg:     rgba(45, 126, 247, 0.13);
+
+  /* ── Semantic ────────────────────────────────────────────────────────────── */
+  --sb-red:              #ef4444;
+  --sb-red-bg:           rgba(239, 68, 68, 0.11);
+  --sb-green:            #10b981;
+  --sb-green-bg:         rgba(16, 185, 129, 0.11);
+  --sb-amber:            #f59e0b;
+  --sb-amber-bg:         rgba(245, 158, 11, 0.11);
+
+  /* ── Text ────────────────────────────────────────────────────────────────── */
+  --sb-text-primary:     #e2eaf5;
+  --sb-text-secondary:   #8b9ab5;
+  --sb-text-muted:       #4a5a72;
+
+  /* ── Borders ─────────────────────────────────────────────────────────────── */
+  --sb-border:           rgba(255, 255, 255, 0.048);
+  --sb-border-hover:     rgba(255, 255, 255, 0.075);
+  --sb-border-active:    rgba(45, 126, 247, 0.32);
+
+  /* ── Shadows ─────────────────────────────────────────────────────────────── */
+  --sb-shadow-active:    0 4px 24px rgba(45,126,247,0.14), 0 0 0 1px rgba(45,126,247,0.22);
+  --sb-shadow-badge:     0 1px 4px rgba(0,0,0,0.38);
+
+  /* ── Radius ──────────────────────────────────────────────────────────────── */
+  --sb-r-sm:             6px;
+  --sb-r-md:             9px;
+  --sb-r-lg:             12px;
+
+  /* ── Easing ──────────────────────────────────────────────────────────────── */
+  --sb-ease:             cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --sb-t-fast:           140ms;
+  --sb-t-base:           180ms;
+  --sb-t-slow:           280ms;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   SIDEBAR SHELL
+   ══════════════════════════════════════════════════════════════════════════════ */
+#sidebar.sidebar {
+  width: var(--sidebar-width) !important;
+  min-width: var(--sidebar-width) !important;
+  background: var(--sb-bg) !important;
+  border-right: 1px solid var(--sb-border) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  position: relative !important;
+  overflow: hidden !important;
+}
+
+/* Collapsed keeps mini-width (existing JS controls this) */
+#sidebar.sidebar.collapsed {
+  width: 68px !important;
+  min-width: 68px !important;
+}
+
+/* Ambient top radial glow — extremely subtle */
+#sidebar.sidebar::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 260px;
+  background: radial-gradient(
+    ellipse 70% 30% at 50% -8%,
+    rgba(45, 126, 247, 0.06) 0%,
+    transparent 100%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Left inner highlight edge */
+#sidebar.sidebar::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0;
+  width: 1px;
+  height: 100%;
+  background: linear-gradient(
+    to bottom,
+    rgba(255,255,255,0.065) 0%,
+    rgba(255,255,255,0.020) 25%,
+    transparent 60%
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   HEADER / BRANDING
+   ══════════════════════════════════════════════════════════════════════════════ */
+#sidebar .sidebar-header {
+  position: relative;
+  z-index: 2;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  padding: 18px 16px 16px !important;
+  border-bottom: 1px solid var(--sb-border) !important;
+  background: transparent !important;
+  min-height: auto !important;
+  flex-shrink: 0 !important;
+}
+
+/* Logo image — crisper glow */
+#sidebar .sidebar-logo-img {
+  width: 38px !important;
+  height: 38px !important;
+  object-fit: contain !important;
+  flex-shrink: 0 !important;
+  filter: drop-shadow(0 0 10px rgba(45, 126, 247, 0.50)) !important;
+  border-radius: 10px !important;
+}
+
+/* Logo text block */
+#sidebar .logo-text {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0 !important;
+  overflow: hidden !important;
+}
+
+/* App name — clean, no gradient text, high contrast */
+#sidebar .logo-name {
+  font-size: 14.5px !important;
+  font-weight: 650 !important;
+  letter-spacing: -0.2px !important;
+  line-height: 1.25 !important;
+  white-space: nowrap !important;
+  color: var(--sb-text-primary) !important;
+  background: none !important;
+  -webkit-text-fill-color: var(--sb-text-primary) !important;
+  -webkit-background-clip: unset !important;
+  background-clip: unset !important;
+}
+
+/* Tagline under app name */
+#sidebar .logo-tagline {
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  color: var(--sb-text-muted) !important;
+  white-space: nowrap !important;
+  letter-spacing: 0.5px !important;
+  margin-top: 2px !important;
+}
+
+/* Version dot + text: inject live indicator via pseudo if needed */
+#sidebar .logo-tagline::before {
+  content: '';
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--sb-green);
+  box-shadow: 0 0 5px rgba(16,185,129,0.7);
+  margin-right: 5px;
+  vertical-align: middle;
+  animation: sb-pulse-dot 2.8s ease-in-out infinite;
+}
+
+@keyframes sb-pulse-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.55; }
+}
+
+/* "AI SECURITY PLATFORM" secondary tagline — injected as sibling via ::after on logo-text */
+#sidebar .logo-text::after {
+  content: 'AI SECURITY PLATFORM';
+  display: block;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 1.1px;
+  color: var(--sb-text-muted);
+  text-transform: uppercase;
+  margin-top: 1px;
+  opacity: 0.7;
+}
+
+/* Hamburger toggle button */
+#sidebar .sidebar-toggle {
+  background: rgba(255,255,255,0.04) !important;
+  border: 1px solid var(--sb-border) !important;
+  border-radius: var(--sb-r-md) !important;
+  color: var(--sb-text-secondary) !important;
+  padding: 6px 9px !important;
+  cursor: pointer !important;
+  flex-shrink: 0 !important;
+  transition:
+    background var(--sb-t-fast) var(--sb-ease),
+    border-color var(--sb-t-fast) var(--sb-ease),
+    color var(--sb-t-fast) var(--sb-ease) !important;
+}
+
+#sidebar .sidebar-toggle:hover {
+  background: var(--sb-bg-hover) !important;
+  border-color: var(--sb-border-hover) !important;
+  color: var(--sb-text-primary) !important;
+}
+
+/* Hamburger SVG lines */
+#sidebar .sb-ham-line {
+  stroke: currentColor !important;
+  stroke-width: 1.5px !important;
+  stroke-linecap: round !important;
+  transition: stroke var(--sb-t-fast) !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   NAV SCROLL CONTAINER
+   ══════════════════════════════════════════════════════════════════════════════ */
+#sidebar .sidebar-nav-scroll {
+  position: relative;
+  z-index: 2;
+  flex: 1 !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding: 12px 8px 16px !important;
+  scrollbar-width: thin !important;
+  scrollbar-color: rgba(255,255,255,0.055) transparent !important;
+}
+
+#sidebar .sidebar-nav-scroll::-webkit-scrollbar { width: 3px !important; }
+#sidebar .sidebar-nav-scroll::-webkit-scrollbar-track { background: transparent !important; }
+#sidebar .sidebar-nav-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.065) !important;
+  border-radius: 3px !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   NAV GROUP (module section wrapper)
+   ══════════════════════════════════════════════════════════════════════════════ */
+#sidebar .nav-group {
+  margin: 1px 4px !important;
+  border-radius: var(--sb-r-lg) !important;
+  overflow: visible !important;
+}
+
+/* ── GROUP HEADER ─────────────────────────────────────────────────────────── */
+#sidebar .nav-group-header {
+  display: flex !important;
+  align-items: center !important;
+  gap: 0 !important;
+  width: 100% !important;
+  padding: 0 10px 0 6px !important;
+  height: 44px !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  border-radius: var(--sb-r-lg) !important;
+  cursor: pointer !important;
+  text-align: left !important;
+  color: var(--sb-text-secondary) !important;
+  font-size: 13.5px !important;
+  font-weight: 500 !important;
+  letter-spacing: -0.1px !important;
+  text-transform: none !important;
+  position: relative !important;
+  transition:
+    background var(--sb-t-base) var(--sb-ease),
+    border-color var(--sb-t-base) var(--sb-ease),
+    color var(--sb-t-fast) var(--sb-ease),
+    box-shadow var(--sb-t-base) var(--sb-ease) !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  box-shadow: none !important;
+}
+
+/* Left accent bar */
+#sidebar .nav-group-header::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 0;
+  background: var(--sb-blue);
+  border-radius: 0 3px 3px 0;
+  transition:
+    height var(--sb-t-base) var(--sb-ease),
+    opacity var(--sb-t-base) var(--sb-ease);
+  opacity: 0;
+}
+
+/* Hover */
+#sidebar .nav-group-header:hover {
+  background: var(--sb-bg-hover) !important;
+  color: var(--sb-text-primary) !important;
+  box-shadow: none !important;
+}
+
+#sidebar .nav-group-header:hover .nav-group-icon {
+  transform: translateY(-1px) !important;
+}
+
+/* Open (expanded) */
+#sidebar .nav-group-header.open {
+  background: var(--sb-bg-active) !important;
+  border-color: var(--sb-border-active) !important;
+  color: var(--sb-text-primary) !important;
+  border-radius: var(--sb-r-lg) !important;
+  box-shadow: var(--sb-shadow-active) !important;
+}
+
+#sidebar .nav-group-header.open::before {
+  height: 22px;
+  opacity: 1;
+}
+
+/* Remove old rounded corners on open */
+#sidebar .nav-group-header.open.open {
+  border-radius: var(--sb-r-lg) !important;
+}
+
+/* ── GROUP ICON ───────────────────────────────────────────────────────────── */
+#sidebar .nav-group-icon {
+  width: 32px !important;
+  height: 32px !important;
+  border-radius: var(--sb-r-sm) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-shrink: 0 !important;
+  margin-right: 10px !important;
+  font-size: 14px !important;
+  background: rgba(139, 154, 181, 0.09) !important;
+  box-shadow: none !important;
+  color: var(--sb-text-secondary) !important;
+  transition:
+    transform var(--sb-t-fast) var(--sb-ease),
+    background var(--sb-t-fast) var(--sb-ease),
+    color var(--sb-t-fast) var(--sb-ease) !important;
+}
+
+/* Active icon */
+#sidebar .nav-group-header.open .nav-group-icon {
+  background: var(--sb-blue-icon-bg) !important;
+  color: var(--sb-blue-bright) !important;
+  box-shadow: 0 0 0 1px rgba(45,126,247,0.2), 0 0 8px rgba(45,126,247,0.12) !important;
+  transform: translateY(0) !important;
+}
+
+/* ── GROUP LABEL ─────────────────────────────────────────────────────────── */
+#sidebar .nav-group-label {
+  flex: 1 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  letter-spacing: -0.1px !important;
+  color: inherit !important;
+  font-size: inherit !important;
+  font-weight: inherit !important;
+  text-transform: none !important;
+}
+
+/* ── GROUP COUNT BADGE ───────────────────────────────────────────────────── */
+#sidebar .nav-group-count {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-width: 20px !important;
+  height: 18px !important;
+  padding: 0 6px !important;
+  border-radius: 9px !important;
+  font-size: 10.5px !important;
+  font-weight: 650 !important;
+  letter-spacing: 0.1px !important;
+  opacity: 1 !important;
+  flex-shrink: 0 !important;
+  box-shadow: var(--sb-shadow-badge) !important;
+  /* Default: neutral slate */
+  background: rgba(139, 154, 181, 0.12) !important;
+  color: var(--sb-text-secondary) !important;
+  border: 1px solid rgba(139, 154, 181, 0.18) !important;
+  transition: opacity var(--sb-t-fast) !important;
+}
+
+/* ── GROUP CHEVRON ───────────────────────────────────────────────────────── */
+#sidebar .nav-group-chevron {
+  width: 14px !important;
+  height: 14px !important;
+  font-size: 10px !important;
+  color: var(--sb-text-muted) !important;
+  flex-shrink: 0 !important;
+  opacity: 1 !important;
+  margin-left: 6px !important;
+  transition:
+    transform var(--sb-t-slow) var(--sb-ease),
+    color var(--sb-t-fast) var(--sb-ease) !important;
+}
+
+#sidebar .nav-group-header:hover .nav-group-chevron {
+  color: var(--sb-text-secondary) !important;
+}
+
+#sidebar .nav-group-header.open .nav-group-chevron {
+  transform: rotate(180deg) !important;
+  color: var(--sb-blue-bright) !important;
+  opacity: 1 !important;
+}
+
+/* ── SEPARATOR ───────────────────────────────────────────────────────────── */
+#sidebar .nav-group-sep {
+  height: 1px !important;
+  background: var(--sb-border) !important;
+  margin: 8px 10px !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   NAV GROUP CHILDREN
+   ══════════════════════════════════════════════════════════════════════════════ */
+#sidebar .nav-group-children {
+  max-height: 0 !important;
+  overflow: hidden !important;
+  background: transparent !important;
+  border-radius: 0 0 var(--sb-r-lg) var(--sb-r-lg) !important;
+  border-top: none !important;
+  padding: 0 !important;
+  opacity: 0 !important;
+  transition:
+    max-height var(--sb-t-slow) var(--sb-ease),
+    opacity var(--sb-t-slow) var(--sb-ease) !important;
+}
+
+#sidebar .nav-group-children.open {
+  opacity: 1 !important;
+  padding: 4px 0 8px !important;
+}
+
+/* Connector vertical line */
+#sidebar .nav-group-children.open::before {
+  content: '';
+  position: absolute;
+  left: 23px;
+  margin-top: 2px;
+  width: 1px;
+  height: calc(100% - 20px);
+  background: linear-gradient(
+    to bottom,
+    rgba(45, 126, 247, 0.22) 0%,
+    rgba(45, 126, 247, 0.04) 100%
+  );
+  pointer-events: none;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   NAV CHILD ITEMS
+   ══════════════════════════════════════════════════════════════════════════════ */
+#sidebar .nav-child {
+  display: flex !important;
+  align-items: center !important;
+  gap: 9px !important;
+  padding: 7px 12px 7px 46px !important;
+  color: var(--sb-text-muted) !important;
+  text-decoration: none !important;
+  font-size: 12.5px !important;
+  font-weight: 450 !important;
+  border-radius: var(--sb-r-md) !important;
+  margin: 1px 6px !important;
+  position: relative !important;
+  transition:
+    background var(--sb-t-fast) var(--sb-ease),
+    color var(--sb-t-fast) var(--sb-ease),
+    transform var(--sb-t-fast) var(--sb-ease) !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+
+  /* Staggered reveal — reset from sidebar-v2 */
+  transform: translateY(0) !important;
+  opacity: 0;
+}
+
+#sidebar .nav-group-children.open .nav-child {
+  opacity: 1 !important;
+}
+
+/* Connector dot */
+#sidebar .nav-child::before {
+  content: '' !important;
+  position: absolute !important;
+  left: 28px !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  width: 5px !important;
+  height: 5px !important;
+  border-radius: 50% !important;
+  background: rgba(139, 154, 181, 0.18) !important;
+  border: 1px solid rgba(139, 154, 181, 0.24) !important;
+  box-shadow: none !important;
+  flex-shrink: 0 !important;
+  transition:
+    background var(--sb-t-fast) var(--sb-ease),
+    border-color var(--sb-t-fast) var(--sb-ease),
+    box-shadow var(--sb-t-fast) var(--sb-ease) !important;
+}
+
+/* Remove right-side active bar from old CSS */
+#sidebar .nav-child::after {
+  display: none !important;
+}
+
+/* Icons inside nav-child */
+#sidebar .nav-child i {
+  width: 14px !important;
+  font-size: 12px !important;
+  flex-shrink: 0 !important;
+  color: var(--sb-text-muted) !important;
+  opacity: 1 !important;
+  transition: color var(--sb-t-fast) var(--sb-ease) !important;
+}
+
+/* Hover */
+#sidebar .nav-child:hover {
+  background: rgba(255,255,255,0.038) !important;
+  color: var(--sb-text-secondary) !important;
+  transform: translateX(0) translateY(0) !important;
+}
+
+#sidebar .nav-child:hover::before {
+  background: rgba(45, 126, 247, 0.45) !important;
+  border-color: rgba(45, 126, 247, 0.5) !important;
+  box-shadow: none !important;
+}
+
+#sidebar .nav-child:hover i {
+  color: var(--sb-text-secondary) !important;
+}
+
+/* Active child */
+#sidebar .nav-child.active {
+  background: rgba(45, 126, 247, 0.09) !important;
+  color: var(--sb-text-primary) !important;
+  font-weight: 550 !important;
+  transform: translateX(0) translateY(0) !important;
+}
+
+#sidebar .nav-child.active::before {
+  background: var(--sb-blue) !important;
+  border-color: rgba(45, 126, 247, 0.55) !important;
+  box-shadow: 0 0 5px rgba(45, 126, 247, 0.40) !important;
+}
+
+#sidebar .nav-child.active i {
+  color: var(--sb-blue-bright) !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   NAV-CHILD BADGES — Unified premium pill system
+   Replaces all inline gradient badge styles with semantic tokens
+   ══════════════════════════════════════════════════════════════════════════════ */
+#sidebar .nav-child-badge {
+  margin-left: auto !important;
+  font-size: 10px !important;
+  font-weight: 650 !important;
+  padding: 0 6px !important;
+  height: 17px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 8px !important;
+  letter-spacing: 0.15px !important;
+  flex-shrink: 0 !important;
+  box-shadow: var(--sb-shadow-badge) !important;
+  line-height: 1 !important;
+  /* Default neutral */
+  background: rgba(139,154,181,0.10) !important;
+  color: var(--sb-text-secondary) !important;
+  border: 1px solid rgba(139,154,181,0.16) !important;
+}
+
+/* Override specific inline-gradient badges to be clean semantic pills */
+/* LIVE badge → green */
+#sidebar .nav-child .nav-child-badge[style*="ef4444"][style*="f97316"] {
+  background: rgba(16,185,129,0.13) !important;
+  color: #4fd4a5 !important;
+  border: 1px solid rgba(16,185,129,0.24) !important;
+}
+
+/* NEW badge (blue-cyan gradient) → clean blue */
+#sidebar .nav-child .nav-child-badge[style*="3b82f6"][style*="06b6d4"],
+#sidebar .nav-child .nav-child-badge[style*="22d3ee"][style*="0ea5e9"],
+#sidebar .nav-child .nav-child-badge[style*="22d3ee"][style*="3b82f6"] {
+  background: rgba(45,126,247,0.12) !important;
+  color: var(--sb-blue-bright) !important;
+  border: 1px solid rgba(45,126,247,0.22) !important;
+}
+
+/* AI badge (red gradients) → red semantic */
+#sidebar .nav-child .nav-child-badge[style*="dc2626"],
+#sidebar .nav-child .nav-child-badge[style*="b91c1c"] {
+  background: rgba(239,68,68,0.12) !important;
+  color: #ff7070 !important;
+  border: 1px solid rgba(239,68,68,0.22) !important;
+}
+
+/* LAB badge → amber */
+#sidebar .nav-child .nav-child-badge[style*="f97316"]:not([style*="22d3ee"]) {
+  background: rgba(245,158,11,0.12) !important;
+  color: #fbb94a !important;
+  border: 1px solid rgba(245,158,11,0.22) !important;
+}
+
+/* XAI / purple gradient badges → purple semantic */
+#sidebar .nav-child .nav-child-badge[style*="a855f7"],
+#sidebar .nav-child .nav-child-badge[style*="6366f1"],
+#sidebar .nav-child .nav-child-badge[style*="7c3aed"] {
+  background: rgba(139,92,246,0.12) !important;
+  color: #c084fc !important;
+  border: 1px solid rgba(139,92,246,0.22) !important;
+}
+
+/* v2 / version badge — neutral */
+#sidebar .nav-child .nav-child-badge[style*="22d3ee"][style*="3b82f6"] {
+  background: rgba(45,126,247,0.11) !important;
+  color: var(--sb-blue-bright) !important;
+  border: 1px solid rgba(45,126,247,0.20) !important;
+}
+
+/* badge-red class */
+#sidebar .nav-child-badge.badge-red {
+  background: var(--sb-red-bg) !important;
+  color: #ff7070 !important;
+  border: 1px solid rgba(239,68,68,0.22) !important;
+}
+
+/* badge-orange class */
+#sidebar .nav-child-badge.badge-orange {
+  background: var(--sb-amber-bg) !important;
+  color: #fbb94a !important;
+  border: 1px solid rgba(245,158,11,0.22) !important;
+}
+
+/* badge-purple class */
+#sidebar .nav-child-badge.badge-purple {
+  background: rgba(139,92,246,0.12) !important;
+  color: #c084fc !important;
+  border: 1px solid rgba(139,92,246,0.22) !important;
+}
+
+/* badge-green class */
+#sidebar .nav-child-badge.badge-green {
+  background: var(--sb-green-bg) !important;
+  color: #4fd4a5 !important;
+  border: 1px solid rgba(16,185,129,0.22) !important;
+}
+
+/* badge-cyan class */
+#sidebar .nav-child-badge.badge-cyan {
+  background: rgba(6,182,212,0.11) !important;
+  color: #67e8f9 !important;
+  border: 1px solid rgba(6,182,212,0.22) !important;
+}
+
+/* LIVE blink badge — keep animation but fix color */
+#sidebar .nav-child-badge.badge-green.blink {
+  animation: sb-blink 2.4s ease-in-out infinite !important;
+}
+
+@keyframes sb-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.45; }
+}
+
+/* Nexus "NEW" badge next to group count — semantic blue pill */
+#sidebar .nav-group .nav-child-badge[style*="3b82f6"][style*="06b6d4"] {
+  font-size: 9px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.7px !important;
+  text-transform: uppercase !important;
+  height: 16px !important;
+  padding: 0 6px !important;
+  border-radius: 8px !important;
+  background: rgba(45,126,247,0.13) !important;
+  color: var(--sb-blue-bright) !important;
+  border: 1px solid rgba(45,126,247,0.26) !important;
+  box-shadow: var(--sb-shadow-badge) !important;
+  margin-left: 4px !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   PER-MODULE SEMANTIC COLORS
+   Replaces rainbow per-group themes with a disciplined semantic system:
+   - Default (blue): Operations, Cyber Defense, AI Analyst, Threat Intel,
+                     Wadjet Nexus, Platform
+   - Red: Advanced SOC (critical severity)
+   - Green: SOC Operations (operational health)
+   - Amber: Innovations (beta/experimental)
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── DEFAULT GROUPS (blue) ────────────────────────────────────────────────── */
+#sidebar .nav-group--ops .nav-group-icon,
+#sidebar .nav-group--brain .nav-group-icon,
+#sidebar .nav-group--ai .nav-group-icon,
+#sidebar .nav-group--threat-intel .nav-group-icon,
+#sidebar .nav-group--nexus .nav-group-icon,
+#sidebar .nav-group--platform .nav-group-icon {
+  background: rgba(139, 154, 181, 0.09) !important;
+  color: var(--sb-text-secondary) !important;
+  box-shadow: none !important;
+  filter: none !important;
+  -webkit-background-clip: unset !important;
+  -webkit-text-fill-color: var(--sb-text-secondary) !important;
+  background-clip: unset !important;
+  animation: none !important;
+}
+
+/* Active state for blue groups */
+#sidebar .nav-group--ops .nav-group-header.open .nav-group-icon,
+#sidebar .nav-group--brain .nav-group-header.open .nav-group-icon,
+#sidebar .nav-group--ai .nav-group-header.open .nav-group-icon,
+#sidebar .nav-group--threat-intel .nav-group-header.open .nav-group-icon,
+#sidebar .nav-group--nexus .nav-group-header.open .nav-group-icon,
+#sidebar .nav-group--platform .nav-group-header.open .nav-group-icon {
+  background: var(--sb-blue-icon-bg) !important;
+  color: var(--sb-blue-bright) !important;
+  -webkit-text-fill-color: var(--sb-blue-bright) !important;
+  box-shadow: 0 0 0 1px rgba(45,126,247,0.20), 0 0 10px rgba(45,126,247,0.12) !important;
+}
+
+/* Blue group counts */
+#sidebar .nav-group--ops .nav-group-count,
+#sidebar .nav-group--brain .nav-group-count,
+#sidebar .nav-group--ai .nav-group-count,
+#sidebar .nav-group--threat-intel .nav-group-count,
+#sidebar .nav-group--nexus .nav-group-count,
+#sidebar .nav-group--platform .nav-group-count {
+  background: rgba(45,126,247,0.13) !important;
+  color: var(--sb-blue-bright) !important;
+  border: 1px solid rgba(45,126,247,0.22) !important;
+  animation: none !important;
+}
+
+/* Blue group child hover */
+#sidebar .nav-group--ops .nav-child:hover,
+#sidebar .nav-group--brain .nav-child:hover,
+#sidebar .nav-group--ai .nav-child:hover,
+#sidebar .nav-group--threat-intel .nav-child:hover,
+#sidebar .nav-group--nexus .nav-child:hover,
+#sidebar .nav-group--platform .nav-child:hover {
+  background: rgba(45,126,247,0.06) !important;
+  color: var(--sb-text-secondary) !important;
+}
+
+/* Blue group child active */
+#sidebar .nav-group--ops .nav-child.active,
+#sidebar .nav-group--brain .nav-child.active,
+#sidebar .nav-group--ai .nav-child.active,
+#sidebar .nav-group--threat-intel .nav-child.active,
+#sidebar .nav-group--nexus .nav-child.active,
+#sidebar .nav-group--platform .nav-child.active {
+  background: rgba(45,126,247,0.11) !important;
+  color: var(--sb-text-primary) !important;
+}
+
+/* Blue group header open */
+#sidebar .nav-group--ops .nav-group-header.open,
+#sidebar .nav-group--brain .nav-group-header.open,
+#sidebar .nav-group--ai .nav-group-header.open,
+#sidebar .nav-group--threat-intel .nav-group-header.open,
+#sidebar .nav-group--nexus .nav-group-header.open,
+#sidebar .nav-group--platform .nav-group-header.open {
+  background: var(--sb-bg-active) !important;
+  color: var(--sb-text-primary) !important;
+  border-color: var(--sb-border-active) !important;
+  box-shadow: var(--sb-shadow-active) !important;
+}
+
+/* Kill old brain/ai/threat-intel shimmer/glow animations */
+#sidebar .nav-group--brain .nav-group-header::before,
+#sidebar .nav-group--ai .nav-group-header::before,
+#sidebar .nav-group--threat-intel .nav-group-header::before {
+  animation: none !important;
+  background: none !important;
+  display: none !important;
+}
+
+#sidebar .nav-group--threat-intel .ti-group-header {
+  background: transparent !important;
+  border-left: none !important;
+  border-image: none !important;
+  animation: none !important;
+  box-shadow: none !important;
+}
+
+#sidebar .nav-group--threat-intel .ti-group-header::before {
+  display: none !important;
+}
+
+#sidebar .ti-group-icon {
+  background: rgba(139,154,181,0.09) !important;
+  color: var(--sb-text-secondary) !important;
+  -webkit-text-fill-color: var(--sb-text-secondary) !important;
+  -webkit-background-clip: unset !important;
+  background-clip: unset !important;
+  filter: none !important;
+  animation: none !important;
+}
+
+#sidebar .nav-group--threat-intel .nav-group-header.open .ti-group-icon {
+  background: var(--sb-blue-icon-bg) !important;
+  color: var(--sb-blue-bright) !important;
+  -webkit-text-fill-color: var(--sb-blue-bright) !important;
+}
+
+/* Threat intel count badge — kill old neon pulse */
+#sidebar .ti-count {
+  background: rgba(45,126,247,0.13) !important;
+  color: var(--sb-blue-bright) !important;
+  border: 1px solid rgba(45,126,247,0.22) !important;
+  animation: none !important;
+  box-shadow: none !important;
+}
+
+/* Threat Intel children — clean up old purple/cyan glow */
+#sidebar .ti-nav-child {
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: var(--sb-r-md) !important;
+  margin: 1px 6px !important;
+  transform: none !important;
+  animation: none !important;
+  overflow: hidden !important;
+}
+
+#sidebar .ti-nav-child::before {
+  background: rgba(139,154,181,0.18) !important;
+  border: 1px solid rgba(139,154,181,0.24) !important;
+  left: 28px !important;
+  width: 5px !important;
+  height: 5px !important;
+}
+
+#sidebar .ti-nav-child:hover,
+#sidebar .ti-nav-child.active {
+  background: rgba(45,126,247,0.08) !important;
+  box-shadow: none !important;
+  transform: translateX(0) !important;
+}
+
+#sidebar .ti-nav-child:hover::before,
+#sidebar .ti-nav-child.active::before {
+  background: var(--sb-blue) !important;
+  border-color: rgba(45,126,247,0.5) !important;
+  opacity: 1 !important;
+}
+
+/* TI icon wrap */
+#sidebar .ti-nav-icon-wrap {
+  background: rgba(139,154,181,0.09) !important;
+  width: 26px !important;
+  height: 26px !important;
+  border-radius: var(--sb-r-sm) !important;
+}
+
+#sidebar .ti-nav-icon-wrap i {
+  background: none !important;
+  -webkit-background-clip: unset !important;
+  -webkit-text-fill-color: var(--sb-text-secondary) !important;
+  background-clip: unset !important;
+  color: var(--sb-text-secondary) !important;
+}
+
+#sidebar .ti-nav-child:hover .ti-nav-icon-wrap i,
+#sidebar .ti-nav-child.active .ti-nav-icon-wrap i {
+  -webkit-text-fill-color: var(--sb-blue-bright) !important;
+  color: var(--sb-blue-bright) !important;
+}
+
+/* TI version text */
+#sidebar .ti-nav-version {
+  color: var(--sb-text-muted) !important;
+  font-family: 'Inter', sans-serif !important;
+  font-size: 9px !important;
+  letter-spacing: 0.3px !important;
+  opacity: 0.7 !important;
+}
+
+/* TI new badge — clean blue */
+#sidebar .ti-badge {
+  background: rgba(45,126,247,0.13) !important;
+  color: var(--sb-blue-bright) !important;
+  border: 1px solid rgba(45,126,247,0.24) !important;
+  animation: none !important;
+  box-shadow: none !important;
+}
+
+/* ── ADVANCED SOC — Semantic Red (critical) ───────────────────────────────── */
+#sidebar .nav-group--advanced .nav-group-icon {
+  background: var(--sb-red-bg) !important;
+  color: rgba(239,68,68,0.75) !important;
+  box-shadow: none !important;
+}
+
+#sidebar .nav-group--advanced .nav-group-header.open .nav-group-icon {
+  background: var(--sb-red-bg) !important;
+  color: var(--sb-red) !important;
+  box-shadow: 0 0 0 1px rgba(239,68,68,0.18) !important;
+}
+
+#sidebar .nav-group--advanced .nav-group-count {
+  background: var(--sb-red-bg) !important;
+  color: #ff7070 !important;
+  border: 1px solid rgba(239,68,68,0.24) !important;
+}
+
+#sidebar .nav-group--advanced .nav-group-header.open {
+  background: rgba(239,68,68,0.07) !important;
+  border-color: rgba(239,68,68,0.24) !important;
+  box-shadow: 0 4px 20px rgba(239,68,68,0.10), 0 0 0 1px rgba(239,68,68,0.18) !important;
+}
+
+#sidebar .nav-group--advanced .nav-group-header.open::before {
+  background: var(--sb-red) !important;
+}
+
+#sidebar .nav-group--advanced .nav-child:hover {
+  background: rgba(239,68,68,0.06) !important;
+}
+
+/* ── SOC OPERATIONS — Semantic Green (healthy/operational) ──────────────── */
+#sidebar .nav-group--soc .nav-group-icon {
+  background: var(--sb-green-bg) !important;
+  color: rgba(16,185,129,0.75) !important;
+  box-shadow: none !important;
+}
+
+#sidebar .nav-group--soc .nav-group-header.open .nav-group-icon {
+  background: var(--sb-green-bg) !important;
+  color: var(--sb-green) !important;
+  box-shadow: 0 0 0 1px rgba(16,185,129,0.18) !important;
+}
+
+#sidebar .nav-group--soc .nav-group-count {
+  background: var(--sb-green-bg) !important;
+  color: #4fd4a5 !important;
+  border: 1px solid rgba(16,185,129,0.24) !important;
+}
+
+#sidebar .nav-group--soc .nav-group-header.open {
+  background: rgba(16,185,129,0.07) !important;
+  border-color: rgba(16,185,129,0.24) !important;
+  box-shadow: 0 4px 20px rgba(16,185,129,0.10), 0 0 0 1px rgba(16,185,129,0.18) !important;
+}
+
+#sidebar .nav-group--soc .nav-group-header.open::before {
+  background: var(--sb-green) !important;
+}
+
+#sidebar .nav-group--soc .nav-child:hover {
+  background: rgba(16,185,129,0.06) !important;
+}
+
+/* ── INNOVATIONS — Semantic Amber (beta/experimental) ─────────────────────── */
+#sidebar .nav-group--innovations .nav-group-icon {
+  background: var(--sb-amber-bg) !important;
+  color: rgba(245,158,11,0.75) !important;
+  box-shadow: none !important;
+}
+
+#sidebar .nav-group--innovations .nav-group-header.open .nav-group-icon {
+  background: var(--sb-amber-bg) !important;
+  color: var(--sb-amber) !important;
+  box-shadow: 0 0 0 1px rgba(245,158,11,0.18) !important;
+}
+
+#sidebar .nav-group--innovations .nav-group-count {
+  background: var(--sb-amber-bg) !important;
+  color: #fbb94a !important;
+  border: 1px solid rgba(245,158,11,0.24) !important;
+}
+
+#sidebar .nav-group--innovations .nav-group-header.open {
+  background: rgba(245,158,11,0.06) !important;
+  border-color: rgba(245,158,11,0.24) !important;
+  box-shadow: 0 4px 20px rgba(245,158,11,0.08), 0 0 0 1px rgba(245,158,11,0.18) !important;
+}
+
+#sidebar .nav-group--innovations .nav-group-header.open::before {
+  background: var(--sb-amber) !important;
+}
+
+#sidebar .nav-group--innovations .nav-child:hover {
+  background: rgba(245,158,11,0.05) !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   FOOTER
+   ══════════════════════════════════════════════════════════════════════════════ */
+#sidebar .sidebar-footer {
+  position: relative;
+  z-index: 2;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  padding: 12px 14px !important;
+  border-top: 1px solid var(--sb-border) !important;
+  background: rgba(8, 14, 24, 0.75) !important;
+  flex-shrink: 0 !important;
+}
+
+/* User block */
+#sidebar .sidebar-user {
+  display: flex !important;
+  align-items: center !important;
+  gap: 9px !important;
+  overflow: hidden !important;
+}
+
+/* Avatar */
+#sidebar .user-avatar-sm {
+  width: 32px !important;
+  height: 32px !important;
+  border-radius: 50% !important;
+  background: linear-gradient(135deg, #1a4fd4 0%, #0d33a0 100%) !important;
+  color: #fff !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-shrink: 0 !important;
+  letter-spacing: 0.3px !important;
+  position: relative !important;
+}
+
+/* Live online dot on avatar */
+#sidebar .user-avatar-sm::after {
+  content: '';
+  position: absolute;
+  bottom: 0; right: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--sb-green);
+  border: 1.5px solid var(--sb-bg);
+  box-shadow: 0 0 5px rgba(16,185,129,0.65);
+  animation: sb-pulse-dot 2.8s ease-in-out infinite;
+}
+
+/* User name */
+#sidebar .user-name-sm {
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: var(--sb-text-primary) !important;
+}
+
+/* User role */
+#sidebar .user-role-sm {
+  font-size: 10.5px !important;
+  color: var(--sb-text-muted) !important;
+  margin-top: 1px !important;
+}
+
+/* Logout button */
+#sidebar .sidebar-logout-btn {
+  background: rgba(255,255,255,0.04) !important;
+  border: 1px solid var(--sb-border) !important;
+  border-radius: var(--sb-r-md) !important;
+  color: var(--sb-text-muted) !important;
+  padding: 6px 9px !important;
+  cursor: pointer !important;
+  transition:
+    background var(--sb-t-fast) var(--sb-ease),
+    border-color var(--sb-t-fast) var(--sb-ease),
+    color var(--sb-t-fast) var(--sb-ease) !important;
+  font-size: 12px !important;
+}
+
+#sidebar .sidebar-logout-btn:hover {
+  background: rgba(239,68,68,0.09) !important;
+  border-color: rgba(239,68,68,0.24) !important;
+  color: #ff7070 !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   COLLAPSED STATE — preserve existing JS behaviour
+   ══════════════════════════════════════════════════════════════════════════════ */
+#sidebar.sidebar.collapsed .logo-text,
+#sidebar.sidebar.collapsed .nav-group-label,
+#sidebar.sidebar.collapsed .nav-group-count,
+#sidebar.sidebar.collapsed .nav-group-chevron,
+#sidebar.sidebar.collapsed .nav-group-children,
+#sidebar.sidebar.collapsed .user-info-text,
+#sidebar.sidebar.collapsed .sidebar-logout-btn {
+  display: none !important;
+}
+
+#sidebar.sidebar.collapsed .sidebar-logo-img {
+  width: 30px !important;
+  height: 30px !important;
+}
+
+#sidebar.sidebar.collapsed .nav-group-header {
+  justify-content: center !important;
+  padding: 0 !important;
+  height: 42px !important;
+}
+
+#sidebar.sidebar.collapsed .nav-group-icon {
+  margin-right: 0 !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   STAGGERED CHILD REVEAL — refined, subtle
+   ══════════════════════════════════════════════════════════════════════════════ */
+#sidebar .nav-child:nth-child(1)  { transition-delay: 0.020s; }
+#sidebar .nav-child:nth-child(2)  { transition-delay: 0.040s; }
+#sidebar .nav-child:nth-child(3)  { transition-delay: 0.060s; }
+#sidebar .nav-child:nth-child(4)  { transition-delay: 0.080s; }
+#sidebar .nav-child:nth-child(5)  { transition-delay: 0.100s; }
+#sidebar .nav-child:nth-child(6)  { transition-delay: 0.120s; }
+#sidebar .nav-child:nth-child(7)  { transition-delay: 0.140s; }
+#sidebar .nav-child:nth-child(8)  { transition-delay: 0.160s; }
+#sidebar .nav-child:nth-child(9)  { transition-delay: 0.180s; }
+#sidebar .nav-child:nth-child(10) { transition-delay: 0.200s; }
+#sidebar .nav-child:nth-child(11) { transition-delay: 0.220s; }
+#sidebar .nav-child:nth-child(12) { transition-delay: 0.240s; }
