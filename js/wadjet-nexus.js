@@ -68,9 +68,306 @@ const SEVERITY_COLOR = { critical: DS.red, high: DS.orange, medium: DS.yellow, l
 const SEVERITY_ICON  = { critical: 'fa-skull', high: 'fa-exclamation-triangle', medium: 'fa-exclamation', low: 'fa-info-circle', informational: 'fa-circle-info', unknown: 'fa-question-circle' };
 
 // ── API Client ────────────────────────────────────────────────────────────────
+// nexusApi() — returns rich mock data for all endpoints so the platform
+// renders fully without a live backend.  When window.NEXUS_LIVE_API === true
+// and window.API_BASE_URL is set, it falls through to real HTTP calls.
+// ─────────────────────────────────────────────────────────────────────────────
 const API_BASE = (typeof window !== 'undefined' && window.API_BASE_URL) ? window.API_BASE_URL : '';
 
+// ── Rich demo data seed ───────────────────────────────────────────────────────
+const _MOCK = {
+  // helpers
+  _asset: (i) => ({ id: 'ast-' + i, hostname: ['web-prod-0'+i,'db-core-0'+i,'api-gw-0'+i,'k8s-node-0'+i,'vpn-gw-0'+i][i%5],
+    ip_address: '10.0.' + i + '.'+((i*7)%254+1), criticality: ['critical','high','medium','low'][i%4],
+    risk_score: 30 + (i*13)%60, internet_exposed: i%3===0, asset_type: ['server','container','network','endpoint'][i%4] }),
+  _cve: (i) => {
+    const ids = ['CVE-2024-3400','CVE-2023-44487','CVE-2024-21762','CVE-2023-46604','CVE-2024-1709','CVE-2023-20198','CVE-2024-4577','CVE-2023-42793','CVE-2024-6387','CVE-2023-48788'];
+    const titles = ['PAN-OS Command Injection (CVSS 10)','HTTP/2 Rapid Reset DoS','Fortinet OTP Bypass','Apache ActiveMQ RCE','ConnectWise Auth Bypass','Cisco IOS XE Priv Esc','PHP CGI Arg Injection','JetBrains TeamCity Auth Bypass','OpenSSH regreSSHion RCE','Fortinet FortiClient EMS SQLi'];
+    return { id:'vuln-'+i, cve_id: ids[i%10], title: titles[i%10], severity:['critical','high','high','medium','critical','high','medium','critical','critical','high'][i%10],
+      cvss_score:[10,7.5,9.8,10,10,10,9.8,9.8,9.8,9.8][i%10], epss_score: 0.1+((i*0.09)%0.89),
+      is_kev: i%3===0, has_exploit: i%2===0, published_at: '2024-'+(String(i%12+1).padStart(2,'0'))+'-'+(String(i%28+1).padStart(2,'0')) };
+  },
+  '/dashboard': () => ({
+    success:true, data:{
+      kpis:{ enterprise_risk_score:62, total_assets:2847, internet_exposed:312,
+        total_vulns:4193, critical_vulns:287, kev_vulns:43, open_hunts:8,
+        controls_pct:74, controls_implemented:1482, controls_total:2000,
+        critical_assets:89, high_vulns:891, asset_hygiene_score:81,
+        open_risk_score:38, compliance_debt:26 },
+      severity_breakdown:{ critical:287, high:891, medium:1934, low:1081 },
+      top_risky_assets: Array.from({length:6},(_,i)=>_MOCK._asset(i+1)),
+      recent_risk_score:{ maturity_radar:{ detection:72,mitigation:68,validation:55,compliance:74,crisis_ready:61,risk_treated:80 } }
+    }
+  }),
+  '/vulnerabilities': () => ({success:true, data: Array.from({length:50},(_,i)=>_MOCK._cve(i)), total:4193}),
+  '/exposure-worklist': () => ({success:true, data: Array.from({length:20},(_,i)=>({
+    id:'wl-'+i, fusion_score: 95-i*3, sla_breached: i<4, sla_due_at: new Date(Date.now()+(i-3)*86400000).toISOString(),
+    nexus_vulnerabilities: _MOCK._cve(i), asset_inventory: _MOCK._asset(i)
+  })), total:20}),
+  '/attack-surface-graph': () => ({success:true, data:{
+    nodes: [
+      {id:'n1',label:'web-prod-01',type:'entry',risk_score:82},{id:'n2',label:'api-gw-01',type:'internal',risk_score:65},
+      {id:'n3',label:'db-core-01',type:'crown_jewel',risk_score:91},{id:'n4',label:'auth-svc',type:'choke_point',risk_score:78},
+      {id:'n5',label:'k8s-node-01',type:'internal',risk_score:55},{id:'n6',label:'vpn-gw-01',type:'entry',risk_score:73},
+      {id:'n7',label:'backup-srv',type:'crown_jewel',risk_score:88},{id:'n8',label:'ldap-dc01',type:'choke_point',risk_score:85},
+    ],
+    edges:[
+      {source:'n1',target:'n2',weight:12},{source:'n2',target:'n4',weight:8},
+      {source:'n4',target:'n3',weight:5},{source:'n6',target:'n4',weight:15},
+      {source:'n4',target:'n8',weight:7},{source:'n8',target:'n7',weight:9},
+      {source:'n5',target:'n2',weight:11},{source:'n1',target:'n5',weight:6},
+    ],
+    choke_points:['n4','n8']
+  }}),
+  '/attack-paths': () => ({success:true, data: Array.from({length:12},(_,i)=>({
+    id:'path-'+i, source_asset_id:'asset-'+Math.floor(Math.random()*100),
+    target_asset_id:'crown-'+Math.floor(Math.random()*10),
+    path_cost:20+(i*8)%80, blast_radius:(i+1)*350000, choke_point_ids:['n4','n8'].slice(0,i%3)
+  })), total:12}),
+  '/voc/kpis': () => ({success:true, data:{open_vulns:4193,sla_breached:127,sla_compliance_pct:89,mttr_days:14}}),
+  '/voc/campaigns': () => ({success:true, data:[
+    {id:'c1',name:'Q3 Critical CVE Remediation',status:'active',owner_email:'alice@corp.com',target_date:'2024-09-30'},
+    {id:'c2',name:'KEV 30-Day Patch Cycle',status:'active',owner_email:'bob@corp.com',target_date:'2024-08-15'},
+    {id:'c3',name:'Cloud Exposure Reduction',status:'planned',owner_email:'carol@corp.com',target_date:'2024-10-31'},
+    {id:'c4',name:'Legacy TLS Deprecation',status:'completed',owner_email:'dave@corp.com',target_date:'2024-07-01'},
+  ]}),
+  '/ctem': () => ({success:true, data: Array.from({length:18},(_,i)=>({
+    id:'exp-'+i, exposure_id:'EXP-'+String(1000+i), name:['Internet-Exposed RDP','Unpatched Exchange','Stale Admin Account','Shadow IT Asset','Exposed S3 Bucket','Weak VPN Config','Outdated SSL Cert'][i%7],
+    stage:['discover','prioritize','remediate'][i%3], severity:['critical','high','medium'][i%3],
+    asset_inventory:{hostname:'svc-'+i+'.corp.com'}
+  }))}),
+  '/tid/summary': () => ({success:true, data:{
+    detect_covered:312, detect_partial:89, detect_none:241, false_coverage:44,
+    test_validated:178, avg_program_score:73, total_techniques:686
+  }}),
+  '/tid/coverage': () => ({success:true, data: [
+    {technique_id:'T1059',tactic:'Execution',detect_status:'covered',test_status:'validated',adversary_prevalence:0.91,detection_drift:false},
+    {technique_id:'T1566',tactic:'Initial Access',detect_status:'covered',test_status:'validated',adversary_prevalence:0.88,detection_drift:false},
+    {technique_id:'T1190',tactic:'Initial Access',detect_status:'partial',test_status:'none',adversary_prevalence:0.76,detection_drift:true},
+    {technique_id:'T1486',tactic:'Impact',detect_status:'covered',test_status:'validated',adversary_prevalence:0.72,detection_drift:false},
+    {technique_id:'T1078',tactic:'Initial Access',detect_status:'none',test_status:'none',adversary_prevalence:0.85,detection_drift:false},
+    {technique_id:'T1021',tactic:'Lateral Movement',detect_status:'partial',test_status:'none',adversary_prevalence:0.68,detection_drift:false},
+    {technique_id:'T1110',tactic:'Credential Access',detect_status:'covered',test_status:'validated',adversary_prevalence:0.79,detection_drift:false},
+    {technique_id:'T1048',tactic:'Exfiltration',detect_status:'none',test_status:'none',adversary_prevalence:0.54,detection_drift:true},
+    {technique_id:'T1055',tactic:'Defense Evasion',detect_status:'partial',test_status:'none',adversary_prevalence:0.61,detection_drift:false},
+    {technique_id:'T1547',tactic:'Persistence',detect_status:'covered',test_status:'validated',adversary_prevalence:0.58,detection_drift:false},
+  ], total:686}),
+  '/kill-chain': () => ({success:true, data:{phases:[
+    {phase:'Reconnaissance',technique_count:8,covered:6,uncovered:2,techniques:[{technique_id:'T1595'},{technique_id:'T1592'}]},
+    {phase:'Weaponization',technique_count:7,covered:4,uncovered:3,techniques:[{technique_id:'T1587'},{technique_id:'T1588'}]},
+    {phase:'Delivery',technique_count:9,covered:7,uncovered:2,techniques:[{technique_id:'T1566'},{technique_id:'T1195'}]},
+    {phase:'Exploitation',technique_count:12,covered:5,uncovered:7,techniques:[{technique_id:'T1190'},{technique_id:'T1203'}]},
+    {phase:'Installation',technique_count:10,covered:8,uncovered:2,techniques:[{technique_id:'T1547'},{technique_id:'T1543'}]},
+    {phase:'C2',technique_count:8,covered:6,uncovered:2,techniques:[{technique_id:'T1071'},{technique_id:'T1573'}]},
+    {phase:'Actions on Objectives',technique_count:11,covered:4,uncovered:7,techniques:[{technique_id:'T1486'},{technique_id:'T1485'}]},
+  ]}}),
+  '/hunts': () => ({success:true, data:[
+    {id:'h1',title:'Living-off-the-Land Binaries',hypothesis:'TA using LOLBins to evade AV on workstations',status:'in_progress',priority:'high',technique_ids:['T1218','T1059'],hunter_email:'alice@corp.com',created_at:new Date(Date.now()-3*86400000)},
+    {id:'h2',title:'Kerberoasting Activity',hypothesis:'SPN scanning from non-service accounts',status:'open',priority:'critical',technique_ids:['T1558'],hunter_email:'bob@corp.com',created_at:new Date(Date.now()-1*86400000)},
+    {id:'h3',title:'Lateral Movement via SMB',hypothesis:'Unusual ADMIN$ share access patterns',status:'escalated',priority:'high',technique_ids:['T1021'],hunter_email:'carol@corp.com',created_at:new Date(Date.now()-6*86400000)},
+    {id:'h4',title:'DNS Tunneling Detection',hypothesis:'Long subdomain queries from internal hosts',status:'closed',priority:'medium',technique_ids:['T1071'],hunter_email:'dave@corp.com',created_at:new Date(Date.now()-10*86400000)},
+    {id:'h5',title:'Credential Stuffing in Auth Logs',hypothesis:'Velocity anomalies in SSO login failures',status:'open',priority:'high',technique_ids:['T1110'],hunter_email:'alice@corp.com',created_at:new Date(Date.now()-2*86400000)},
+    {id:'h6',title:'PowerShell Encoded Commands',hypothesis:'Base64 encoded PS exec from scheduled tasks',status:'in_progress',priority:'critical',technique_ids:['T1059'],hunter_email:'bob@corp.com',created_at:new Date(Date.now()-4*86400000)},
+  ], total:6}),
+  '/emulation/scenarios': () => ({success:true, data:[
+    {id:'s1',name:'APT29 Cozy Bear TTPs',threat_actor:'APT29',test_count:42,status:'ready',last_run_at:new Date(Date.now()-2*86400000)},
+    {id:'s2',name:'Ransomware Kill Chain (LockBit)',threat_actor:'LockBit 3.0',test_count:31,status:'ready',last_run_at:new Date(Date.now()-7*86400000)},
+    {id:'s3',name:'Supply Chain Compromise',threat_actor:'APT41',test_count:18,status:'ready',last_run_at:null},
+    {id:'s4',name:'Cloud Jacking — Azure AD',threat_actor:'Storm-0558',test_count:24,status:'running',last_run_at:new Date(Date.now()-1*86400000)},
+    {id:'s5',name:'HAFNIUM Exchange Exploit Chain',threat_actor:'HAFNIUM',test_count:14,status:'ready',last_run_at:new Date(Date.now()-14*86400000)},
+  ]}),
+  '/emulation/results': () => ({success:true, data:[
+    {id:'r1',nexus_emulation_scenarios:{name:'APT29 Cozy Bear TTPs'},total_tests:42,detected:34,undetected:8,coverage_pct:81,run_at:new Date(Date.now()-2*86400000)},
+    {id:'r2',nexus_emulation_scenarios:{name:'Ransomware Kill Chain (LockBit)'},total_tests:31,detected:19,undetected:12,coverage_pct:61,run_at:new Date(Date.now()-7*86400000)},
+    {id:'r3',nexus_emulation_scenarios:{name:'HAFNIUM Exchange Exploit Chain'},total_tests:14,detected:12,undetected:2,coverage_pct:86,run_at:new Date(Date.now()-14*86400000)},
+  ]}),
+  '/controls': () => ({success:true, data:[
+    {id:'c1',control_id:'ISO-A.12.6.1',name:'Management of Technical Vulnerabilities',framework:'ISO 27001',status:'implemented'},
+    {id:'c2',control_id:'NIST-SI-2',name:'Flaw Remediation',framework:'NIST 800-53',status:'implemented'},
+    {id:'c3',control_id:'SOC2-CC7.1',name:'Logical and Physical Access Controls',framework:'SOC 2',status:'partial'},
+    {id:'c4',control_id:'PCI-6.3.3',name:'Security Patches/Updates',framework:'PCI DSS 4.0',status:'implemented'},
+    {id:'c5',control_id:'DORA-ICT.3.4',name:'ICT Risk Management Framework',framework:'DORA',status:'partial'},
+    {id:'c6',control_id:'NIST-IR-4',name:'Incident Handling',framework:'NIST 800-53',status:'implemented'},
+    {id:'c7',control_id:'ISO-A.16.1.1',name:'Incident Management Responsibilities',framework:'ISO 27001',status:'implemented'},
+    {id:'c8',control_id:'CIS-18.1',name:'Security Awareness Training',framework:'CIS v8',status:'partial'},
+    {id:'c9',control_id:'SOC2-CC9.1',name:'Risk Mitigation Activities',framework:'SOC 2',status:'planned'},
+    {id:'c10',control_id:'NIST-SC-7',name:'Boundary Protection',framework:'NIST 800-53',status:'implemented'},
+    {id:'c11',control_id:'PCI-11.3.1',name:'External Vulnerability Scanning',framework:'PCI DSS 4.0',status:'implemented'},
+    {id:'c12',control_id:'CIS-7.1',name:'Vulnerability Management Process',framework:'CIS v8',status:'implemented'},
+  ], total:1482}),
+  '/audits': () => ({success:true, data:[
+    {id:'a1',title:'ISO 27001 Surveillance Audit 2024',audit_type:'certification',status:'completed',score:87},
+    {id:'a2',title:'PCI DSS QSA Assessment',audit_type:'external',status:'in_progress',score:null},
+    {id:'a3',title:'SOC 2 Type II Readiness',audit_type:'readiness',status:'completed',score:79},
+    {id:'a4',title:'DORA Gap Analysis',audit_type:'gap_analysis',status:'completed',score:65},
+    {id:'a5',title:'Penetration Test Q2 2024',audit_type:'pentest',status:'completed',score:72},
+  ]}),
+  '/dfir/cases': () => ({success:true, data:[
+    {id:'f1',title:'Ransomware Incident — Finance BU',status:'active',severity:'critical',lead_analyst:'alice@corp.com',timeline:[1,2,3,4,5],artifacts:[1,2,3,4],created_at:new Date(Date.now()-3*86400000)},
+    {id:'f2',title:'Phishing Campaign — Executive Team',status:'contained',severity:'high',lead_analyst:'bob@corp.com',timeline:[1,2,3],artifacts:[1,2],created_at:new Date(Date.now()-8*86400000)},
+    {id:'f3',title:'Insider Threat — Data Exfiltration',status:'closed',severity:'high',lead_analyst:'carol@corp.com',timeline:[1,2,3,4,5,6],artifacts:[1,2,3],created_at:new Date(Date.now()-21*86400000)},
+    {id:'f4',title:'Supply Chain Backdoor Discovery',status:'active',severity:'critical',lead_analyst:'dave@corp.com',timeline:[1,2],artifacts:[1],created_at:new Date(Date.now()-1*86400000)},
+    {id:'f5',title:'Business Email Compromise — Finance',status:'closed',severity:'medium',lead_analyst:'alice@corp.com',timeline:[1,2,3],artifacts:[1,2],created_at:new Date(Date.now()-35*86400000)},
+  ]}),
+  '/risk-register': () => ({success:true, data:[
+    {id:'r1',title:'Ransomware Attack on Core Systems',category:'Cyber',inherent_likelihood:'critical',residual_likelihood:'high',treatment_strategy:'mitigate',ale_estimate:4200000,priority_score:94},
+    {id:'r2',title:'Third-Party Data Breach',category:'Vendor',inherent_likelihood:'high',residual_likelihood:'medium',treatment_strategy:'transfer',ale_estimate:1800000,priority_score:72},
+    {id:'r3',title:'Cloud Misconfiguration Exposure',category:'Cloud',inherent_likelihood:'high',residual_likelihood:'low',treatment_strategy:'mitigate',ale_estimate:950000,priority_score:61},
+    {id:'r4',title:'Regulatory Non-Compliance (GDPR)',category:'Compliance',inherent_likelihood:'medium',residual_likelihood:'low',treatment_strategy:'accept',ale_estimate:500000,priority_score:45},
+    {id:'r5',title:'DDoS on Public-Facing Services',category:'Availability',inherent_likelihood:'high',residual_likelihood:'medium',treatment_strategy:'mitigate',ale_estimate:720000,priority_score:58},
+    {id:'r6',title:'Insider Threat — Privileged Access',category:'People',inherent_likelihood:'medium',residual_likelihood:'medium',treatment_strategy:'mitigate',ale_estimate:1100000,priority_score:67},
+  ], total:6}),
+  '/connectors': () => ({success:true, data:[
+    {id:'co1',name:'crowdstrike',display_name:'CrowdStrike Falcon',category:'edr',connector_type:'api',enabled:true,last_run_at:new Date(Date.now()-900000),results_count:12483},
+    {id:'co2',name:'sentinel',display_name:'Microsoft Sentinel',category:'siem',connector_type:'api',enabled:true,last_run_at:new Date(Date.now()-300000),results_count:89234},
+    {id:'co3',name:'tenable',display_name:'Tenable.io',category:'vm',connector_type:'api',enabled:true,last_run_at:new Date(Date.now()-3600000),results_count:4193},
+    {id:'co4',name:'splunk',display_name:'Splunk SIEM',category:'siem',connector_type:'api',enabled:false,last_run_at:new Date(Date.now()-86400000),results_count:0},
+    {id:'co5',name:'qualys',display_name:'Qualys VMDR',category:'vm',connector_type:'api',enabled:true,last_run_at:new Date(Date.now()-7200000),results_count:3847},
+    {id:'co6',name:'servicenow',display_name:'ServiceNow ITSM',category:'ticketing',connector_type:'api',enabled:true,last_run_at:new Date(Date.now()-1800000),results_count:267},
+    {id:'co7',name:'jira',display_name:'Jira / Atlassian',category:'ticketing',connector_type:'api',enabled:false,last_run_at:null,results_count:0},
+    {id:'co8',name:'aws_security_hub',display_name:'AWS Security Hub',category:'cloud',connector_type:'api',enabled:true,last_run_at:new Date(Date.now()-600000),results_count:1923},
+    {id:'co9',name:'azure_defender',display_name:'Microsoft Defender for Cloud',category:'cloud',connector_type:'api',enabled:true,last_run_at:new Date(Date.now()-120000),results_count:3312},
+    {id:'co10',name:'virustotal',display_name:'VirusTotal Enterprise',category:'threat_intel',connector_type:'api',enabled:true,last_run_at:new Date(Date.now()-450000),results_count:891},
+    {id:'co11',name:'shodan',display_name:'Shodan',category:'osint',connector_type:'api',enabled:true,last_run_at:new Date(Date.now()-21600000),results_count:312},
+    {id:'co12',name:'misp',display_name:'MISP Threat Intel',category:'threat_intel',connector_type:'api',enabled:true,last_run_at:new Date(Date.now()-3600000),results_count:5621},
+  ], total:1247}),
+  '/ransomware': () => ({success:true, data:[
+    {id:'rs1',threat_actor:'LockBit 3.0',computed_at:new Date(Date.now()-86400000),total_sle:8400000,total_ale:1680000,residual_with_controls:420000,aro_estimate:0.2,blast_radius_count:187,
+     affected_assets:[{asset_name:'ERP-Core-Prod',value_at_risk:3200000,internet_exposed:false},{asset_name:'web-prod-01',value_at_risk:890000,internet_exposed:true},{asset_name:'db-finance',value_at_risk:2100000,internet_exposed:false},{asset_name:'backup-nas',value_at_risk:1500000,internet_exposed:false}]},
+    {id:'rs2',threat_actor:'BlackCat (ALPHV)',computed_at:new Date(Date.now()-7*86400000),total_sle:6100000,total_ale:1220000,residual_with_controls:305000,aro_estimate:0.2,blast_radius_count:142},
+    {id:'rs3',threat_actor:'Royal Ransomware',computed_at:new Date(Date.now()-14*86400000),total_sle:3900000,total_ale:780000,residual_with_controls:195000,aro_estimate:0.2,blast_radius_count:98},
+  ]}),
+  '/aoi': () => ({success:true, data: Array.from({length:30},(_,i)=>({
+    id:'aoi-'+i, aoi_score: 580-(i*8)+(Math.sin(i)*40), computed_at:new Date(Date.now()-i*86400000),
+    choke_points:i===0?['n4','n8']:[], attack_path_gaps:i===0?['T1190','T1021','T1078']:[]
+  }))}),
+  '/sigma-rules': () => ({success:true, data:[
+    {id:'sg1',title:'Suspicious PowerShell Download Cradle',level:'high',status:'stable',attack_techniques:['T1059.001'],source:'sigma-community',enabled:true},
+    {id:'sg2',title:'Mimikatz LSASS Dump Detection',level:'critical',status:'stable',attack_techniques:['T1003.001'],source:'sigma-community',enabled:true},
+    {id:'sg3',title:'Kerberoasting via SetSPN',level:'high',status:'stable',attack_techniques:['T1558.003'],source:'sigma-community',enabled:true},
+    {id:'sg4',title:'Abnormal WMI Activity',level:'medium',status:'test',attack_techniques:['T1047'],source:'custom',enabled:true},
+    {id:'sg5',title:'Pass-the-Hash via NTLM',level:'high',status:'stable',attack_techniques:['T1550.002'],source:'sigma-community',enabled:true},
+    {id:'sg6',title:'Living-off-the-Land Binary (LOLBin)',level:'high',status:'stable',attack_techniques:['T1218'],source:'sigma-community',enabled:true},
+    {id:'sg7',title:'DNS Tunneling via Long Subdomains',level:'medium',status:'experimental',attack_techniques:['T1071.004'],source:'ai-generated',enabled:false},
+    {id:'sg8',title:'RDP Brute Force Detection',level:'medium',status:'stable',attack_techniques:['T1110.001'],source:'sigma-community',enabled:true},
+    {id:'sg9',title:'Cobalt Strike Beacon via Named Pipe',level:'critical',status:'stable',attack_techniques:['T1573'],source:'sigma-community',enabled:true},
+    {id:'sg10',title:'Azure AD Suspicious OAuth App',level:'high',status:'test',attack_techniques:['T1550.001'],source:'custom',enabled:true},
+    {id:'sg11',title:'Scheduled Task Creation for Persistence',level:'medium',status:'stable',attack_techniques:['T1053.005'],source:'sigma-community',enabled:true},
+    {id:'sg12',title:'Credential Dumping via ProcDump',level:'high',status:'stable',attack_techniques:['T1003'],source:'sigma-community',enabled:false},
+  ], total:3750}),
+  '/crisis/scenarios': () => ({success:true, data:[
+    {id:'cs1',name:'Ransomware Outbreak — Hospital BU',scenario_type:'ransomware'},
+    {id:'cs2',name:'Mega-DDoS on Payment Gateway',scenario_type:'ddos'},
+    {id:'cs3',name:'Insider Data Exfiltration',scenario_type:'insider_threat'},
+    {id:'cs4',name:'Supply Chain Software Backdoor',scenario_type:'supply_chain'},
+    {id:'cs5',name:'Critical Infrastructure Attack (OT)',scenario_type:'ot_attack'},
+    {id:'cs6',name:'Nation-State APT Breach',scenario_type:'apt'},
+  ]}),
+  '/crisis/exercises': () => ({success:true, data:[
+    {id:'ce1',title:'Ransomware Response TTX Q2 2024',status:'completed',readiness_score:78,created_at:new Date(Date.now()-30*86400000)},
+    {id:'ce2',title:'DDoS Playbook Validation',status:'completed',readiness_score:84,created_at:new Date(Date.now()-60*86400000)},
+    {id:'ce3',title:'GDPR Breach Notification Drill',status:'in_progress',readiness_score:62,created_at:new Date(Date.now()-5*86400000)},
+    {id:'ce4',title:'OT/ICS Incident Response',status:'planned',readiness_score:0,created_at:new Date(Date.now()-1*86400000)},
+  ]}),
+  '/tprm/vendors': () => ({success:true, data:[
+    {id:'v1',name:'Acme Cloud Services',vendor_type:'cloud_provider',risk_tier:'critical',risk_score:72,assessment_status:'completed'},
+    {id:'v2',name:'DataSync Analytics',vendor_type:'data_processor',risk_tier:'high',risk_score:58,assessment_status:'in_progress'},
+    {id:'v3',name:'SecureComm Ltd',vendor_type:'security_tool',risk_tier:'medium',risk_score:34,assessment_status:'completed'},
+    {id:'v4',name:'GlobalPay Processor',vendor_type:'payment',risk_tier:'critical',risk_score:81,assessment_status:'overdue'},
+    {id:'v5',name:'DevBridge Outsourcing',vendor_type:'software_dev',risk_tier:'high',risk_score:64,assessment_status:'pending'},
+    {id:'v6',name:'NetGuard ISP',vendor_type:'network',risk_tier:'medium',risk_score:28,assessment_status:'completed'},
+  ]}),
+  '/sbom': () => ({success:true, data:[
+    {id:'sb1',name:'ERP Core v4.2 SBOM',sbom_format:'SPDX',component_count:1847,vuln_count:23,license_issues:4},
+    {id:'sb2',name:'Payment Service SBOM',sbom_format:'CycloneDX',component_count:634,vuln_count:8,license_issues:1},
+    {id:'sb3',name:'Mobile App v3.1 SBOM',sbom_format:'CycloneDX',component_count:892,vuln_count:31,license_issues:7},
+    {id:'sb4',name:'API Gateway SBOM',sbom_format:'SPDX',component_count:412,vuln_count:5,license_issues:2},
+    {id:'sb5',name:'Data Pipeline SBOM',sbom_format:'CycloneDX',component_count:1123,vuln_count:14,license_issues:3},
+  ]}),
+  '/insurance-readiness': () => ({success:true, data:{
+    overall_score:73, policy_limit:10000000, coverage_adequate:true,
+    controls_status:{mfa:true,edr:true,backups:true,segmentation:false,patch_mgmt:true,ir_plan:true,encryption:true,phishing_training:false,privileged_access_mgmt:true,logging_monitoring:true}
+  }}),
+  '/pqcmm': () => ({success:true, data:[
+    {id:'pq1',name:'TLS/PKI Infrastructure',current_level:2,target_level:4,quantum_vulnerable:true,cbom_present:false},
+    {id:'pq2',name:'Email Encryption (S/MIME)',current_level:1,target_level:3,quantum_vulnerable:true,cbom_present:false},
+    {id:'pq3',name:'VPN Gateway',current_level:2,target_level:4,quantum_vulnerable:true,cbom_present:true},
+    {id:'pq4',name:'Key Management Service',current_level:3,target_level:5,quantum_vulnerable:false,cbom_present:true},
+  ]}),
+  '/ebios': () => ({success:true, data:[
+    {id:'eb1',name:'Digital Banking Platform Risk Study',status:'Workshop 3 — Strategic Scenarios',express_mode:false,owner_email:'alice@corp.com',updated_at:new Date(Date.now()-2*86400000)},
+    {id:'eb2',name:'Supply Chain Express Assessment',status:'Completed',express_mode:true,owner_email:'bob@corp.com',updated_at:new Date(Date.now()-7*86400000)},
+  ]}),
+  '/nist-800-30': () => ({success:true, data:[
+    {id:'ni1',name:'Cloud Infrastructure Risk Assessment',status:'completed',owner_email:'carol@corp.com',updated_at:new Date(Date.now()-14*86400000)},
+    {id:'ni2',name:'Endpoint Security Threat Assessment',status:'in_progress',owner_email:'dave@corp.com',updated_at:new Date(Date.now()-3*86400000)},
+  ]}),
+  '/bia': () => ({success:true, data:[
+    {id:'bia1',name:'Core Banking System',criticality:'critical',rto_hours:4,rpo_hours:1,financial_impact:2500000},
+    {id:'bia2',name:'Payment Processing',criticality:'critical',rto_hours:2,rpo_hours:0.5,financial_impact:5000000},
+    {id:'bia3',name:'Customer Portal',criticality:'high',rto_hours:8,rpo_hours:4,financial_impact:800000},
+    {id:'bia4',name:'HR Platform',criticality:'medium',rto_hours:24,rpo_hours:8,financial_impact:150000},
+  ]}),
+  '/discovery': () => ({success:true, data:[
+    {id:'d1',seed_domain:'corp.com',status:'completed',discovered_hosts:312,new_assets:28,run_mode:'passive',started_at:new Date(Date.now()-86400000)},
+    {id:'d2',seed_domain:'api.corp.com',status:'completed',discovered_hosts:47,new_assets:4,run_mode:'passive',started_at:new Date(Date.now()-3*86400000)},
+    {id:'d3',seed_domain:'legacy.corp.com',status:'failed',discovered_hosts:0,new_assets:0,run_mode:'live',started_at:new Date(Date.now()-7*86400000)},
+  ]}),
+  '/policies': () => ({success:true, data:[
+    {id:'p1',title:'Information Security Policy',policy_type:'master',framework:'ISO 27001',status:'approved',owner_email:'ciso@corp.com',review_date:'2025-01-01'},
+    {id:'p2',title:'Acceptable Use Policy',policy_type:'operational',framework:'ISO 27001',status:'approved',owner_email:'hr@corp.com',review_date:'2025-03-01'},
+    {id:'p3',title:'Data Classification Policy',policy_type:'data',framework:'GDPR',status:'under_review',owner_email:'dpo@corp.com',review_date:'2024-12-01'},
+    {id:'p4',title:'Incident Response Plan',policy_type:'procedure',framework:'NIST',status:'approved',owner_email:'soc@corp.com',review_date:'2025-06-01'},
+    {id:'p5',title:'Business Continuity Plan',policy_type:'continuity',framework:'ISO 22301',status:'approved',owner_email:'bcm@corp.com',review_date:'2025-02-01'},
+  ]}),
+  '/jobs': () => ({success:true, data:[
+    {id:'j1',name:'CVE Importer (NVD+CISA)',job_type:'cve_import',cron_expression:'0 * * * *',last_status:'success',last_run_at:new Date(Date.now()-3600000),enabled:true},
+    {id:'j2',name:'Risk Score Compute',job_type:'risk_score',cron_expression:'*/30 * * * * *',last_status:'success',last_run_at:new Date(Date.now()-30000),enabled:true},
+    {id:'j3',name:'Attack Path Recompute',job_type:'attack_paths',cron_expression:'*/15 * * * *',last_status:'success',last_run_at:new Date(Date.now()-900000),enabled:true},
+    {id:'j4',name:'SLA Breach Check',job_type:'sla_check',cron_expression:'*/5 * * * *',last_status:'success',last_run_at:new Date(Date.now()-300000),enabled:true},
+    {id:'j5',name:'TID Coverage Sync',job_type:'tid_sync',cron_expression:'0 0 * * *',last_status:'success',last_run_at:new Date(Date.now()-86400000),enabled:true},
+  ]}),
+  '/identities': () => ({success:true, data:[
+    {id:'i1',display_name:'Alice Chen',identity_type:'human',email:'alice@corp.com',source:'EntraID',is_stale:false,mfa_enabled:true},
+    {id:'i2',display_name:'Bob Kumar',identity_type:'human',email:'bob@corp.com',source:'EntraID',is_stale:false,mfa_enabled:true},
+    {id:'i3',display_name:'svc-backup-agent',identity_type:'service',email:null,source:'local',is_stale:false,mfa_enabled:false},
+    {id:'i4',display_name:'john.doe (departed)',identity_type:'human',email:'john.doe@corp.com',source:'EntraID',is_stale:true,mfa_enabled:false},
+    {id:'i5',display_name:'k8s-sa-deploy',identity_type:'service',email:null,source:'kubernetes',is_stale:false,mfa_enabled:false},
+    {id:'i6',display_name:'Carol Martinez',identity_type:'human',email:'carol@corp.com',source:'EntraID',is_stale:false,mfa_enabled:true},
+  ]}),
+  '/risk-score/compute': () => ({success:true, data:{enterprise_risk_score:59}}),
+  '/attack-paths/compute': () => ({success:true, data:{paths_computed:14}}),
+  '/vulnerabilities/match-assets': () => ({success:true, data:{matched:312}}),
+  '/aoi/compute': () => ({success:true, data:{aoi_score:547}}),
+  '/insurance-readiness/assess': () => ({success:true, data:{overall_score:76}}),
+  '/discovery/run': () => ({success:true, data:{status:'started'}}),
+};
+
+// ── Mock resolver — matches path prefix to data generator ─────────────────────
+function _mockResolve(path) {
+  // Strip query string for matching
+  const base = path.split('?')[0];
+  // Exact match
+  if (_MOCK[base]) return _MOCK[base]();
+  // Prefix match (e.g. /connectors/xxx/run)
+  for (const key of Object.keys(_MOCK)) {
+    if (base.startsWith(key + '/') || base === key) return _MOCK[key]();
+  }
+  // Unknown → empty success
+  return { success: true, data: [], total: 0 };
+}
+
 async function nexusApi(path, opts = {}) {
+  // ── Demo mode: return mock data immediately, no network call ──────────────
+  // Set window.NEXUS_LIVE_API = true and window.API_BASE_URL to enable real calls.
+  const liveMode = (typeof window !== 'undefined' && window.NEXUS_LIVE_API === true && window.API_BASE_URL);
+  if (!liveMode) {
+    // Simulate ~60ms network latency for realism
+    await new Promise(r => setTimeout(r, 60));
+    return _mockResolve(path);
+  }
+
+  // ── Live mode (backend available) ────────────────────────────────────────
   const token    = localStorage.getItem('wadjet_token') || localStorage.getItem('auth_token');
   const tenantId = localStorage.getItem('tenant_id');
   const headers  = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
