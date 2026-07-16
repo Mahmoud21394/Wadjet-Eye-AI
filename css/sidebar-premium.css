@@ -74,7 +74,7 @@
   display: flex !important;
   flex-direction: column !important;
   position: relative !important;
-  overflow: hidden !important;
+  overflow: hidden !important; /* shell clips x, scroll is on .sidebar-nav-scroll child */
 }
 
 /* Collapsed keeps mini-width (existing JS controls this) */
@@ -434,23 +434,32 @@
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   NAV GROUP CHILDREN
+   NAV GROUP CHILDREN — Accordion Panel
+   CRITICAL: max-height must NOT use !important — JS sets inline style to
+   animate open/close. opacity also left without !important so JS can control
+   via class toggle cleanly. The .open class wins via higher specificity.
    ══════════════════════════════════════════════════════════════════════════════ */
 #sidebar .nav-group-children {
-  max-height: 0 !important;
+  max-height: 0;
   overflow: hidden !important;
   background: transparent !important;
   border-radius: 0 0 var(--sb-r-lg) var(--sb-r-lg) !important;
   border-top: none !important;
   padding: 0 !important;
-  opacity: 0 !important;
+  /* opacity NOT !important — .open rule below overrides it via specificity */
+  opacity: 0;
   transition:
-    max-height var(--sb-t-slow) var(--sb-ease),
-    opacity var(--sb-t-slow) var(--sb-ease) !important;
+    max-height 280ms cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    opacity 180ms ease,
+    padding 180ms ease !important;
 }
 
+/* Open state — both classes give this rule higher specificity over base */
 #sidebar .nav-group-children.open {
-  opacity: 1 !important;
+  /* JS sets inline max-height = scrollHeight + 'px'.
+     This 2000px fallback handles the rare case scrollHeight was 0 at open time. */
+  max-height: 2000px;
+  opacity: 1;
   padding: 4px 0 8px !important;
 }
 

@@ -524,12 +524,30 @@ function navigateTo(pageId, opts) {
 
 /**
  * Open a nav group — sets max-height to the scrollHeight for smooth animation.
+ * Temporarily clears max-height so scrollHeight reflects real content size,
+ * then snaps back for the CSS transition to animate from 0 → target.
  */
 function _openNavGroup(header, children) {
   header.classList.add('open');
-  children.classList.add('open');
-  // Use scrollHeight for correct max-height animation target
-  children.style.maxHeight = children.scrollHeight + 'px';
+
+  // Use display-block + auto height animation via JS — avoids any CSS
+  // max-height !important conflicts from sidebar-v2.css / other sheets.
+  children.style.display = 'block';
+  children.style.overflow = 'hidden';
+  children.style.opacity  = '0';
+  children.style.padding  = '0';
+
+  // Measure real height
+  const scrollH = children.scrollHeight;
+
+  // Force repaint then animate
+  requestAnimationFrame(() => {
+    children.style.transition = 'max-height 280ms cubic-bezier(0.25,0.46,0.45,0.94), opacity 180ms ease, padding 180ms ease';
+    children.style.maxHeight  = scrollH > 0 ? (scrollH + 16) + 'px' : '2000px';
+    children.style.opacity    = '1';
+    children.style.padding    = '4px 0 8px';
+    children.classList.add('open');
+  });
 }
 
 /**
@@ -538,7 +556,16 @@ function _openNavGroup(header, children) {
 function _closeNavGroup(header, children) {
   header.classList.remove('open');
   children.classList.remove('open');
-  children.style.maxHeight = '0px';
+  children.style.transition = 'max-height 280ms cubic-bezier(0.25,0.46,0.45,0.94), opacity 180ms ease, padding 180ms ease';
+  children.style.maxHeight  = '0px';
+  children.style.opacity    = '0';
+  children.style.padding    = '0';
+  // Hide after transition to avoid being tabbable
+  setTimeout(() => {
+    if (!children.classList.contains('open')) {
+      children.style.display = 'none';
+    }
+  }, 300);
 }
 
 /**
