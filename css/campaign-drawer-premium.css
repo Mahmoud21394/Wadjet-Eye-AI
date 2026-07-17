@@ -1,0 +1,565 @@
+/**
+ * ══════════════════════════════════════════════════════════════════
+ *  Wadjet-Eye AI — Campaign Detail Drawer Premium Refinement
+ *  FILE: css/campaign-drawer-premium.css
+ *  Version: 1.0  |  SOC Premium Dark Theme  |  2026-07-17
+ *
+ *  Objectives:
+ *  ──────────────────────────────────────────────────────────────
+ *  1.  Single backdrop layer at 25–35% opacity, 6–8px blur
+ *  2.  Drawer surface: solid dark, 92–95% effective opacity
+ *  3.  No parent-level opacity on drawer containers
+ *  4.  Z-index: backdrop (1100) below drawer (1200) ← already correct
+ *  5.  Cards 8–12% brighter than drawer surface
+ *  6.  Borders: rgba(255,255,255,0.10–0.15) + soft elevation shadows
+ *  7.  Typography: bright white headings → gray-blue secondary → muted metadata
+ *  8.  Restrained cyan/amber/purple cyber accent on active elements
+ *  9.  Preserves layout, spacing, animations, information architecture
+ *
+ *  Aesthetic target: Microsoft Defender XDR / CrowdStrike Falcon / SentinelOne
+ * ══════════════════════════════════════════════════════════════════
+ */
+
+/* ─── Design Tokens (drawer scope) ──────────────────────────────── */
+:root {
+  /* Drawer surface — solid, not transparent */
+  --dr-surface:         #111827;   /* primary drawer bg — solid dark navy */
+  --dr-surface-raised:  #1a2333;   /* cards inside drawer — 9% brighter */
+  --dr-surface-hover:   #1f2d42;   /* hover state on cards */
+  --dr-surface-header:  #0d1520;   /* header strip — slightly deeper */
+
+  /* Borders — light translucent strokes */
+  --dr-border:          rgba(255, 255, 255, 0.10);
+  --dr-border-bright:   rgba(255, 255, 255, 0.14);
+  --dr-border-accent:   rgba(34, 211, 238, 0.20);
+
+  /* Typography hierarchy */
+  --dr-text-primary:    #f0f6fc;   /* bright white — main headings */
+  --dr-text-secondary:  #a8b8cc;   /* blue-gray — secondary text */
+  --dr-text-muted:      #6b7a8d;   /* muted gray — metadata/timestamps */
+  --dr-text-label:      #7d8fa3;   /* uppercase labels */
+
+  /* Accent colors — restrained glow */
+  --dr-cyan:            #22d3ee;
+  --dr-cyan-glow:       rgba(34, 211, 238, 0.15);
+  --dr-cyan-border:     rgba(34, 211, 238, 0.25);
+  --dr-amber:           #fbbf24;
+  --dr-amber-glow:      rgba(251, 191, 36, 0.12);
+  --dr-purple:          #a78bfa;
+  --dr-purple-glow:     rgba(167, 139, 250, 0.12);
+  --dr-red:             #f43f5e;
+  --dr-orange:          #fb923c;
+  --dr-green:           #34d399;
+
+  /* Overlay — single layer only */
+  --dr-overlay-bg:      rgba(4, 8, 16, 0.30);   /* 30% opacity — in spec range */
+  --dr-overlay-blur:    7px;                      /* 6–8px blur */
+
+  /* Shadows */
+  --dr-shadow-panel:    -12px 0 40px rgba(0, 0, 0, 0.40),
+                        -2px 0 8px rgba(0, 0, 0, 0.30),
+                        inset 1px 0 0 rgba(255, 255, 255, 0.05);
+  --dr-shadow-card:     0 2px 8px rgba(0, 0, 0, 0.25),
+                        0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  --dr-shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.35),
+                          0 1px 0 rgba(255, 255, 255, 0.06) inset;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   OVERLAY — single, restrained backdrop
+   Replaces: background: rgba(0,0,0,.5) → 30% opacity
+   Replaces: no backdrop-filter → 7px blur
+═══════════════════════════════════════════════════════════════ */
+.soc-overlay,
+#csoc-overlay {
+  background: var(--dr-overlay-bg) !important;
+  backdrop-filter: blur(var(--dr-overlay-blur)) !important;
+  -webkit-backdrop-filter: blur(var(--dr-overlay-blur)) !important;
+  /* Z-index already correct (1100 < panel 1200) */
+  z-index: 1100 !important;
+  /* Ensure no compounded opacity — use rgba only on background */
+  opacity: 0;          /* start hidden — JS sets to 1 */
+  transition: opacity .2s ease !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   DETAIL PANEL — solid surface, no parent opacity issues
+   Replaces: background: var(--soc-bg-card) = #0d1117 (too dark)
+═══════════════════════════════════════════════════════════════ */
+.soc-detail-panel,
+#csoc-detail-panel {
+  background: var(--dr-surface) !important;
+  border-left: 1px solid var(--dr-border-bright) !important;
+  box-shadow: var(--dr-shadow-panel) !important;
+  z-index: 1200 !important;
+
+  /* CRITICAL: No opacity on the element itself — prevents compound darkening.
+     If transparency is ever needed, apply only to background-color via rgba(). */
+  opacity: 1 !important;
+
+  /* Refined dimensions */
+  width: 460px !important;
+  max-width: 96vw !important;
+}
+
+/* ─── Panel Header ─────────────────────────────────────────── */
+.soc-detail-panel .panel-hdr,
+#csoc-detail-panel .panel-hdr {
+  background: var(--dr-surface-header) !important;
+  border-bottom: 1px solid var(--dr-border) !important;
+  padding: 20px 22px 16px !important;
+
+  /* Subtle top gradient for depth */
+  background-image: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.03) 0%,
+    transparent 100%
+  ) !important;
+}
+
+/* ─── Panel Body ───────────────────────────────────────────── */
+.soc-detail-panel .panel-body,
+#csoc-detail-panel .panel-body {
+  background: var(--dr-surface) !important;
+  padding: 18px 22px !important;
+}
+
+/* ─── Panel Section h4 Labels ──────────────────────────────── */
+.soc-detail-panel .panel-section h4,
+#csoc-detail-panel .panel-section h4 {
+  color: var(--dr-text-label) !important;
+  font-size: .74em !important;
+  letter-spacing: .07em !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TYPOGRAPHY HIERARCHY
+   Primary headings → Secondary → Metadata
+═══════════════════════════════════════════════════════════════ */
+
+/* Campaign title in header — bright white primary */
+#csoc-detail-panel .panel-hdr [style*="font-size:1.1em"],
+#csoc-detail-panel [style*="font-weight:800"][style*="color:#e6edf3"],
+#csoc-detail-panel [style*="font-weight:800"] {
+  color: var(--dr-text-primary) !important;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5) !important;
+}
+
+/* "Campaign Detail" eyebrow label — muted gray */
+#csoc-detail-panel .panel-hdr [style*="font-size:.7em"],
+#csoc-detail-panel [style*="text-transform:uppercase"][style*="color:#8b949e"] {
+  color: var(--dr-text-label) !important;
+  letter-spacing: .07em !important;
+}
+
+/* Timestamps and metadata */
+#csoc-detail-panel [style*="color:#8b949e"],
+.soc-detail-panel [style*="color:#8b949e"] {
+  color: var(--dr-text-secondary) !important;
+}
+
+/* Very muted metadata (timestamps, file counts) */
+#csoc-detail-panel [style*="color:#4b5563"],
+.soc-detail-panel [style*="color:#4b5563"] {
+  color: var(--dr-text-muted) !important;
+}
+
+/* Primary text inside panel */
+#csoc-detail-panel [style*="color:#e6edf3"],
+.soc-detail-panel [style*="color:#e6edf3"] {
+  color: var(--dr-text-primary) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   INTERNAL CARDS — 8-12% brighter than drawer surface
+   Drawer surface: #111827 (HSL ≈ 220° 30% 11%)
+   Card surface:   #1a2333 (HSL ≈ 220° 31% 15%) → ~4% L brighter
+═══════════════════════════════════════════════════════════════ */
+
+/* Stats grid mini-cards (Threat Actor, Risk Score, IOCs, Findings) */
+#csoc-detail-panel [style*="background:#0d1117"],
+.soc-detail-panel [style*="background:#0d1117"] {
+  background: var(--dr-surface-raised) !important;
+  border: 1px solid var(--dr-border) !important;
+  box-shadow: var(--dr-shadow-card) !important;
+  border-radius: 8px !important;
+  transition: box-shadow .15s ease, background .15s ease !important;
+}
+
+#csoc-detail-panel [style*="background:#0d1117"]:hover,
+.soc-detail-panel [style*="background:#0d1117"]:hover {
+  background: var(--dr-surface-hover) !important;
+  box-shadow: var(--dr-shadow-card-hover) !important;
+}
+
+/* Description block */
+#csoc-detail-panel [style*="background:#0d1117"][style*="line-height:1.65"],
+.soc-detail-panel [style*="background:#0d1117"][style*="line-height"] {
+  background: var(--dr-surface-raised) !important;
+  border: 1px solid var(--dr-border) !important;
+  color: var(--dr-text-secondary) !important;
+  line-height: 1.65 !important;
+}
+
+/* IOC list container */
+#csoc-detail-panel [style*="max-height:200px"],
+.soc-detail-panel [style*="max-height:200px"] {
+  background: var(--dr-surface-raised) !important;
+  border: 1px solid var(--dr-border) !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+}
+
+/* IOC list row dividers */
+#csoc-detail-panel [style*="max-height:200px"] > [style*="border-bottom:1px solid #161b22"],
+.soc-detail-panel [style*="max-height:200px"] > [style*="border-bottom"] {
+  border-bottom-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   BORDERS — rgba white strokes + elevation shadows
+═══════════════════════════════════════════════════════════════ */
+
+/* All [border:1px solid #1e2d3d] inside panel → lighter rgba stroke */
+#csoc-detail-panel [style*="border:1px solid #1e2d3d"],
+.soc-detail-panel [style*="border:1px solid #1e2d3d"] {
+  border-color: var(--dr-border) !important;
+}
+
+/* Actions footer border */
+#csoc-detail-panel [style*="border-top:1px solid #1e2d3d"],
+.soc-detail-panel [style*="border-top:1px solid #1e2d3d"] {
+  border-top-color: var(--dr-border) !important;
+}
+
+/* Panel header accent left border — color-coded by severity (already set via JS inline) */
+#csoc-detail-panel .panel-hdr[style*="border-left"] {
+  /* Keep JS-injected severity border-left color; just ensure width */
+  border-left-width: 3px !important;
+  border-left-style: solid !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SECTION LABELS / UPPERCASE HEADINGS
+═══════════════════════════════════════════════════════════════ */
+#csoc-detail-panel [style*="text-transform:uppercase"][style*="letter-spacing:.05em"],
+#csoc-detail-panel [style*="text-transform:uppercase"][style*="letter-spacing:.06em"],
+.soc-detail-panel [style*="text-transform:uppercase"] {
+  color: var(--dr-text-label) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CYBER ACCENT ILLUMINATION — restrained glow on active elements
+═══════════════════════════════════════════════════════════════ */
+
+/* MITRE ATT&CK chips — purple glow on hover */
+#csoc-detail-panel .mitre-chip,
+.soc-detail-panel .mitre-chip {
+  background: rgba(167, 139, 250, 0.10) !important;
+  border: 1px solid rgba(167, 139, 250, 0.22) !important;
+  color: #c4b5fd !important;
+  transition: background .12s, box-shadow .12s, border-color .12s !important;
+}
+
+#csoc-detail-panel .mitre-chip:hover,
+.soc-detail-panel .mitre-chip:hover {
+  background: rgba(167, 139, 250, 0.20) !important;
+  border-color: rgba(167, 139, 250, 0.40) !important;
+  box-shadow: 0 0 10px rgba(167, 139, 250, 0.20) !important;
+  color: #ddd6fe !important;
+}
+
+/* IOC type badge — cyan accent */
+#csoc-detail-panel [style*="background:rgba(34,211,238,.1)"],
+.soc-detail-panel [style*="background:rgba(34,211,238,.1)"] {
+  background: rgba(34, 211, 238, 0.12) !important;
+  border: 1px solid rgba(34, 211, 238, 0.22) !important;
+  color: #67e8f9 !important;
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.08) !important;
+}
+
+/* Timeline dot — cyan pulse */
+.soc-detail-panel .soc-timeline-item::before,
+#csoc-detail-panel .soc-timeline-item::before {
+  background: var(--dr-cyan) !important;
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.40), 0 0 16px rgba(34, 211, 238, 0.15) !important;
+}
+
+/* Timeline connector line — softer */
+.soc-detail-panel .soc-timeline::before,
+#csoc-detail-panel .soc-timeline::before {
+  background: var(--dr-border) !important;
+}
+
+/* Timeline timestamp */
+.soc-detail-panel .soc-timeline-item .t-time,
+#csoc-detail-panel .soc-timeline-item .t-time {
+  color: var(--dr-text-muted) !important;
+}
+
+/* Timeline title */
+.soc-detail-panel .soc-timeline-item .t-title,
+#csoc-detail-panel .soc-timeline-item .t-title {
+  color: var(--dr-text-primary) !important;
+  font-weight: 600 !important;
+}
+
+/* Timeline description */
+.soc-detail-panel .soc-timeline-item .t-desc,
+#csoc-detail-panel .soc-timeline-item .t-desc {
+  color: var(--dr-text-secondary) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   BUTTONS INSIDE DRAWER — refined for premium look
+═══════════════════════════════════════════════════════════════ */
+
+/* Close button */
+#csoc-detail-panel .panel-hdr button[style*="background:none"],
+.soc-detail-panel .panel-hdr button[style*="background:none"] {
+  color: var(--dr-text-muted) !important;
+  transition: color .15s, text-shadow .15s !important;
+  width: 28px !important;
+  height: 28px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 6px !important;
+}
+
+#csoc-detail-panel .panel-hdr button[style*="background:none"]:hover,
+.soc-detail-panel .panel-hdr button[style*="background:none"]:hover {
+  color: var(--dr-text-primary) !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  text-shadow: 0 0 12px rgba(255, 255, 255, 0.3) !important;
+}
+
+/* AI Investigate — cyan accent on primary button */
+#csoc-detail-panel .soc-btn-primary,
+.soc-detail-panel .soc-btn-primary {
+  background: linear-gradient(135deg, #1d4ed8, #2563eb) !important;
+  box-shadow: 0 2px 12px rgba(37, 99, 235, 0.30),
+              0 0 0 1px rgba(59, 130, 246, 0.20) inset !important;
+  color: #fff !important;
+}
+
+#csoc-detail-panel .soc-btn-primary:hover,
+.soc-detail-panel .soc-btn-primary:hover {
+  background: linear-gradient(135deg, #2563eb, #3b82f6) !important;
+  box-shadow: 0 4px 20px rgba(37, 99, 235, 0.40),
+              0 0 0 1px rgba(96, 165, 250, 0.30) inset !important;
+  transform: translateY(-1px) !important;
+}
+
+/* Export JSON — purple */
+#csoc-detail-panel .soc-btn-purple,
+.soc-detail-panel .soc-btn-purple {
+  background: linear-gradient(135deg, #5b21b6, #7c3aed) !important;
+  box-shadow: 0 2px 12px rgba(124, 58, 237, 0.25),
+              0 0 0 1px rgba(167, 139, 250, 0.20) inset !important;
+  color: #fff !important;
+}
+
+#csoc-detail-panel .soc-btn-purple:hover,
+.soc-detail-panel .soc-btn-purple:hover {
+  box-shadow: 0 4px 20px rgba(124, 58, 237, 0.40),
+              0 0 0 1px rgba(167, 139, 250, 0.35) inset !important;
+  transform: translateY(-1px) !important;
+}
+
+/* Mark Contained — danger/red */
+#csoc-detail-panel .soc-btn-danger,
+.soc-detail-panel .soc-btn-danger {
+  background: linear-gradient(135deg, #9f1239, #be123c) !important;
+  box-shadow: 0 2px 12px rgba(190, 18, 60, 0.25),
+              0 0 0 1px rgba(244, 63, 94, 0.20) inset !important;
+  color: #fff !important;
+}
+
+#csoc-detail-panel .soc-btn-danger:hover,
+.soc-detail-panel .soc-btn-danger:hover {
+  background: linear-gradient(135deg, #be123c, #f43f5e) !important;
+  box-shadow: 0 4px 20px rgba(244, 63, 94, 0.35),
+              0 0 0 1px rgba(244, 63, 94, 0.30) inset !important;
+  transform: translateY(-1px) !important;
+}
+
+/* Close (ghost) button */
+#csoc-detail-panel .soc-btn-ghost,
+.soc-detail-panel .soc-btn-ghost {
+  background: rgba(255, 255, 255, 0.04) !important;
+  border: 1px solid var(--dr-border) !important;
+  color: var(--dr-text-secondary) !important;
+}
+
+#csoc-detail-panel .soc-btn-ghost:hover,
+.soc-detail-panel .soc-btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-color: var(--dr-border-bright) !important;
+  color: var(--dr-text-primary) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   STATUS BADGES / SEVERITY BADGES — restrained glow
+═══════════════════════════════════════════════════════════════ */
+
+/* Severity: CRITICAL — pulsing red */
+#csoc-detail-panel .soc-badge-critical,
+.soc-detail-panel .soc-badge-critical {
+  box-shadow: 0 0 10px rgba(244, 63, 94, 0.20) !important;
+}
+
+/* Severity: HIGH — amber warm */
+#csoc-detail-panel .soc-badge-high,
+.soc-detail-panel .soc-badge-high {
+  box-shadow: 0 0 8px rgba(251, 146, 60, 0.15) !important;
+}
+
+/* Severity: MEDIUM */
+#csoc-detail-panel .soc-badge-medium,
+.soc-detail-panel .soc-badge-medium {
+  box-shadow: 0 0 8px rgba(251, 191, 36, 0.12) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SCROLLBAR — refined for premium look
+═══════════════════════════════════════════════════════════════ */
+.soc-detail-panel .panel-body::-webkit-scrollbar,
+#csoc-detail-panel .panel-body::-webkit-scrollbar {
+  width: 4px !important;
+}
+
+.soc-detail-panel .panel-body::-webkit-scrollbar-track,
+#csoc-detail-panel .panel-body::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+
+.soc-detail-panel .panel-body::-webkit-scrollbar-thumb,
+#csoc-detail-panel .panel-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12) !important;
+  border-radius: 2px !important;
+}
+
+.soc-detail-panel .panel-body::-webkit-scrollbar-thumb:hover,
+#csoc-detail-panel .panel-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   IOC LIST ITEMS — brighter mono text for readability
+═══════════════════════════════════════════════════════════════ */
+#csoc-detail-panel [style*="JetBrains Mono"],
+.soc-detail-panel [style*="JetBrains Mono"] {
+  color: #d4e0f0 !important;  /* brighter than standard #e6edf3 for monospace clarity */
+}
+
+/* IOC risk score values */
+#csoc-detail-panel [style*="max-height:200px"] [style*="font-weight:600"],
+.soc-detail-panel [style*="max-height:200px"] [style*="font-weight:600"] {
+  font-weight: 700 !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   STATS ROW VALUES — accent colors brighter
+═══════════════════════════════════════════════════════════════ */
+
+/* Threat actor color — warmer orange */
+#csoc-detail-panel [style*="color:#fb923c"],
+.soc-detail-panel [style*="color:#fb923c"] {
+  color: #fdba74 !important;  /* slightly brighter warm amber */
+}
+
+/* IOC count — brighter cyan */
+#csoc-detail-panel [style*="color:#22d3ee"],
+.soc-detail-panel [style*="color:#22d3ee"] {
+  color: #67e8f9 !important;  /* sky-300 — more legible */
+  text-shadow: 0 0 8px rgba(34, 211, 238, 0.25) !important;
+}
+
+/* Findings count — lavender purple */
+#csoc-detail-panel [style*="color:#a78bfa"],
+.soc-detail-panel [style*="color:#a78bfa"] {
+  color: #c4b5fd !important;  /* violet-300 — more legible */
+  text-shadow: 0 0 8px rgba(167, 139, 250, 0.20) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ANIMATION — slide-in remains intact, just ensure no opacity bleed
+═══════════════════════════════════════════════════════════════ */
+#csoc-detail-panel.open,
+.soc-detail-panel.open {
+  opacity: 1 !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SKELETON LOADER — inside drawer
+═══════════════════════════════════════════════════════════════ */
+#csoc-detail-panel .soc-skeleton,
+.soc-detail-panel .soc-skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 25%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.04) 75%
+  ) !important;
+  background-size: 800px 100% !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CAMPAIGN CARDS (main grid) — subtle improvement for context
+   Not part of drawer, but cards feed into it visually
+═══════════════════════════════════════════════════════════════ */
+.soc-campaign-card {
+  background: #0f1620 !important;  /* slightly brighter than --soc-bg-card #0d1117 */
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.30),
+              0 0 0 1px rgba(255, 255, 255, 0.03) inset !important;
+  transition: transform .18s ease, box-shadow .18s ease, background .15s ease !important;
+}
+
+.soc-campaign-card:hover {
+  background: #141f2e !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   KPI CARDS — slightly elevated surface for better contrast
+═══════════════════════════════════════════════════════════════ */
+.soc-kpi-card {
+  background: #0f1620 !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25),
+              0 1px 0 rgba(255, 255, 255, 0.04) inset !important;
+}
+
+.soc-kpi-card:hover {
+  border-color: rgba(255, 255, 255, 0.16) !important;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35),
+              0 1px 0 rgba(255, 255, 255, 0.05) inset !important;
+}
+
+.soc-kpi-card .kpi-value {
+  color: #f0f6fc !important;  /* bright white for KPI numbers */
+}
+
+.soc-kpi-card .kpi-label {
+  color: var(--dr-text-label) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ACTIVE STATUS INDICATOR — subtle glowing dot near active element
+═══════════════════════════════════════════════════════════════ */
+.soc-dot {
+  box-shadow: 0 0 10px rgba(34, 211, 238, 0.60),
+              0 0 20px rgba(34, 211, 238, 0.25) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   RESPONSIVE — preserve mobile layout
+═══════════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  .soc-detail-panel,
+  #csoc-detail-panel {
+    width: 100% !important;
+  }
+}
