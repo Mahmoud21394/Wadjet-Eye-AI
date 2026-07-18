@@ -41,6 +41,14 @@ const url    = require('url');
 const crypto = require('crypto');
 const jwt    = require('jsonwebtoken');
 
+// ── Auth lifecycle manager (token expiry warnings + cooperative refresh) ──────
+let _wsAuthManager = null;
+try {
+  _wsAuthManager = require('./ws-auth-manager');
+} catch (_) {
+  console.warn('[WS] ws-auth-manager.js not loaded — token expiry warnings disabled');
+}
+
 // ── FIX-002: Fatal error on missing JWT_SECRET ─────────────────────
 // This block runs at module load time (server startup).
 // If neither JWT secret is configured, the server cannot safely verify
@@ -291,7 +299,8 @@ function initSocketIO(io) {
     }
 
     Object.assign(socket, user);
-    socket._isGuest = false;
+    socket._isGuest  = false;
+    socket._initToken = token;  // store for auth manager
     console.log(`[SIO] AUTH_OK userId=${user.userId} tenant=${user.tenantId} auth=${user.authType} id=${socket.id}`);
     next();
   });
@@ -300,6 +309,16 @@ function initSocketIO(io) {
   io.on('connection', (socket) => {
     let room = `tenant:${socket.tenantId}`;
     socket.join(room);
+
+    // Attach auth lifecycle manager (token expiry warnings + cooperative refresh)
+    let _authMgr = null;
+    if (_wsAuthManager && socket._initToken) {
+      _authMgr = _wsAuthManager.attachToSocketIO(
+        socket,
+        socket._initToken,
+        { userId: socket.userId, tenantId: socket.tenantId, email: socket.email, role: socket.role }
+      );
+    }
 
     console.log(`[SIO] CONNECT userId=${socket.userId} tenant=${socket.tenantId} auth=${socket.authType} id=${socket.id}`);
 
@@ -349,6 +368,7 @@ function initSocketIO(io) {
     /* DISCONNECT */
     socket.on('disconnect', (reason) => {
       clearInterval(socket._interval);
+      if (_authMgr) _authMgr.destroy();
       console.log(`[SIO] DISCONNECT userId=${socket.userId} reason=${reason}`);
     });
 
@@ -431,8 +451,14 @@ function initNativeWS(httpServer) {
     ws._alive    = true;
     ws._interval = null;
     ws._pingTimer = null;
+    ws._authMgr  = null;
 
     _wsRegistryAdd(user.userId, ws);
+
+    // Attach auth lifecycle manager for token expiry warnings + cooperative refresh
+    if (_wsAuthManager) {
+      ws._authMgr = _wsAuthManager.attachToNativeWS(ws, token, user, (data) => _wsSend(ws, data));
+    }
 
     const clientId = `${user.userId.slice(0, 16)}-${Date.now().toString(36)}`;
     console.log(`[NWS] CONNECT clientId=${clientId} userId=${user.userId} tenant=${user.tenantId} auth=${user.authType}`);
@@ -465,6 +491,19 @@ function initNativeWS(httpServer) {
 
       switch (msg.type) {
         case 'auth': {
+          // If auth manager is attached, use it for cooperative token refresh
+          if (ws._authMgr && msg.token) {
+            const result = ws._authMgr.handleRefresh(msg.token);
+            if (result.ok) {
+              ws._user = result.user;
+              _wsSend(ws, { type: 'auth_ok', userId: result.user.userId, tenant: result.user.tenantId });
+              console.log(`[NWS] AUTH_REFRESH_OK clientId=${clientId} userId=${result.user.userId}`);
+            } else {
+              _wsSend(ws, { type: 'auth_failed', reason: result.error, code: 4401 });
+            }
+            break;
+          }
+          // Fallback: full re-auth (used when auth manager not available)
           const refreshedUser = await resolveToken(msg.token);
           if (refreshedUser) {
             ws._user = refreshedUser;
@@ -515,9 +554,11 @@ function initNativeWS(httpServer) {
     ws.on('close', (code, reason) => {
       clearInterval(ws._interval);
       clearInterval(ws._pingTimer);
+      if (ws._authMgr) ws._authMgr.destroy();
       _wsRegistryRemove(user.userId, ws);
       ws._interval  = null;
       ws._pingTimer = null;
+      ws._authMgr   = null;
       console.log(`[NWS] DISCONNECT clientId=${clientId} code=${code} reason="${reason?.toString() || ''}" userId=${user.userId}`);
       if (code !== 1000 && code !== 1001) {
         console.info(`[NWS] Abnormal close code=${code} — client should apply exponential backoff`);

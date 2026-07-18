@@ -31,6 +31,16 @@
 const axios      = require('axios');
 const { supabase } = require('../../config/supabase');
 
+// ── Queue-based ingestion pipeline ──────────────────────────────────────────
+// Import the new queue processor. If it fails to load (e.g. missing uuid dep)
+// we fall back gracefully to the legacy upsertIOCs() defined below.
+let _queueProcessor = null;
+try {
+  _queueProcessor = require('./queue-processor');
+} catch (_loadErr) {
+  console.warn('[Ingestion] queue-processor.js not available, using legacy upsertIOCs():', _loadErr.message);
+}
+
 // ── Global MSSP tenant (default ingestion target) ──────────────
 const DEFAULT_TENANT = '00000000-0000-0000-0000-000000000001';
 
@@ -104,11 +114,23 @@ async function logTimelineEvent(tenantId, eventType, title, description, severit
 }
 
 // ── IOC Upsert (core dedup logic) ───────────────────────────────
-// FIX 1: Deduplicate within the batch BEFORE sending to Supabase.
-//   "ON CONFLICT DO UPDATE command cannot affect row a second time"
-//   happens when the same value appears twice in one chunk.
-//   Solution: deduplicate by (tenant_id + value) before upsert.
-async function upsertIOCs(tenantId, iocs) {
+// v3.2: If the queue-processor is available, delegate to it for durable,
+// queue-based ingestion with exponential backoff and dead-letter support.
+// Falls back to the legacy chunked-upsert path when unavailable.
+async function upsertIOCs(tenantId, iocs, feedSource) {
+  if (_queueProcessor) {
+    try {
+      return await _queueProcessor.upsertIOCsQueued(tenantId, iocs, feedSource || 'unknown');
+    } catch (queueErr) {
+      console.warn('[Ingestion] Queue processor error, falling back to direct upsert:', queueErr.message);
+      // Fall through to legacy implementation below
+    }
+  }
+  return _legacyUpsertIOCs(tenantId, iocs);
+}
+
+// Legacy direct-upsert implementation (circuit-breaker replaced by MAX_ERRORS=10)
+async function _legacyUpsertIOCs(tenantId, iocs) {
   if (!iocs || iocs.length === 0) return { new: 0, updated: 0, duplicate: 0 };
 
   const validTypes = new Set([
@@ -175,7 +197,7 @@ async function upsertIOCs(tenantId, iocs) {
   let CHUNK = 25;
   let consecutiveErrors = 0;
   let timeoutsSeen = 0;
-  const MAX_CONSECUTIVE_ERRORS = 3;
+  const MAX_CONSECUTIVE_ERRORS = 10; // raised from 3 — queue processor handles retry now
 
   for (let i = 0; i < deduped.length; i += CHUNK) {
     if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
@@ -335,7 +357,7 @@ async function ingestOTX(tenantId) {
       await _sleep(300);
     }
 
-    const stats = await upsertIOCs(tenantId, iocs);
+    const stats = await upsertIOCs(tenantId, iocs, 'otx');
     const duration = Date.now() - t0;
 
     await finishFeedLog(logId, {
@@ -447,7 +469,7 @@ async function ingestAbuseIPDB(tenantId) {
       });
     }
 
-    const stats    = await upsertIOCs(tenantId, iocs);
+    const stats    = await upsertIOCs(tenantId, iocs, 'abuseipdb');
     const duration = Date.now() - t0;
 
     await finishFeedLog(logId, {
@@ -597,7 +619,7 @@ async function ingestURLhaus(tenantId) {
       }
     }
 
-    const stats    = await upsertIOCs(tenantId, iocs);
+    const stats    = await upsertIOCs(tenantId, iocs, 'urlhaus');
     const duration = Date.now() - t0;
 
     await finishFeedLog(logId, {
@@ -711,7 +733,7 @@ async function ingestThreatFox(tenantId) {
       });
     }
 
-    const stats    = await upsertIOCs(tenantId, iocs);
+    const stats    = await upsertIOCs(tenantId, iocs, 'threatfox');
     const duration = Date.now() - t0;
 
     await finishFeedLog(logId, {
@@ -1264,4 +1286,11 @@ module.exports = {
   ingestEmergingThreats,
   runAllIngestion,
   runIngestion,
+  // Queue processor API (new in v3.2)
+  ...((_queueProcessor) ? {
+    getQueueStats:      _queueProcessor.getQueueStats,
+    requeueDeadLetter:  _queueProcessor.requeueDeadLetter,
+    processAllPending:  _queueProcessor.processAllPending,
+    enqueueIOCs:        _queueProcessor.enqueueIOCs,
+  } : {}),
 };
