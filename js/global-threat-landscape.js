@@ -757,164 +757,1193 @@ function _cvssColor(score) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   §4  WORLD MAP PANEL — SVG Choropleth + Threat Arcs
+   §4  WORLD MAP PANEL — D3.js + TopoJSON Cinematic Cyber Threat Map
 ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Spec severity colors */
+const SEV_COLORS = {
+  critical: '#ff3b5c',
+  high:     '#ff8a3d',
+  elevated: '#f5c518',
+  moderate: '#3b82f6',
+  low:      '#14b8a6',
+};
+
+/* Threat scores per ISO alpha-3 numeric (TopoJSON country ids) */
+const THREAT_SCORES = {
+  'US':98,'RU':82,'CN':79,'GB':72,'DE':68,'FR':67,'UA':91,'IL':75,
+  'IR':74,'KP':71,'IN':65,'BR':63,'AU':69,'CA':71,'JP':66,'KR':68,
+  'SA':72,'SG':69,'PK':64,'EG':63,'NG':60,'ZA':61,'TW':86,'VN':61,
+  'TR':66,'MX':62,'AR':59,'NL':65,'PL':64,'SE':63,'NO':62,'FI':61,
+  'CH':67,'BE':64,'ES':65,'IT':64,'PT':61,'GR':63,'RO':62,'CZ':63,
+  'HU':61,'AT':62,'DK':63,'IE':61,'SY':71,'IQ':70,'LB':68,'AF':69,
+  'PH':65,'ID':64,'MY':63,'TH':62,'BD':61,'MM':67,'LK':60,'NZ':60,
+};
+
+/* Attack arc definitions: src→tgt with actor/severity metadata */
+const CYBER_ARCS = [
+  {src:'RU',tgt:'UA',actor:'Sandworm',     sev:'critical', tech:'ICS/SCADA Wiper'},
+  {src:'RU',tgt:'US',actor:'APT29',        sev:'high',     tech:'Spearphishing'},
+  {src:'CN',tgt:'US',actor:'APT41',        sev:'high',     tech:'Supply Chain'},
+  {src:'CN',tgt:'TW',actor:'APT40',        sev:'critical', tech:'Zero-Day Exploit'},
+  {src:'KP',tgt:'US',actor:'Lazarus',      sev:'elevated', tech:'Crypto Heist'},
+  {src:'IR',tgt:'IL',actor:'APT33',        sev:'critical', tech:'OT Attack'},
+  {src:'IR',tgt:'SA',actor:'APT34',        sev:'high',     tech:'Phishing Kit'},
+  {src:'RU',tgt:'DE',actor:'Fancy Bear',   sev:'elevated', tech:'DDoS'},
+  {src:'KP',tgt:'KR',actor:'Kimsuky',      sev:'elevated', tech:'Watering Hole'},
+  {src:'CN',tgt:'IN',actor:'APT15',        sev:'elevated', tech:'Border Espionage'},
+  {src:'RU',tgt:'GB',actor:'Cozy Bear',    sev:'high',     tech:'Email Compromise'},
+  {src:'CN',tgt:'JP',actor:'Stone Panda',  sev:'elevated', tech:'IP Theft'},
+  {src:'IR',tgt:'US',actor:'ChaferAPT',    sev:'high',     tech:'RCE Exploit'},
+  {src:'RU',tgt:'FR',actor:'Turla',        sev:'moderate', tech:'DNS Hijack'},
+  {src:'CN',tgt:'AU',actor:'APT31',        sev:'high',     tech:'Gov Espionage'},
+  {src:'KP',tgt:'JP',actor:'APT38',        sev:'high',     tech:'SWIFT Fraud'},
+  {src:'RU',tgt:'PL',actor:'Gamaredon',    sev:'moderate', tech:'Malware Drop'},
+  {src:'CN',tgt:'GB',actor:'APT10',        sev:'high',     tech:'MSP Breach'},
+  {src:'IR',tgt:'DE',actor:'Tortoiseshell',sev:'moderate', tech:'Watering Hole'},
+  {src:'KP',tgt:'IN',actor:'SilentChollima',sev:'moderate',tech:'Crypto Mining'},
+];
+
+/* Country geographic centroids [lng, lat] */
+const COUNTRY_CENTROIDS = {
+  US:[-98,38],CA:[-96,60],MX:[-102,24],BR:[-51,-10],AR:[-64,-34],
+  GB:[-3,54],FR:[2,47],DE:[10,51],ES:[-4,40],IT:[12,42],NL:[5,52],
+  PL:[20,52],UA:[31,49],RU:[100,62],TR:[35,39],SE:[18,62],NO:[15,65],
+  FI:[27,64],CH:[8,47],BE:[4,51],AT:[14,47],DK:[10,56],IE:[-8,53],
+  PT:[-8,39],GR:[22,38],RO:[25,46],CZ:[16,50],HU:[19,47],
+  IL:[35,31],IR:[53,33],IQ:[44,33],SA:[45,24],SY:[38,35],LB:[36,34],
+  IN:[80,22],PK:[70,30],AF:[65,33],BD:[90,24],LK:[81,8],
+  CN:[104,36],JP:[138,37],KP:[127,40],KR:[128,36],TW:[121,24],
+  VN:[108,14],PH:[122,13],ID:[118,-5],MY:[110,4],TH:[101,16],MM:[96,20],
+  SG:[104,1],AU:[134,-26],NZ:[172,-41],
+  EG:[29,27],NG:[8,10],ZA:[25,-30],
+  CA_:[96,60],
+};
+
+/* Inject CSS for the cinematic map (idempotent) */
+function _injectCyberMapCSS() {
+  if (document.getElementById('gtl-cybermap-css')) return;
+  const style = document.createElement('style');
+  style.id = 'gtl-cybermap-css';
+  style.textContent = `
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+    /* ── Root wrapper ── */
+    #gtl-cybermap-root {
+      font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Courier New', monospace;
+      background: #0a0e14;
+      color: #e2e8f0;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      min-height: 0;
+    }
+
+    /* ── KPI bar ── */
+    .gcm-kpi-bar {
+      display: flex;
+      gap: 1px;
+      background: #0d1117;
+      border-bottom: 1px solid #1e2a3a;
+      flex-shrink: 0;
+    }
+    .gcm-kpi-card {
+      flex: 1;
+      padding: 10px 14px;
+      background: #0a0f1a;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      position: relative;
+      overflow: hidden;
+      cursor: default;
+      transition: background 0.2s;
+    }
+    .gcm-kpi-card:hover { background: #0d1525; }
+    .gcm-kpi-card::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 2px;
+      background: var(--kpi-color, #00d4ff);
+      opacity: 0.6;
+    }
+    .gcm-kpi-label {
+      font-size: 9px;
+      color: #4a5568;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .gcm-kpi-val {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--kpi-color, #00d4ff);
+      line-height: 1;
+      transition: color 0.3s;
+    }
+    .gcm-kpi-val.gcm-flash {
+      animation: gcm-val-flash 0.6s ease-out;
+    }
+    @keyframes gcm-val-flash {
+      0%   { text-shadow: 0 0 20px var(--kpi-color,#00d4ff), 0 0 40px var(--kpi-color,#00d4ff); }
+      100% { text-shadow: none; }
+    }
+    .gcm-kpi-spark {
+      height: 24px;
+      margin-top: 2px;
+    }
+    .gcm-kpi-sub {
+      font-size: 9px;
+      color: #2d3748;
+    }
+
+    /* ── LIVE badge ── */
+    .gcm-live-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      color: #ff3b5c;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border: 1px solid rgba(255,59,92,0.35);
+      border-radius: 3px;
+      background: rgba(255,59,92,0.08);
+    }
+    .gcm-live-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #ff3b5c;
+      animation: gcm-live-breathe 1.8s ease-in-out infinite;
+    }
+    @keyframes gcm-live-breathe {
+      0%, 100% { opacity: 1; box-shadow: 0 0 4px #ff3b5c, 0 0 8px #ff3b5c; transform: scale(1); }
+      50%       { opacity: 0.3; box-shadow: none; transform: scale(0.7); }
+    }
+
+    /* ── Map area ── */
+    .gcm-map-area {
+      display: flex;
+      flex: 1;
+      min-height: 420px;
+      position: relative;
+      overflow: hidden;
+      background: #0a0e14;
+    }
+    .gcm-svg-wrap {
+      flex: 1;
+      position: relative;
+      min-width: 0;
+    }
+    #gcm-world-svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: radial-gradient(ellipse at 50% 40%, #0d1525 0%, #0a0e14 70%);
+    }
+    /* Scanline texture */
+    #gcm-world-svg::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 3px,
+        rgba(0,212,255,0.015) 3px,
+        rgba(0,212,255,0.015) 4px
+      );
+      pointer-events: none;
+    }
+
+    /* Country paths */
+    .gcm-country {
+      fill: #141a24;
+      stroke: #1e2a3a;
+      stroke-width: 0.4;
+      cursor: pointer;
+      transition: fill 0.25s, stroke 0.25s, filter 0.25s;
+    }
+    .gcm-country:hover {
+      stroke: #00d4ff;
+      stroke-width: 0.8;
+      filter: drop-shadow(0 0 4px rgba(0,212,255,0.5));
+    }
+    .gcm-country.gcm-country-active {
+      stroke: #00d4ff;
+      stroke-width: 1;
+      filter: drop-shadow(0 0 6px rgba(0,212,255,0.6));
+    }
+
+    /* Graticule */
+    .gcm-graticule {
+      fill: none;
+      stroke: #1a2235;
+      stroke-width: 0.3;
+    }
+    .gcm-sphere {
+      fill: #0a0e14;
+    }
+
+    /* Origin / target nodes */
+    .gcm-node-origin {
+      cursor: pointer;
+    }
+    .gcm-node-origin circle.core {
+      transition: r 0.2s;
+    }
+    .gcm-node-origin:hover circle.core { r: 7; }
+    .gcm-ping-ring {
+      fill: none;
+      transform-origin: center;
+      animation: gcm-ping 2.4s ease-out infinite;
+      pointer-events: none;
+    }
+    .gcm-ping-ring.r2 { animation-delay: 0.8s; }
+    .gcm-ping-ring.r3 { animation-delay: 1.6s; }
+    @keyframes gcm-ping {
+      0%   { opacity: 0.7; transform: scale(1); }
+      100% { opacity: 0;   transform: scale(3.2); }
+    }
+
+    /* Attack arcs */
+    .gcm-arc-trail {
+      fill: none;
+      stroke-linecap: round;
+    }
+
+    /* Tooltip */
+    #gcm-tooltip {
+      position: absolute;
+      background: rgba(10,14,20,0.95);
+      border: 1px solid #1e2a3a;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 11px;
+      font-family: 'JetBrains Mono','IBM Plex Mono',monospace;
+      color: #e2e8f0;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.15s;
+      z-index: 100;
+      max-width: 240px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.8), 0 0 0 1px rgba(0,212,255,0.1);
+      white-space: nowrap;
+    }
+    #gcm-tooltip.visible { opacity: 1; }
+    .gcm-tip-title { font-size: 12px; font-weight: 600; margin-bottom: 5px; color: #00d4ff; }
+    .gcm-tip-row { display: flex; gap: 8px; margin: 2px 0; color: #94a3b8; font-size: 10px; }
+    .gcm-tip-row span:first-child { color: #4a5568; }
+    .gcm-tip-sev { font-weight: 600; }
+
+    /* ── Right side panel ── */
+    .gcm-side-panel {
+      width: 220px;
+      flex-shrink: 0;
+      background: #0d1117;
+      border-left: 1px solid #1e2a3a;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .gcm-panel-hdr {
+      padding: 10px 12px;
+      border-bottom: 1px solid #1e2a3a;
+      font-size: 10px;
+      color: #4a5568;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .gcm-spotlight-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      scrollbar-width: thin;
+      scrollbar-color: #1e2a3a transparent;
+    }
+    .gcm-spotlight-empty {
+      color: #2d3748;
+      font-size: 11px;
+      text-align: center;
+      padding: 24px 8px;
+      line-height: 1.6;
+    }
+
+    /* ── Attack ticker ── */
+    .gcm-ticker-wrap {
+      border-top: 1px solid #1e2a3a;
+      background: #0a0e14;
+      flex-shrink: 0;
+      height: 100px;
+      overflow: hidden;
+      position: relative;
+    }
+    .gcm-ticker-hdr {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      border-bottom: 1px solid #111928;
+      font-size: 9px;
+      color: #4a5568;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+    .gcm-ticker-list {
+      padding: 4px 0;
+      overflow: hidden;
+      height: 72px;
+    }
+    .gcm-tick-entry {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 3px 12px;
+      font-size: 10px;
+      font-family: 'JetBrains Mono','IBM Plex Mono',monospace;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      border-left: 2px solid transparent;
+      transition: background 0.3s, border-color 0.3s;
+    }
+    .gcm-tick-entry.gcm-tick-new {
+      animation: gcm-tick-glow 1.5s ease-out;
+    }
+    @keyframes gcm-tick-glow {
+      0%  { background: rgba(255,59,92,0.12); border-left-color: #ff3b5c; }
+      100%{ background: transparent; border-left-color: transparent; }
+    }
+    .gcm-tick-time { color: #2d3748; font-size: 9px; flex-shrink: 0; }
+    .gcm-tick-actor { font-weight: 600; flex-shrink: 0; }
+    .gcm-tick-arrow { color: #2d3748; flex-shrink: 0; }
+    .gcm-tick-tgt { color: #94a3b8; flex-shrink: 0; }
+    .gcm-tick-dot { color: #2d3748; flex-shrink: 0; }
+    .gcm-tick-tech { color: #4a5568; font-size: 9px; overflow: hidden; text-overflow: ellipsis; }
+
+    /* ── Legend ── */
+    .gcm-legend {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      padding: 6px 12px;
+      border-top: 1px solid #1e2a3a;
+      background: #0a0e14;
+      flex-wrap: wrap;
+    }
+    .gcm-legend-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 9px;
+      color: #64748b;
+    }
+    .gcm-legend-swatch {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    /* ── Sparkline SVGs ── */
+    .gcm-spark-svg { overflow: visible; }
+    .gcm-spark-line { fill: none; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+    .gcm-spark-area { opacity: 0.15; }
+
+    /* ── Spotlight content ── */
+    .gcm-spot-flag   { font-size: 28px; line-height: 1; }
+    .gcm-spot-name   { font-size: 13px; font-weight: 700; color: #e2e8f0; margin-top: 4px; }
+    .gcm-spot-score  { font-size: 11px; margin-top: 2px; }
+    .gcm-spot-bar-wrap{ background:#111928; border-radius:2px; height:4px; margin:8px 0 4px; overflow:hidden; }
+    .gcm-spot-bar    { height:100%; border-radius:2px; transition: width 0.6s ease; }
+    .gcm-spot-section{ font-size: 9px; color: #4a5568; text-transform: uppercase; letter-spacing: 0.08em; margin: 10px 0 4px; }
+    .gcm-spot-chip   { display:inline-block; padding:2px 7px; border-radius:10px; font-size:9px; margin:2px 2px 0 0;
+                        background:rgba(0,212,255,0.08); border:1px solid rgba(0,212,255,0.2); color:#94a3b8; }
+    .gcm-spot-stat   { display:flex; justify-content:space-between; font-size:10px; padding:3px 0; border-bottom:1px solid #111928; }
+    .gcm-spot-stat span:first-child { color:#4a5568; }
+
+    /* ── Arc count badge ── */
+    .gcm-arc-count {
+      position: absolute;
+      top: 8px; right: 8px;
+      font-size: 9px;
+      color: #2d3748;
+      background: rgba(10,14,20,0.7);
+      border: 1px solid #1e2a3a;
+      padding: 3px 8px;
+      border-radius: 3px;
+      pointer-events: none;
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 900px) {
+      .gcm-side-panel { display: none; }
+      .gcm-kpi-card { padding: 8px 8px; }
+      .gcm-kpi-val  { font-size: 18px; }
+    }
+    @media (max-width: 600px) {
+      .gcm-kpi-bar { flex-wrap: wrap; }
+      .gcm-kpi-card { flex: 0 0 50%; }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+/* Build the HTML skeleton for the cyber map */
 function _buildWorldMap() {
-  /* Simplified world map built with SVG paths for major nations.
-     Threat intensity shown via fill colour. Live arcs animate between
-     attacker countries and targeted ones. */
+  _injectCyberMapCSS();
 
-  /* Country shapes as simplified polygons [cx,cy,w,h,label] */
-  const COUNTRY_RECTS = [
-    ['USA',     160, 118, 70, 38, 'US'],
-    ['Canada',  150, 82,  72, 32, 'CA'],
-    ['Mexico',  148, 157, 34, 22, 'MX'],
-    ['Brazil',  220, 200, 48, 52, 'BR'],
-    ['UK',      368, 96,  14, 16, 'GB'],
-    ['France',  378, 110, 16, 14, 'FR'],
-    ['Germany', 392, 104, 16, 14, 'DE'],
-    ['Spain',   370, 118, 20, 14, 'ES'],
-    ['Italy',   394, 118, 12, 18, 'IT'],
-    ['Ukraine', 422, 104, 22, 16, 'UA'],
-    ['Russia',  460, 82,  130, 52, 'RU'],
-    ['Turkey',  434, 120, 28, 14, 'TR'],
-    ['Israel',  440, 134, 10, 10, 'IL'],
-    ['Iran',    454, 126, 24, 18, 'IR'],
-    ['Saudi',   446, 146, 22, 18, 'SA'],
-    ['India',   502, 142, 28, 32, 'IN'],
-    ['China',   544, 110, 60, 42, 'CN'],
-    ['NKorea',  600, 108, 12, 12, 'KP'],
-    ['SKorea',  604, 118, 12, 10, 'KR'],
-    ['Japan',   618, 112, 14, 20, 'JP'],
-    ['Taiwan',  606, 132, 10, 10, 'TW'],
-    ['Vietnam', 576, 148, 12, 16, 'VN'],
-    ['SEAsia',  572, 164, 30, 20, 'SG'],
-    ['Australia',582, 218, 52, 38, 'AU'],
-    ['Egypt',   428, 148, 16, 16, 'EG'],
-    ['Nigeria', 396, 172, 16, 14, 'NG'],
-    ['SAfrika', 412, 210, 20, 18, 'ZA'],
-    ['Pakistan',488, 132, 20, 18, 'PK'],
-  ];
-
-  const THREAT_MAP = {US:98,RU:82,CN:79,GB:72,DE:68,FR:67,UA:91,IL:75,IR:74,KP:71,IN:65,BR:63,AU:69,CA:71,JP:66,KR:68,SA:72,SG:69,UA:91,PK:64,EG:63,NG:60,ZA:61,TW:86,VN:61};
-
-  function _threatToColor(score) {
-    if (!score) return '#1a2744';
-    if (score >= 90) return 'rgba(255,45,85,0.7)';
-    if (score >= 80) return 'rgba(255,107,53,0.6)';
-    if (score >= 70) return 'rgba(245,158,11,0.55)';
-    if (score >= 60) return 'rgba(59,130,246,0.45)';
-    return 'rgba(34,211,238,0.25)';
-  }
-
-  /* Live attack arcs: [src_name, tgt_name, color] */
-  const ARC_DEFINITIONS = [
-    {src:'Russia',tgt:'Ukraine',color:C.crit},
-    {src:'Russia',tgt:'USA',color:C.orange},
-    {src:'China',tgt:'USA',color:C.orange},
-    {src:'China',tgt:'Taiwan',color:C.crit},
-    {src:'NKorea',tgt:'USA',color:C.amber},
-    {src:'Iran',tgt:'Israel',color:C.red},
-    {src:'Iran',tgt:'Saudi',color:C.orange},
-    {src:'Russia',tgt:'Germany',color:C.amber},
-    {src:'NKorea',tgt:'SKorea',color:C.amber},
-    {src:'China',tgt:'India',color:C.amber},
-    {src:'Russia',tgt:'UK',color:C.orange},
-    {src:'China',tgt:'Japan',color:C.amber},
-  ];
-
-  const CX = (r) => r[1];
-  const CY = (r) => r[2];
-
-  /* Build a lookup cx/cy by label */
-  const coordMap = {};
-  COUNTRY_RECTS.forEach(r => { coordMap[r[0]] = {x:r[1]+r[3]/2, y:r[2]+r[4]/2}; });
-
-  /* Generate animated arcs SVG */
-  let arcsSvg = '';
-  ARC_DEFINITIONS.forEach((arc, i) => {
-    const s = coordMap[arc.src], t = coordMap[arc.tgt];
-    if (!s || !t) return;
-    const mx = (s.x + t.x) / 2;
-    const my = Math.min(s.y, t.y) - 40;
-    const id = `arc-${i}`;
-    arcsSvg += `
-      <path id="${id}" d="M${s.x},${s.y} Q${mx},${my} ${t.x},${t.y}"
-        fill="none" stroke="${arc.color}" stroke-width="1.2" stroke-opacity="0.6"
-        stroke-dasharray="4,3">
-        <animate attributeName="stroke-dashoffset" from="0" to="-70" dur="${1.5 + i*0.2}s" repeatCount="indefinite"/>
-      </path>
-      <circle r="2.5" fill="${arc.color}" opacity="0.8">
-        <animateMotion dur="${1.5 + i*0.2}s" repeatCount="indefinite">
-          <mpath href="#${id}"/>
-        </animateMotion>
-      </circle>`;
-  });
-
-  /* Country rectangles */
-  let rectsSvg = '';
-  COUNTRY_RECTS.forEach(r => {
-    const [name, cx, cy, w, h, iso] = r;
-    const score = THREAT_MAP[iso] || 40;
-    const fill = _threatToColor(score);
-    const stroke = score >= 80 ? C.crit : score >= 70 ? C.orange : C.border;
-    const sw = score >= 80 ? 1.5 : 0.8;
-    rectsSvg += `<rect x="${cx}" y="${cy}" width="${w}" height="${h}" rx="3"
-      fill="${fill}" stroke="${stroke}" stroke-width="${sw}"
-      data-iso="${iso}" data-name="${name}" data-score="${score}"
-      class="gtl-map-country" style="cursor:pointer;transition:fill 0.3s;">
-      <title>${name} — Threat Score: ${score}/100</title>
-    </rect>`;
-  });
-
-  /* Legend */
-  const legendItems = [
-    {label:'Critical (90+)', color:'rgba(255,45,85,0.7)'},
-    {label:'High (80-89)',  color:'rgba(255,107,53,0.6)'},
-    {label:'Elevated (70-79)',color:'rgba(245,158,11,0.55)'},
-    {label:'Moderate (60-69)',color:'rgba(59,130,246,0.45)'},
-    {label:'Low (<60)',     color:'rgba(34,211,238,0.25)'},
-  ];
-  let legendHtml = legendItems.map(li =>
-    `<div class="gtl-legend-item"><span class="gtl-legend-swatch" style="background:${li.color};"></span>${li.label}</div>`
-  ).join('');
-
-  /* KPI bar above map */
   const totalActors = GTL_ACTORS.filter(a => a.active).length;
   const activeCamps = GTL_CAMPAIGNS.filter(c => c.status === 'Active').length;
   const critVulns   = GTL_VULNS.filter(v => v.severity === 'Critical' && v.exploit_wild).length;
   const zerodays    = GTL_VULNS.filter(v => v.zero_day && v.exploit_wild).length;
 
+  const kpis = [
+    { label:'Active APT Groups',    val:totalActors, color:'#ff3b5c', id:'gcm-kv-apt'   },
+    { label:'Active Campaigns',     val:activeCamps, color:'#ff8a3d', id:'gcm-kv-camp'  },
+    { label:'Critical Wild Exploits',val:critVulns,  color:'#ff3b5c', id:'gcm-kv-crit'  },
+    { label:'In-Wild Zero-Days',    val:zerodays,    color:'#a855f7', id:'gcm-kv-zero'  },
+    { label:'Intel Feed Status',    val:'LIVE',      color:'#ff3b5c', id:'gcm-kv-live', isLive:true },
+  ];
+
+  const kpiHtml = kpis.map(k => `
+    <div class="gcm-kpi-card" style="--kpi-color:${k.color}">
+      <div class="gcm-kpi-label">${k.label}</div>
+      ${k.isLive
+        ? `<div class="gcm-kpi-val" id="${k.id}"><span class="gcm-live-badge"><span class="gcm-live-dot"></span>LIVE</span></div>`
+        : `<div class="gcm-kpi-val" id="${k.id}">${k.val}</div>`
+      }
+      ${k.isLive ? '' : `<svg class="gcm-kpi-spark" id="${k.id}-spark" viewBox="0 0 80 24" preserveAspectRatio="none"></svg>`}
+      <div class="gcm-kpi-sub">&nbsp;</div>
+    </div>`).join('');
+
   return `
-  <div class="gtl-map-kpi-row">
-    <div class="gtl-map-kpi"><span class="gtl-map-kpi-val" style="color:${C.red}">${totalActors}</span><span>Active APT Groups</span></div>
-    <div class="gtl-map-kpi"><span class="gtl-map-kpi-val" style="color:${C.orange}">${activeCamps}</span><span>Active Campaigns</span></div>
-    <div class="gtl-map-kpi"><span class="gtl-map-kpi-val" style="color:${C.crit}">${critVulns}</span><span>Critical Wild Exploits</span></div>
-    <div class="gtl-map-kpi"><span class="gtl-map-kpi-val" style="color:${C.purple}">${zerodays}</span><span>In-Wild Zero-Days</span></div>
-    <div class="gtl-map-kpi"><span class="gtl-map-kpi-val" style="color:${C.accent}">LIVE</span><span>Intel Feed Status</span></div>
+<div id="gtl-cybermap-root">
+  <div class="gcm-kpi-bar">${kpiHtml}</div>
+
+  <div class="gcm-map-area">
+    <div class="gcm-svg-wrap">
+      <svg id="gcm-world-svg" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <radialGradient id="gcm-vignette" cx="50%" cy="50%" r="60%">
+            <stop offset="0%"   stop-color="#0a0e14" stop-opacity="0"/>
+            <stop offset="100%" stop-color="#050810" stop-opacity="0.7"/>
+          </radialGradient>
+          <filter id="gcm-glow-crit">
+            <feGaussianBlur stdDeviation="2.5" result="blur"/>
+            <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+          </filter>
+          <filter id="gcm-glow-high">
+            <feGaussianBlur stdDeviation="2" result="blur"/>
+            <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+          </filter>
+          <filter id="gcm-glow-soft">
+            <feGaussianBlur stdDeviation="1.5" result="blur"/>
+            <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+          </filter>
+          <filter id="gcm-country-hover">
+            <feGaussianBlur stdDeviation="3" result="blur"/>
+            <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+          </filter>
+        </defs>
+        <!-- Sphere (ocean) -->
+        <path class="gcm-sphere" id="gcm-sphere-path"/>
+        <!-- Graticule grid -->
+        <path class="gcm-graticule" id="gcm-graticule-path"/>
+        <!-- Scanline texture overlay -->
+        <rect id="gcm-scanline" width="100%" height="100%" fill="url(#gcm-scanline-pat)" opacity="0.03" pointer-events="none"/>
+        <!-- Countries layer -->
+        <g id="gcm-countries-g"></g>
+        <!-- Borders -->
+        <path id="gcm-borders-path" fill="none" stroke="#0d1a2d" stroke-width="0.3"/>
+        <!-- Arcs layer (below nodes) -->
+        <g id="gcm-arcs-g"></g>
+        <!-- Nodes layer -->
+        <g id="gcm-nodes-g"></g>
+        <!-- Vignette -->
+        <rect width="100%" height="100%" fill="url(#gcm-vignette)" pointer-events="none"/>
+      </svg>
+      <div id="gcm-tooltip"></div>
+      <div class="gcm-arc-count" id="gcm-arc-count">Loading map…</div>
+    </div>
+
+    <div class="gcm-side-panel">
+      <div class="gcm-panel-hdr">
+        <span>Country Threat Profile</span>
+        <span class="gcm-live-badge" style="padding:1px 6px;font-size:8px;">
+          <span class="gcm-live-dot"></span>LIVE
+        </span>
+      </div>
+      <div class="gcm-spotlight-body" id="gcm-spotlight-body">
+        <div class="gcm-spotlight-empty">
+          <i class="fas fa-crosshairs" style="font-size:22px;color:#1e2a3a;display:block;margin-bottom:10px;"></i>
+          Click any country<br>to view its threat profile
+        </div>
+      </div>
+    </div>
   </div>
-  <div class="gtl-map-wrap">
-    <svg viewBox="0 0 700 280" xmlns="http://www.w3.org/2000/svg" class="gtl-world-svg">
-      <!-- Ocean -->
-      <rect width="700" height="280" fill="#060d1f" rx="8"/>
-      <!-- Grid lines -->
-      <line x1="350" y1="0" x2="350" y2="280" stroke="${C.border}" stroke-width="0.3" stroke-dasharray="2,4"/>
-      <line x1="0" y1="140" x2="700" y2="140" stroke="${C.border}" stroke-width="0.3" stroke-dasharray="2,4"/>
-      <!-- Country shapes -->
-      ${rectsSvg}
-      <!-- Attack arcs -->
-      ${arcsSvg}
-      <!-- Labels -->
-      <text x="160" y="80" fill="${C.muted}" font-size="8" font-family="monospace">AMERICAS</text>
-      <text x="380" y="80" fill="${C.muted}" font-size="8" font-family="monospace">EUROPE</text>
-      <text x="550" y="80" fill="${C.muted}" font-size="8" font-family="monospace">APAC</text>
-      <text x="400" y="170" fill="${C.muted}" font-size="8" font-family="monospace">AFRICA / ME</text>
-    </svg>
-    <div class="gtl-map-legend">${legendHtml}</div>
+
+  <div class="gcm-legend">
+    <span style="font-size:9px;color:#2d3748;text-transform:uppercase;letter-spacing:.1em;margin-right:4px;">Threat Level</span>
+    <div class="gcm-legend-item"><span class="gcm-legend-swatch" style="background:#ff3b5c;box-shadow:0 0 4px #ff3b5c;"></span>Critical (90+)</div>
+    <div class="gcm-legend-item"><span class="gcm-legend-swatch" style="background:#ff8a3d;box-shadow:0 0 4px #ff8a3d;"></span>High (80-89)</div>
+    <div class="gcm-legend-item"><span class="gcm-legend-swatch" style="background:#f5c518;box-shadow:0 0 4px #f5c518;"></span>Elevated (70-79)</div>
+    <div class="gcm-legend-item"><span class="gcm-legend-swatch" style="background:#3b82f6;box-shadow:0 0 4px #3b82f6;"></span>Moderate (60-69)</div>
+    <div class="gcm-legend-item"><span class="gcm-legend-swatch" style="background:#14b8a6;box-shadow:0 0 4px #14b8a6;"></span>Low (&lt;60)</div>
+    <div style="margin-left:auto;display:flex;gap:12px;">
+      <div class="gcm-legend-item">
+        <svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="4" fill="none" stroke="#ff3b5c" stroke-width="1.5" opacity="0.6"/>
+          <circle cx="7" cy="7" r="2" fill="#ff3b5c"/></svg>Origin node
+      </div>
+      <div class="gcm-legend-item">
+        <svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="3" fill="#3b82f6" opacity="0.8"/></svg>Target node
+      </div>
+    </div>
   </div>
-  <div class="gtl-map-spotlight" id="gtl-map-spotlight">
-    <div style="color:${C.muted};font-size:13px;padding:12px;">Click a country to view threat profile</div>
-  </div>`;
+
+  <div class="gcm-ticker-wrap">
+    <div class="gcm-ticker-hdr">
+      <span class="gcm-live-badge"><span class="gcm-live-dot"></span>LIVE</span>
+      <span>Attack Intelligence Feed</span>
+      <span id="gcm-attack-count" style="margin-left:auto;color:#1e2a3a;">—</span>
+    </div>
+    <div class="gcm-ticker-list" id="gcm-ticker-list"></div>
+  </div>
+</div>
+
+<div class="gtl-map-spotlight" id="gtl-map-spotlight" style="display:none;"></div>`;
+}
+
+/* ── D3 + TopoJSON Cyber Map Engine ── */
+let _gcmRAF = null;
+let _gcmComets = [];
+let _gcmProjection = null;
+let _gcmTopoData = null;
+let _gcmInitialized = false;
+
+function _sevColor(sev) {
+  switch((sev||'').toLowerCase()) {
+    case 'critical': return SEV_COLORS.critical;
+    case 'high':     return SEV_COLORS.high;
+    case 'elevated': return SEV_COLORS.elevated;
+    case 'moderate': return SEV_COLORS.moderate;
+    default:         return SEV_COLORS.low;
+  }
+}
+
+function _scoreToSev(score) {
+  if (score >= 90) return 'critical';
+  if (score >= 80) return 'high';
+  if (score >= 70) return 'elevated';
+  if (score >= 60) return 'moderate';
+  return 'low';
+}
+
+function _loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
+    const s = document.createElement('script');
+    s.src = src; s.async = true;
+    s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+async function _initCyberMap() {
+  if (_gcmInitialized) return;
+
+  /* Load D3 and TopoJSON from CDN */
+  try {
+    await _loadScript('https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js');
+    await _loadScript('https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js');
+  } catch(e) {
+    const countEl = document.getElementById('gcm-arc-count');
+    if (countEl) countEl.textContent = 'Map libs failed to load';
+    console.error('[CyberMap] CDN load error:', e);
+    return;
+  }
+
+  const svg = document.getElementById('gcm-world-svg');
+  if (!svg) return;
+
+  /* Fetch world atlas TopoJSON */
+  let world;
+  try {
+    const resp = await fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json');
+    world = await resp.json();
+  } catch(e) {
+    console.error('[CyberMap] world-atlas fetch error:', e);
+    const countEl = document.getElementById('gcm-arc-count');
+    if (countEl) countEl.textContent = 'Map data unavailable';
+    return;
+  }
+
+  _gcmTopoData = world;
+  _gcmInitialized = true;
+  _gcmRender(svg, world);
+}
+
+function _gcmRender(svg, world) {
+  const d3 = window.d3;
+  const topojson = window.topojson;
+  if (!d3 || !topojson) return;
+
+  const svgEl = d3.select(svg);
+  const W = svg.clientWidth  || svg.parentElement.clientWidth  || 800;
+  const H = svg.clientHeight || svg.parentElement.clientHeight || 450;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+  /* Natural Earth projection */
+  const projection = d3.geoNaturalEarth1()
+    .scale(W / 6.2)
+    .translate([W / 2, H / 2]);
+  _gcmProjection = projection;
+
+  const path = d3.geoPath().projection(projection);
+
+  /* Sphere (ocean background) */
+  svgEl.select('#gcm-sphere-path')
+    .datum({type:'Sphere'})
+    .attr('d', path)
+    .attr('fill', '#0a0e14');
+
+  /* Graticule */
+  const graticule = d3.geoGraticule().step([20, 20]);
+  svgEl.select('#gcm-graticule-path')
+    .datum(graticule())
+    .attr('d', path)
+    .attr('stroke', '#111928')
+    .attr('stroke-width', 0.3)
+    .attr('fill', 'none');
+
+  /* Countries */
+  const countries = topojson.feature(world, world.objects.countries);
+  const borders   = topojson.mesh(world, world.objects.countries, (a,b) => a !== b);
+
+  /* Numeric → ISO alpha-2 lookup (partial, covers our threat map) */
+  const NUM_TO_ISO = {
+    840:'US',643:'RU',156:'CN',826:'GB',276:'DE',250:'FR',804:'UA',376:'IL',
+    364:'IR',408:'KP',356:'IN',76:'BR',36:'AU',124:'CA',392:'JP',410:'KR',
+    682:'SA',702:'SG',586:'PK',818:'EG',566:'NG',710:'ZA',158:'TW',704:'VN',
+    792:'TR',484:'MX',32:'AR',528:'NL',616:'PL',752:'SE',578:'NO',246:'FI',
+    756:'CH',56:'BE',40:'AT',208:'DK',372:'IE',620:'PT',300:'GR',642:'RO',
+    203:'CZ',348:'HU',724:'ES',380:'IT',760:'SY',368:'IQ',422:'LB',4:'AF',
+    608:'PH',360:'ID',458:'MY',764:'TH',104:'MM',50:'BD',144:'LK',554:'NZ',
+    218:'EC',604:'PE',170:'CO',862:'VE',152:'CL',320:'GT',188:'CR',591:'PA',
+    52:'BB',388:'JM',214:'DO',630:'PR',792:'TR',31:'AZ',268:'GE',51:'AM',
+    860:'UZ',398:'KZ',417:'KG',762:'TJ',795:'TM',496:'MN',116:'KH',418:'LA',
+    144:'LK',694:'SL',288:'GH',384:'CI',430:'LR',562:'NE',854:'BF',466:'ML',
+    686:'SN',440:'LT',428:'LV',233:'EE',112:'BY',498:'MD',807:'MK',8:'AL',
+    705:'SI',191:'HR',891:'RS',70:'BA',499:'ME',414:'KW',784:'AE',48:'BH',
+    512:'OM',275:'PS',434:'LY',788:'TN',12:'DZ',504:'MA',706:'SO',231:'ET',
+    404:'KE',800:'UG',834:'TZ',508:'MZ',454:'MW',716:'ZW',426:'LS',748:'SZ',
+    72:'BW',516:'NA',24:'AO',180:'CD',178:'CG',120:'CM',140:'CF',148:'TD',
+    729:'SD',728:'SS',646:'RW',108:'BI',454:'MW',686:'SN',466:'ML',562:'NE',
+  };
+
+  const countriesG = svgEl.select('#gcm-countries-g');
+
+  countriesG.selectAll('path')
+    .data(countries.features)
+    .join('path')
+    .attr('class', 'gcm-country')
+    .attr('d', path)
+    .attr('data-iso', d => NUM_TO_ISO[+d.id] || '')
+    .attr('data-name', d => _gcmCountryName(+d.id, NUM_TO_ISO))
+    .style('fill', d => {
+      const iso = NUM_TO_ISO[+d.id];
+      const score = iso ? (THREAT_SCORES[iso] || 35) : 35;
+      return _gcmScoreToFill(score);
+    })
+    .on('mouseover', function(event, d) {
+      const iso   = NUM_TO_ISO[+d.id] || '';
+      const score = iso ? (THREAT_SCORES[iso] || 35) : 35;
+      const name  = _gcmCountryName(+d.id, NUM_TO_ISO);
+      if (!iso) return;
+      const actor = GTL_ACTORS.filter(a => a.origin === iso)[0];
+      const camps = GTL_CAMPAIGNS.filter(c => {
+        const a = GTL_ACTORS.find(x=>x.id===c.actor);
+        return a && a.origin === iso;
+      }).length;
+      _gcmShowTooltip(event, `
+        <div class="gcm-tip-title">${name}</div>
+        <div class="gcm-tip-row"><span>Threat Score</span><span class="gcm-tip-sev" style="color:${_sevColor(_scoreToSev(score))}">${score}/100</span></div>
+        <div class="gcm-tip-row"><span>Campaigns</span><span>${camps}</span></div>
+        ${actor ? `<div class="gcm-tip-row"><span>Top Actor</span><span>${actor.name}</span></div>` : ''}
+        <div class="gcm-tip-row" style="color:#2d3748;font-size:9px;margin-top:4px;">Click to expand profile</div>
+      `);
+      d3.select(this)
+        .style('stroke', '#00d4ff')
+        .style('stroke-width', 0.8)
+        .style('filter', 'drop-shadow(0 0 5px rgba(0,212,255,0.5))');
+    })
+    .on('mousemove', _gcmMoveTooltip)
+    .on('mouseout', function(event, d) {
+      _gcmHideTooltip();
+      const iso = NUM_TO_ISO[+d.id] || '';
+      const score = iso ? (THREAT_SCORES[iso] || 35) : 35;
+      d3.select(this)
+        .style('stroke', score >= 80 ? 'rgba(255,59,92,0.4)' : '#1e2a3a')
+        .style('stroke-width', score >= 80 ? 0.6 : 0.4)
+        .style('filter', null);
+    })
+    .on('click', function(event, d) {
+      const iso  = NUM_TO_ISO[+d.id] || '';
+      const name = _gcmCountryName(+d.id, NUM_TO_ISO);
+      const score= iso ? (THREAT_SCORES[iso] || 35) : 35;
+      if (iso) _gcmShowCountryPanel(iso, name, score);
+    });
+
+  /* Borders */
+  svgEl.select('#gcm-borders-path')
+    .datum(borders)
+    .attr('d', path)
+    .attr('stroke', '#0d1a2d')
+    .attr('stroke-width', 0.3);
+
+  /* Render attack nodes and arcs */
+  _gcmRenderNodes(projection, W, H);
+  _gcmRenderArcs(svg, projection);
+  _gcmStartTicker();
+  _gcmDrawSparklines();
+
+  const countEl = document.getElementById('gcm-arc-count');
+  if (countEl) countEl.textContent = `${Math.min(CYBER_ARCS.length, 25)} live arcs`;
+}
+
+function _gcmCountryName(numId, NUM_TO_ISO) {
+  const iso = NUM_TO_ISO[numId];
+  const names = {
+    US:'United States',RU:'Russia',CN:'China',GB:'United Kingdom',DE:'Germany',
+    FR:'France',UA:'Ukraine',IL:'Israel',IR:'Iran',KP:'North Korea',IN:'India',
+    BR:'Brazil',AU:'Australia',CA:'Canada',JP:'Japan',KR:'South Korea',
+    SA:'Saudi Arabia',SG:'Singapore',PK:'Pakistan',EG:'Egypt',NG:'Nigeria',
+    ZA:'South Africa',TW:'Taiwan',VN:'Vietnam',TR:'Turkey',MX:'Mexico',
+    AR:'Argentina',NL:'Netherlands',PL:'Poland',SE:'Sweden',NO:'Norway',
+    FI:'Finland',CH:'Switzerland',BE:'Belgium',AT:'Austria',DK:'Denmark',
+    IE:'Ireland',ES:'Spain',IT:'Italy',PT:'Portugal',GR:'Greece',RO:'Romania',
+    CZ:'Czech Republic',HU:'Hungary',SY:'Syria',IQ:'Iraq',LB:'Lebanon',
+    AF:'Afghanistan',PH:'Philippines',ID:'Indonesia',MY:'Malaysia',TH:'Thailand',
+    MM:'Myanmar',BD:'Bangladesh',LK:'Sri Lanka',NZ:'New Zealand',
+    AZ:'Azerbaijan',GE:'Georgia',AM:'Armenia',KZ:'Kazakhstan',UZ:'Uzbekistan',
+    KG:'Kyrgyzstan',TJ:'Tajikistan',TM:'Turkmenistan',MN:'Mongolia',KH:'Cambodia',
+    LA:'Laos',KW:'Kuwait',AE:'UAE',BH:'Bahrain',OM:'Oman',LY:'Libya',
+    TN:'Tunisia',DZ:'Algeria',MA:'Morocco',SO:'Somalia',ET:'Ethiopia',
+    KE:'Kenya',UG:'Uganda',TZ:'Tanzania',MZ:'Mozambique',ZW:'Zimbabwe',
+    AO:'Angola',CD:'DR Congo',CG:'Congo',CM:'Cameroon',SD:'Sudan',SS:'South Sudan',
+  };
+  return (iso && names[iso]) || 'Unknown';
+}
+
+function _gcmScoreToFill(score) {
+  if (score >= 90) return 'rgba(255,59,92,0.35)';
+  if (score >= 80) return 'rgba(255,138,61,0.28)';
+  if (score >= 70) return 'rgba(245,197,24,0.22)';
+  if (score >= 60) return 'rgba(59,130,246,0.18)';
+  if (score >= 40) return 'rgba(20,184,166,0.10)';
+  return '#141a24';
+}
+
+function _gcmRenderNodes(projection, W, H) {
+  const d3 = window.d3;
+  const nodesG = d3.select('#gcm-nodes-g');
+  nodesG.selectAll('*').remove();
+
+  /* Origins — one per unique source country */
+  const origins = [...new Set(CYBER_ARCS.map(a => a.src))];
+  origins.forEach(iso => {
+    const centroid = COUNTRY_CENTROIDS[iso];
+    if (!centroid) return;
+    const [px, py] = projection(centroid);
+    if (isNaN(px) || isNaN(py)) return;
+
+    const arcs = CYBER_ARCS.filter(a => a.src === iso);
+    const maxSev = arcs.reduce((best, a) => {
+      const order = {critical:0,high:1,elevated:2,moderate:3,low:4};
+      return order[a.sev] < order[best] ? a.sev : best;
+    }, 'low');
+    const col = _sevColor(maxSev);
+    const r   = Math.min(3 + arcs.length * 1.4, 9);
+
+    const g = nodesG.append('g')
+      .attr('class', 'gcm-node-origin')
+      .attr('transform', `translate(${px},${py})`)
+      .style('cursor','pointer')
+      .on('mouseover', function(event) {
+        _gcmShowTooltip(event, `
+          <div class="gcm-tip-title">${iso} — Origin Node</div>
+          <div class="gcm-tip-row"><span>Active arcs</span><span>${arcs.length}</span></div>
+          <div class="gcm-tip-row"><span>Max severity</span><span class="gcm-tip-sev" style="color:${col}">${maxSev.toUpperCase()}</span></div>
+          <div class="gcm-tip-row"><span>Top actor</span><span>${arcs[0].actor}</span></div>
+        `);
+      })
+      .on('mousemove', _gcmMoveTooltip)
+      .on('mouseout', _gcmHideTooltip);
+
+    /* Radar ping rings */
+    ['r1','r2','r3'].forEach(cls => {
+      g.append('circle')
+        .attr('class', `gcm-ping-ring ${cls}`)
+        .attr('r', r * 1.8)
+        .style('stroke', col)
+        .style('stroke-width', 0.8)
+        .style('stroke-opacity', 0.5)
+        .style('fill', 'none');
+    });
+
+    /* Core dot */
+    g.append('circle')
+      .attr('class', 'core')
+      .attr('r', r)
+      .style('fill', col)
+      .style('fill-opacity', 0.9)
+      .style('filter', `drop-shadow(0 0 ${r}px ${col})`);
+
+    /* Inner dot */
+    g.append('circle')
+      .attr('r', Math.max(r*0.4, 1.5))
+      .style('fill', '#fff')
+      .style('fill-opacity', 0.8)
+      .style('pointer-events', 'none');
+  });
+
+  /* Targets */
+  const targets = [...new Set(CYBER_ARCS.map(a => a.tgt))];
+  targets.forEach(iso => {
+    if (origins.includes(iso)) return; /* don't double-draw */
+    const centroid = COUNTRY_CENTROIDS[iso];
+    if (!centroid) return;
+    const [px, py] = projection(centroid);
+    if (isNaN(px) || isNaN(py)) return;
+
+    const score = THREAT_SCORES[iso] || 40;
+    const col   = _sevColor(_scoreToSev(score));
+
+    const arcsHit = CYBER_ARCS.filter(a => a.tgt === iso);
+
+    nodesG.append('g')
+      .attr('transform', `translate(${px},${py})`)
+      .style('cursor','pointer')
+      .on('mouseover', function(event) {
+        _gcmShowTooltip(event, `
+          <div class="gcm-tip-title">${iso} — Target Node</div>
+          <div class="gcm-tip-row"><span>Threat score</span><span style="color:${col}">${score}/100</span></div>
+          <div class="gcm-tip-row"><span>Inbound arcs</span><span>${arcsHit.length}</span></div>
+          ${arcsHit[0] ? `<div class="gcm-tip-row"><span>Latest</span><span>${arcsHit[0].actor} · ${arcsHit[0].tech}</span></div>` : ''}
+        `);
+      })
+      .on('mousemove', _gcmMoveTooltip)
+      .on('mouseout', _gcmHideTooltip)
+      .append('circle')
+      .attr('r', 3.5)
+      .style('fill', col)
+      .style('fill-opacity', 0.75)
+      .style('stroke', col)
+      .style('stroke-width', 0.5)
+      .style('stroke-opacity', 0.4)
+      .style('filter', `drop-shadow(0 0 3px ${col})`);
+  });
+}
+
+function _gcmRenderArcs(svgEl, projection) {
+  const d3 = window.d3;
+  const arcsG = d3.select('#gcm-arcs-g');
+  arcsG.selectAll('*').remove();
+  _gcmComets = [];
+  if (_gcmRAF) { cancelAnimationFrame(_gcmRAF); _gcmRAF = null; }
+
+  const maxArcs = Math.min(CYBER_ARCS.length, 25);
+  const activeArcs = CYBER_ARCS.slice(0, maxArcs);
+
+  activeArcs.forEach((arc, i) => {
+    const srcC = COUNTRY_CENTROIDS[arc.src];
+    const tgtC = COUNTRY_CENTROIDS[arc.tgt];
+    if (!srcC || !tgtC) return;
+
+    const [sx, sy] = projection(srcC);
+    const [tx, ty] = projection(tgtC);
+    if (isNaN(sx)||isNaN(sy)||isNaN(tx)||isNaN(ty)) return;
+
+    const col = _sevColor(arc.sev);
+
+    /* Control point: elevated above midpoint for a great-circle-like arc */
+    const mx = (sx + tx) / 2;
+    const my = (sy + ty) / 2 - Math.hypot(tx-sx, ty-sy) * 0.35;
+    const dStr = `M${sx},${sy} Q${mx},${my} ${tx},${ty}`;
+
+    /* Ghost trail path (faint static arc) */
+    arcsG.append('path')
+      .attr('class', 'gcm-arc-trail')
+      .attr('d', dStr)
+      .attr('stroke', col)
+      .attr('stroke-width', 0.5)
+      .attr('stroke-opacity', 0.15)
+      .on('mouseover', function(event) {
+        _gcmShowTooltip(event, `
+          <div class="gcm-tip-title">${arc.actor}</div>
+          <div class="gcm-tip-row"><span>Route</span><span>${arc.src} → ${arc.tgt}</span></div>
+          <div class="gcm-tip-row"><span>Severity</span><span class="gcm-tip-sev" style="color:${col}">${arc.sev.toUpperCase()}</span></div>
+          <div class="gcm-tip-row"><span>Technique</span><span>${arc.tech}</span></div>
+          <div class="gcm-tip-row"><span>Last seen</span><span>${_gcmTimeAgo()}</span></div>
+        `);
+      })
+      .on('mousemove', _gcmMoveTooltip)
+      .on('mouseout', _gcmHideTooltip);
+
+    /* Comet dot */
+    const comet = arcsG.append('circle')
+      .attr('r', arc.sev === 'critical' ? 3 : arc.sev === 'high' ? 2.5 : 2)
+      .attr('fill', col)
+      .style('filter', `drop-shadow(0 0 ${arc.sev === 'critical' ? 5 : 3}px ${col})`)
+      .style('pointer-events', 'none');
+
+    /* Comet tail */
+    const tail = arcsG.append('path')
+      .attr('fill', 'none')
+      .attr('stroke', col)
+      .attr('stroke-width', arc.sev === 'critical' ? 1.8 : 1.2)
+      .attr('stroke-opacity', 0)
+      .style('pointer-events', 'none');
+
+    /* Create a hidden SVG path to measure lengths */
+    const measPath = document.createElementNS('http://www.w3.org/2000/svg','path');
+    measPath.setAttribute('d', dStr);
+    const totalLen = measPath.getTotalLength();
+
+    const speed = 1.5 + Math.random() * 1.5;          /* seconds for full traversal */
+    const delay = i * 0.18 + Math.random() * 0.8;     /* stagger start */
+    const tailFrac = 0.12;                             /* tail is 12% of path length */
+
+    _gcmComets.push({
+      comet, tail, measPath, totalLen,
+      speed, delay,
+      startTime: null,
+      col,
+    });
+  });
+
+  /* RAF animation loop */
+  let firstTick = null;
+  function tick(ts) {
+    if (!firstTick) firstTick = ts;
+    const elapsed = (ts - firstTick) / 1000; /* seconds */
+
+    _gcmComets.forEach(c => {
+      const t = ((elapsed - c.delay) % c.speed) / c.speed;
+      if (t < 0) { /* before delay — hide */ c.comet.attr('opacity',0); c.tail.attr('stroke-opacity',0); return; }
+
+      const pos  = c.totalLen * t;
+      const pt   = c.measPath.getPointAtLength(Math.min(pos, c.totalLen - 0.1));
+      const tailStart = Math.max(0, pos - c.totalLen * 0.12);
+      const tailPts = [];
+      const steps = 8;
+      for (let s = 0; s <= steps; s++) {
+        const sp = tailStart + (pos - tailStart) * (s / steps);
+        const tp = c.measPath.getPointAtLength(Math.min(sp, c.totalLen - 0.1));
+        tailPts.push(`${s===0?'M':'L'}${tp.x},${tp.y}`);
+      }
+
+      c.comet.attr('cx', pt.x).attr('cy', pt.y).attr('opacity', 0.95);
+      c.tail
+        .attr('d', tailPts.join(' '))
+        .attr('stroke-opacity', 0.55 * Math.min(t * 6, 1));
+    });
+
+    _gcmRAF = requestAnimationFrame(tick);
+  }
+
+  /* Only start if the SVG is visible */
+  if (document.getElementById('gcm-world-svg')) {
+    _gcmRAF = requestAnimationFrame(tick);
+  }
+}
+
+function _gcmShowTooltip(event, html) {
+  const tip = document.getElementById('gcm-tooltip');
+  if (!tip) return;
+  tip.innerHTML = html;
+  tip.classList.add('visible');
+  _gcmMoveTooltip(event);
+}
+
+function _gcmMoveTooltip(event) {
+  const tip = document.getElementById('gcm-tooltip');
+  if (!tip || !tip.classList.contains('visible')) return;
+  const wrap = document.querySelector('.gcm-svg-wrap');
+  if (!wrap) return;
+  const rect = wrap.getBoundingClientRect();
+  let x = event.clientX - rect.left + 14;
+  let y = event.clientY - rect.top  - 10;
+  const tw = tip.offsetWidth || 200;
+  if (x + tw > rect.width) x = event.clientX - rect.left - tw - 14;
+  tip.style.left = x + 'px';
+  tip.style.top  = y + 'px';
+}
+
+function _gcmHideTooltip() {
+  const tip = document.getElementById('gcm-tooltip');
+  if (tip) tip.classList.remove('visible');
+}
+
+function _gcmTimeAgo() {
+  const mins = Math.floor(Math.random() * 55) + 1;
+  return mins < 2 ? 'Just now' : `${mins}m ago`;
+}
+
+function _gcmShowCountryPanel(iso, name, score) {
+  const body = document.getElementById('gcm-spotlight-body');
+  if (!body) return;
+
+  const col   = _sevColor(_scoreToSev(score));
+  const geo   = typeof GEO_RISK !== 'undefined' ? GEO_RISK.find(g => g.code === iso) : null;
+  const actors = GTL_ACTORS.filter(a => a.origin === iso).slice(0, 4);
+  const camps  = GTL_CAMPAIGNS.filter(c => {
+    const a = GTL_ACTORS.find(x => x.id === c.actor);
+    return a && a.origin === iso;
+  });
+  const inbound = CYBER_ARCS.filter(a => a.tgt === iso);
+  const outbound= CYBER_ARCS.filter(a => a.src === iso);
+
+  const flag = geo ? geo.flag : '';
+  const sev  = _scoreToSev(score);
+  const sevLabel = sev.charAt(0).toUpperCase() + sev.slice(1);
+
+  body.innerHTML = `
+    <div style="text-align:center;margin-bottom:12px;">
+      <div class="gcm-spot-flag">${flag}</div>
+      <div class="gcm-spot-name">${name}</div>
+      <div class="gcm-spot-score" style="color:${col}">${sevLabel} Threat · ${score}/100</div>
+      <div class="gcm-spot-bar-wrap" style="margin:8px 0 0;">
+        <div class="gcm-spot-bar" style="width:${score}%;background:${col};"></div>
+      </div>
+    </div>
+
+    ${geo ? `
+    <div class="gcm-spot-section">Geopolitical Status</div>
+    <div style="font-size:10px;color:#64748b;line-height:1.5;">${geo.escalation || '—'}</div>
+    ` : ''}
+
+    <div class="gcm-spot-section">Statistics</div>
+    <div class="gcm-spot-stat"><span>Origin actors</span><span style="color:${col}">${actors.length}</span></div>
+    <div class="gcm-spot-stat"><span>Campaigns</span><span style="color:#ff8a3d">${camps.length}</span></div>
+    <div class="gcm-spot-stat"><span>Outbound arcs</span><span style="color:#ff3b5c">${outbound.length}</span></div>
+    <div class="gcm-spot-stat"><span>Inbound arcs</span><span style="color:#3b82f6">${inbound.length}</span></div>
+
+    ${actors.length ? `
+    <div class="gcm-spot-section">Known Actors</div>
+    <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:2px;">
+      ${actors.map(a => `<span class="gcm-spot-chip">${_esc(a.name)}</span>`).join('')}
+    </div>` : ''}
+
+    ${outbound.length ? `
+    <div class="gcm-spot-section">Active Attacks</div>
+    ${outbound.slice(0,3).map(a => `
+      <div style="font-size:9px;color:#64748b;padding:4px 0;border-bottom:1px solid #111928;display:flex;justify-content:space-between;">
+        <span style="color:${_sevColor(a.sev)}">${a.actor}</span>
+        <span>→ ${a.tgt}</span>
+        <span style="color:#2d3748">${a.tech}</span>
+      </div>`).join('')}
+    ` : ''}
+
+    ${inbound.length ? `
+    <div class="gcm-spot-section">Under Attack From</div>
+    ${inbound.slice(0,3).map(a => `
+      <div style="font-size:9px;color:#64748b;padding:4px 0;border-bottom:1px solid #111928;display:flex;justify-content:space-between;">
+        <span style="color:${_sevColor(a.sev)}">${a.src}</span>
+        <span style="color:#4a5568">${a.actor}</span>
+        <span style="color:#2d3748">${a.tech}</span>
+      </div>`).join('')}
+    ` : ''}
+  `;
+}
+
+let _gcmTickerInterval = null;
+function _gcmStartTicker() {
+  const list = document.getElementById('gcm-ticker-list');
+  const countEl = document.getElementById('gcm-attack-count');
+  if (!list) return;
+  if (_gcmTickerInterval) clearInterval(_gcmTickerInterval);
+
+  let totalEvents = 0;
+
+  function _addEntry(isFirst) {
+    const arc = CYBER_ARCS[Math.floor(Math.random() * CYBER_ARCS.length)];
+    const col = _sevColor(arc.sev);
+    const now = new Date();
+    const t   = now.toTimeString().slice(0,8);
+    totalEvents++;
+    if (countEl) countEl.textContent = `${totalEvents} events`;
+
+    const entry = document.createElement('div');
+    entry.className = 'gcm-tick-entry gcm-tick-new';
+    entry.innerHTML = `
+      <span class="gcm-tick-time">${t}</span>
+      <span class="gcm-tick-actor" style="color:${col}">${arc.actor}</span>
+      <span class="gcm-tick-arrow">→</span>
+      <span class="gcm-tick-tgt">${arc.tgt}</span>
+      <span class="gcm-tick-dot">·</span>
+      <span class="gcm-tick-sev" style="color:${col};font-size:9px;font-weight:600;">${arc.sev.toUpperCase()}</span>
+      <span class="gcm-tick-dot">·</span>
+      <span class="gcm-tick-tech">${arc.tech}</span>
+    `;
+    list.insertBefore(entry, list.firstChild);
+
+    /* Keep max 6 entries */
+    while (list.children.length > 6) {
+      list.removeChild(list.lastChild);
+    }
+  }
+
+  /* Seed with initial entries */
+  for (let i = 0; i < 5; i++) _addEntry(true);
+
+  /* Update every 3.5 seconds */
+  _gcmTickerInterval = setInterval(() => {
+    if (!document.getElementById('gcm-ticker-list')) {
+      clearInterval(_gcmTickerInterval); return;
+    }
+    _addEntry(false);
+  }, 3500);
+}
+
+function _gcmDrawSparklines() {
+  const d3 = window.d3;
+  if (!d3) return;
+
+  const kpiIds = ['gcm-kv-apt','gcm-kv-camp','gcm-kv-crit','gcm-kv-zero'];
+  kpiIds.forEach(id => {
+    const svg = document.getElementById(`${id}-spark`);
+    if (!svg) return;
+    const base = parseInt(document.getElementById(id)?.textContent) || 10;
+    /* Generate realistic sparkline data (last 12 periods) */
+    const data = Array.from({length:12}, (_,i) => {
+      const trend = base * (0.6 + 0.4 * (i/11));
+      return Math.round(trend + (Math.random()-0.4) * base * 0.3);
+    });
+    data[11] = base;
+
+    const W = 80, H = 24;
+    const xScale = d3.scaleLinear().domain([0, data.length-1]).range([0, W]);
+    const yScale = d3.scaleLinear().domain([0, Math.max(...data)*1.1]).range([H, 0]);
+    const line   = d3.line().x((_,i) => xScale(i)).y(d => yScale(d)).curve(d3.curveCatmullRom);
+    const area   = d3.area().x((_,i) => xScale(i)).y0(H).y1(d => yScale(d)).curve(d3.curveCatmullRom);
+
+    const card   = svg.closest('.gcm-kpi-card');
+    const col    = card ? getComputedStyle(card).getPropertyValue('--kpi-color').trim() : '#00d4ff';
+
+    const svgSel = d3.select(svg);
+    svgSel.selectAll('*').remove();
+    svgSel.append('path').datum(data).attr('class','gcm-spark-area').attr('d', area)
+      .attr('fill', col);
+    svgSel.append('path').datum(data).attr('class','gcm-spark-line').attr('d', line)
+      .attr('stroke', col);
+  });
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1637,53 +2666,24 @@ function _buildLayout(container) {
 }
 
 function _initPanels() {
-  /* World map */
+  /* World map — inject skeleton HTML then boot D3 async */
   const mapMain = _el('gtl-map-main');
-  if (mapMain) mapMain.innerHTML = _buildWorldMap();
-
-  /* Attach map country click handler */
-  document.querySelectorAll('.gtl-map-country').forEach(el => {
-    el.addEventListener('click', function() {
-      const iso = this.dataset.iso, name = this.dataset.name, score = this.dataset.score;
-      _showCountrySpotlight(iso, name, parseInt(score));
+  if (mapMain) {
+    mapMain.innerHTML = _buildWorldMap();
+    /* Use rAF to allow DOM to settle before D3 measures sizes */
+    requestAnimationFrame(() => {
+      _initCyberMap().catch(err => {
+        console.error('[CyberMap] init error:', err);
+        const countEl = document.getElementById('gcm-arc-count');
+        if (countEl) countEl.textContent = 'Map init failed';
+      });
     });
-  });
+  }
 }
 
 function _showCountrySpotlight(iso, name, score) {
-  const spot = _el('gtl-map-spotlight');
-  if (!spot) return;
-  const geo = GEO_RISK.find(g => g.code === iso);
-  const actors = GTL_ACTORS.filter(a => a.origin === iso || (geo && geo.groups.some(gr => gr.includes(a.name.split(' ')[0]))));
-  const camps  = GTL_CAMPAIGNS.filter(c => {
-    const a = GTL_ACTORS.find(x=>x.id===c.actor);
-    return a && a.origin === iso;
-  });
-  const riskColor = score>=90?C.crit:score>=80?C.orange:score>=70?C.amber:C.green;
-
-  let content = `
-  <div style="padding:14px;">
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-      <span style="font-size:24px;">${geo?geo.flag:''}</span>
-      <div>
-        <div style="font-weight:700;color:${C.text};font-size:14px;">${name}</div>
-        <div style="font-size:11px;color:${riskColor};">Threat Score: ${score}/100</div>
-      </div>
-    </div>`;
-
-  if (geo) {
-    content += `<div style="font-size:11px;color:${C.muted};margin-bottom:6px;">${geo.status} · ${geo.escalation}</div>
-    <div style="font-size:11px;margin-bottom:8px;">${_esc(geo.nexus)}</div>`;
-  }
-  if (actors.length) {
-    content += `<div style="font-size:10px;color:${C.muted};margin-bottom:4px;">ORIGIN ACTORS</div>
-    <div>${actors.slice(0,3).map(a=>`<span class="gtl-group-chip">${_esc(a.name)}</span>`).join('')}</div>`;
-  }
-  if (camps.length) {
-    content += `<div style="font-size:10px;color:${C.muted};margin-top:8px;margin-bottom:4px;">ACTIVE CAMPAIGNS: ${camps.length}</div>`;
-  }
-  content += '</div>';
-  spot.innerHTML = content;
+  /* Delegate to the new D3 cyber map panel */
+  _gcmShowCountryPanel(iso, name, score);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1907,7 +2907,11 @@ function _startSigintTicker() {
 
 /* Cleanup on re-render */
 function _cleanup() {
-  if (_sigintInterval) { clearInterval(_sigintInterval); _sigintInterval = null; }
+  if (_sigintInterval)    { clearInterval(_sigintInterval);  _sigintInterval = null; }
+  if (_gcmTickerInterval) { clearInterval(_gcmTickerInterval); _gcmTickerInterval = null; }
+  if (_gcmRAF)            { cancelAnimationFrame(_gcmRAF);   _gcmRAF = null; }
+  _gcmComets = [];
+  _gcmInitialized = false;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1942,6 +2946,22 @@ global.renderGlobalThreatLandscape = function() {
     const upd = _el('gtl-last-update');
     if (upd) upd.textContent = `Updated ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}`;
   }, 30000);
+
+  /* Resize: re-render D3 map when container changes dimensions */
+  let _gcmResizeTimer = null;
+  const _gcmResizeObs = new ResizeObserver(() => {
+    clearTimeout(_gcmResizeTimer);
+    _gcmResizeTimer = setTimeout(() => {
+      const svgEl = document.getElementById('gcm-world-svg');
+      if (svgEl && _gcmTopoData && window.d3 && window.topojson) {
+        if (_gcmRAF) { cancelAnimationFrame(_gcmRAF); _gcmRAF = null; }
+        _gcmComets = [];
+        _gcmRender(svgEl, _gcmTopoData);
+      }
+    }, 250);
+  });
+  const mapWrap = document.querySelector('.gcm-svg-wrap');
+  if (mapWrap) _gcmResizeObs.observe(mapWrap);
 
   console.log(`[GTL v${GTL_VERSION}] Global Threat Landscape initialized — ${GTL_ACTORS.length} actors, ${GTL_CAMPAIGNS.length} campaigns, ${GTL_VULNS.length} CVEs`);
 };
