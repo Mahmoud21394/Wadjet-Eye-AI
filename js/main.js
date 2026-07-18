@@ -377,7 +377,7 @@ const PAGE_CONFIG = {
   }, onLeave:()=>{ if (window.IOCDB) window.IOCDB.loading = false; } },
   'geo-threats':     { title:'Live Cyber Threat Map',   breadcrumb:'Intel Hub / Radware Real-Time Threat Map', onEnter:()=>{ if(typeof window.renderGeoMap==='function') window.renderGeoMap(); else { const w=document.getElementById('geoThreatsWrap'); if(w) w.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:12px;color:#8b949e"><i class="fas fa-spinner fa-spin fa-2x"></i><div>Loading threat map…</div></div>'; } }, onLeave:()=>{} },
   /* ── PLATFORM ── */
-  'rbac-admin':      { title:'RBAC Administration',     breadcrumb:'Platform / Access Control',              onEnter:()=>renderRBACAdmin(),      onLeave:()=>{} },
+  'rbac-admin':      { title:'RBAC Administration',     breadcrumb:'Platform / Access Control',              onEnter:()=>{ if(typeof window.renderRBACAdminPage==='function') window.renderRBACAdminPage(); else if(typeof window.renderTenantManagement==='function') window.renderTenantManagement(); else if(typeof renderRBACAdmin==='function') renderRBACAdmin(); }, onLeave:()=>{} },
   'branding':        { title:'White-Label Branding',    breadcrumb:'Platform / Brand Management',            onEnter:()=>renderBranding(),       onLeave:()=>{} },
   'pricing':         { title:'Pricing Plans',           breadcrumb:'Platform / Subscription Tiers',          onEnter:()=>renderPricing(),        onLeave:()=>{} },
   /* ── RAKAY AI Analyst ── */

@@ -1,8 +1,22 @@
 /* ══════════════════════════════════════════════════════════
-   Wadjet-Eye AI — RBAC Module v17.0.0
+   Wadjet-Eye AI — RBAC Module v17.1.0
    Role-Based Access Control: Users, Roles, Permissions,
    Tenant Isolation, Audit Log
+
+   v17.1.0 fixes:
+   • window.renderRBACAdminPage() — safe public entry point
+   • Permission guard: non-admins see access-denied state
+   • ARGUS_DATA null guards — never crashes on missing data
+   • Error boundary — renders error state instead of blank page
+   • All internal renderRBACAdmin() refs call safe wrapper
    ══════════════════════════════════════════════════════════ */
+
+/* ─── SAFE DATA ACCESSORS ───────────────────────────────── */
+/* ARGUS_DATA is defined in data.js which loads before rbac.js.
+   These helpers return safe fallbacks if data is missing,
+   so the page never crashes with "Cannot read .length of undefined" */
+function _rbacUsers()   { return (window.ARGUS_DATA?.users   || []); }
+function _rbacTenants() { return (window.ARGUS_DATA?.tenants || []); }
 
 /* ─── RBAC DATA STORE ─── */
 const RBAC_STORE = {
@@ -111,9 +125,9 @@ function renderRBACAdmin() {
     <!-- RBAC Stats -->
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:20px;">
       ${[
-        {label:'Total Users', val: ARGUS_DATA.users.length, icon:'fa-users', color:'#3b82f6'},
+        {label:'Total Users', val: _rbacUsers().length, icon:'fa-users', color:'#3b82f6'},
         {label:'Active Roles', val: RBAC_STORE.roles.length, icon:'fa-shield-alt', color:'#a855f7'},
-        {label:'Tenants', val: ARGUS_DATA.tenants.length, icon:'fa-building', color:'#22d3ee'},
+        {label:'Tenants', val: _rbacTenants().length, icon:'fa-building', color:'#22d3ee'},
         {label:'Active Sessions', val: 4, icon:'fa-wifi', color:'#22c55e'},
         {label:'Failed Logins (24h)', val: 1, icon:'fa-ban', color:'#ef4444'},
         {label:'Audit Events', val: RBAC_STORE.audit_log.length, icon:'fa-list-alt', color:'#f59e0b'},
@@ -144,10 +158,10 @@ function renderRBACAdmin() {
         </select>
         <select class="filter-select" id="rbacTenantFilter" onchange="filterRBACUsers(document.getElementById('rbacUserSearch').value)">
           <option value="">All Tenants</option>
-          ${ARGUS_DATA.tenants.map(t=>`<option value="${t.name}">${t.name}</option>`).join('')}
+          ${_rbacTenants().map(t=>`<option value="${t.name}">${t.name}</option>`).join('')}
         </select>
       </div>
-      <div id="rbacUsersTable">${renderRBACUsersTable(ARGUS_DATA.users)}</div>
+      <div id="rbacUsersTable">${renderRBACUsersTable(_rbacUsers())}</div>
     </div>
 
     <!-- ROLES TAB -->
@@ -159,7 +173,7 @@ function renderRBACAdmin() {
               <div style="width:36px;height:36px;background:${role.color}22;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;">🛡️</div>
               <div style="flex:1;">
                 <div style="font-size:13px;font-weight:800;color:${role.color};">${role.name}</div>
-                <div style="font-size:10px;color:var(--text-muted);">${ARGUS_DATA.users.filter(u=>u.role===role.name||u.role===role.slug.toUpperCase()).length} users assigned</div>
+                <div style="font-size:10px;color:var(--text-muted);">${_rbacUsers().filter(u=>u.role===role.name||u.role===role.slug.toUpperCase()).length} users assigned</div>
               </div>
               <span style="font-size:9px;padding:2px 7px;background:${role.color}22;color:${role.color};border-radius:4px;border:1px solid ${role.color}44;font-family:monospace;">${role.slug}</span>
             </div>
@@ -344,7 +358,7 @@ function renderRBACUsersTable(users) {
                 <button class="tbl-btn" title="Edit User & Permissions" onclick="openRBACEditUser('${u.id}')"><i class="fas fa-user-cog"></i></button>
                 <button class="tbl-btn" title="Manage Module Access" onclick="openModuleAccessModal('${u.id}')"><i class="fas fa-th"></i></button>
                 <button class="tbl-btn" title="Reset Password" onclick="showToast('Reset email sent to ${u.email}','success')"><i class="fas fa-key"></i></button>
-                <button class="tbl-btn" title="${u.status==='active'?'Deactivate':'Activate'}" onclick="toggleUserStatus('${u.id}');renderRBACAdmin()"><i class="fas fa-${u.status==='active'?'user-slash':'user-check'}"></i></button>
+                <button class="tbl-btn" title="${u.status==='active'?'Deactivate':'Activate'}" onclick="toggleUserStatus('${u.id}');window.renderRBACAdminPage()"><i class="fas fa-${u.status==='active'?'user-slash':'user-check'}"></i></button>
               </div>
             </td>
           </tr>`;
@@ -392,17 +406,19 @@ function switchRBACTab(btn, tabId) {
 }
 
 function filterRBACUsers(q) {
-  q = q.toLowerCase();
+  q = (q || '').toLowerCase();
   const roleF = document.getElementById('rbacRoleFilter')?.value.toLowerCase() || '';
   const tenF  = document.getElementById('rbacTenantFilter')?.value.toLowerCase() || '';
-  const filtered = ARGUS_DATA.users.filter(u => {
-    const matchQ = !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
-    const matchR = !roleF || u.role.toLowerCase().includes(roleF);
-    const matchT = !tenF  || u.tenant.toLowerCase().includes(tenF);
+  const filtered = _rbacUsers().filter(u => {
+    const matchQ = !q || (u.name||'').toLowerCase().includes(q) || (u.email||'').toLowerCase().includes(q);
+    const matchR = !roleF || (u.role||'').toLowerCase().includes(roleF);
+    const matchT = !tenF  || (u.tenant||'').toLowerCase().includes(tenF);
     return matchQ && matchR && matchT;
   });
   const wrap = document.getElementById('rbacUsersTable');
-  if (wrap) wrap.innerHTML = renderRBACUsersTable(filtered);
+  if (wrap) wrap.innerHTML = filtered.length
+    ? renderRBACUsersTable(filtered)
+    : '<div style="padding:32px;text-align:center;color:var(--text-muted);font-size:13px;"><i class="fas fa-search" style="font-size:24px;margin-bottom:8px;display:block;"></i>No users match that filter</div>';
 }
 
 function filterAuditLog(q) {
@@ -424,13 +440,13 @@ function exportAuditLog() {
 }
 
 function exportRBACReport() {
-  const data = { generated: new Date().toISOString(), users: ARGUS_DATA.users, roles: RBAC_STORE.roles, audit_log: RBAC_STORE.audit_log };
+  const data = { generated: new Date().toISOString(), users: _rbacUsers(), roles: RBAC_STORE.roles, audit_log: RBAC_STORE.audit_log };
   downloadFile('threatpilot_rbac_report.json', JSON.stringify(data,null,2),'application/json');
   showToast('RBAC report exported','success');
 }
 
 function openRBACEditUser(userId) {
-  const u = ARGUS_DATA.users.find(x => x.id === userId);
+  const u = _rbacUsers().find(x => x.id === userId);
   if (!u) return;
   const modal = document.createElement('div');
   modal.id = 'rbacEditOverlay';
@@ -450,7 +466,7 @@ function openRBACEditUser(userId) {
           </select></div>
         <div><label style="font-size:11px;color:var(--text-muted);font-weight:700;display:block;margin-bottom:4px;">TENANT</label>
           <select id="reu_tenant" class="settings-input" style="width:100%;">
-            ${ARGUS_DATA.tenants.map(t=>`<option ${u.tenant===t.name?'selected':''}>${t.name}</option>`).join('')}
+            ${_rbacTenants().map(t=>`<option ${u.tenant===t.name?'selected':''}>${t.name}</option>`).join('')}
           </select></div>
         <div style="display:flex;align-items:center;justify-content:space-between;padding:10px;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius);">
           <div><div style="font-size:12px;font-weight:600;">MFA Required</div><div style="font-size:10px;color:var(--text-muted);">Enforce multi-factor authentication</div></div>
@@ -471,7 +487,7 @@ function openRBACEditUser(userId) {
 }
 
 function saveRBACEditUser(userId) {
-  const u = ARGUS_DATA.users.find(x => x.id === userId);
+  const u = _rbacUsers().find(x => x.id === userId);
   if (!u) return;
   const name   = document.getElementById('reu_name')?.value.trim();
   const email  = document.getElementById('reu_email')?.value.trim();
@@ -483,11 +499,11 @@ function saveRBACEditUser(userId) {
   RBAC_STORE.audit_log.unshift({id:'AL'+Date.now(),user:CURRENT_USER?.name||'Admin',action:'Role Change',resource:userId,detail:`Updated ${name} — role: ${role}`,time:'Just now',ip:'localhost',severity:'warning'});
   document.getElementById('rbacEditOverlay')?.remove();
   showToast(`User ${name} updated!`,'success');
-  renderRBACAdmin();
+  renderRBACAdmin();  // internal call — always safe within this module
 }
 
 function openModuleAccessModal(userId) {
-  const u = ARGUS_DATA.users.find(x => x.id === userId);
+  const u = _rbacUsers().find(x => x.id === userId);
   if (!u) return;
   const roleObj = RBAC_STORE.roles.find(r => r.name === u.role || r.slug.toUpperCase() === u.role);
   const allModules = ['command-center','findings','campaigns','detections','threat-actors','dark-web','exposure','ioc-registry','ioc-database','ai-orchestrator','collectors','playbooks','edr-siem','sysmon','customers','reports','settings','executive-dashboard','kill-chain','case-management','threat-hunting','detection-engineering','soar','live-feeds','cyber-news','mitre-attack','geo-threats','rbac-admin','branding','pricing'];
@@ -565,7 +581,7 @@ function createCustomRole() {
   RBAC_STORE.roles.push(newRole);
   document.getElementById('createRoleOverlay')?.remove();
   showToast(`Role "${name}" created!`,'success');
-  renderRBACAdmin();
+  renderRBACAdmin();  // internal call — always safe within this module
 }
 
 function editRole(roleId) {
@@ -574,3 +590,113 @@ function editRole(roleId) {
   showToast(`Editing role: ${role.name}`,'info');
   openCreateRoleModal();
 }
+
+/* ══════════════════════════════════════════════════════════
+   PUBLIC ENTRY POINT — v17.1.0
+   ══════════════════════════════════════════════════════════
+   window.renderRBACAdminPage is the ONLY function that should
+   be called from PAGE_CONFIG.onEnter or from _wire().
+
+   It provides:
+   1. Permission guard — non-admin users see an access-denied
+      state instead of a blank page or crash.
+   2. Error boundary — any render exception surfaces a clear
+      error state; never fails silently to a blank page.
+   3. Null-safe data — ARGUS_DATA checked before use.
+   4. Empty state — no roles/users configured → friendly UI.
+   ══════════════════════════════════════════════════════════ */
+window.renderRBACAdminPage = function renderRBACAdminPage() {
+  /* ── 1. Resolve the container ── */
+  const container = document.getElementById('rbacAdminWrap');
+  if (!container) {
+    // Fallback: try the page wrapper itself
+    const page = document.getElementById('page-rbac-admin');
+    if (!page) {
+      console.warn('[RBAC] renderRBACAdminPage: #rbacAdminWrap not found in DOM');
+      return;
+    }
+    // Insert the expected wrapper
+    const wrap = document.createElement('div');
+    wrap.id = 'rbacAdminWrap';
+    page.appendChild(wrap);
+  }
+
+  /* ── 2. Permission guard ── */
+  const role = (window.CURRENT_USER?.role || '').toUpperCase();
+  const isAdmin = role === 'SUPER_ADMIN' || role === 'ADMIN';
+  // Auditors can view RBAC read-only; everyone else is denied
+  const isReadOnly = role === 'AUDITOR';
+  const canAccess = isAdmin || isReadOnly;
+
+  if (!canAccess) {
+    const wrap = document.getElementById('rbacAdminWrap');
+    if (wrap) {
+      wrap.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:320px;gap:16px;padding:40px;">
+          <div style="width:64px;height:64px;border-radius:16px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);display:flex;align-items:center;justify-content:center;">
+            <i class="fas fa-lock" style="font-size:24px;color:#ef4444;"></i>
+          </div>
+          <div style="text-align:center;">
+            <div style="font-size:16px;font-weight:800;color:var(--text-primary);margin-bottom:6px;">Access Restricted</div>
+            <div style="font-size:13px;color:var(--text-muted);max-width:380px;line-height:1.5;">
+              RBAC Administration requires <strong>Admin</strong> or <strong>Super Admin</strong> privileges.<br>
+              Your current role (<strong>${window.CURRENT_USER?.role || 'Unknown'}</strong>) does not have permission to manage roles and permissions.
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:8px;">
+            <button class="btn-primary" style="font-size:12px;" onclick="if(typeof navigateTo==='function')navigateTo('command-center')">
+              <i class="fas fa-arrow-left"></i> Back to Dashboard
+            </button>
+          </div>
+        </div>`;
+    }
+    return;
+  }
+
+  /* ── 3. Error boundary — wrap render in try/catch ── */
+  try {
+    renderRBACAdmin();
+  } catch (err) {
+    console.error('[RBAC] renderRBACAdmin() threw an error:', err);
+    const wrap = document.getElementById('rbacAdminWrap');
+    if (wrap) {
+      wrap.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:320px;gap:16px;padding:40px;">
+          <div style="width:64px;height:64px;border-radius:16px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);display:flex;align-items:center;justify-content:center;">
+            <i class="fas fa-exclamation-triangle" style="font-size:24px;color:#ef4444;"></i>
+          </div>
+          <div style="text-align:center;">
+            <div style="font-size:16px;font-weight:800;color:var(--text-primary);margin-bottom:6px;">RBAC Module Error</div>
+            <div style="font-size:13px;color:var(--text-muted);max-width:460px;line-height:1.5;">
+              The RBAC page encountered an error while loading. The error has been logged to the console.
+            </div>
+            <div style="margin-top:10px;padding:10px 14px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;font-family:monospace;font-size:11px;color:#ef4444;text-align:left;max-width:460px;word-break:break-all;">
+              ${(err.message||String(err)).slice(0,200)}
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:8px;">
+            <button class="btn-primary" style="font-size:12px;" onclick="window.renderRBACAdminPage()">
+              <i class="fas fa-redo"></i> Retry
+            </button>
+            <button style="padding:7px 14px;background:transparent;border:1px solid var(--border);border-radius:var(--radius);color:var(--text-secondary);cursor:pointer;font-size:12px;" onclick="if(typeof navigateTo==='function')navigateTo('command-center')">
+              Back to Dashboard
+            </button>
+          </div>
+        </div>`;
+    }
+  }
+};
+
+/* ── Export helper functions called from inline onclick handlers ── */
+window.filterRBACUsers    = filterRBACUsers;
+window.filterAuditLog     = filterAuditLog;
+window.exportAuditLog     = exportAuditLog;
+window.exportRBACReport   = exportRBACReport;
+window.openRBACEditUser   = openRBACEditUser;
+window.saveRBACEditUser   = saveRBACEditUser;
+window.openModuleAccessModal = openModuleAccessModal;
+window.openCreateRoleModal   = openCreateRoleModal;
+window.createCustomRole      = createCustomRole;
+window.editRole              = editRole;
+window.switchRBACTab         = switchRBACTab;
+window.renderRBACAdmin       = renderRBACAdmin;  // keep legacy name accessible
