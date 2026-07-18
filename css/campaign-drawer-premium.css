@@ -53,7 +53,10 @@
 
   /* Overlay — single layer only */
   --dr-overlay-bg:      rgba(4, 8, 16, 0.30);   /* 30% opacity — in spec range */
-  --dr-overlay-blur:    7px;                      /* 6–8px blur */
+  /* NOTE: backdrop-filter intentionally NOT used on the overlay —
+     it would blur the ENTIRE dashboard background (sidebar + main content)
+     behind the fixed overlay. Only the drawer panel itself uses box-shadow
+     for visual depth. The dark tint alone provides sufficient focus. */
 
   /* Shadows */
   --dr-shadow-panel:    -12px 0 40px rgba(0, 0, 0, 0.40),
@@ -66,15 +69,23 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   OVERLAY — single, restrained backdrop
-   Replaces: background: rgba(0,0,0,.5) → 30% opacity
-   Replaces: no backdrop-filter → 7px blur
+   OVERLAY — single, restrained dark tint (NO backdrop-filter)
+
+   CRITICAL: backdrop-filter: blur() on a fixed full-viewport overlay
+   blurs EVERYTHING behind it — sidebar, main content, all UI.
+   The drawer is above the overlay (z:1200 > 1100) so it stays sharp,
+   but the entire background becomes unreadably blurry.
+
+   Fix: Use ONLY a semi-transparent dark background tint.
+   Visual depth is provided by the drawer's box-shadow instead.
+   Replaces: background rgba(0,0,0,.5) → rgba(4,8,16,0.30)
 ═══════════════════════════════════════════════════════════════ */
 .soc-overlay,
 #csoc-overlay {
   background: var(--dr-overlay-bg) !important;
-  backdrop-filter: blur(var(--dr-overlay-blur)) !important;
-  -webkit-backdrop-filter: blur(var(--dr-overlay-blur)) !important;
+  /* NO backdrop-filter — would blur entire page behind overlay */
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
   /* Z-index already correct (1100 < panel 1200) */
   z-index: 1100 !important;
   /* Ensure no compounded opacity — use rgba only on background */
