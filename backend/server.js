@@ -195,6 +195,7 @@ const stixRoutes          = require('./routes/stix');                // ← STIX
 const detectionRoutes     = require('./routes/detection');           // ← Detection Engine API
 const socMetricsRoutes    = require('./routes/soc-metrics');         // ← SOC Metrics v2
 const ragRoutes           = require('./routes/rag');                 // ← RAG Pipeline
+const investigationRoutes = require('./routes/investigation');        // ← Phase 1: Investigation Pipeline
 const graphRoutes         = require('./routes/graph');               // ← Neo4j Threat Graph
 const threatGraphRoutes   = require('./routes/threat-graph');        // ← Attack-chain graph
 const mfaRoutes           = require('./routes/mfa');                 // ← MFA management
@@ -722,6 +723,7 @@ app.use('/api/stix',           stixRoutes);
 app.use('/api/detection',      detectionRoutes);
 app.use('/api/v2/metrics',     v2MetricsRoutes);
 app.use('/api/rag',            ragRoutes);
+app.use('/api/investigation',  aiFirewallMiddleware, investigationRoutes);  // Phase 1
 app.use('/api/graph',          graphRoutes);
 app.use('/api/threat-graph',   threatGraphRoutes);
 app.use('/api/mfa',            mfaRoutes);

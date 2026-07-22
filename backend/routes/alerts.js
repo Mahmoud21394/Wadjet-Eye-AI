@@ -18,6 +18,20 @@ const { supabase } = require('../config/supabase');
 const { requireRole, requirePermission } = require('../middleware/auth');
 const { asyncHandler, createError }      = require('../middleware/errorHandler');
 
+/* ── Phase 2: Fusion + UEBA (shadow mode, feature-flagged) ── */
+let _fusion = null;
+let _ueba   = null;
+try {
+  _fusion = require('../../js/alert-fusion.js');
+} catch (_) {
+  console.warn('[alerts] alert-fusion.js not loadable — fusion disabled');
+}
+try {
+  _ueba = require('../../js/ueba.js');
+} catch (_) {
+  console.warn('[alerts] ueba.js not loadable — UEBA disabled');
+}
+
 /* ──────────────────────────────────────────────
    GET /api/alerts — List with filters + pagination
 ────────────────────────────────────────────── */
@@ -127,6 +141,55 @@ router.post('/', requirePermission('create_alerts'), asyncHandler(async (req, re
     throw createError(400, 'title and severity are required');
   }
 
+  /* ── Phase 2: Pre-insert Fusion + UEBA (shadow mode) ────────────────────
+   *  Both modules run BEFORE the Supabase insert so their metadata columns
+   *  land in the same row.  Errors are non-fatal: alert insertion never
+   *  blocked by fusion failures (fail-open for availability).
+   *  Shadow mode (we_fusion_shadow=TRUE) means fusion output is recorded
+   *  but NOT yet used to suppress or re-route alerts.
+   * ─────────────────────────────────────────────────────────────────────── */
+  let fusionResult  = null;
+  let uebaResult    = null;
+  let fusionColumns = {};
+
+  // ── UEBA scoring (uses entity extracted from alert) ──
+  if (_ueba) {
+    try {
+      const entityId   = (metadata && (metadata.username || metadata.src_ip || metadata.hostname)) ||
+                         req.user.id;
+      const entityType = metadata && metadata.src_ip ? 'ip' :
+                         metadata && metadata.hostname ? 'host' : 'user';
+      const features   = _ueba.extractAlertFeatures(req.body);
+
+      uebaResult = await _ueba.scoreEntityEvent({
+        supabase,
+        tenantId:   req.tenantId,
+        entityType,
+        entityId:   String(entityId),
+        features,
+        // alertId not available yet (pre-insert); will be filled via anomaly row
+      });
+    } catch (uebaErr) {
+      console.error('[alerts] UEBA error (non-fatal):', uebaErr.message);
+    }
+  }
+
+  // ── Alert Fusion: fingerprint + dedup check + confidence score ──
+  if (_fusion) {
+    try {
+      fusionResult = await _fusion.fuseAlert({
+        supabase,
+        tenantId:  req.tenantId,
+        alertBody: req.body,
+        uebaResult,
+      });
+      fusionColumns = fusionResult.alertColumns || {};
+    } catch (fusErr) {
+      console.error('[alerts] Fusion error (non-fatal):', fusErr.message);
+    }
+  }
+
+  /* ── Insert alert with fusion metadata columns ── */
   const { data, error } = await supabase
     .from('alerts')
     .insert({
@@ -142,12 +205,25 @@ router.post('/', requirePermission('create_alerts'), asyncHandler(async (req, re
       affected_assets: affected_assets || [],
       metadata:        metadata || {},
       status:          'open',
-      created_by:      req.user.id
+      created_by:      req.user.id,
+      // Phase 2 shadow columns (all default to null / TRUE if fusion didn't run)
+      ...fusionColumns,
     })
     .select()
     .single();
 
   if (error) throw createError(500, error.message);
+
+  /* ── Post-insert Fusion: register fingerprint + build incident ── */
+  if (_fusion && fusionResult) {
+    _fusion.postFuseAlert({
+      supabase,
+      tenantId:    req.tenantId,
+      alertId:     data.id,
+      alertBody:   req.body,
+      fusionResult,
+    }).catch(err => console.error('[alerts] postFuseAlert error (non-fatal):', err.message));
+  }
 
   /* Emit real-time event to tenant room */
   const io = req.app.get('io');
