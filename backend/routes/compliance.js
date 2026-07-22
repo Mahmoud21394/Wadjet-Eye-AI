@@ -301,7 +301,7 @@ router.get('/evidence', asyncHandler(async (req, res) => {
  *  POST /api/compliance/evidence
  *  Body: { framework, control_id, evidence_kind, summary, raw_payload, case_id }
  * ──────────────────────────────────────────────────────────────────── */
-router.post('/evidence', requireRole('analyst'), asyncHandler(async (req, res) => {
+router.post('/evidence', requireRole(['ADMIN', 'SUPER_ADMIN', 'admin', 'super_admin', 'auditor', 'analyst']), asyncHandler(async (req, res) => {
   if (!_requireEvidence(res)) return;
 
   const { framework, control_id, evidence_kind = 'attestation',
@@ -347,7 +347,7 @@ router.get('/evidence/:id', asyncHandler(async (req, res) => {
  *  Note: Requires Supabase RPC `we_review_compliance_evidence` (SECURITY DEFINER)
  *        to bypass the append-only trigger. See compliance-evidence.js for details.
  * ──────────────────────────────────────────────────────────────────── */
-router.post('/evidence/:id/review', requireRole('manager'), asyncHandler(async (req, res) => {
+router.post('/evidence/:id/review', requireRole(['ADMIN', 'SUPER_ADMIN', 'admin', 'super_admin', 'manager']), asyncHandler(async (req, res) => {
   if (!_requireEvidence(res)) return;
 
   const { decision } = req.body;
@@ -423,7 +423,7 @@ router.get('/chain/verify', asyncHandler(async (req, res) => {
  *  POST /api/compliance/ti/poll
  *  Admin: trigger on-demand TI poll.  Body: { feed: 'all'|'cisa-kev'|'otx' }
  * ──────────────────────────────────────────────────────────────────── */
-router.post('/ti/poll', requireRole('admin'), asyncHandler(async (req, res) => {
+router.post('/ti/poll', requireRole(['ADMIN', 'SUPER_ADMIN', 'admin', 'super_admin']), asyncHandler(async (req, res) => {
   if (!_tiPoller) {
     return res.status(503).json({ error: 'Threat Intel Poller module not available' });
   }
