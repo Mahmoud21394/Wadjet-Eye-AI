@@ -18,6 +18,14 @@ const { supabase } = require('../config/supabase');
 const { requireRole }     = require('../middleware/auth');
 const { asyncHandler, createError } = require('../middleware/errorHandler');
 
+/* ── Phase 3: Compliance Evidence (fire-and-forget on case closure) ── */
+let _compliance = null;
+try {
+  _compliance = require('../../js/compliance-evidence.js');
+} catch (e) {
+  console.warn('[cases] compliance-evidence.js not loadable — case-closure evidence disabled:', e.message);
+}
+
 /* ── GET /api/cases ── */
 router.get('/', asyncHandler(async (req, res) => {
   const { page = 1, limit = 20, status, severity, assigned_to, search } = req.query;
@@ -125,6 +133,20 @@ router.patch('/:id', asyncHandler(async (req, res) => {
     .single();
 
   if (error || !data) throw createError(404, 'Case not found');
+
+  /* ── Phase 3: Compliance evidence on case closure (fire-and-forget) ──
+   *  collectCaseClosureEvidence() is async but we deliberately do NOT await it.
+   *  Case closure succeeds regardless of evidence-write outcome.
+   *  Evidence includes SHA-256 hash chain per SOC2:CC7.4 + NIST-CSF:RS.MI-2.
+   */
+  if (updates.status === 'closed' && _compliance && _compliance.isComplianceEnabled()) {
+    _compliance.collectCaseClosureEvidence({
+      supabase,
+      tenantId:     req.tenantId,
+      caseData:     data,
+      closedByName: req.user?.name || req.user?.email || 'system',
+    }).catch(err => console.error('[cases] collectCaseClosureEvidence error (non-fatal):', err.message));
+  }
 
   /* Timeline event */
   await supabase.from('case_timeline').insert({

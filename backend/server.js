@@ -723,7 +723,7 @@ app.use('/api/stix',           stixRoutes);
 app.use('/api/detection',      detectionRoutes);
 app.use('/api/v2/metrics',     v2MetricsRoutes);
 app.use('/api/rag',            ragRoutes);
-app.use('/api/investigation',  aiFirewallMiddleware, investigationRoutes);  // Phase 1
+app.use('/api/investigation',  aiFirewallMiddleware, investigationRoutes);  // Phase 1 (Task 4)
 app.use('/api/graph',          graphRoutes);
 app.use('/api/threat-graph',   threatGraphRoutes);
 app.use('/api/mfa',            mfaRoutes);
@@ -844,6 +844,24 @@ httpServer.listen(PORT, '0.0.0.0', () => {
     logger.warn('STARTUP', 'No AI provider keys detected — RAKAY will use Local Intelligence Mode. Add OPENAI_API_KEY / CLAUDE_API_KEY / GEMINI_API_KEY to env.');
   } else {
     logger.info('STARTUP', `AI providers active — mode: EXTERNAL LLM`);
+  }
+
+  // ── Phase 3 (Task 4): Threat Intel Poller startup ──────────────────────
+  // Feature-flagged: only activates when ENABLE_THREAT_INTEL_POLLING=true.
+  // startPoller() is a no-op scheduler when flag is false (shadow mode).
+  try {
+    const { supabase: _pollerSupabase } = require('./config/supabase');
+    const _tiPoller = require('./services/threatIntelPoller');
+    const _pollerHandle = _tiPoller.startPoller(_pollerSupabase);
+    process.once('SIGTERM', () => _pollerHandle.stop());
+    process.once('SIGINT',  () => _pollerHandle.stop());
+    if (_tiPoller.isPollingEnabled()) {
+      logger.info('STARTUP', 'Threat Intel Poller started — CISA KEV (6h) + OTX (1h)');
+    } else {
+      logger.info('STARTUP', 'Threat Intel Poller ready (set ENABLE_THREAT_INTEL_POLLING=true to activate)');
+    }
+  } catch (pollerErr) {
+    logger.warn('STARTUP', `Threat Intel Poller load failed (non-fatal): ${pollerErr.message}`);
   }
 });
 
