@@ -216,4 +216,253 @@ router.get('/dashboard', asyncHandler(async (req, res) => {
   });
 }));
 
+/* ══════════════════════════════════════════════════════════════════════
+ *  Phase 3 — Compliance Evidence (AiSOC port: compliance.py)
+ *  All routes prefixed /api/compliance/evidence*
+ *
+ *  Feature flag: ENABLE_COMPLIANCE_EVIDENCE (default TRUE — always-on by policy)
+ *  Existing routes above are UNTOUCHED for UI parity.
+ *
+ *  New endpoints:
+ *    GET    /api/compliance/frameworks          — FRAMEWORKS catalogue
+ *    GET    /api/compliance/evidence            — list evidence (filterable)
+ *    POST   /api/compliance/evidence            — collect one evidence record
+ *    GET    /api/compliance/evidence/:id        — get single evidence record
+ *    POST   /api/compliance/evidence/:id/review — accept / reject evidence
+ *    GET    /api/compliance/report              — posture report (per framework)
+ *    GET    /api/compliance/chain/verify        — verify hash chain integrity
+ *    POST   /api/compliance/ti/poll             — trigger on-demand TI poll (admin)
+ *    GET    /api/compliance/ti/status           — TI poll log / IOC counts
+ * ══════════════════════════════════════════════════════════════════════ */
+const { supabase: compSupabase } = require('../config/supabase');
+
+/* ── Load compliance-evidence module ── */
+let _compEvidence = null;
+try {
+  _compEvidence = require('../../js/compliance-evidence.js');
+} catch (e) {
+  console.warn('[compliance] compliance-evidence.js not loadable:', e.message);
+}
+
+/* ── Load threatIntelPoller for TI admin endpoints ── */
+let _tiPoller = null;
+try {
+  _tiPoller = require('../services/threatIntelPoller.js');
+} catch (e) {
+  console.warn('[compliance] threatIntelPoller.js not loadable:', e.message);
+}
+
+/* ── Helper: require compliance module or 503 ── */
+function _requireEvidence (res) {
+  if (!_compEvidence) {
+    res.status(503).json({ error: 'Compliance evidence module not available' });
+    return false;
+  }
+  return true;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ *  GET /api/compliance/frameworks
+ *  Returns the FRAMEWORKS catalogue (SOC2, PCI-DSS, HIPAA, ISO27001, NIST-CSF)
+ * ──────────────────────────────────────────────────────────────────── */
+router.get('/frameworks', asyncHandler(async (req, res) => {
+  if (!_requireEvidence(res)) return;
+  res.json({
+    enabled:    _compEvidence.isComplianceEnabled(),
+    frameworks: _compEvidence.FRAMEWORKS,
+  });
+}));
+
+/* ─────────────────────────────────────────────────────────────────────
+ *  GET /api/compliance/evidence
+ *  Query params: framework, control_id, case_id, status, limit, offset
+ * ──────────────────────────────────────────────────────────────────── */
+router.get('/evidence', asyncHandler(async (req, res) => {
+  if (!_requireEvidence(res)) return;
+
+  const { framework, control_id, case_id, status: evStatus,
+          limit = 50, offset = 0 } = req.query;
+
+  const rows = await _compEvidence.listEvidence({
+    supabase:  compSupabase,
+    tenantId:  req.tenantId,
+    framework: framework  || undefined,
+    controlId: control_id || undefined,
+    caseId:    case_id    || undefined,
+    status:    evStatus   || undefined,
+    limit:     Math.min(parseInt(limit)  || 50,  200),
+    offset:    Math.max(parseInt(offset) || 0,   0),
+  });
+
+  res.json({ data: rows, count: rows.length });
+}));
+
+/* ─────────────────────────────────────────────────────────────────────
+ *  POST /api/compliance/evidence
+ *  Body: { framework, control_id, evidence_kind, summary, raw_payload, case_id }
+ * ──────────────────────────────────────────────────────────────────── */
+router.post('/evidence', requireRole('analyst'), asyncHandler(async (req, res) => {
+  if (!_requireEvidence(res)) return;
+
+  const { framework, control_id, evidence_kind = 'attestation',
+          summary, raw_payload, case_id } = req.body;
+
+  if (!framework || !control_id || !summary) {
+    return res.status(400).json({ error: 'framework, control_id, and summary are required' });
+  }
+
+  const row = await _compEvidence.collectEvidence({
+    supabase:     compSupabase,
+    tenantId:     req.tenantId,
+    framework,
+    controlId:    control_id,
+    evidenceKind: evidence_kind,
+    summary,
+    rawPayload:   raw_payload || {},
+    caseId:       case_id || null,
+  });
+
+  res.status(201).json(row);
+}));
+
+/* ─────────────────────────────────────────────────────────────────────
+ *  GET /api/compliance/evidence/:id
+ * ──────────────────────────────────────────────────────────────────── */
+router.get('/evidence/:id', asyncHandler(async (req, res) => {
+  if (!_requireEvidence(res)) return;
+
+  const row = await _compEvidence.getEvidence({
+    supabase:   compSupabase,
+    tenantId:   req.tenantId,
+    evidenceId: req.params.id,
+  });
+
+  if (!row) return res.status(404).json({ error: 'Evidence record not found' });
+  res.json(row);
+}));
+
+/* ─────────────────────────────────────────────────────────────────────
+ *  POST /api/compliance/evidence/:id/review
+ *  Body: { decision: 'accepted'|'rejected' }
+ *  Note: Requires Supabase RPC `we_review_compliance_evidence` (SECURITY DEFINER)
+ *        to bypass the append-only trigger. See compliance-evidence.js for details.
+ * ──────────────────────────────────────────────────────────────────── */
+router.post('/evidence/:id/review', requireRole('manager'), asyncHandler(async (req, res) => {
+  if (!_requireEvidence(res)) return;
+
+  const { decision } = req.body;
+  if (!['accepted', 'rejected'].includes(decision)) {
+    return res.status(400).json({ error: "decision must be 'accepted' or 'rejected'" });
+  }
+
+  try {
+    await _compEvidence.reviewEvidence({
+      supabase:     compSupabase,
+      tenantId:     req.tenantId,
+      evidenceId:   req.params.id,
+      decision,
+      reviewerName: req.user?.name || req.user?.email || 'unknown',
+    });
+    res.json({ ok: true, decision });
+  } catch (err) {
+    // Distinguish between "needs RPC" vs other errors
+    if (err.message && err.message.includes('RPC')) {
+      return res.status(501).json({
+        error: 'Review requires Supabase RPC we_review_compliance_evidence (SECURITY DEFINER). See ops runbook.',
+        detail: err.message,
+      });
+    }
+    throw err;
+  }
+}));
+
+/* ─────────────────────────────────────────────────────────────────────
+ *  GET /api/compliance/report
+ *  Query params: framework (optional — omit for all frameworks)
+ *  Returns posture report: control coverage by framework.
+ * ──────────────────────────────────────────────────────────────────── */
+router.get('/report', asyncHandler(async (req, res) => {
+  if (!_requireEvidence(res)) return;
+
+  const report = await _compEvidence.complianceReport({
+    supabase: compSupabase,
+    tenantId: req.tenantId,
+    framework: req.query.framework || undefined,
+  });
+
+  res.json({
+    generated_at: new Date().toISOString(),
+    tenant_id:    req.tenantId,
+    report,
+  });
+}));
+
+/* ─────────────────────────────────────────────────────────────────────
+ *  GET /api/compliance/chain/verify
+ *  Query params: framework (required)
+ *  Returns chain integrity verification result.
+ * ──────────────────────────────────────────────────────────────────── */
+router.get('/chain/verify', asyncHandler(async (req, res) => {
+  if (!_requireEvidence(res)) return;
+
+  const { framework } = req.query;
+  if (!framework) {
+    return res.status(400).json({ error: 'framework query param is required' });
+  }
+
+  const result = await _compEvidence.verifyChain({
+    supabase: compSupabase,
+    tenantId: req.tenantId,
+    framework,
+  });
+
+  res.json(result);
+}));
+
+/* ─────────────────────────────────────────────────────────────────────
+ *  POST /api/compliance/ti/poll
+ *  Admin: trigger on-demand TI poll.  Body: { feed: 'all'|'cisa-kev'|'otx' }
+ * ──────────────────────────────────────────────────────────────────── */
+router.post('/ti/poll', requireRole('admin'), asyncHandler(async (req, res) => {
+  if (!_tiPoller) {
+    return res.status(503).json({ error: 'Threat Intel Poller module not available' });
+  }
+
+  const feed = req.body?.feed || 'all';
+  const result = await _tiPoller.pollNow(compSupabase, feed);
+  res.json({ ok: true, feed, result });
+}));
+
+/* ─────────────────────────────────────────────────────────────────────
+ *  GET /api/compliance/ti/status
+ *  Returns recent poll log entries + IOC catalog stats.
+ * ──────────────────────────────────────────────────────────────────── */
+router.get('/ti/status', asyncHandler(async (req, res) => {
+  // Recent poll logs (last 20)
+  const { data: logs } = await compSupabase
+    .from('we_ti_poll_log')
+    .select('*')
+    .order('started_at', { ascending: false })
+    .limit(20);
+
+  // IOC counts by source
+  const { data: counts } = await compSupabase
+    .from('we_ioc_catalog')
+    .select('source')
+    .eq('is_active', true);
+
+  const bySource = {};
+  for (const row of (counts || [])) {
+    bySource[row.source] = (bySource[row.source] || 0) + 1;
+  }
+
+  res.json({
+    polling_enabled: _tiPoller ? _tiPoller.isPollingEnabled() : false,
+    recent_polls:    logs || [],
+    ioc_counts:      bySource,
+    total_iocs:      (counts || []).length,
+  });
+}));
+
 module.exports = router;
+

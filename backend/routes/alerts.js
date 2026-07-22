@@ -32,6 +32,14 @@ try {
   console.warn('[alerts] ueba.js not loadable — UEBA disabled');
 }
 
+/* ── Phase 3: Threat Intel enrichment (shadow mode, feature-flagged) ── */
+let _tiPoller = null;
+try {
+  _tiPoller = require('../services/threatIntelPoller.js');
+} catch (_) {
+  console.warn('[alerts] threatIntelPoller.js not loadable — TI enrichment disabled');
+}
+
 /* ──────────────────────────────────────────────
    GET /api/alerts — List with filters + pagination
 ────────────────────────────────────────────── */
@@ -223,6 +231,42 @@ router.post('/', requirePermission('create_alerts'), asyncHandler(async (req, re
       alertBody:   req.body,
       fusionResult,
     }).catch(err => console.error('[alerts] postFuseAlert error (non-fatal):', err.message));
+  }
+
+  /* ── Phase 3: TI enrichment lookup (shadow mode, fire-and-forget) ────────
+   *  Looks up alert IOC fields in we_ioc_catalog and writes hit count +
+   *  enrichment snapshot to alert.we_ti_enrichments / we_ti_hit_count.
+   *  Non-blocking: alert creation already succeeded above.
+   */
+  if (_tiPoller) {
+    (async () => {
+      try {
+        const { hits, hitCount } = await _tiPoller.enrichAlertWithTI(supabase, req.body);
+        if (hitCount > 0) {
+          await supabase
+            .from('alerts')
+            .update({
+              we_ti_enrichments: hits,
+              we_ti_hit_count:   hitCount,
+            })
+            .eq('id', data.id)
+            .eq('tenant_id', req.tenantId);
+
+          // Log IOC-alert hit cross-reference rows
+          const hitRows = hits.map(h => ({
+            alert_id:   data.id,
+            ioc_id:     h.id,
+            tenant_id:  req.tenantId,
+            matched_at: new Date().toISOString(),
+          }));
+          if (hitRows.length) {
+            await supabase.from('we_ioc_alert_hits').insert(hitRows);
+          }
+        }
+      } catch (tiErr) {
+        console.error('[alerts] TI enrichment error (non-fatal):', tiErr.message);
+      }
+    })();
   }
 
   /* Emit real-time event to tenant room */
