@@ -23,6 +23,8 @@ const { llmRateLimit: llmRateLimiter } = require('../middleware/rateLimiter');
 const ragPipeline = require('../services/rag/rag-pipeline');
 const { supabase }  = require('../config/supabase');
 const { z }         = require('zod');
+// Phase 0 — LLM Input Contract
+const { guardMessages, LLMContractViolation } = require('../middleware/llmContract');
 
 router.use(verifyToken);
 
@@ -396,11 +398,21 @@ ${ragResults.map((r, i) => `[${i+1}] ${r.title || r.metadata?.title || 'Document
   ].filter(Boolean).join('\n');
 
   // Build messages array for LLM
-  const messages = [
+  const _rawMessages = [
     { role: 'system', content: systemPrompt },
     ...history.map(h => ({ role: h.role, content: h.content })),
     { role: 'user', content: message },
   ];
+
+  // Phase 0 — LLM Input Contract: validate before sending to any provider
+  const { messages, blocked: _copilotBlocked, reason: _copilotReason } =
+    guardMessages(_rawMessages, 'rag/copilot');
+  if (_copilotBlocked) {
+    return res.status(422).json({
+      success: false,
+      error: { code: 'LLM_CONTRACT_VIOLATION', message: _copilotReason },
+    });
+  }
 
   // Call LLM
   const llmProvider = require('../services/llm-provider');
@@ -550,10 +562,20 @@ Format: ${format || 'markdown'}
 `.trim();
 
   const llmProvider = require('../services/llm-provider');
-  const response = await llmProvider.chat([
+  // Phase 0 — LLM Input Contract: validate explain-alert messages
+  const _explainRaw = [
     { role: 'system', content: 'You are RAKAY v2, a senior SOC analyst AI. Analyze security alerts concisely and accurately.' },
     { role: 'user', content: prompt },
-  ], {
+  ];
+  const { messages: _explainMsgs, blocked: _explainBlocked, reason: _explainReason } =
+    guardMessages(_explainRaw, 'rag/explain-alert');
+  if (_explainBlocked) {
+    return res.status(422).json({
+      success: false,
+      error: { code: 'LLM_CONTRACT_VIOLATION', message: _explainReason },
+    });
+  }
+  const response = await llmProvider.chat(_explainMsgs, {
     model:       process.env.COPILOT_MODEL || 'gpt-4o',
     max_tokens:  1500,
     temperature: 0.2,

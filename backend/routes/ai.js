@@ -17,6 +17,13 @@ const router = require('express').Router();
 const axios  = require('axios');
 const { supabase }    = require('../config/supabase');
 const { asyncHandler } = require('../middleware/errorHandler');
+// Phase 0 — LLM Input Contract (fail-closed validator)
+const {
+  guardMessages,
+  llmContractMiddleware,
+  contractStatsHandler,
+  LLMContractViolation,
+} = require('../middleware/llmContract');
 
 // NOTE: verifyToken is already applied globally in server.js before /api/ai routes.
 // Do NOT add verifyToken per-route here — that causes double Supabase auth calls.
@@ -190,6 +197,14 @@ async function callOllama(messages, options = {}) {
    PROVIDER CHAIN — Try each in order
 ═══════════════════════════════════════════════ */
 async function callAI(messages, options = {}) {
+  // Phase 0 — LLM Input Contract: validate messages before any provider call.
+  // Throws LLMContractViolation (HTTP 422) if raw OCSF/log/secret data detected.
+  const { messages: safeMessages, blocked, reason } = guardMessages(messages, 'routes/ai callAI');
+  if (blocked) {
+    throw new LLMContractViolation(`callAI blocked by LLM Input Contract: ${reason}`);
+  }
+  messages = safeMessages;
+
   const errors = [];
 
   // 1. Try OpenAI
@@ -466,5 +481,12 @@ router.post('/summarize', asyncHandler(async (req, res) => {
     generated_at: new Date().toISOString(),
   });
 }));
+
+/* ════════════════════════════════════════════════
+   GET /api/ai/contract/stats — Phase 0 observability
+   Returns LLM contract validation counters:
+   checked, blocked, bypassed, lastViolation
+═══════════════════════════════════════════════ */
+router.get('/contract/stats', contractStatsHandler);
 
 module.exports = router;
